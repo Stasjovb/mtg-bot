@@ -188,7 +188,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.log.append(
             f"{item.source.printing.name}'s triggered ability resolves"
         )
-        item.ability.effect.resolve(state, item.controller_id)
+        item.ability.effect.resolve(state, item.controller_id, item.targets)
         return
 
     # Spell resolution
@@ -206,18 +206,46 @@ def resolve_top_of_stack(state: GameState) -> None:
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
-    """Push any ETB triggers from ``creature`` onto the stack, in printing order."""
+    """Push any ETB triggers from ``creature`` onto the stack, in printing order.
+
+    If an ability requires a target, legal targets are gathered and the
+    controller's agent picks one as the ability goes on the stack. If there
+    are no legal targets, the ability fizzles (doesn't go on the stack at
+    all), per the simplified Stage-3 targeting model.
+    """
     from mtg_bot.game import StackItem
 
     for ability in creature.printing.triggered_abilities:
-        if ability.trigger == "etb":
-            state.stack.append(
-                StackItem(
-                    source=creature,
-                    controller_id=creature.controller_id,
-                    ability=ability,
+        if ability.trigger != "etb":
+            continue
+        controller_id = creature.controller_id
+        effect = ability.effect
+        targets: tuple[tuple[str, int], ...] = ()
+        if effect.requires_target():
+            legal = effect.legal_targets(state, controller_id)
+            if not legal:
+                state.log.append(
+                    f"{creature.printing.name}'s ETB has no legal targets; "
+                    f"trigger fizzles"
                 )
+                continue
+            controller = state.player_by_id(controller_id)
+            chosen = controller.agent.choose_target(state, controller_id, legal)
+            if chosen is None:
+                state.log.append(
+                    f"{creature.printing.name}'s ETB had no target chosen; "
+                    f"trigger fizzles"
+                )
+                continue
+            targets = (chosen,)
+        state.stack.append(
+            StackItem(
+                source=creature,
+                controller_id=controller_id,
+                ability=ability,
+                targets=targets,
             )
-            state.log.append(
-                f"{creature.printing.name}'s ETB trigger goes on the stack"
-            )
+        )
+        state.log.append(
+            f"{creature.printing.name}'s ETB trigger goes on the stack"
+        )

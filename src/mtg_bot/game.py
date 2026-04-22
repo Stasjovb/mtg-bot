@@ -50,11 +50,15 @@ class StackItem:
     When ``ability`` is None the stack item represents a spell being cast;
     resolving it moves ``source`` to the battlefield. When ``ability`` is set,
     the item represents a triggered ability; resolving it runs the effect.
+
+    ``targets`` holds (kind, id) pairs chosen when the ability went on the
+    stack — empty for spells and for untargeted abilities.
     """
 
     source: GameObject
     controller_id: int
     ability: Optional["TriggeredAbility"] = None
+    targets: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass

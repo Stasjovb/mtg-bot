@@ -102,6 +102,24 @@ def test_random_agent_passes_when_only_pass_legal():
     assert isinstance(result, PassPriority)
 
 
+def test_random_agent_choose_target_returns_none_when_no_legal():
+    agent = RandomAgent()
+    assert agent.choose_target(state=None, player_id=0, legal_targets=[]) is None
+
+
+def test_random_agent_choose_target_picks_from_legal():
+    agent = RandomAgent()
+    legal = [("player", 1), ("player", 2)]
+    choice = agent.choose_target(state=None, player_id=0, legal_targets=legal)
+    assert choice in legal
+
+
+def test_random_agent_choose_discard_picks_from_hand():
+    agent = RandomAgent()
+    hand_ids = [10, 20, 30]
+    assert agent.choose_discard(state=None, player_id=0, hand_card_ids=hand_ids) in hand_ids
+
+
 # -----------------------
 # game.py helpers + error paths
 # -----------------------

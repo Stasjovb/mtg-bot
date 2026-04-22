@@ -87,6 +87,9 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
                 "ability_description": (
                     item.ability.describe() if item.ability is not None else None
                 ),
+                "targets": [
+                    {"kind": kind, "id": tid} for kind, tid in item.targets
+                ],
             }
             for item in state.stack
         ],

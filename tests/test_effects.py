@@ -15,6 +15,14 @@ def test_base_effect_is_abstract():
         e.describe()
 
 
+def test_base_effect_default_requires_target_is_false():
+    assert Effect().requires_target() is False
+
+
+def test_base_effect_default_legal_targets_is_empty():
+    assert Effect().legal_targets(None, 0) == []
+
+
 def test_gain_life_adds_to_controller():
     state = GameState()
     state.players.append(Player(id=0, life=20))

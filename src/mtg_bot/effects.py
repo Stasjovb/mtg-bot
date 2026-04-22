@@ -18,10 +18,33 @@ if TYPE_CHECKING:
     from mtg_bot.game import GameState
 
 
-class Effect:
-    """Base class for untargeted ability effects."""
+# A Target is a (kind, id) pair. ``kind`` is one of:
+#   "player"   — id is a Player.id
+#   "creature" — id is a GameObject.id of a creature on the battlefield
+Target = tuple[str, int]
 
-    def resolve(self, state: "GameState", controller_id: int) -> None:
+
+class Effect:
+    """Base class for ability effects.
+
+    Untargeted effects override ``resolve``; targeted effects also override
+    ``requires_target`` + ``legal_targets``. ``resolve`` receives a tuple of
+    chosen targets (empty for untargeted effects).
+    """
+
+    def requires_target(self) -> bool:
+        """Whether this effect needs at least one chosen target to resolve."""
+        return False
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        """Enumerate legal targets. Empty list means no targets are needed."""
+        return []
+
+    def resolve(
+        self, state: "GameState", controller_id: int, targets: tuple[Target, ...] = ()
+    ) -> None:
         raise NotImplementedError
 
     def describe(self) -> str:
@@ -32,7 +55,10 @@ class Effect:
 class GainLife(Effect):
     amount: int
 
-    def resolve(self, state: "GameState", controller_id: int) -> None:
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
         p = state.player_by_id(controller_id)
         p.life += self.amount
         state.log.append(
@@ -47,7 +73,10 @@ class GainLife(Effect):
 class DrawCards(Effect):
     amount: int
 
-    def resolve(self, state: "GameState", controller_id: int) -> None:
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
         from mtg_bot.turn import draw_card
 
         for _ in range(self.amount):
@@ -64,11 +93,12 @@ class DrawCards(Effect):
 class EachPlayerDraws(Effect):
     amount: int
 
-    def resolve(self, state: "GameState", controller_id: int) -> None:
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
         from mtg_bot.turn import draw_card
 
-        # Starting with active player, each player draws. Skip anyone who has
-        # already lost (no one to hand cards to).
         for i in range(len(state.players)):
             idx = (state.active_player_idx + i) % len(state.players)
             p = state.players[idx]

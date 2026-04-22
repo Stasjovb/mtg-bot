@@ -36,6 +36,24 @@ class Agent:
     ) -> dict[int, int]:
         raise NotImplementedError
 
+    def choose_target(
+        self,
+        state: "GameState",
+        player_id: int,
+        legal_targets: list[tuple[str, int]],
+    ) -> tuple[str, int] | None:
+        """Pick one of the legal (kind, id) targets, or None to decline."""
+        raise NotImplementedError
+
+    def choose_discard(
+        self,
+        state: "GameState",
+        player_id: int,
+        hand_card_ids: list[int],
+    ) -> int:
+        """Pick which of the player's hand cards to discard."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -66,3 +84,11 @@ class RandomAgent(Agent):
             if self.rng.random() < self.block_probability:
                 assignments[b.id] = self.rng.choice(attackers).id
         return assignments
+
+    def choose_target(self, state, player_id, legal_targets):
+        if not legal_targets:
+            return None
+        return self.rng.choice(legal_targets)
+
+    def choose_discard(self, state, player_id, hand_card_ids):
+        return self.rng.choice(hand_card_ids)
