@@ -55,6 +55,15 @@ class GameObject:
     charge_counters: int = 0
 
 
+def is_void_active(state: GameState) -> bool:
+    """EoE Void condition: a nonland permanent left the battlefield this turn
+    OR a spell was warped this turn."""
+    return (
+        state.permanent_left_battlefield_this_turn
+        or state.spell_warped_this_turn
+    )
+
+
 def is_stationed(obj: GameObject) -> bool:
     """True when this Spacecraft has enough charge counters to be a creature."""
     threshold = obj.printing.station_threshold
@@ -135,6 +144,19 @@ class GameState:
     log: list[str] = field(default_factory=list)
     winner_id: Optional[int] = None
     is_draw: bool = False
+    # EoE "Void" turn-state flags. Both are reset on cleanup (end of turn).
+    # ``permanent_left_battlefield_this_turn`` is set whenever any nonland
+    # permanent leaves the battlefield (destroy, exile, bounce, cease-to-
+    # exist, warp-exile). ``spell_warped_this_turn`` is set when a spell
+    # was cast via its warp alt-cost. The ``is_void_active`` helper returns
+    # True when either flag is set, which is the Void trigger condition.
+    permanent_left_battlefield_this_turn: bool = False
+    spell_warped_this_turn: bool = False
+    # Source GameObject of the currently-resolving ability, if any. Set by
+    # resolve_top_of_stack during ability resolution so effects like
+    # "put a +1/+1 counter on this creature" can reach the source without
+    # having to thread it through every resolve() signature.
+    resolving_source: Optional[GameObject] = None
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

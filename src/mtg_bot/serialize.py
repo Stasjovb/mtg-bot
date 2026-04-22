@@ -16,6 +16,7 @@ from mtg_bot.game import (
     effective_toughness,
     is_creature_now,
     is_stationed,
+    is_void_active,
 )
 
 
@@ -99,6 +100,9 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
         "active_player_idx": state.active_player_idx,
         "priority_player_idx": state.priority_player_idx,
         "step": state.step.value if state.step is not None else None,
+        "void_active": is_void_active(state),
+        "permanent_left_battlefield_this_turn": state.permanent_left_battlefield_this_turn,
+        "spell_warped_this_turn": state.spell_warped_this_turn,
         "players": players,
         "stack": [
             {

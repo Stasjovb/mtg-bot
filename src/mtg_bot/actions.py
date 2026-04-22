@@ -158,6 +158,8 @@ def _cast_spell(
         # Mark the spell as warp-cast so it triggers the end-step exile once
         # it resolves onto the battlefield.
         card.cast_via_warp = bool(use_warp)
+        if use_warp:
+            state.spell_warped_this_turn = True
     else:
         # Cast from exile: only legal for cards previously exiled by warp
         # (warped=True), and only at their normal cost.

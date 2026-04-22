@@ -76,6 +76,10 @@ def move_off_battlefield(
     """
     if obj not in state.battlefield:
         return
+    # Mark Void state: any non-land permanent leaving the battlefield this
+    # turn (including tokens ceasing to exist) enables Void triggers.
+    if not obj.printing.is_land:
+        state.permanent_left_battlefield_this_turn = True
     state.battlefield.remove(obj)
     obj.damage = 0
     obj.marked_lethal = False
@@ -128,6 +132,9 @@ def run_cleanup_step(state: GameState) -> None:
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
+    # Reset turn-scoped Void tracking so next turn starts fresh.
+    state.permanent_left_battlefield_this_turn = False
+    state.spell_warped_this_turn = False
 
 
 def state_based_actions(state: GameState) -> bool:
