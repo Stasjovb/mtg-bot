@@ -73,9 +73,18 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if card.printing.is_land:
                 actions.append(PlayLand(card.id))
 
-    # Creature and sorcery casts at sorcery speed.
+    # Creature / sorcery / other permanent (artifact, spacecraft, ...) casts
+    # at sorcery speed.
+    def _is_sorcery_speed_spell(card) -> bool:
+        pr = card.printing
+        return (
+            pr.is_creature
+            or pr.is_sorcery
+            or (pr.is_permanent and not pr.is_instant and not pr.is_land)
+        )
+
     for card in p.hand:
-        if card.printing.is_creature or card.printing.is_sorcery:
+        if _is_sorcery_speed_spell(card):
             if can_pay_cost(
                 state, player_id, card.printing.mana_cost
             ) and _targets_are_satisfiable(state, player_id, card):

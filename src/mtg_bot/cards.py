@@ -89,6 +89,12 @@ class CardPrinting:
     # normal cost on a later turn.
     warp_cost: ManaCost | None = None
     warp_cost_str: str = ""
+    # EoE Spacecraft Station mechanic. For a Spacecraft card: once it has
+    # station_threshold or more charge counters on it, it becomes an artifact
+    # creature with its printed P/T and gains stationed_keywords. None on
+    # non-Spacecraft cards.
+    station_threshold: int | None = None
+    stationed_keywords: frozenset[str] = frozenset()
 
     @property
     def is_land(self) -> bool:
@@ -113,6 +119,25 @@ class CardPrinting:
     @property
     def is_sorcery(self) -> bool:
         return "Sorcery" in self.card_types
+
+    @property
+    def is_artifact(self) -> bool:
+        return "Artifact" in self.card_types
+
+    @property
+    def is_spacecraft(self) -> bool:
+        return "Spacecraft" in self.subtypes
+
+    @property
+    def is_permanent(self) -> bool:
+        """Resolves onto the battlefield when cast."""
+        return (
+            self.is_creature
+            or self.is_artifact
+            or self.is_land
+            or "Enchantment" in self.card_types
+            or "Planeswalker" in self.card_types
+        )
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
@@ -154,6 +179,40 @@ def make_creature(
         triggered_abilities=tuple(triggered_abilities),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
+    )
+
+
+def make_spacecraft(
+    name: str,
+    cost: str,
+    power: int,
+    toughness: int,
+    station_threshold: int,
+    stationed_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    legendary: bool = False,
+) -> CardPrinting:
+    """Build a Spacecraft card (Artifact — Spacecraft).
+
+    Spacecraft enter as non-creature artifacts. Once they accumulate
+    ``station_threshold`` charge counters they become artifact creatures
+    with the printed ``power``/``toughness`` and ``stationed_keywords``
+    until counters drop (which doesn't happen in Stage-3 scope).
+    """
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Artifact — Spacecraft"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        power=power,
+        toughness=toughness,
+        station_threshold=station_threshold,
+        stationed_keywords=frozenset(stationed_keywords),
     )
 
 

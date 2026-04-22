@@ -50,6 +50,32 @@ class GameObject:
     # via that trigger — it can be cast from exile at its normal cost.
     cast_via_warp: bool = False
     warped: bool = False
+    # EoE Spacecraft charge counters. A Spacecraft at ``station_threshold`` or
+    # more is a creature (see ``is_creature_now``).
+    charge_counters: int = 0
+
+
+def is_stationed(obj: GameObject) -> bool:
+    """True when this Spacecraft has enough charge counters to be a creature."""
+    threshold = obj.printing.station_threshold
+    return threshold is not None and obj.charge_counters >= threshold
+
+
+def is_creature_now(obj: GameObject) -> bool:
+    """Whether ``obj`` currently counts as a creature on the battlefield.
+
+    True for printed creatures AND for Spacecraft whose charge-counter
+    threshold has been crossed (they're artifact creatures while stationed).
+    """
+    return obj.printing.is_creature or is_stationed(obj)
+
+
+def effective_keywords(obj: GameObject) -> frozenset[str]:
+    """Keywords in effect right now — printing + stationed_keywords if the
+    Spacecraft is currently stationed."""
+    if is_stationed(obj):
+        return obj.printing.keywords | obj.printing.stationed_keywords
+    return obj.printing.keywords
 
 
 def effective_power(obj: GameObject) -> int:

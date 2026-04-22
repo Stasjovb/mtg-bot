@@ -73,13 +73,26 @@ def test_apply_unknown_action_raises():
         apply_action(state, 0, object())  # type: ignore[arg-type]
 
 
-def test_resolve_non_creature_raises():
+def test_resolve_unknown_card_type_raises():
+    # Construct a CardPrinting with no recognised types — exercises the
+    # defensive branch in resolve_top_of_stack. In real play every card is
+    # either a permanent (creature/artifact/land/enchantment/planeswalker)
+    # or a spell (instant/sorcery), so this shouldn't happen organically.
+    from mtg_bot.cards import CardPrinting, ManaCost
+
     state = GameState()
     state.players.append(Player(id=0))
-    # Put a land "spell" on the stack (lands don't use the stack normally, but
-    # this exercises the defensive branch)
-    land = state.new_object(BASIC_LANDS["Forest"], owner_id=0, zone=Zone.STACK)
-    state.stack.append(StackItem(source=land, controller_id=0))
+    weird_printing = CardPrinting(
+        name="Typeless Thing",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Tribal",
+        supertypes=(),
+        card_types=("Tribal",),
+        subtypes=(),
+    )
+    obj = state.new_object(weird_printing, owner_id=0, zone=Zone.STACK)
+    state.stack.append(StackItem(source=obj, controller_id=0))
     with pytest.raises(ValueError, match="don't know how to resolve"):
         resolve_top_of_stack(state)
 

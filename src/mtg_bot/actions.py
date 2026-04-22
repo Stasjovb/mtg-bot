@@ -242,7 +242,9 @@ def resolve_top_of_stack(state: GameState) -> None:
 
     # Spell resolution
     card = item.source
-    if card.printing.is_creature:
+    if card.printing.is_permanent and not (
+        card.printing.is_instant or card.printing.is_sorcery
+    ):
         state.log.append(f"{card.printing.name} resolves onto the battlefield")
         put_into_battlefield(state, card, item.controller_id)
         return

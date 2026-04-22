@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from mtg_bot.game import GameObject, GameState, effective_power, effective_toughness
+from mtg_bot.game import (
+    GameObject,
+    GameState,
+    effective_keywords,
+    effective_power,
+    effective_toughness,
+    is_creature_now,
+)
 
 
 def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
     return [
         o for o in state.battlefield
         if o.controller_id == player_id
-        and o.printing.is_creature
+        and is_creature_now(o)
         and not o.tapped
-        and (not o.summoning_sick or "haste" in o.printing.keywords)
-        and "defender" not in o.printing.keywords
+        and (not o.summoning_sick or "haste" in effective_keywords(o))
+        and "defender" not in effective_keywords(o)
     ]
 
 
@@ -20,7 +27,7 @@ def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
     return [
         o for o in state.battlefield
         if o.controller_id == player_id
-        and o.printing.is_creature
+        and is_creature_now(o)
         and not o.tapped
     ]
 
@@ -31,11 +38,10 @@ def can_block(blocker: GameObject, attacker: GameObject) -> bool:
     Flying: a creature with flying can only be blocked by creatures with flying
     or reach.
     """
-    if "flying" in attacker.printing.keywords:
-        if not (
-            "flying" in blocker.printing.keywords
-            or "reach" in blocker.printing.keywords
-        ):
+    attacker_kws = effective_keywords(attacker)
+    blocker_kws = effective_keywords(blocker)
+    if "flying" in attacker_kws:
+        if not ("flying" in blocker_kws or "reach" in blocker_kws):
             return False
     return True
 
@@ -45,7 +51,7 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
         obj = next(o for o in state.battlefield if o.id == oid)
         obj.attacking = True
         # Vigilance: attacking doesn't tap
-        if "vigilance" not in obj.printing.keywords:
+        if "vigilance" not in effective_keywords(obj):
             obj.tapped = True
         state.log.append(f"{obj.printing.name} attacks")
 
@@ -78,7 +84,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
             continue
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_power = effective_power(attacker)
-        attacker_kws = attacker.printing.keywords
+        attacker_kws = effective_keywords(attacker)
         attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
         has_deathtouch = "deathtouch" in attacker_kws
@@ -116,7 +122,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
-                         blocker.printing.keywords, blocker.controller_id)
+                         effective_keywords(blocker), blocker.controller_id)
                     )
 
     for kind, target_id, amount, source_kws, source_controller in damage_events_typed:

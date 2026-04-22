@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from mtg_bot.game import GameState, Zone, effective_toughness
+from mtg_bot.game import GameState, Zone, effective_toughness, is_creature_now
 
 
 class Step(Enum):
@@ -142,7 +142,7 @@ def state_based_actions(state: GameState) -> bool:
 
     destroyed = []
     for obj in state.battlefield:
-        if not obj.printing.is_creature:
+        if not is_creature_now(obj):
             continue
         tough = effective_toughness(obj)
         if tough <= 0 or obj.damage >= tough or obj.marked_lethal:

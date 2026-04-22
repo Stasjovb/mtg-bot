@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from mtg_bot.game import GameObject, GameState, effective_power, effective_toughness
+from mtg_bot.game import (
+    GameObject,
+    GameState,
+    effective_keywords,
+    effective_power,
+    effective_toughness,
+    is_creature_now,
+    is_stationed,
+)
 
 
 def serialize_permanent(obj: GameObject) -> dict[str, Any]:
@@ -20,12 +28,17 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "mana_cost": p.mana_cost_str,
         "power": p.power,
         "toughness": p.toughness,
-        "effective_power": effective_power(obj) if p.is_creature else None,
-        "effective_toughness": effective_toughness(obj) if p.is_creature else None,
+        "effective_power": effective_power(obj) if is_creature_now(obj) else None,
+        "effective_toughness": effective_toughness(obj) if is_creature_now(obj) else None,
         "is_creature": p.is_creature,
+        "is_creature_now": is_creature_now(obj),
         "is_land": p.is_land,
         "is_token": p.is_token,
-        "keywords": sorted(p.keywords),
+        "is_spacecraft": p.is_spacecraft,
+        "is_stationed": is_stationed(obj),
+        "station_threshold": p.station_threshold,
+        "charge_counters": obj.charge_counters,
+        "keywords": sorted(effective_keywords(obj)),
         "abilities": [a.describe() for a in p.triggered_abilities],
         "warp_cost": p.warp_cost_str or None,
         "tapped": obj.tapped,
