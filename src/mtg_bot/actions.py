@@ -28,6 +28,27 @@ class CastCreature(Action):
     card_id: int
 
 
+@dataclass(frozen=True)
+class DeclareAttackers(Action):
+    """Declare a set of creatures as attackers during the declare-attackers step.
+
+    Ineligible ids (summoning-sick creatures, tapped creatures, etc.) are
+    silently filtered during application.
+    """
+    attacker_ids: frozenset[int] = frozenset()
+
+
+@dataclass(frozen=True)
+class DeclareBlockers(Action):
+    """Declare block assignments during the declare-blockers step.
+
+    ``assignments`` is a tuple of (blocker_id, attacker_id) pairs (tuples
+    instead of a dict so the action itself is hashable). Illegal pairs are
+    silently filtered during application.
+    """
+    assignments: tuple[tuple[int, int], ...] = ()
+
+
 def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
     return [
         o for o in state.battlefield
@@ -78,6 +99,12 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
     if isinstance(action, CastCreature):
         _cast_creature(state, player_id, action.card_id)
         return
+    if isinstance(action, DeclareAttackers):
+        _declare_attackers(state, player_id, action.attacker_ids)
+        return
+    if isinstance(action, DeclareBlockers):
+        _declare_blockers(state, player_id, action.assignments)
+        return
     raise ValueError(f"unknown action: {action!r}")
 
 
@@ -102,6 +129,42 @@ def _cast_creature(state: GameState, player_id: int, card_id: int) -> None:
     card.controller_id = player_id
     state.stack.append(StackItem(source=card, controller_id=player_id))
     state.log.append(f"P{player_id} casts {card.printing.name}")
+
+
+def _declare_attackers(
+    state: GameState, player_id: int, attacker_ids: frozenset[int]
+) -> None:
+    from mtg_bot.combat import declare_attackers, eligible_attackers
+
+    eligible_ids = {o.id for o in eligible_attackers(state, player_id)}
+    valid = [oid for oid in attacker_ids if oid in eligible_ids]
+    declare_attackers(state, valid)
+
+
+def _declare_blockers(
+    state: GameState,
+    player_id: int,
+    assignments: tuple[tuple[int, int], ...],
+) -> None:
+    from mtg_bot.combat import can_block, declare_blockers, eligible_blockers
+
+    eligible_ids = {o.id for o in eligible_blockers(state, player_id)}
+    attackers = {o.id: o for o in state.battlefield if o.attacking}
+    blockers_on_bf = {o.id: o for o in state.battlefield}
+
+    validated: dict[int, int] = {}
+    for blocker_id, attacker_id in assignments:
+        if blocker_id not in eligible_ids:
+            continue
+        if attacker_id not in attackers:
+            continue
+        if blocker_id not in blockers_on_bf:
+            continue
+        if not can_block(blockers_on_bf[blocker_id], attackers[attacker_id]):
+            continue
+        validated[blocker_id] = attacker_id
+
+    declare_blockers(state, validated)
 
 
 def resolve_top_of_stack(state: GameState) -> None:

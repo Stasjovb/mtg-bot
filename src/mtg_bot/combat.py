@@ -24,6 +24,16 @@ def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
     ]
 
 
+def can_block(blocker: GameObject, attacker: GameObject) -> bool:
+    """Return True if ``blocker`` may legally declare a block against ``attacker``.
+
+    Stage-2 keyword rules (flying/reach/menace/etc.) get layered in as each
+    keyword lands. For now, every creature can block every creature.
+    """
+    del blocker, attacker  # unused until keyword rules land
+    return True
+
+
 def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     for oid in attacker_ids:
         obj = next(o for o in state.battlefield if o.id == oid)

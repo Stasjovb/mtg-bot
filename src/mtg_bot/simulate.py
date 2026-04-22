@@ -5,13 +5,17 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from mtg_bot.actions import PassPriority, apply_action, resolve_top_of_stack
+from mtg_bot.actions import (
+    DeclareAttackers,
+    DeclareBlockers,
+    PassPriority,
+    apply_action,
+    resolve_top_of_stack,
+)
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import all_printings, build_mono_color_deck
 from mtg_bot.combat import (
     clear_combat_state,
-    declare_attackers,
-    declare_blockers,
     eligible_attackers,
     eligible_blockers,
     resolve_combat_damage,
@@ -134,9 +138,9 @@ def run_step(state: GameState, step: Step) -> None:
         ap = state.active_player()
         eligible = eligible_attackers(state, ap.id)
         chosen = ap.agent.declare_attackers(state, ap.id, eligible)
-        valid_ids = {e.id for e in eligible}
-        chosen = [i for i in chosen if i in valid_ids]
-        declare_attackers(state, chosen)
+        apply_action(
+            state, ap.id, DeclareAttackers(attacker_ids=frozenset(chosen))
+        )
 
     elif step == Step.DECLARE_BLOCKERS:
         attackers = [o for o in state.battlefield if o.attacking]
@@ -149,14 +153,11 @@ def run_step(state: GameState, step: Step) -> None:
             assignments = defender.agent.declare_blockers(
                 state, defender.id, eligible, attackers
             )
-            valid_blockers = {e.id for e in eligible}
-            valid_attackers = {a.id for a in attackers}
-            assignments = {
-                bid: aid
-                for bid, aid in assignments.items()
-                if bid in valid_blockers and aid in valid_attackers
-            }
-            declare_blockers(state, assignments)
+            apply_action(
+                state,
+                defender.id,
+                DeclareBlockers(assignments=tuple(assignments.items())),
+            )
 
     elif step == Step.COMBAT_DAMAGE:
         if any(o.attacking for o in state.battlefield):
