@@ -1089,6 +1089,59 @@ def test_spell_requiring_target_is_not_legal_with_no_legal_targets():
     )
 
 
+def test_bombard_instant_kills_a_small_creature():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    bombard = EOE_SPELLS["Bombard"]
+    state = _arena(
+        p0_hand=[bombard],
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 3,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],  # 2/2
+    )
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    # Bombard goes on stack with the bear as its target
+    assert state.stack[0].targets == (("creature", bear.id),)
+    resolve_top_of_stack(state)  # 4 damage
+
+    from mtg_bot.turn import state_based_actions
+    state_based_actions(state)
+    assert bear not in state.battlefield
+    # Spell itself went to P0's graveyard
+    assert spell in state.players[0].graveyard
+
+
+def test_bombard_is_legal_at_instant_speed():
+    """Bombard is an instant — legal on the opponent's turn too, outside the
+    main phase, with a non-empty stack."""
+    from mtg_bot.cards import EOE_SPELLS
+
+    bombard = EOE_SPELLS["Bombard"]
+    # Set up: it's P1's turn, P0 has priority on their end step.
+    state = _arena(
+        p0_hand=[bombard],
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 3,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+        step=Step.END,
+        active=1,
+    )
+    state.priority_player_idx = 0  # P0 gets to respond
+
+    moves = legal_moves(state, player_id=0)
+    # Bombard (an instant) IS legal here despite being off-turn, post-combat
+    bombard_obj = state.players[0].hand[0]
+    assert any(
+        isinstance(a, CastSpell) and a.card_id == bombard_obj.id for a in moves
+    )
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

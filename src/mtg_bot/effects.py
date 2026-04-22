@@ -269,6 +269,44 @@ class DealDamageAnyTarget(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToTargetCreature(Effect):
+    """Deal ``amount`` damage to any target creature (controller's or otherwise).
+
+    Matches oracle text like "~ deals N damage to target creature" (Bombard).
+    Unlike DealDamageToOpponentCreature this can target your own creatures
+    too.
+    """
+
+    amount: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, _ = targets[0]
+        if kind != "creature":
+            return
+        _apply_damage(state, targets[0], self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to target creature"
+
+
+@dataclass(frozen=True)
 class DealDamageToOpponentCreature(Effect):
     """Deal ``amount`` damage to target creature an opponent controls.
 

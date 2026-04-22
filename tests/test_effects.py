@@ -6,6 +6,7 @@ from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
+    DealDamageToTargetCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -351,6 +352,57 @@ def test_deal_damage_opponent_creature_no_targets_is_noop():
     state = GameState()
     state.players.append(Player(id=0))
     DealDamageToOpponentCreature(amount=1).resolve(state, controller_id=0, targets=())
+
+
+def test_deal_damage_target_creature_requires_target():
+    assert DealDamageToTargetCreature(amount=4).requires_target() is True
+
+
+def test_deal_damage_target_creature_includes_own_creatures():
+    """Unlike DealDamageToOpponentCreature, this filter includes every
+    creature on the battlefield."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+
+    targets = DealDamageToTargetCreature(amount=4).legal_targets(state, 0)
+    assert ("creature", mine.id) in targets
+    assert ("creature", theirs.id) in targets
+    assert not any(kind == "player" for kind, _ in targets)
+
+
+def test_deal_damage_target_creature_applies():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    target = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(target)
+    DealDamageToTargetCreature(amount=4).resolve(
+        state, controller_id=0, targets=(("creature", target.id),)
+    )
+    assert target.damage == 4
+
+
+def test_deal_damage_target_creature_wrong_kind_or_empty_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    DealDamageToTargetCreature(amount=4).resolve(state, 0, targets=())
+    DealDamageToTargetCreature(amount=4).resolve(
+        state, 0, targets=(("player", 0),)
+    )
+
+
+def test_deal_damage_target_creature_describe():
+    assert (
+        DealDamageToTargetCreature(amount=4).describe()
+        == "deals 4 damage to target creature"
+    )
 
 
 def test_plus_one_counter_requires_target():

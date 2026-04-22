@@ -15,6 +15,7 @@ from mtg_bot.effects import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
+    DealDamageToTargetCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -405,6 +406,9 @@ EOE_SPELLS: dict[str, CardPrinting] = {
     for c in [
         make_sorcery(
             "Plasma Bolt", "{R}", effect=DealDamageAnyTarget(amount=2),
+        ),
+        make_instant(
+            "Bombard", "{2}{R}", effect=DealDamageToTargetCreature(amount=4),
         ),
     ]
 }
