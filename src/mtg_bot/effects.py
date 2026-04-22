@@ -117,6 +117,52 @@ class EachPlayerDraws(Effect):
         return f"each player draws {self.amount} cards"
 
 
+@dataclass(frozen=True)
+class Sequence(Effect):
+    """Run multiple effects in order as a single composite effect.
+
+    Target selection: only one of the sub-effects may require a target (this
+    keeps the cast-time target-selection pipeline single-choice). That one
+    sub-effect's legal_targets becomes the Sequence's. At resolution, the
+    chosen target(s) are passed to the targeted sub-effect; untargeted sub-
+    effects receive an empty tuple.
+    """
+
+    effects: tuple[Effect, ...]
+
+    def __post_init__(self) -> None:
+        targeted = [e for e in self.effects if e.requires_target()]
+        if len(targeted) > 1:
+            raise ValueError(
+                "Sequence supports at most one targeting sub-effect "
+                f"(got {len(targeted)})"
+            )
+
+    def requires_target(self) -> bool:
+        return any(e.requires_target() for e in self.effects)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        for e in self.effects:
+            if e.requires_target():
+                return e.legal_targets(state, controller_id)
+        return []
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for e in self.effects:
+            if e.requires_target():
+                e.resolve(state, controller_id, targets)
+            else:
+                e.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return ". ".join(e.describe() for e in self.effects) + "."
+
+
 def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     """Apply ``amount`` damage to ``target``. Used by damage effects.
 

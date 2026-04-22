@@ -13,6 +13,7 @@ from mtg_bot.effects import (
     Effect,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
+    Sequence,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -468,6 +469,68 @@ def test_plus_one_counter_missing_id_is_noop():
     PutPlusOneCounterOnCreatureYouControl().resolve(
         state, controller_id=0, targets=(("creature", 99999),)
     )
+
+
+def test_sequence_of_untargeted_effects_runs_all_in_order():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, life=10, agent=RandomAgent()))
+    # Stub a library with one card so the draw can succeed
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    Sequence(effects=(GainLife(amount=2), DrawCards(amount=1))).resolve(
+        state, controller_id=0
+    )
+    assert state.players[0].life == 12
+    assert len(state.players[0].hand) == 1
+
+
+def test_sequence_with_one_targeting_sub_effect():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0, life=10))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+
+    seq = Sequence(effects=(
+        PutPlusOneCounterOnCreatureYouControl(amount=1),
+        GainLife(amount=3),
+    ))
+    assert seq.requires_target()
+    assert ("creature", bear.id) in seq.legal_targets(state, controller_id=0)
+
+    seq.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    assert bear.plus_one_counters == 1
+    assert state.players[0].life == 13
+
+
+def test_sequence_without_targeting_sub_effects_needs_no_target():
+    seq = Sequence(effects=(GainLife(amount=1), GainLife(amount=2)))
+    assert seq.requires_target() is False
+    assert seq.legal_targets(None, 0) == []
+
+
+def test_sequence_rejects_multiple_targeting_sub_effects():
+    import pytest
+
+    with pytest.raises(ValueError, match="at most one targeting"):
+        Sequence(effects=(
+            PutPlusOneCounterOnCreatureYouControl(),
+            DealDamageToOpponentCreature(amount=1),
+        ))
+
+
+def test_sequence_describe_joins_sub_effects():
+    seq = Sequence(effects=(
+        PutPlusOneCounterOnCreatureYouControl(amount=1),
+        DrawCards(amount=1),
+    ))
+    desc = seq.describe()
+    assert "+1/+1 counter" in desc
+    assert "draw a card" in desc
 
 
 def test_plus_one_counter_describe_singular_and_plural():
