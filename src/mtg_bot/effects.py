@@ -173,6 +173,7 @@ class PumpTargetCreatureUntilEOT(Effect):
     power_bonus: int = 0
     toughness_bonus: int = 0
     granted_keywords: frozenset[str] = frozenset()
+    you_control_only: bool = False  # restrict to "target creature you control"
 
     def requires_target(self) -> bool:
         return True
@@ -184,6 +185,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            and (not self.you_control_only or o.controller_id == controller_id)
         ]
 
     def resolve(
@@ -1035,6 +1037,7 @@ class TriggeredAbility:
         prefix = {
             "etb": "When ~ enters the battlefield",
             "beginning_of_end_step": "At the beginning of your end step",
+            "beginning_of_combat": "At the beginning of combat on your turn",
             "dies": "When ~ dies",
             "landfall": "Landfall — Whenever a land you control enters",
         }.get(self.trigger, self.trigger)

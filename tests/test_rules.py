@@ -2357,6 +2357,60 @@ def test_illvoi_galeblade_sacrifices_for_draw():
     assert len(state.players[0].hand) == hand_before + 1
 
 
+def test_molecular_modifier_pumps_on_beginning_of_combat():
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords, effective_power
+    from mtg_bot.turn import run_beginning_of_combat_triggers
+    import random
+
+    mod = EOE_CREATURES["Molecular Modifier"]
+    state = _arena(p0_battlefield=[mod, SYNTHETIC_CREATURES["Wild Bear"]])
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    run_beginning_of_combat_triggers(state)
+
+    # Some creature you control got +1/+0 first strike (random target of
+    # Modifier or Bear — both qualify).
+    buffed = [
+        o for o in state.battlefield
+        if o.controller_id == 0
+        and o.temp_power_bonus == 1
+        and "first strike" in effective_keywords(state, o)
+    ]
+    assert len(buffed) == 1
+
+
+def test_beginning_of_combat_does_not_fire_on_opponents_turn():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_combat_triggers
+
+    mod = EOE_CREATURES["Molecular Modifier"]
+    state = _arena(p1_battlefield=[mod])
+    state.active_player_idx = 0  # P0 is active; Mod is under P1
+    run_beginning_of_combat_triggers(state)
+    # Mod didn't trigger (not P1's turn)
+    mod_obj = state.battlefield[0]
+    assert mod_obj.temp_power_bonus == 0
+
+
+def test_molecular_modifier_self_targets_when_solo():
+    """Modifier's target is "creature you control" — with only itself on
+    the battlefield, it self-targets."""
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_combat_triggers
+    import random
+
+    mod = EOE_CREATURES["Molecular Modifier"]
+    state = _arena(p0_battlefield=[mod])
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    run_beginning_of_combat_triggers(state)
+    mod_obj = state.battlefield[0]
+    assert mod_obj.temp_power_bonus == 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

@@ -148,6 +148,46 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             state.resolving_source = None
 
 
+def run_beginning_of_combat_triggers(state: GameState) -> None:
+    """Fire "At the beginning of combat on your turn" triggered abilities.
+
+    Targets are selected via the controller's agent just like ETBs. Fires
+    as a turn-based action (no stack) for consistency with our other
+    trigger events.
+    """
+    ap_id = state.active_player().id
+    for obj in list(state.battlefield):
+        if obj.controller_id != ap_id:
+            continue
+        for ability in obj.printing.triggered_abilities:
+            if ability.trigger != "beginning_of_combat":
+                continue
+            # Target selection mirrors _trigger_etb_abilities.
+            targets: tuple[tuple[str, int], ...] = ()
+            effect = ability.effect
+            if effect.requires_target():
+                legal = effect.legal_targets(state, ap_id)
+                if not legal:
+                    state.log.append(
+                        f"{obj.printing.name}'s beginning-of-combat "
+                        f"trigger fizzles (no legal targets)"
+                    )
+                    continue
+                controller = state.player_by_id(ap_id)
+                chosen = controller.agent.choose_target(state, ap_id, legal)
+                if chosen is None:
+                    continue
+                targets = (chosen,)
+            state.log.append(
+                f"{obj.printing.name}'s beginning-of-combat ability triggers"
+            )
+            state.resolving_source = obj
+            try:
+                effect.resolve(state, ap_id, targets)
+            finally:
+                state.resolving_source = None
+
+
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
     """Fire "At the beginning of your end step, ..." triggered abilities on
     permanents controlled by the active player. EoE "Void —" abilities carry

@@ -651,6 +651,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"haste"},
             warp="{1}{R}",
         ),
+        # Molecular Modifier: "At the beginning of combat on your turn,
+        # target creature you control gets +1/+0 and gains first strike
+        # until end of turn."
+        make_creature(
+            "Molecular Modifier", "{2}{R}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_combat",
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=1, toughness_bonus=0,
+                        granted_keywords=frozenset({"first strike"}),
+                        you_control_only=True,
+                    ),
+                ),
+            ),
+        ),
         # Bygone Colossus is colorless ({9}) so it shows up in every deck
         # thanks to the colorless-inclusion rule in build_mono_color_deck.
         make_creature(

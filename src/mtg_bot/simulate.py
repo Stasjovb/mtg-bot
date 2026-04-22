@@ -27,6 +27,7 @@ from mtg_bot.turn import (
     STEPS_WITH_PRIORITY,
     Step,
     draw_card,
+    run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_cleanup_step,
     run_draw_step,
@@ -170,6 +171,12 @@ def run_step(state: GameState, step: Step) -> None:
             state_based_actions(state)
             if state.is_over():
                 return
+
+    elif step == Step.BEGINNING_OF_COMBAT:
+        run_beginning_of_combat_triggers(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
 
     elif step == Step.CLEANUP:
         run_cleanup_step(state)
