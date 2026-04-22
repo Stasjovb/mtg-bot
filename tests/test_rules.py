@@ -2808,6 +2808,57 @@ def test_debris_field_crusher_activated_ability_pumps_self():
     assert effective_power(state, obj) == base + 2
 
 
+def test_rescue_skiff_reanimates_a_creature_from_graveyard():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    skiff = EOE_CREATURES["Rescue Skiff"]
+    state = _arena(
+        p0_hand=[skiff],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 6,
+    )
+    # Seed P0 graveyard with a dead creature card
+    dead_bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD
+    )
+    state.players[0].graveyard.append(dead_bear)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell → skiff + ETB stacks
+    resolve_top_of_stack(state)  # ETB: return dead bear to battlefield
+    # Wild Bear is back on the battlefield, not in graveyard
+    assert dead_bear in state.battlefield
+    assert dead_bear not in state.players[0].graveyard
+    assert dead_bear.controller_id == 0
+
+
+def test_rescue_skiff_etb_fizzles_with_empty_graveyard():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    skiff = EOE_CREATURES["Rescue Skiff"]
+    state = _arena(
+        p0_hand=[skiff],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 6,
+    )
+    assert len(state.players[0].graveyard) == 0
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # Skiff resolves; ETB has no legal targets so fizzles
+    # ETB trigger fizzled — nothing on stack now
+    assert not state.stack
+    assert any("fizzles" in e for e in state.log)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

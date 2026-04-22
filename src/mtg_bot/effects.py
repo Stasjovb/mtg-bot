@@ -144,6 +144,57 @@ class DiscardSelf(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
+    """Target creature card from your graveyard enters the battlefield under
+    your control. Fires ETB triggers (via put_into_battlefield).
+
+    Target format: ``("graveyard_creature", id)`` where id is a GameObject
+    in the controller's graveyard.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_creature":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to the battlefield"
+        )
+        put_into_battlefield(state, card, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "return target creature card from your graveyard to the "
+            "battlefield"
+        )
+
+
+@dataclass(frozen=True)
 class ExileEachOpponentsGraveyard(Effect):
     """Move every card in each opponent's graveyard to that player's exile."""
 

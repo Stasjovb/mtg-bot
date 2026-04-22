@@ -37,6 +37,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    ReturnCreatureFromYourGraveyardToBattlefield,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -866,6 +867,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         DrawCards(amount=2),
                         DiscardSelf(amount=1),
                     )),
+                ),
+            ),
+        ),
+        # Rescue Skiff: ETB return target creature from your graveyard to
+        # the battlefield. Real card also allows enchantments; we only
+        # model creatures.
+        make_spacecraft(
+            "Rescue Skiff", "{5}{W}", 5, 6,
+            station_threshold=10,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
                 ),
             ),
         ),
