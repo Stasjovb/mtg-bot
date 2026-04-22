@@ -45,11 +45,11 @@ def test_build_deck_rejects_unknown_color():
 
 
 def test_build_deck_rejects_color_with_no_creatures(monkeypatch):
-    # Fake-out the creature pool so a color has no creatures, exercising the
+    # Fake-out the non-land pool so a color has no cards, exercising the
     # "no creatures in color" branch.
     from mtg_bot import cards
 
-    monkeypatch.setattr(cards, "CREATURE_POOL", {})
+    monkeypatch.setattr(cards, "NONLAND_POOL", {})
     with pytest.raises(ValueError, match="no creatures in color"):
         cards.build_mono_color_deck("G")
 

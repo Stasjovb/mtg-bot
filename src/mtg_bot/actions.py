@@ -127,7 +127,24 @@ def _cast_spell(state: GameState, player_id: int, card_id: int) -> None:
     auto_tap_for_cost(state, player_id, card.printing.mana_cost)
     card.zone = Zone.STACK
     card.controller_id = player_id
-    state.stack.append(StackItem(source=card, controller_id=player_id))
+
+    # If this spell has a targeted spell_effect, select a target now (before
+    # the spell settles on the stack) via the caster's agent — same pattern
+    # as _trigger_etb_abilities.
+    targets: tuple[tuple[str, int], ...] = ()
+    spell_effect = card.printing.spell_effect
+    if spell_effect is not None and spell_effect.requires_target():
+        legal = spell_effect.legal_targets(state, player_id)
+        # legal_actions should already filter spells with no legal targets,
+        # so this is defense-in-depth.
+        if legal:
+            chosen = p.agent.choose_target(state, player_id, legal)
+            if chosen is not None:
+                targets = (chosen,)
+
+    state.stack.append(
+        StackItem(source=card, controller_id=player_id, targets=targets)
+    )
     state.log.append(f"P{player_id} casts {card.printing.name}")
 
 
@@ -196,6 +213,16 @@ def resolve_top_of_stack(state: GameState) -> None:
     if card.printing.is_creature:
         state.log.append(f"{card.printing.name} resolves onto the battlefield")
         put_into_battlefield(state, card, item.controller_id)
+        return
+    if card.printing.is_instant or card.printing.is_sorcery:
+        state.log.append(f"{card.printing.name} resolves")
+        if card.printing.spell_effect is not None:
+            card.printing.spell_effect.resolve(
+                state, item.controller_id, item.targets
+            )
+        # Non-permanent spells go to their owner's graveyard.
+        card.zone = Zone.GRAVEYARD
+        state.player_by_id(card.owner_id).graveyard.append(card)
         return
     raise ValueError(f"don't know how to resolve {card.printing.name}")
 

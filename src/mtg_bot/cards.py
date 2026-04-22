@@ -18,6 +18,7 @@ from mtg_bot.effects import (
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
+    Effect,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
     TargetOpponentDiscards,
@@ -73,6 +74,10 @@ class CardPrinting:
     produces: frozenset[str] = frozenset()
     keywords: frozenset[str] = frozenset()
     triggered_abilities: tuple[TriggeredAbility, ...] = ()
+    # For instants and sorceries: the effect that runs when the spell
+    # resolves. After resolution the spell goes to its owner's graveyard.
+    # None for creatures, lands, and spells whose effect is implicit (rare).
+    spell_effect: Effect | None = None
 
     @property
     def is_land(self) -> bool:
@@ -89,6 +94,14 @@ class CardPrinting:
     @property
     def is_token(self) -> bool:
         return "Token" in self.supertypes
+
+    @property
+    def is_instant(self) -> bool:
+        return "Instant" in self.card_types
+
+    @property
+    def is_sorcery(self) -> bool:
+        return "Sorcery" in self.card_types
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
@@ -127,6 +140,36 @@ def make_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
+    )
+
+
+def make_instant(name: str, cost: str, effect: Effect) -> CardPrinting:
+    type_line = "Instant"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        spell_effect=effect,
+    )
+
+
+def make_sorcery(name: str, cost: str, effect: Effect) -> CardPrinting:
+    type_line = "Sorcery"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        spell_effect=effect,
     )
 
 
@@ -355,24 +398,42 @@ EOE_CREATURES: dict[str, CardPrinting] = {
 }
 
 
-# The pool used for games — synthetic placeholders plus every real EoE card
-# we've implemented so far.
-CREATURE_POOL: dict[str, CardPrinting] = {**SYNTHETIC_CREATURES, **EOE_CREATURES}
+# Real EoE instants and sorceries. Non-permanent spells that resolve via
+# their spell_effect and then go to their owner's graveyard.
+EOE_SPELLS: dict[str, CardPrinting] = {
+    c.name: c
+    for c in [
+        make_sorcery(
+            "Plasma Bolt", "{R}", effect=DealDamageAnyTarget(amount=2),
+        ),
+    ]
+}
+
+
+# Everything non-land that's playable — creatures + instants + sorceries.
+# Drawn into decks, castable from hand.
+NONLAND_POOL: dict[str, CardPrinting] = {
+    **SYNTHETIC_CREATURES, **EOE_CREATURES, **EOE_SPELLS,
+}
+# Back-compat alias — some tests and the deck builder still reference the
+# creature-only name. Kept so that the existing test signatures don't need
+# to change; new code should read NONLAND_POOL.
+CREATURE_POOL: dict[str, CardPrinting] = NONLAND_POOL
 
 
 def all_printings() -> dict[str, CardPrinting]:
-    return {**BASIC_LANDS, **CREATURE_POOL}
+    return {**BASIC_LANDS, **NONLAND_POOL}
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
-    """60 cards: 24 basics of the chosen color + 36 creatures of that color."""
+    """60 cards: 24 basics of the chosen color + 36 non-land cards of that color."""
     if color not in _COLOR_TO_BASIC:
         raise ValueError(f"unknown color: {color}")
     rng = random.Random(seed)
     land_name = _COLOR_TO_BASIC[color]
     creatures = [
         name
-        for name, p in CREATURE_POOL.items()
+        for name, p in NONLAND_POOL.items()
         if color in p.mana_cost.colors
     ]
     if not creatures:

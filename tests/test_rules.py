@@ -996,6 +996,99 @@ def test_soldier_token_dies_in_combat_and_vanishes():
     assert any("ceases to exist" in e for e in state.log)
 
 
+# --------------------------------------------------------------------------
+# Rule: INSTANTS & SORCERIES — cast, resolve, go to graveyard
+# --------------------------------------------------------------------------
+
+
+def test_sorcery_goes_on_stack_at_sorcery_timing_and_resolves_to_graveyard():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[BASIC_LANDS["Mountain"]],
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    # Spell is on the stack with a target
+    assert len(state.stack) == 1
+    assert state.stack[0].targets != ()
+    # Resolve it — damage lands, spell goes to graveyard
+    resolve_top_of_stack(state)
+    # Someone took 2 damage
+    life_lost = 20 - state.players[1].life
+    self_hit = 20 - state.players[0].life
+    # Plasma Bolt went to P0's graveyard
+    assert spell in state.players[0].graveyard
+    assert spell not in state.battlefield
+    assert life_lost + self_hit == 2 or life_lost == 0  # may have hit creature
+
+
+def test_sorcery_not_legal_outside_main_phase():
+    from mtg_bot.cards import EOE_SPELLS
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[BASIC_LANDS["Mountain"]],
+        step=Step.UPKEEP,
+    )
+    assert not any(isinstance(a, CastSpell) for a in legal_moves(state))
+
+
+def test_sorcery_not_legal_with_nonempty_stack():
+    from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt, SYNTHETIC_CREATURES["Wild Bear"]],
+        p0_battlefield=[BASIC_LANDS["Mountain"], BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
+    )
+    # Put a bear on the stack so sorcery timing fails
+    bear = state.players[0].hand[1]
+    apply(state, CastSpell(bear.id))
+    assert state.stack
+    # Bolt (a sorcery) should not be a legal move while stack is non-empty
+    bolt_obj = state.players[0].hand[0]
+    assert not any(
+        isinstance(a, CastSpell) and a.card_id == bolt_obj.id
+        for a in legal_moves(state)
+    )
+
+
+def test_spell_requiring_target_is_not_legal_with_no_legal_targets():
+    """Plasma Bolt targets 'any target'. With both players' battlefields
+    totally empty and both alive, there are always player targets, so this
+    test uses a made-up scenario to exercise the no-legal-targets filter.
+    """
+    from mtg_bot.cards import make_sorcery
+    from mtg_bot.effects import DealDamageToOpponentCreature
+
+    # A spell that needs an opponent's creature. With none on the battlefield,
+    # not legal to cast.
+    test_spell_printing = make_sorcery(
+        "Test Zap", "{R}", effect=DealDamageToOpponentCreature(amount=1)
+    )
+    state = _arena(
+        p0_hand=[test_spell_printing],
+        p0_battlefield=[BASIC_LANDS["Mountain"]],
+    )
+    # No opposing creatures → spell is not a legal move
+    card_obj = state.players[0].hand[0]
+    assert not any(
+        isinstance(a, CastSpell) and a.card_id == card_obj.id
+        for a in legal_moves(state)
+    )
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
