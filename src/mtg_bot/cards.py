@@ -18,6 +18,7 @@ from mtg_bot.effects import (
     EachOpponentDiscards,
     EachPlayerDraws,
     GainLife,
+    PutPlusOneCounterOnCreatureYouControl,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -220,6 +221,16 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
 EOE_CREATURES: dict[str, CardPrinting] = {
     c.name: c
     for c in [
+        # White
+        make_creature(
+            "Rayblade Trooper", "{2}{W}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+            ),
+        ),
         # Black
         make_creature("Hullcarver", "{B}", 1, 1, keywords={"deathtouch"}),
         make_creature("Monoist Sentry", "{B}", 4, 1, keywords={"defender"}),

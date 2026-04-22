@@ -11,6 +11,7 @@ from mtg_bot.effects import (
     EachPlayerDraws,
     Effect,
     GainLife,
+    PutPlusOneCounterOnCreatureYouControl,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -350,6 +351,82 @@ def test_deal_damage_opponent_creature_no_targets_is_noop():
     state = GameState()
     state.players.append(Player(id=0))
     DealDamageToOpponentCreature(amount=1).resolve(state, controller_id=0, targets=())
+
+
+def test_plus_one_counter_requires_target():
+    assert PutPlusOneCounterOnCreatureYouControl().requires_target() is True
+
+
+def test_plus_one_counter_legal_targets_only_own_creatures():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+
+    targets = PutPlusOneCounterOnCreatureYouControl().legal_targets(state, 0)
+    assert ("creature", mine.id) in targets
+    assert ("creature", theirs.id) not in targets
+
+
+def test_plus_one_counter_adds_counter_on_resolve():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+    assert bear.plus_one_counters == 0
+
+    PutPlusOneCounterOnCreatureYouControl(amount=1).resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.plus_one_counters == 1
+
+    # Stacks on the same creature
+    PutPlusOneCounterOnCreatureYouControl(amount=2).resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.plus_one_counters == 3
+
+
+def test_plus_one_counter_no_targets_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    PutPlusOneCounterOnCreatureYouControl().resolve(
+        state, controller_id=0, targets=()
+    )
+
+
+def test_plus_one_counter_wrong_kind_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    # Passing a player target shouldn't mutate anything
+    PutPlusOneCounterOnCreatureYouControl().resolve(
+        state, controller_id=0, targets=(("player", 0),)
+    )
+
+
+def test_plus_one_counter_missing_id_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    PutPlusOneCounterOnCreatureYouControl().resolve(
+        state, controller_id=0, targets=(("creature", 99999),)
+    )
+
+
+def test_plus_one_counter_describe_singular_and_plural():
+    assert (
+        PutPlusOneCounterOnCreatureYouControl(amount=1).describe()
+        == "put a +1/+1 counter on target creature you control"
+    )
+    assert (
+        PutPlusOneCounterOnCreatureYouControl(amount=3).describe()
+        == "put 3 +1/+1 counters on target creature you control"
+    )
 
 
 def test_deal_damage_opponent_creature_describe():

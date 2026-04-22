@@ -856,6 +856,68 @@ def test_nova_hellkite_fizzles_with_no_enemy_creatures():
     assert any("fizzles" in entry for entry in state.log)
 
 
+def test_rayblade_trooper_etb_can_counter_itself():
+    """With no other creatures you control at ETB time, Rayblade is still a
+    legal target — it counters itself."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(
+        p0_hand=[rayblade],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 3,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell → on bf; trigger stacks
+    # Target must be Rayblade itself (the only creature P0 controls)
+    assert state.stack[0].targets == (("creature", obj.id),)
+    resolve_top_of_stack(state)  # ability → counter
+
+    rayblade_on_bf = next(o for o in state.battlefield if o.id == obj.id)
+    assert rayblade_on_bf.plus_one_counters == 1
+
+
+def test_rayblade_trooper_etb_boosts_existing_creature():
+    """When there are multiple own creatures, the counter lands on some
+    creature P0 controls — not an opponent's."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(
+        p0_hand=[rayblade],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 3,
+    )
+    ally = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    enemy = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([ally, enemy])
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    # Chosen target must be an own creature
+    kind, target_id = state.stack[0].targets[0]
+    assert kind == "creature"
+    assert target_id in {obj.id, ally.id}
+    assert target_id != enemy.id
+
+    resolve_top_of_stack(state)  # counter lands
+    target = next(o for o in state.battlefield if o.id == target_id)
+    assert target.plus_one_counters == 1
+    # Enemy untouched
+    assert enemy.plus_one_counters == 0
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
