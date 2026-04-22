@@ -987,6 +987,9 @@ class StaticAbility:
     power_bonus: int = 0
     toughness_bonus: int = 0
     active_turn_only: bool = False
+    # Tiered abilities on Spacecraft: the ability is only active when the
+    # source has ``tier_threshold`` or more charge counters. 0 = always on.
+    tier_threshold: int = 0
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
@@ -1003,6 +1006,9 @@ class StaticAbility:
                 return False
             if state.players[state.active_player_idx].id != source.controller_id:
                 return False
+        # Spacecraft tier gate — source needs enough charge counters.
+        if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
+            return False
         if self.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL:
             return target.id != source.id
         if self.scope == StaticScope.CREATURES_YOU_CONTROL:

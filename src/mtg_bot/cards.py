@@ -224,13 +224,16 @@ def make_spacecraft(
     station_threshold: int,
     stationed_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     legendary: bool = False,
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
 ) -> CardPrinting:
     """Build a Spacecraft card (Artifact — Spacecraft).
 
     Spacecraft enter as non-creature artifacts. Once they accumulate
     ``station_threshold`` charge counters they become artifact creatures
-    with the printed ``power``/``toughness`` and ``stationed_keywords``
-    until counters drop (which doesn't happen in Stage-3 scope).
+    with the printed ``power``/``toughness`` and ``stationed_keywords``.
+    Tier-gated static abilities (like Lumen-Class Frigate's "2+ anthem")
+    use StaticAbility(tier_threshold=N).
     """
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Artifact — Spacecraft"
@@ -247,6 +250,8 @@ def make_spacecraft(
         toughness=toughness,
         station_threshold=station_threshold,
         stationed_keywords=frozenset(stationed_keywords),
+        triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
     )
 
 
@@ -693,6 +698,37 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Galvanizing Sawship", "{5}{R}", 6, 5,
             station_threshold=3,
             stationed_keywords={"flying", "haste"},
+        ),
+        # Lumen-Class Frigate: two-tiered Spacecraft.
+        # 2+ | Other creatures you control get +1/+1.  (anthem, no creature yet)
+        # 12+ | Flying, lifelink — and it becomes an artifact creature.
+        make_spacecraft(
+            "Lumen-Class Frigate", "{1}{W}", 3, 5,
+            station_threshold=12,
+            stationed_keywords={"flying", "lifelink"},
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    power_bonus=1, toughness_bonus=1,
+                    tier_threshold=2,
+                ),
+            ),
+        ),
+        # Wedgelight Rammer: ETB creates a 2/2 Robot, 9+ it's a creature
+        # with flying + first strike.
+        make_spacecraft(
+            "Wedgelight Rammer", "{3}{W}", 3, 4,
+            station_threshold=9,
+            stationed_keywords={"flying", "first strike"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                    ),
+                ),
+            ),
         ),
         # Green
         make_creature(

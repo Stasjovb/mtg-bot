@@ -2441,6 +2441,69 @@ def test_memorial_team_leader_does_not_pump_itself():
     assert effective_power(state, leader) == 4  # base 4
 
 
+def test_lumen_anthem_inactive_below_tier_threshold():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    lumen = EOE_CREATURES["Lumen-Class Frigate"]
+    state = _arena(p0_battlefield=[lumen, SYNTHETIC_CREATURES["Wild Bear"]])
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    # 0 counters, 2+ anthem inactive.
+    assert effective_power(state, bear) == 2
+
+
+def test_lumen_anthem_active_at_2_plus_counters_even_before_creature():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, is_creature_now
+
+    lumen = EOE_CREATURES["Lumen-Class Frigate"]
+    state = _arena(p0_battlefield=[lumen, SYNTHETIC_CREATURES["Wild Bear"]])
+    lumen_obj = next(o for o in state.battlefield if o.printing.name == "Lumen-Class Frigate")
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    lumen_obj.charge_counters = 2
+    assert not is_creature_now(lumen_obj)  # station threshold is 12
+    # Anthem fires: bear is pumped.
+    assert effective_power(state, bear) == 3
+
+
+def test_lumen_becomes_creature_at_station_threshold():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords, is_creature_now
+
+    lumen = EOE_CREATURES["Lumen-Class Frigate"]
+    state = _arena(p0_battlefield=[lumen])
+    lumen_obj = state.battlefield[0]
+    lumen_obj.charge_counters = 12
+    assert is_creature_now(lumen_obj)
+    kws = effective_keywords(state, lumen_obj)
+    assert "flying" in kws
+    assert "lifelink" in kws
+
+
+def test_wedgelight_rammer_etb_creates_robot():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    import random
+
+    rammer = EOE_CREATURES["Wedgelight Rammer"]
+    state = _arena(
+        p0_hand=[rammer],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 4,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell → Rammer enters + ETB stacks
+    resolve_top_of_stack(state)  # ETB resolves → Robot token
+    robots = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Robot"]
+    ]
+    assert len(robots) == 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
