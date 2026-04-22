@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     GainLife,
     LoseLife,
     PumpCreaturesYouControlUntilEOT,
+    PumpSelfUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
@@ -230,6 +231,7 @@ def make_spacecraft(
     legendary: bool = False,
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     static_abilities: tuple[StaticAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
 ) -> CardPrinting:
     """Build a Spacecraft card (Artifact — Spacecraft).
 
@@ -256,6 +258,7 @@ def make_spacecraft(
         stationed_keywords=frozenset(stationed_keywords),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
+        activated_abilities=tuple(activated_abilities),
     )
 
 
@@ -819,9 +822,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Debris Field Crusher: ETB 3 damage to any target, 8+ flying.
-        # Real card has an activated ability "{1}{R}: this gets +2/+0 UEOT"
-        # which we don't include — it'd need a self-pump variant.
+        # Debris Field Crusher: ETB 3 damage to any target, 8+ flying,
+        # "{1}{R}: This Spacecraft gets +2/+0 until end of turn."
         make_spacecraft(
             "Debris Field Crusher", "{4}{R}", 1, 5,
             station_threshold=8,
@@ -830,6 +832,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=DealDamageAnyTarget(amount=3),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{1}{R}"),
+                    effect=PumpSelfUntilEOT(power_bonus=2, toughness_bonus=0),
                 ),
             ),
         ),

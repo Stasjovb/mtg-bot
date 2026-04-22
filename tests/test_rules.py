@@ -2786,6 +2786,28 @@ def test_dauntless_scrapbot_exiles_opponent_graveyard_and_creates_lander():
     assert len(landers) == 1
 
 
+def test_debris_field_crusher_activated_ability_pumps_self():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+    import random
+
+    dfc = EOE_CREATURES["Debris Field Crusher"]
+    state = _arena(p0_battlefield=[dfc] + [BASIC_LANDS["Mountain"]] * 3)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    obj = next(o for o in state.battlefield if o.printing.name == "Debris Field Crusher")
+    # Station DFC past its threshold so it's a creature (else effective_power
+    # on a non-creature is base power for testing purposes).
+    obj.charge_counters = 8
+    base = effective_power(state, obj)
+
+    apply(state, ActivateAbility(source_id=obj.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    assert effective_power(state, obj) == base + 2
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

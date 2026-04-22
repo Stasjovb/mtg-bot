@@ -323,6 +323,38 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class PumpSelfUntilEOT(Effect):
+    """The ability's source gets +power/+toughness (and optional keywords)
+    until end of turn. Reads state.resolving_source."""
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        source.temp_power_bonus += self.power_bonus
+        source.temp_toughness_bonus += self.toughness_bonus
+        if self.granted_keywords:
+            source.temp_keywords = source.temp_keywords | self.granted_keywords
+        state.log.append(
+            f"{source.printing.name} gets "
+            f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"this gets +{self.power_bonus}/+{self.toughness_bonus} "
+            f"until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class PumpCreaturesYouControlUntilEOT(Effect):
     """Each creature the controller controls gets +power/+toughness until
     end of turn (applied at resolution; creatures entering later don't get
