@@ -1193,6 +1193,42 @@ def test_gravkill_exiles_a_creature():
     assert bear not in state.players[1].graveyard
 
 
+def test_honor_gives_counter_and_draws_card_as_one_spell():
+    """Honor is the first composite-effect spell: a single cast applies both
+    the +1/+1 counter and the draw on resolution."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    honor = EOE_SPELLS["Honor"]
+    state = _arena(
+        p0_hand=[honor],
+        p0_battlefield=[BASIC_LANDS["Plains"]],
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Target for the +1/+1 counter
+    ally = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(ally)
+    # Library has a card to draw
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    hand_before = len(state.players[0].hand) - 1  # after we cast Honor
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    # Target recorded
+    assert state.stack[0].targets == (("creature", ally.id),)
+    resolve_top_of_stack(state)  # both effects run
+
+    assert ally.plus_one_counters == 1
+    assert len(state.players[0].hand) == hand_before + 1
+    # Honor itself went to the graveyard
+    assert spell in state.players[0].graveyard
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

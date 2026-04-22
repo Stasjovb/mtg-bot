@@ -24,6 +24,8 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnTargetCreature,
+    Sequence,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -422,6 +424,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # Spacecraft aren't implemented yet, ours only targets creatures.
         make_instant(
             "Gravkill", "{3}{B}", effect=ExileTargetCreature(),
+        ),
+        # Honor: "Put a +1/+1 counter on target creature. Draw a card."
+        make_sorcery(
+            "Honor", "{W}", effect=Sequence(effects=(
+                PutPlusOneCounterOnTargetCreature(amount=1),
+                DrawCards(amount=1),
+            )),
         ),
     ]
 }

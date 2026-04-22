@@ -15,6 +15,7 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnTargetCreature,
     Sequence,
     TargetOpponentDiscards,
     TriggeredAbility,
@@ -629,6 +630,54 @@ def test_exile_target_creature_empty_or_wrong_kind_is_noop():
 
 def test_exile_target_creature_describe():
     assert ExileTargetCreature().describe() == "exile target creature"
+
+
+def test_plus_one_counter_on_target_creature_allows_any_creature():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+
+    targets = PutPlusOneCounterOnTargetCreature().legal_targets(state, 0)
+    assert ("creature", mine.id) in targets
+    assert ("creature", theirs.id) in targets  # not restricted to own
+
+
+def test_plus_one_counter_on_target_creature_adds_counter():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+    PutPlusOneCounterOnTargetCreature(amount=2).resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.plus_one_counters == 2
+
+
+def test_plus_one_counter_on_target_creature_empty_and_wrong_kind_noops():
+    state = GameState()
+    state.players.append(Player(id=0))
+    PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=())
+    PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=(("player", 0),))
+    PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=(("creature", 99999),))
+
+
+def test_plus_one_counter_on_target_creature_describe():
+    assert (
+        PutPlusOneCounterOnTargetCreature(amount=1).describe()
+        == "put a +1/+1 counter on target creature"
+    )
+    assert (
+        PutPlusOneCounterOnTargetCreature(amount=3).describe()
+        == "put 3 +1/+1 counters on target creature"
+    )
 
 
 def test_sequence_describe_joins_sub_effects():
