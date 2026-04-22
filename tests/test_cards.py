@@ -47,6 +47,23 @@ def test_creature_has_power_toughness():
     assert bear.toughness == 2
 
 
+def test_creature_defaults_to_no_keywords():
+    bear = SYNTHETIC_CREATURES["Wild Bear"]
+    assert bear.keywords == frozenset()
+
+
+def test_make_creature_accepts_keywords():
+    from mtg_bot.cards import make_creature
+    c = make_creature("Test Flier", "{1}{U}", 2, 2, keywords={"flying", "vigilance"})
+    assert c.keywords == frozenset({"flying", "vigilance"})
+
+
+def test_make_creature_keywords_from_tuple():
+    from mtg_bot.cards import make_creature
+    c = make_creature("Test", "{R}", 1, 1, keywords=("haste",))
+    assert "haste" in c.keywords
+
+
 def test_build_deck_is_60_cards():
     deck = build_mono_color_deck("G", seed=1)
     assert len(deck) == 60

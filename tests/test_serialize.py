@@ -38,6 +38,18 @@ def test_serialize_hand_card_has_basic_fields():
     assert d["type_line"] == "Basic Land — Forest"
     assert d["power"] is None
     assert d["toughness"] is None
+    assert d["keywords"] == []
+
+
+def test_serialize_permanent_includes_keywords():
+    from mtg_bot.cards import make_creature
+
+    state = _fresh_state()
+    flier_printing = make_creature("Sky Drake", "{2}{U}", 2, 2, keywords={"flying"})
+    flier = state.new_object(flier_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(flier)
+    d = serialize_permanent(flier)
+    assert d["keywords"] == ["flying"]
 
 
 def test_serialize_state_contains_players_and_stack():

@@ -58,6 +58,7 @@ class CardPrinting:
     power: int | None = None
     toughness: int | None = None
     produces: frozenset[str] = frozenset()
+    keywords: frozenset[str] = frozenset()
 
     @property
     def is_land(self) -> bool:
@@ -86,7 +87,13 @@ def _parse_type_line(
     return supertypes, card_types, subtypes
 
 
-def make_creature(name: str, cost: str, power: int, toughness: int) -> CardPrinting:
+def make_creature(
+    name: str,
+    cost: str,
+    power: int,
+    toughness: int,
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+) -> CardPrinting:
     type_line = "Creature"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
@@ -99,6 +106,7 @@ def make_creature(name: str, cost: str, power: int, toughness: int) -> CardPrint
         subtypes=subtypes,
         power=power,
         toughness=toughness,
+        keywords=frozenset(keywords),
     )
 
 

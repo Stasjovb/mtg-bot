@@ -52,6 +52,7 @@ form button:hover { background: #558; }
 .card.creature { background: #2a4432; }
 .card .pt { color: #fc8; font-weight: bold; }
 .card .dmg { color: #f77; }
+.card .kw { color: #9df; font-style: italic; font-size: 0.85em; margin-left: 0.3em; }
 .result { padding: 0.8em 1em; border-radius: 6px; margin-bottom: 1em;
           font-size: 1.15em; background: #2a2a4e; }
 .result.winner { border-left: 4px solid #6f6; }
@@ -110,7 +111,7 @@ _PAGE_HTML = """<!DOCTYPE html>
         <div><strong>Hand:</strong></div>
         <div class="cards">
           {% for c in p.hand %}
-            <span class="card">{{ c.name }}{% if c.mana_cost %} {{ c.mana_cost }}{% endif %}{% if c.power is not none %} <span class="pt">{{ c.power }}/{{ c.toughness }}</span>{% endif %}</span>
+            <span class="card">{{ c.name }}{% if c.mana_cost %} {{ c.mana_cost }}{% endif %}{% if c.power is not none %} <span class="pt">{{ c.power }}/{{ c.toughness }}</span>{% endif %}{% if c.keywords %}<span class="kw">{{ c.keywords | join(', ') }}</span>{% endif %}</span>
           {% endfor %}
         </div>
       {% endif %}
@@ -119,7 +120,7 @@ _PAGE_HTML = """<!DOCTYPE html>
         <div class="cards">
           {% for o in p.battlefield %}
             <span class="card {% if o.tapped %}tapped{% endif %} {% if o.is_land %}land{% elif o.is_creature %}creature{% endif %}">
-              {{ o.name }}{% if o.is_creature %} <span class="pt">{{ o.power }}/{{ o.toughness }}</span>{% if o.damage %} <span class="dmg">[{{ o.damage }}]</span>{% endif %}{% endif %}
+              {{ o.name }}{% if o.is_creature %} <span class="pt">{{ o.power }}/{{ o.toughness }}</span>{% if o.damage %} <span class="dmg">[{{ o.damage }}]</span>{% endif %}{% endif %}{% if o.keywords %}<span class="kw">{{ o.keywords | join(', ') }}</span>{% endif %}
             </span>
           {% endfor %}
         </div>

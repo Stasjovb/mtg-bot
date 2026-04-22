@@ -22,6 +22,7 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "toughness": p.toughness,
         "is_creature": p.is_creature,
         "is_land": p.is_land,
+        "keywords": sorted(p.keywords),
         "tapped": obj.tapped,
         "damage": obj.damage,
         "summoning_sick": obj.summoning_sick,
@@ -39,6 +40,7 @@ def serialize_hand_card(obj: GameObject) -> dict[str, Any]:
         "type_line": p.type_line,
         "power": p.power,
         "toughness": p.toughness,
+        "keywords": sorted(p.keywords),
     }
 
 
