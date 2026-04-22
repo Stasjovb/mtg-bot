@@ -118,6 +118,44 @@ class EachPlayerDraws(Effect):
 
 
 @dataclass(frozen=True)
+class EachOpponentDiscards(Effect):
+    """Each opponent discards ``count`` cards (untargeted; no choice of target).
+
+    Each discarding player chooses their own discard via their agent's
+    ``choose_discard`` — the ability's controller doesn't pick for them.
+    """
+
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            for _ in range(self.count):
+                if not p.hand:
+                    break
+                hand_ids = [c.id for c in p.hand]
+                chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+                card = next(c for c in p.hand if c.id == chosen_id)
+                p.hand.remove(card)
+                card.zone = Zone.GRAVEYARD
+                p.graveyard.append(card)
+                state.log.append(
+                    f"P{p.id} discards {card.printing.name}"
+                )
+
+    def describe(self) -> str:
+        if self.count == 1:
+            return "each opponent discards a card"
+        return f"each opponent discards {self.count} cards"
+
+
+@dataclass(frozen=True)
 class TargetOpponentDiscards(Effect):
     """Target opponent discards ``count`` cards.
 

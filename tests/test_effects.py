@@ -5,6 +5,7 @@ import pytest
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
     DrawCards,
+    EachOpponentDiscards,
     EachPlayerDraws,
     Effect,
     GainLife,
@@ -192,3 +193,45 @@ def test_target_opponent_discards_resolve_skips_if_target_already_lost():
 def test_target_opponent_discards_describe_singular_and_plural():
     assert TargetOpponentDiscards(count=1).describe() == "target opponent discards a card"
     assert TargetOpponentDiscards(count=2).describe() == "target opponent discards 2 cards"
+
+
+def test_each_opponent_discards_requires_no_target():
+    assert EachOpponentDiscards().requires_target() is False
+    assert EachOpponentDiscards().legal_targets(None, 0) == []
+
+
+def test_each_opponent_discards_hits_every_living_opponent():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    state.players.append(Player(id=2, agent=RandomAgent()))
+    for pid in (1, 2):
+        card = state.new_object(BASIC_LANDS["Plains"], owner_id=pid, zone=Zone.HAND)
+        state.players[pid].hand.append(card)
+
+    EachOpponentDiscards(count=1).resolve(state, controller_id=0)
+    assert len(state.players[0].hand) == 0   # controller untouched
+    assert len(state.players[1].graveyard) == 1
+    assert len(state.players[2].graveyard) == 1
+
+
+def test_each_opponent_discards_skips_lost_players_and_empty_hands():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    state.players.append(Player(id=2, agent=RandomAgent()))
+    state.players[1].has_lost = True
+    # P2 has empty hand — skipped silently
+
+    EachOpponentDiscards(count=1).resolve(state, controller_id=0)
+    assert len(state.players[1].graveyard) == 0  # lost player not affected
+    assert len(state.players[2].graveyard) == 0  # empty hand, no discard
+
+
+def test_each_opponent_discards_describe_singular_and_plural():
+    assert EachOpponentDiscards(count=1).describe() == "each opponent discards a card"
+    assert EachOpponentDiscards(count=2).describe() == "each opponent discards 2 cards"
