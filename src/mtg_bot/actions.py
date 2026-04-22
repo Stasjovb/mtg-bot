@@ -33,6 +33,18 @@ class CastSpell(Action):
 
 
 @dataclass(frozen=True)
+class ActivateAbility(Action):
+    """Activate the N-th activated ability on a permanent the player
+    controls. Pays the cost and puts the ability on the stack. Ineligibility
+    (can't pay, creature summoning-sick for tap-cost abilities, etc.) is
+    filtered in ``legal_actions`` and silently no-ops here as defense.
+    """
+
+    source_id: int
+    ability_index: int
+
+
+@dataclass(frozen=True)
 class ActivateStation(Action):
     """Activate the Station ability of a Spacecraft.
 
@@ -125,6 +137,11 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
     if isinstance(action, ActivateStation):
         _activate_station(state, player_id, action.spacecraft_id, action.crew_id)
         return
+    if isinstance(action, ActivateAbility):
+        _activate_ability(
+            state, player_id, action.source_id, action.ability_index
+        )
+        return
     raise ValueError(f"unknown action: {action!r}")
 
 
@@ -196,6 +213,61 @@ def _cast_spell(
     )
     mode = " (warp)" if use_warp else ""
     state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
+
+
+def _activate_ability(
+    state: GameState, player_id: int, source_id: int, ability_index: int
+) -> None:
+    """Pay an activated ability's cost and put it on the stack."""
+    from mtg_bot.turn import move_off_battlefield
+
+    source = next((o for o in state.battlefield if o.id == source_id), None)
+    if source is None or source.controller_id != player_id:
+        return
+    abilities = source.printing.activated_abilities
+    if ability_index < 0 or ability_index >= len(abilities):
+        return
+    ability = abilities[ability_index]
+
+    # Pay mana first (auto-tap lands).
+    if ability.cost.mana is not None:
+        auto_tap_for_cost(state, player_id, ability.cost.mana)
+
+    # Tap-self (if cost requires it).
+    if ability.cost.tap_self:
+        source.tapped = True
+
+    # Target selection for the effect (if it targets).
+    targets: tuple[tuple[str, int], ...] = ()
+    if ability.effect.requires_target():
+        legal = ability.effect.legal_targets(state, player_id)
+        if legal:
+            p = state.player_by_id(player_id)
+            chosen = p.agent.choose_target(state, player_id, legal)
+            if chosen is not None:
+                targets = (chosen,)
+
+    # Sacrifice-self is paid LAST so the source is still on the battlefield
+    # for target selection — the Lander case where the ability's effect
+    # doesn't reference the source but the controller needs to still own it.
+    if ability.cost.sacrifice_self:
+        state.log.append(
+            f"P{player_id} sacrifices {source.printing.name}"
+        )
+        move_off_battlefield(state, source, destination="graveyard")
+
+    # Put the ability on the stack using the existing StackItem shape.
+    state.stack.append(
+        StackItem(
+            source=source,
+            controller_id=player_id,
+            ability=ability,
+            targets=targets,
+        )
+    )
+    state.log.append(
+        f"P{player_id} activates {source.printing.name}'s ability"
+    )
 
 
 def _activate_station(

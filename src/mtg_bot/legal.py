@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mtg_bot.actions import (
     Action,
+    ActivateAbility,
     ActivateStation,
     CastSpell,
     PassPriority,
@@ -113,6 +114,34 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             state, player_id, card.printing.mana_cost
         ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id))
+
+    # Activated abilities on permanents this player controls.
+    for obj in state.battlefield:
+        if obj.controller_id != player_id:
+            continue
+        for idx, ability in enumerate(obj.printing.activated_abilities):
+            if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
+                continue
+            # Cost payability checks.
+            if ability.cost.mana is not None and not can_pay_cost(
+                state, player_id, ability.cost.mana
+            ):
+                continue
+            if ability.cost.tap_self:
+                if obj.tapped:
+                    continue
+                # Creatures tapping as part of a cost can't while summoning-sick.
+                from mtg_bot.game import is_creature_now
+                if is_creature_now(obj) and obj.summoning_sick:
+                    continue
+            # If the effect requires a target, at least one must be legal.
+            if ability.effect.requires_target() and not ability.effect.legal_targets(
+                state, player_id
+            ):
+                continue
+            actions.append(
+                ActivateAbility(source_id=obj.id, ability_index=idx)
+            )
 
     # Station activations: for each Spacecraft this player controls, each
     # untapped non-sick creature they control (not the Spacecraft itself) is

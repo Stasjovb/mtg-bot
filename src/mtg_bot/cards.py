@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 
 from mtg_bot.effects import (
+    ActivatedAbility,
+    ActivationCost,
     ConditionalIfVoid,
     CreateToken,
     DealDamageAnyTarget,
@@ -104,6 +106,8 @@ class CardPrinting:
     # Continuous abilities that buff other permanents while this permanent
     # is on the battlefield (anthems, keyword grants).
     static_abilities: tuple[StaticAbility, ...] = ()
+    # Abilities the controller may activate by paying a cost.
+    activated_abilities: tuple["ActivatedAbility", ...] = ()
 
     @property
     def is_land(self) -> bool:
@@ -171,6 +175,7 @@ def make_creature(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     static_abilities: tuple[StaticAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
     warp: str | None = None,
     legendary: bool = False,
 ) -> CardPrinting:
@@ -190,8 +195,21 @@ def make_creature(
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
+        activated_abilities=tuple(activated_abilities),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
+    )
+
+
+def cost(
+    mana: str = "", tap_self: bool = False, sacrifice_self: bool = False
+) -> ActivationCost:
+    """Small constructor for ``ActivationCost`` that handles mana parsing."""
+    return ActivationCost(
+        mana=parse_mana_cost(mana) if mana else None,
+        mana_str=mana,
+        tap_self=tap_self,
+        sacrifice_self=sacrifice_self,
     )
 
 
@@ -266,6 +284,7 @@ def make_token_creature(
     subtypes: tuple[str, ...] = (),
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     artifact: bool = False,
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -293,6 +312,7 @@ def make_token_creature(
         power=power,
         toughness=toughness,
         keywords=frozenset(keywords),
+        activated_abilities=tuple(activated_abilities),
     )
 
 

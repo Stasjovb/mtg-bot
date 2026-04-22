@@ -137,7 +137,9 @@ class StackItem:
 
     source: GameObject
     controller_id: int
-    ability: Optional["TriggeredAbility"] = None
+    # Either a TriggeredAbility or an ActivatedAbility — both have an
+    # ``.effect`` attribute and resolve the same way.
+    ability: "object | None" = None
     targets: tuple[tuple[str, int], ...] = ()
 
 

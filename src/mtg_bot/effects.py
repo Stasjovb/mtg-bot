@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from mtg_bot.cards import ManaCost
     from mtg_bot.game import GameState
 
 
@@ -756,6 +757,48 @@ class TargetOpponentDiscards(Effect):
         if self.count == 1:
             return "target opponent discards a card"
         return f"target opponent discards {self.count} cards"
+
+
+@dataclass(frozen=True)
+class ActivationCost:
+    """Cost to activate an activated ability.
+
+    Composable pieces: mana cost, tap the source, sacrifice the source.
+    "Tap another creature" style costs aren't covered here — Station
+    already has its own Action for that specialised case.
+    """
+
+    mana: "ManaCost | None" = None
+    mana_str: str = ""  # display form like "{2}"
+    tap_self: bool = False
+    sacrifice_self: bool = False
+
+    def describe(self) -> str:
+        parts: list[str] = []
+        if self.mana_str:
+            parts.append(self.mana_str)
+        if self.tap_self:
+            parts.append("{T}")
+        if self.sacrifice_self:
+            parts.append("Sacrifice ~")
+        return ", ".join(parts) if parts else "0"
+
+
+@dataclass(frozen=True)
+class ActivatedAbility:
+    """An ability players can activate by paying ``cost``. On activation the
+    ability goes on the stack; when it resolves, ``effect`` runs.
+
+    ``sorcery_speed=True`` limits activation to main-phase-with-empty-stack
+    timing (matches "Activate only as a sorcery").
+    """
+
+    cost: ActivationCost
+    effect: Effect
+    sorcery_speed: bool = False
+
+    def describe(self) -> str:
+        return f"{self.cost.describe()}: {self.effect.describe()}"
 
 
 class StaticScope:
