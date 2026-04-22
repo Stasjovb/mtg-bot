@@ -600,6 +600,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
             ),
         ),
+        # Illvoi Galeblade: Flash + Flying + "{2}, Sacrifice this creature:
+        # Draw a card." First card to exercise the flash keyword.
+        make_creature(
+            "Illvoi Galeblade", "{U}", 1, 1,
+            keywords={"flash", "flying"},
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{2}", sacrifice_self=True),
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
         # Red
         make_creature(
             "Nebula Dragon", "{6}{R}", 4, 4,

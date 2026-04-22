@@ -2297,6 +2297,66 @@ def test_landfall_also_fires_from_lander_library_search():
     assert effective_power(state, god) == 7
 
 
+def test_flash_creature_is_legal_at_instant_speed():
+    """Illvoi Galeblade has flash: can be cast on opponent's turn with a
+    non-empty stack too."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    galeblade = EOE_CREATURES["Illvoi Galeblade"]
+    state = _arena(
+        p0_hand=[galeblade],
+        p0_battlefield=[BASIC_LANDS["Island"]],
+        step=Step.END,  # off main phase
+        active=1,       # opponent's turn
+    )
+    state.priority_player_idx = 0
+    moves = legal_moves(state, player_id=0)
+    card = state.players[0].hand[0]
+    assert any(
+        isinstance(a, CastSpell) and a.card_id == card.id for a in moves
+    )
+
+
+def test_non_flash_creature_not_legal_at_instant_speed():
+    """Sanity: a regular creature stays sorcery-speed."""
+    state = _arena(
+        p0_hand=[SYNTHETIC_CREATURES["Wild Bear"]],
+        p0_battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
+        step=Step.END,
+        active=1,
+    )
+    state.priority_player_idx = 0
+    moves = legal_moves(state, player_id=0)
+    card = state.players[0].hand[0]
+    assert not any(
+        isinstance(a, CastSpell) and a.card_id == card.id for a in moves
+    )
+
+
+def test_illvoi_galeblade_sacrifices_for_draw():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    galeblade = EOE_CREATURES["Illvoi Galeblade"]
+    state = _arena(p0_battlefield=[galeblade, BASIC_LANDS["Island"], BASIC_LANDS["Island"]])
+    obj = next(o for o in state.battlefield if o.printing.name == "Illvoi Galeblade")
+    # Seed library so the draw has something
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    hand_before = len(state.players[0].hand)
+    apply(state, ActivateAbility(source_id=obj.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    # Galeblade was sacrificed; P0 drew a card.
+    assert obj not in state.battlefield
+    assert len(state.players[0].hand) == hand_before + 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

@@ -58,10 +58,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     p = state.player_by_id(player_id)
 
-    # Instants: legal any time you have priority. Warp variants of an
-    # instant (rare — EoE warp is creature-focused) would also be legal here.
+    # Instant-speed-castable: instants AND any permanent spell with flash.
     for card in p.hand:
-        if not card.printing.is_instant:
+        instant_speed = (
+            card.printing.is_instant or "flash" in card.printing.keywords
+        )
+        if not instant_speed:
             continue
         if can_pay_cost(
             state, player_id, card.printing.mana_cost
@@ -82,7 +84,9 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 actions.append(PlayLand(card.id))
 
     # Creature / sorcery / other permanent (artifact, spacecraft, ...) casts
-    # at sorcery speed.
+    # at sorcery speed. Creatures/permanents with flash were already proposed
+    # in the instant-speed block above, so skip them here to avoid duplicate
+    # CastSpell actions.
     def _is_sorcery_speed_spell(card) -> bool:
         pr = card.printing
         return (
@@ -92,6 +96,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         )
 
     for card in p.hand:
+        if "flash" in card.printing.keywords:
+            continue
+        if card.printing.is_instant:
+            continue
         if _is_sorcery_speed_spell(card):
             if can_pay_cost(
                 state, player_id, card.printing.mana_cost
