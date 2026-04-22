@@ -562,6 +562,52 @@ def test_defender_can_still_block():
 
 
 # --------------------------------------------------------------------------
+# Rule: MENACE — can't be blocked by fewer than two creatures
+# --------------------------------------------------------------------------
+
+
+def _menacer(name="Test Menacer", power=3, toughness=2):
+    return make_creature(name, "{2}{R}", power, toughness, keywords={"menace"})
+
+
+def test_menace_attacker_cannot_be_blocked_by_one():
+    state = _arena(
+        p0_battlefield=[_menacer()],
+        p1_battlefield=[_ground("Blocker", 2, 2)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Single block filtered → menacer goes through unblocked
+    assert state.players[1].life == 20 - 3
+    assert attacker in state.battlefield
+    assert blocker in state.battlefield
+    assert blocker.blocking is None
+
+
+def test_menace_attacker_can_be_blocked_by_two():
+    state = _arena(
+        p0_battlefield=[_menacer("Brute", 3, 3)],
+        p1_battlefield=[_ground("B1", 2, 2), _ground("B2", 2, 2)],
+    )
+    attacker, b1, b2 = state.battlefield
+    _simulate_combat_step(
+        state, [attacker.id], [(b1.id, attacker.id), (b2.id, attacker.id)]
+    )
+    # Legal double-block stands: 3 damage goes to b1 (dies), then b2 gets
+    # leftover; b1+b2 deal 2+2=4 back, attacker dies
+    assert state.players[1].life == 20
+    assert attacker not in state.battlefield
+
+
+def test_menace_attacker_unblocked_is_unchanged():
+    state = _arena(p0_battlefield=[_menacer()])
+    attacker = state.battlefield[0]
+    _simulate_combat_step(state, [attacker.id])
+    # No blockers at all is fine — unblocked
+    assert state.players[1].life == 20 - 3
+
+
+# --------------------------------------------------------------------------
 # Rule: HASTE — ignores summoning sickness
 # --------------------------------------------------------------------------
 

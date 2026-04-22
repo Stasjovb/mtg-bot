@@ -164,6 +164,19 @@ def _declare_blockers(
             continue
         validated[blocker_id] = attacker_id
 
+    # Menace: if an attacker has menace and was assigned exactly one blocker,
+    # the block is illegal — drop it so the attacker goes through unblocked.
+    blockers_by_attacker: dict[int, list[int]] = {}
+    for bid, aid in validated.items():
+        blockers_by_attacker.setdefault(aid, []).append(bid)
+    for aid, blocker_ids in blockers_by_attacker.items():
+        if (
+            "menace" in attackers[aid].printing.keywords
+            and len(blocker_ids) < 2
+        ):
+            for bid in blocker_ids:
+                validated.pop(bid, None)
+
     declare_blockers(state, validated)
 
 
