@@ -23,6 +23,7 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "is_creature": p.is_creature,
         "is_land": p.is_land,
         "keywords": sorted(p.keywords),
+        "abilities": [a.describe() for a in p.triggered_abilities],
         "tapped": obj.tapped,
         "damage": obj.damage,
         "summoning_sick": obj.summoning_sick,
@@ -41,6 +42,7 @@ def serialize_hand_card(obj: GameObject) -> dict[str, Any]:
         "power": p.power,
         "toughness": p.toughness,
         "keywords": sorted(p.keywords),
+        "abilities": [a.describe() for a in p.triggered_abilities],
     }
 
 
@@ -77,8 +79,15 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
         "step": state.step.value if state.step is not None else None,
         "players": players,
         "stack": [
-            {"id": item.source.id, "name": item.source.printing.name,
-             "controller_id": item.controller_id}
+            {
+                "id": item.source.id,
+                "name": item.source.printing.name,
+                "controller_id": item.controller_id,
+                "is_ability": item.ability is not None,
+                "ability_description": (
+                    item.ability.describe() if item.ability is not None else None
+                ),
+            }
             for item in state.stack
         ],
         "log": list(state.log),

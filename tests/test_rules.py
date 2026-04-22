@@ -18,6 +18,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, make_creature
+from mtg_bot.effects import GainLife, TriggeredAbility
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import (
     Step,
@@ -402,6 +403,111 @@ def test_cast_creature_enters_with_summoning_sickness():
 def test_creature_keyword_set_is_exposed_on_printing():
     flier = make_creature("Test Flier", "{U}", 1, 1, keywords={"flying"})
     assert "flying" in flier.keywords
+
+
+# --------------------------------------------------------------------------
+# Rule: ETB TRIGGERS — when a creature enters, its ETB abilities go on the stack
+# --------------------------------------------------------------------------
+
+
+def _etb_lifegain_creature(name="Test Wisp", amount=2):
+    return make_creature(
+        name, "{W}", 1, 1,
+        triggered_abilities=(
+            TriggeredAbility(trigger="etb", effect=GainLife(amount=amount)),
+        ),
+    )
+
+
+def test_casting_etb_creature_enters_and_triggers_ability_on_stack():
+    """After the creature-spell resolves, the ETB ability goes on the stack
+    separately — it does NOT resolve immediately."""
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _arena(
+        p0_hand=[_etb_lifegain_creature()],
+        p0_battlefield=[BASIC_LANDS["Plains"]],
+        p0_life=20,
+    )
+    wisp = state.players[0].hand[0]
+    apply(state, CastCreature(wisp.id))
+    # Spell on stack
+    assert len(state.stack) == 1
+    # Resolve the spell → creature enters AND the ETB trigger stacks
+    resolve_top_of_stack(state)
+    assert wisp in state.battlefield
+    assert wisp.zone == Zone.BATTLEFIELD
+    assert len(state.stack) == 1
+    assert state.stack[0].ability is not None
+    # Life unchanged until ability resolves
+    assert state.players[0].life == 20
+
+
+def test_etb_lifegain_resolves_and_adjusts_controller_life():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _arena(
+        p0_hand=[_etb_lifegain_creature(amount=3)],
+        p0_battlefield=[BASIC_LANDS["Plains"]],
+        p0_life=15,
+    )
+    wisp = state.players[0].hand[0]
+    apply(state, CastCreature(wisp.id))
+    resolve_top_of_stack(state)  # spell → creature on bf + trigger stacked
+    resolve_top_of_stack(state)  # ability → life gain
+    assert state.players[0].life == 15 + 3
+    assert not state.stack
+
+
+def test_etb_does_not_fire_when_creature_is_already_on_battlefield():
+    """ETB triggers on ENTERING the battlefield, not on being on it. A
+    creature directly placed (not cast) shouldn't fire."""
+    state = _arena(p0_battlefield=[_etb_lifegain_creature(amount=2)], p0_life=20)
+    # No cast → no trigger was ever scheduled
+    assert not state.stack
+    assert state.players[0].life == 20
+
+
+def test_multiple_etb_triggers_stack_in_printing_order():
+    # Creature with two ETBs: gain 1, then gain 3
+    from mtg_bot.actions import resolve_top_of_stack
+
+    card = make_creature(
+        "Double Wisp", "{W}", 1, 1,
+        triggered_abilities=(
+            TriggeredAbility(trigger="etb", effect=GainLife(amount=1)),
+            TriggeredAbility(trigger="etb", effect=GainLife(amount=3)),
+        ),
+    )
+    state = _arena(
+        p0_hand=[card], p0_battlefield=[BASIC_LANDS["Plains"]], p0_life=10,
+    )
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell resolves → 2 abilities on stack
+    assert len(state.stack) == 2
+    # Stack resolves LIFO: last-pushed (gain 3) resolves first
+    resolve_top_of_stack(state)
+    assert state.players[0].life == 10 + 3
+    resolve_top_of_stack(state)
+    assert state.players[0].life == 10 + 3 + 1
+
+
+def test_etb_triggers_fire_in_full_game_flow():
+    """End-to-end: with at least one ETB card in the deck, a real simulated
+    game should fire some ETB triggers. Uses a white deck (Healing Wisp is
+    the Stage-1 ETB card)."""
+    from mtg_bot.simulate import simulate_game
+
+    seen_etb = False
+    for seed in range(10):
+        state = simulate_game(colors=["W", "W"], seed=seed, max_turns=300)
+        if any("ETB trigger" in entry for entry in state.log):
+            seen_etb = True
+            break
+    assert seen_etb, (
+        "expected at least one ETB trigger across 10 seeded W-vs-W games"
+    )
 
 
 # --------------------------------------------------------------------------

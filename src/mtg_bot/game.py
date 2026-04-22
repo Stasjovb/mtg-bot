@@ -10,6 +10,7 @@ from mtg_bot.cards import CardPrinting
 
 if TYPE_CHECKING:
     from mtg_bot.agents import Agent
+    from mtg_bot.effects import TriggeredAbility
     from mtg_bot.turn import Step
 
 
@@ -44,10 +45,16 @@ class GameObject:
 
 @dataclass
 class StackItem:
-    """A spell or ability on the stack. Stage 1: only creature spells."""
+    """A spell or triggered ability on the stack.
+
+    When ``ability`` is None the stack item represents a spell being cast;
+    resolving it moves ``source`` to the battlefield. When ``ability`` is set,
+    the item represents a triggered ability; resolving it runs the effect.
+    """
 
     source: GameObject
     controller_id: int
+    ability: Optional["TriggeredAbility"] = None
 
 
 @dataclass

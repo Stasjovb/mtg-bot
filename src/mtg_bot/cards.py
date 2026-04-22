@@ -11,6 +11,8 @@ import random
 import re
 from dataclasses import dataclass
 
+from mtg_bot.effects import GainLife, TriggeredAbility
+
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
 
@@ -59,6 +61,7 @@ class CardPrinting:
     toughness: int | None = None
     produces: frozenset[str] = frozenset()
     keywords: frozenset[str] = frozenset()
+    triggered_abilities: tuple[TriggeredAbility, ...] = ()
 
     @property
     def is_land(self) -> bool:
@@ -93,6 +96,7 @@ def make_creature(
     power: int,
     toughness: int,
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
 ) -> CardPrinting:
     type_line = "Creature"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -107,6 +111,7 @@ def make_creature(
         power=power,
         toughness=toughness,
         keywords=frozenset(keywords),
+        triggered_abilities=tuple(triggered_abilities),
     )
 
 
@@ -149,6 +154,12 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Vigilant Guard", "{2}{W}", 2, 3, keywords={"vigilance"}),
         make_creature("Wall of Stone", "{1}{W}", 0, 5, keywords={"defender"}),
         make_creature("Cleric of Dawn", "{2}{W}", 2, 2, keywords={"lifelink"}),
+        make_creature(
+            "Healing Wisp", "{W}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+            ),
+        ),
         # Blue
         make_creature("Coastal Scout", "{U}", 1, 2),
         make_creature("Tidal Warrior", "{1}{U}", 2, 2),

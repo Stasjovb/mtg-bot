@@ -182,6 +182,16 @@ def _declare_blockers(
 
 def resolve_top_of_stack(state: GameState) -> None:
     item = state.stack.pop()
+
+    # Triggered-ability resolution
+    if item.ability is not None:
+        state.log.append(
+            f"{item.source.printing.name}'s triggered ability resolves"
+        )
+        item.ability.effect.resolve(state, item.controller_id)
+        return
+
+    # Spell resolution
     card = item.source
     if card.printing.is_creature:
         card.zone = Zone.BATTLEFIELD
@@ -190,5 +200,24 @@ def resolve_top_of_stack(state: GameState) -> None:
         card.summoning_sick = True
         state.battlefield.append(card)
         state.log.append(f"{card.printing.name} resolves onto the battlefield")
+        _trigger_etb_abilities(state, card)
         return
     raise ValueError(f"don't know how to resolve {card.printing.name}")
+
+
+def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
+    """Push any ETB triggers from ``creature`` onto the stack, in printing order."""
+    from mtg_bot.game import StackItem
+
+    for ability in creature.printing.triggered_abilities:
+        if ability.trigger == "etb":
+            state.stack.append(
+                StackItem(
+                    source=creature,
+                    controller_id=creature.controller_id,
+                    ability=ability,
+                )
+            )
+            state.log.append(
+                f"{creature.printing.name}'s ETB trigger goes on the stack"
+            )
