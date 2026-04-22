@@ -205,6 +205,68 @@ class Sequence(Effect):
         return ". ".join(e.describe() for e in self.effects) + "."
 
 
+@dataclass(frozen=True)
+class ConditionalIfVoid(Effect):
+    """Run ``then_effect`` when Void is active on resolution; else ``else_effect``.
+
+    Checks ``is_void_active(state)`` at resolution time (MTG-accurate for
+    intervening-if clauses on spell resolution). Either branch may be None
+    (the condition simply does nothing that side).
+
+    Matches the "Void —" rider on spell effects like Decode Transmissions
+    ("instead...") or Hymn of the Faller ("...draw another card").
+    """
+
+    then_effect: Effect
+    else_effect: Effect | None = None
+
+    def requires_target(self) -> bool:
+        then_req = self.then_effect.requires_target()
+        else_req = self.else_effect.requires_target() if self.else_effect else False
+        return then_req or else_req
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Matches Sequence's constraint: only one branch may require a target.
+        if self.then_effect.requires_target():
+            return self.then_effect.legal_targets(state, controller_id)
+        if self.else_effect is not None and self.else_effect.requires_target():
+            return self.else_effect.legal_targets(state, controller_id)
+        return []
+
+    def __post_init__(self) -> None:
+        then_req = self.then_effect.requires_target()
+        else_req = (
+            self.else_effect.requires_target() if self.else_effect is not None
+            else False
+        )
+        if then_req and else_req:
+            raise ValueError(
+                "ConditionalIfVoid supports targeting in at most one branch"
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_void_active
+
+        branch = self.then_effect if is_void_active(state) else self.else_effect
+        if branch is None:
+            return
+        branch.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        then_desc = self.then_effect.describe()
+        if self.else_effect is None:
+            return f"Void — {then_desc}"
+        return (
+            f"if Void is active, {then_desc}; otherwise, "
+            f"{self.else_effect.describe()}"
+        )
+
+
 def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     """Apply ``amount`` damage to ``target``. Used by damage effects.
 

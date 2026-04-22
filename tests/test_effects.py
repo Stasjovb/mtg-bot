@@ -4,6 +4,7 @@ import pytest
 
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
+    ConditionalIfVoid,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
@@ -740,6 +741,75 @@ def test_triggered_ability_describe_void_prefix():
     desc = ab.describe()
     assert desc.startswith("Void — ")
     assert "end step" in desc
+
+
+def test_conditional_if_void_runs_then_branch_when_void_active():
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    state.permanent_left_battlefield_this_turn = True  # Void active
+
+    effect = ConditionalIfVoid(
+        then_effect=EachOpponentLosesLife(amount=2),
+        else_effect=LoseLife(amount=2),
+    )
+    effect.resolve(state, controller_id=0)
+    assert state.players[0].life == 20  # didn't hit self
+    assert state.players[1].life == 18  # opponent took 2
+
+
+def test_conditional_if_void_runs_else_branch_when_void_inactive():
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    # Void NOT active — neither flag set.
+
+    effect = ConditionalIfVoid(
+        then_effect=EachOpponentLosesLife(amount=2),
+        else_effect=LoseLife(amount=2),
+    )
+    effect.resolve(state, controller_id=0)
+    assert state.players[0].life == 18  # self took 2
+    assert state.players[1].life == 20
+
+
+def test_conditional_if_void_no_else_is_void_gated():
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+
+    effect = ConditionalIfVoid(then_effect=LoseLife(amount=1))
+    # Void NOT active — nothing happens.
+    effect.resolve(state, controller_id=0)
+    assert state.players[0].life == 20
+
+    # Activate Void, resolve again — now the then branch fires.
+    state.permanent_left_battlefield_this_turn = True
+    effect.resolve(state, controller_id=0)
+    assert state.players[0].life == 19
+
+
+def test_conditional_if_void_rejects_both_branches_requiring_targets():
+    import pytest
+
+    with pytest.raises(ValueError, match="at most one branch"):
+        ConditionalIfVoid(
+            then_effect=DestroyTargetCreature(),
+            else_effect=DestroyTargetCreature(),
+        )
+
+
+def test_conditional_if_void_describe_includes_void_or_both_branches():
+    one = ConditionalIfVoid(then_effect=LoseLife(amount=1))
+    assert one.describe().startswith("Void — ")
+
+    two = ConditionalIfVoid(
+        then_effect=EachOpponentLosesLife(amount=2),
+        else_effect=LoseLife(amount=2),
+    )
+    d = two.describe()
+    assert "if Void is active" in d
+    assert "otherwise" in d
 
 
 def test_triggered_ability_describe_beginning_of_end_step():
