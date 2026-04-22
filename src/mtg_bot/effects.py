@@ -70,6 +70,48 @@ class GainLife(Effect):
 
 
 @dataclass(frozen=True)
+class LoseLife(Effect):
+    """Controller loses ``amount`` life."""
+
+    amount: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        p.life -= self.amount
+        state.log.append(
+            f"P{controller_id} loses {self.amount} life (life: {p.life})"
+        )
+
+    def describe(self) -> str:
+        return f"you lose {self.amount} life"
+
+
+@dataclass(frozen=True)
+class EachOpponentLosesLife(Effect):
+    """Each opponent loses ``amount`` life."""
+
+    amount: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= self.amount
+            state.log.append(
+                f"P{p.id} loses {self.amount} life (life: {p.life})"
+            )
+
+    def describe(self) -> str:
+        return f"each opponent loses {self.amount} life"
+
+
+@dataclass(frozen=True)
 class DrawCards(Effect):
     amount: int
 

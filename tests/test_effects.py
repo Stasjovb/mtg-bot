@@ -10,10 +10,12 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DrawCards,
     EachOpponentDiscards,
+    EachOpponentLosesLife,
     EachPlayerDraws,
     Effect,
     ExileTargetCreature,
     GainLife,
+    LoseLife,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -47,6 +49,35 @@ def test_gain_life_adds_to_controller():
     GainLife(amount=3).resolve(state, controller_id=0)
     assert state.players[0].life == 23
     assert state.players[1].life == 20
+
+
+def test_lose_life_subtracts_from_controller():
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    LoseLife(amount=3).resolve(state, controller_id=0)
+    assert state.players[0].life == 17
+    assert state.players[1].life == 20
+
+
+def test_lose_life_describe():
+    assert LoseLife(amount=2).describe() == "you lose 2 life"
+
+
+def test_each_opponent_loses_life_hits_all_living_opponents():
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    state.players.append(Player(id=2, life=20))
+    state.players[2].has_lost = True
+    EachOpponentLosesLife(amount=2).resolve(state, controller_id=0)
+    assert state.players[0].life == 20
+    assert state.players[1].life == 18
+    assert state.players[2].life == 20  # lost player skipped
+
+
+def test_each_opponent_loses_life_describe():
+    assert EachOpponentLosesLife(amount=2).describe() == "each opponent loses 2 life"
 
 
 def test_gain_life_describe_includes_amount():
