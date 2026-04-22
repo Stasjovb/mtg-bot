@@ -327,6 +327,64 @@ class Surveil(Effect):
 
 
 @dataclass(frozen=True)
+class MillTargetPlayer(Effect):
+    """Target player puts the top N cards of their library into their
+    graveyard.
+
+    If ``use_controller_life`` is True, N is the controller's current life
+    total (minimum 0) instead of ``amount`` — matches Space-Time Anomaly.
+    Running out of cards mid-mill simply stops; empty-library loss is
+    handled separately by the draw step.
+    """
+
+    amount: int = 1
+    use_controller_life: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players if not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        target = state.player_by_id(target_id)
+        if self.use_controller_life:
+            n = max(0, state.player_by_id(controller_id).life)
+        else:
+            n = self.amount
+        milled = 0
+        for _ in range(n):
+            if not target.library:
+                break
+            card = target.library.pop(0)
+            card.zone = Zone.GRAVEYARD
+            target.graveyard.append(card)
+            milled += 1
+        state.log.append(f"P{target_id} mills {milled} cards")
+
+    def describe(self) -> str:
+        if self.use_controller_life:
+            return (
+                "target player mills cards equal to your life total"
+            )
+        return f"target player mills {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class DrawCards(Effect):
     amount: int
 

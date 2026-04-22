@@ -43,6 +43,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifactOrTappedCreature,
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1074,6 +1075,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DestroyTargetArtifactEnchantmentOrFlyingCreature(),
                 Surveil(amount=1),
             )),
+        ),
+        # Space-Time Anomaly — target player mills cards equal to YOUR life.
+        make_sorcery(
+            "Space-Time Anomaly", "{2}{W}{U}",
+            effect=MillTargetPlayer(use_controller_life=True),
         ),
     ]
 }

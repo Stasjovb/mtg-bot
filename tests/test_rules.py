@@ -3268,6 +3268,77 @@ def test_shattered_wings_noop_paths_and_lost_legality():
     assert victim in state.battlefield
 
 
+def _stock_library(state, player_id, count=20):
+    """Put ``count`` copies of a basic land into the player's library so
+    mill/draw tests can operate on a non-empty library."""
+    from mtg_bot.cards import BASIC_LANDS
+
+    for _ in range(count):
+        card = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=player_id, zone=Zone.LIBRARY
+        )
+        state.players[player_id].library.append(card)
+
+
+def test_mill_target_player_fixed_amount():
+    from mtg_bot.effects import MillTargetPlayer
+
+    state = _arena()
+    _stock_library(state, 1, count=10)
+    starting_lib = len(state.players[1].library)
+    gy_before = len(state.players[1].graveyard)
+    e = MillTargetPlayer(amount=3)
+    assert e.requires_target() is True
+    assert "3" in e.describe()
+    legal = {tid for kind, tid in e.legal_targets(state, controller_id=0)
+             if kind == "player"}
+    assert 0 in legal and 1 in legal
+    e.resolve(state, controller_id=0, targets=(("player", 1),))
+    assert len(state.players[1].library) == starting_lib - 3
+    assert len(state.players[1].graveyard) == gy_before + 3
+
+
+def test_mill_target_player_uses_controller_life():
+    """Space-Time Anomaly style: amount = caster's life total."""
+    from mtg_bot.effects import MillTargetPlayer
+
+    state = _arena()
+    _stock_library(state, 1, count=20)
+    state.players[0].life = 5
+    starting_lib = len(state.players[1].library)
+    e = MillTargetPlayer(use_controller_life=True)
+    assert "life total" in e.describe()
+    e.resolve(state, controller_id=0, targets=(("player", 1),))
+    assert len(state.players[1].library) == starting_lib - 5
+
+
+def test_mill_caps_at_empty_library():
+    from mtg_bot.effects import MillTargetPlayer
+
+    state = _arena()
+    # Leave P1 with just 2 cards in library.
+    _stock_library(state, 1, count=2)
+    e = MillTargetPlayer(amount=10)
+    e.resolve(state, controller_id=0, targets=(("player", 1),))
+    assert state.players[1].library == []
+    assert len(state.players[1].graveyard) >= 2
+
+
+def test_mill_noop_paths():
+    from mtg_bot.effects import MillTargetPlayer
+
+    state = _arena()
+    e = MillTargetPlayer(amount=5)
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Negative life → mill 0.
+    state.players[0].life = -3
+    e2 = MillTargetPlayer(use_controller_life=True)
+    before = len(state.players[1].library)
+    e2.resolve(state, controller_id=0, targets=(("player", 1),))
+    assert len(state.players[1].library) == before
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,
