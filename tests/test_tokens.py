@@ -30,6 +30,46 @@ def test_make_token_creature_has_token_supertype():
     assert "Soldier" in t.subtypes
 
 
+def test_make_token_artifact_creature_has_artifact_type():
+    t = make_token_creature("Robot", 2, 2, subtypes=("Robot",), artifact=True)
+    assert t.is_token is True
+    assert t.is_creature is True
+    assert t.is_artifact is True
+    assert "Robot" in t.subtypes
+    # Type line should include both Artifact and Creature
+    assert "Artifact" in t.type_line
+    assert "Creature" in t.type_line
+
+
+def test_robot_token_is_defined():
+    robot = TOKEN_PRINTINGS["Robot"]
+    assert robot.is_artifact and robot.is_creature
+    assert robot.power == 2 and robot.toughness == 2
+
+
+def test_create_token_tapped_option_makes_it_enter_tapped():
+    state = _setup()
+    from mtg_bot.cards import TOKEN_PRINTINGS as _TP
+    robot = _TP["Robot"]
+    CreateToken(token_printing=robot, count=1, tapped=True).resolve(
+        state, controller_id=0
+    )
+    tokens = [o for o in state.battlefield if o.printing.is_token]
+    assert len(tokens) == 1
+    assert tokens[0].tapped is True
+
+
+def test_create_token_default_is_untapped():
+    state = _setup()
+    from mtg_bot.cards import TOKEN_PRINTINGS as _TP
+    soldier = _TP["Human Soldier"]
+    CreateToken(token_printing=soldier, count=1).resolve(
+        state, controller_id=0
+    )
+    tokens = [o for o in state.battlefield if o.printing.is_token]
+    assert tokens[0].tapped is False
+
+
 def test_human_soldier_token_is_defined():
     t = TOKEN_PRINTINGS["Human Soldier"]
     assert t.is_token

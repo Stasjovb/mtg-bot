@@ -256,15 +256,22 @@ def make_token_creature(
     toughness: int,
     subtypes: tuple[str, ...] = (),
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    artifact: bool = False,
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
     Tokens have no mana cost; they're created by effects rather than cast.
     The "Token" supertype distinguishes them so the engine can remove them
-    from any non-battlefield zone per MTG rule 704.5d.
+    from any non-battlefield zone per MTG rule 704.5d. Setting
+    ``artifact=True`` adds the Artifact card type (e.g. for EoE's colorless
+    Robot tokens).
     """
     subtypes_str = " ".join(subtypes)
-    type_line = f"Token Creature — {subtypes_str}" if subtypes else "Token Creature"
+    extra_type = "Artifact " if artifact else ""
+    type_line = (
+        f"Token {extra_type}Creature — {subtypes_str}"
+        if subtypes else f"Token {extra_type}Creature"
+    )
     supertypes, card_types, subtypes_tup = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -309,6 +316,11 @@ BASIC_LANDS: dict[str, CardPrinting] = {
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Human Soldier": make_token_creature(
         "Human Soldier", 1, 1, subtypes=("Human", "Soldier")
+    ),
+    # 2/2 colorless Robot artifact creature — EoE's generic Robot token,
+    # created by many Spacecraft ETBs and dies-triggered creatures.
+    "Robot": make_token_creature(
+        "Robot", 2, 2, subtypes=("Robot",), artifact=True
     ),
 }
 

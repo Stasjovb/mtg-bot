@@ -295,10 +295,14 @@ class CreateToken(Effect):
     via ``cards.make_token_creature``). Tokens enter the battlefield through
     the same helper as spells, so any ETBs they themselves have fire
     correctly.
+
+    Set ``tapped=True`` for effects whose oracle text says "enters tapped"
+    (e.g. Gravpack Monoist's "create a tapped 2/2 Robot token").
     """
 
     token_printing: "CardPrinting"
     count: int = 1
+    tapped: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -313,8 +317,11 @@ class CreateToken(Effect):
             )
             state.log.append(
                 f"P{controller_id} creates a {self.token_printing.name} token"
+                + (" (tapped)" if self.tapped else "")
             )
             put_into_battlefield(state, obj, controller_id)
+            if self.tapped:
+                obj.tapped = True
 
     def describe(self) -> str:
         p = self.token_printing
