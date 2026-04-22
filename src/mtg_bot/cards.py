@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from mtg_bot.effects import (
+    ConditionalIfVoid,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
@@ -19,10 +20,12 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DrawCards,
     EachOpponentDiscards,
+    EachOpponentLosesLife,
     EachPlayerDraws,
     Effect,
     ExileTargetCreature,
     GainLife,
+    LoseLife,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -531,6 +534,30 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Honor", "{W}", effect=Sequence(effects=(
                 PutPlusOneCounterOnTargetCreature(amount=1),
                 DrawCards(amount=1),
+            )),
+        ),
+        # Decode Transmissions: "You draw two cards and lose 2 life.
+        # Void — instead you draw two cards and each opponent loses 2 life."
+        # Modeled as: always draw 2; life-loss switches based on Void.
+        make_sorcery(
+            "Decode Transmissions", "{2}{B}",
+            effect=Sequence(effects=(
+                DrawCards(amount=2),
+                ConditionalIfVoid(
+                    then_effect=EachOpponentLosesLife(amount=2),
+                    else_effect=LoseLife(amount=2),
+                ),
+            )),
+        ),
+        # Hymn of the Faller: "Surveil 1, then you draw a card and lose 1
+        # life. Void — draw another card." Surveil is not implemented yet,
+        # so this version drops the surveil step and plays the rest.
+        make_sorcery(
+            "Hymn of the Faller", "{1}{B}",
+            effect=Sequence(effects=(
+                DrawCards(amount=1),
+                LoseLife(amount=1),
+                ConditionalIfVoid(then_effect=DrawCards(amount=1)),
             )),
         ),
     ]

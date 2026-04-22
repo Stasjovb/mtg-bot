@@ -1577,6 +1577,126 @@ def test_void_end_step_trigger_stacks_across_turns():
     assert skitter.plus_one_counters == 3
 
 
+def test_decode_transmissions_base_mode_self_life_loss():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    decode = EOE_SPELLS["Decode Transmissions"]
+    state = _arena(
+        p0_hand=[decode],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 3,
+        p0_life=20,
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed library for draws
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    hand_before = len(state.players[0].hand) - 1  # after cast
+
+    spell = state.players[0].hand[0]
+    # Void NOT active — base mode: P0 draws 2, loses 2 life.
+    assert not state.permanent_left_battlefield_this_turn
+    assert not state.spell_warped_this_turn
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    assert len(state.players[0].hand) == hand_before + 2
+    assert state.players[0].life == 18
+    assert state.players[1].life == 20
+
+
+def test_decode_transmissions_void_mode_opponents_lose_life():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    decode = EOE_SPELLS["Decode Transmissions"]
+    state = _arena(
+        p0_hand=[decode],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 3,
+        p0_life=20,
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    # Activate Void (a permanent left the battlefield already this turn).
+    state.permanent_left_battlefield_this_turn = True
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Void mode: P0 still draws 2, but P1 loses 2 life (P0 doesn't).
+    assert state.players[0].life == 20
+    assert state.players[1].life == 18
+
+
+def test_hymn_of_the_faller_base_mode():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    hymn = EOE_SPELLS["Hymn of the Faller"]
+    state = _arena(
+        p0_hand=[hymn],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
+        p0_life=15,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    hand_before = len(state.players[0].hand) - 1
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Void inactive: 1 draw, 1 life loss.
+    assert len(state.players[0].hand) == hand_before + 1
+    assert state.players[0].life == 14
+
+
+def test_hymn_of_the_faller_void_mode_draws_extra():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    hymn = EOE_SPELLS["Hymn of the Faller"]
+    state = _arena(
+        p0_hand=[hymn],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
+        p0_life=15,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    hand_before = len(state.players[0].hand) - 1
+    state.spell_warped_this_turn = True  # Void active
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Void active: 2 draws total, 1 life loss.
+    assert len(state.players[0].hand) == hand_before + 2
+    assert state.players[0].life == 14
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
