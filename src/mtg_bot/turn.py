@@ -71,11 +71,15 @@ def move_off_battlefield(
 
     ``destination`` is ``"graveyard"`` or ``"exile"``. Tokens cease to exist
     per rule 704.5d regardless of destination. Combat state (damage, tapped,
-    attacking, blocking) is cleared. No-op if the object isn't on the
-    battlefield.
+    attacking, blocking) is cleared.
+
+    If the object was a creature (or a stationed Spacecraft) and
+    ``destination`` is ``"graveyard"``, its "when this creature dies"
+    triggered abilities fire after the zone change.
     """
     if obj not in state.battlefield:
         return
+    was_creature = is_creature_now(obj)
     # Mark Void state: any non-land permanent leaving the battlefield this
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
@@ -92,8 +96,7 @@ def move_off_battlefield(
     obj.cast_via_warp = False
     if obj.printing.is_token:
         state.log.append(f"{obj.printing.name} token ceases to exist")
-        return
-    if destination == "graveyard":
+    elif destination == "graveyard":
         obj.zone = Zone.GRAVEYARD
         state.player_by_id(obj.owner_id).graveyard.append(obj)
     elif destination == "exile":
@@ -101,6 +104,25 @@ def move_off_battlefield(
         state.player_by_id(obj.owner_id).exile.append(obj)
     else:
         raise ValueError(f"unknown destination: {destination!r}")
+
+    # Fire "when this creature dies" triggers if applicable.
+    if destination == "graveyard" and was_creature:
+        _fire_dies_triggers(state, obj)
+
+
+def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
+    """Run "dies" triggered abilities on ``dead``. Fires directly (no stack)
+    for consistency with other trigger events in this engine. Source is
+    exposed via state.resolving_source for effects that need it."""
+    for ability in dead.printing.triggered_abilities:
+        if ability.trigger != "dies":
+            continue
+        state.log.append(f"{dead.printing.name}'s dies ability triggers")
+        state.resolving_source = dead
+        try:
+            ability.effect.resolve(state, dead.controller_id, ())
+        finally:
+            state.resolving_source = None
 
 
 def run_beginning_of_end_step_triggers(state: GameState) -> None:

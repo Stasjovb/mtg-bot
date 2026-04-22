@@ -772,6 +772,7 @@ class TriggeredAbility:
         prefix = {
             "etb": "When ~ enters the battlefield",
             "beginning_of_end_step": "At the beginning of your end step",
+            "dies": "When ~ dies",
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:
