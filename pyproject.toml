@@ -1,0 +1,24 @@
+[project]
+name = "mtg-bot"
+version = "0.0.1"
+description = "A bot that plays Magic: The Gathering and tries to win."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+mtg-bot = "mtg_bot.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
