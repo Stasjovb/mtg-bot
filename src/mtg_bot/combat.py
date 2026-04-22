@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mtg_bot.game import GameObject, GameState
+from mtg_bot.game import GameObject, GameState, effective_power, effective_toughness
 
 
 def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
@@ -77,7 +77,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
         if not attacker.attacking:
             continue
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
-        attacker_power = attacker.printing.power or 0
+        attacker_power = effective_power(attacker)
         attacker_kws = attacker.printing.keywords
         attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
@@ -94,7 +94,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                     break
                 # Deathtouch: any 1 damage is lethal.
                 need = 1 if has_deathtouch else max(
-                    0, (blocker.printing.toughness or 0) - blocker.damage
+                    0, effective_toughness(blocker) - blocker.damage
                 )
                 is_last = i == len(blockers) - 1
                 if is_last and not has_trample:
@@ -112,7 +112,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                      attacker_kws, attacker_controller)
                 )
             for blocker in blockers:
-                blocker_power = blocker.printing.power or 0
+                blocker_power = effective_power(blocker)
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,

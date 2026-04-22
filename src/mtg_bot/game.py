@@ -41,6 +41,21 @@ class GameObject:
     # Marked lethal by a deathtouch source this turn — destroyed by SBAs
     # regardless of damage vs toughness. Cleared when damage is cleared.
     marked_lethal: bool = False
+    # +1/+1 counters raise effective power and toughness by equal amounts.
+    # Persist across turns (never wear off on their own).
+    plus_one_counters: int = 0
+
+
+def effective_power(obj: GameObject) -> int:
+    """Power including +1/+1 counters. Falls back to 0 for non-creatures."""
+    base = obj.printing.power or 0
+    return base + obj.plus_one_counters
+
+
+def effective_toughness(obj: GameObject) -> int:
+    """Toughness including +1/+1 counters. Falls back to 0 for non-creatures."""
+    base = obj.printing.toughness or 0
+    return base + obj.plus_one_counters
 
 
 @dataclass

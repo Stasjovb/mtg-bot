@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mtg_bot.game import GameObject, GameState
+from mtg_bot.game import GameObject, GameState, effective_power, effective_toughness
 
 
 def serialize_permanent(obj: GameObject) -> dict[str, Any]:
@@ -20,6 +20,8 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "mana_cost": p.mana_cost_str,
         "power": p.power,
         "toughness": p.toughness,
+        "effective_power": effective_power(obj) if p.is_creature else None,
+        "effective_toughness": effective_toughness(obj) if p.is_creature else None,
         "is_creature": p.is_creature,
         "is_land": p.is_land,
         "keywords": sorted(p.keywords),
@@ -29,6 +31,7 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "summoning_sick": obj.summoning_sick,
         "attacking": obj.attacking,
         "blocking": obj.blocking,
+        "plus_one_counters": obj.plus_one_counters,
     }
 
 

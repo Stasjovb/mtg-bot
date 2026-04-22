@@ -52,6 +52,7 @@ form button:hover { background: #558; }
 .card.creature { background: #2a4432; }
 .card .pt { color: #fc8; font-weight: bold; }
 .card .dmg { color: #f77; }
+.card .counters { color: #ff9; font-weight: bold; }
 .card .kw { color: #9df; font-style: italic; font-size: 0.85em; margin-left: 0.3em; }
 .card .ab { color: #fd9; font-size: 0.8em; display: block; margin-top: 0.1em; max-width: 18em; white-space: normal; }
 .result { padding: 0.8em 1em; border-radius: 6px; margin-bottom: 1em;
@@ -121,7 +122,7 @@ _PAGE_HTML = """<!DOCTYPE html>
         <div class="cards">
           {% for o in p.battlefield %}
             <span class="card {% if o.tapped %}tapped{% endif %} {% if o.is_land %}land{% elif o.is_creature %}creature{% endif %}">
-              {{ o.name }}{% if o.is_creature %} <span class="pt">{{ o.power }}/{{ o.toughness }}</span>{% if o.damage %} <span class="dmg">[{{ o.damage }}]</span>{% endif %}{% endif %}{% if o.keywords %}<span class="kw">{{ o.keywords | join(', ') }}</span>{% endif %}{% for ab in o.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}
+              {{ o.name }}{% if o.is_creature %} <span class="pt">{{ o.effective_power }}/{{ o.effective_toughness }}</span>{% if o.plus_one_counters %} <span class="counters">+{{ o.plus_one_counters }}</span>{% endif %}{% if o.damage %} <span class="dmg">[{{ o.damage }}]</span>{% endif %}{% endif %}{% if o.keywords %}<span class="kw">{{ o.keywords | join(', ') }}</span>{% endif %}{% for ab in o.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}
             </span>
           {% endfor %}
         </div>
