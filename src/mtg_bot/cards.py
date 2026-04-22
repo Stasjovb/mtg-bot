@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from mtg_bot.effects import (
+    CreateToken,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
     DrawCards,
@@ -271,6 +272,35 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+            ),
+        ),
+        # Honored Knight-Captain also has a {4}{W}{W}, Sacrifice: search
+        # your library for an Equipment activated ability — not yet
+        # implemented (no activated-ability or sacrifice framework).
+        make_creature(
+            "Honored Knight-Captain", "{1}{W}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Knight Luminary has warp {1}{W} — warp is not implemented yet, so
+        # Luminary only plays at its regular cost.
+        make_creature(
+            "Knight Luminary", "{3}{W}", 3, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
+                        count=1,
+                    ),
                 ),
             ),
         ),

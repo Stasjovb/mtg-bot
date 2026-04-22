@@ -918,6 +918,84 @@ def test_rayblade_trooper_etb_boosts_existing_creature():
     assert enemy.plus_one_counters == 0
 
 
+def test_honored_knight_captain_etb_creates_a_soldier_token():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    captain = EOE_CREATURES["Honored Knight-Captain"]
+    state = _arena(
+        p0_hand=[captain],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 2,
+    )
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # captain enters
+    resolve_top_of_stack(state)  # token creation resolves
+    tokens = [o for o in state.battlefield if o.printing.is_token]
+    assert len(tokens) == 1
+    assert tokens[0].printing.name == "Human Soldier"
+    assert tokens[0].printing.power == 1
+    assert tokens[0].printing.toughness == 1
+    assert tokens[0].controller_id == 0
+    assert tokens[0].summoning_sick  # brand-new; can't attack this turn
+
+
+def test_knight_luminary_etb_creates_a_soldier_token():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    luminary = EOE_CREATURES["Knight Luminary"]
+    state = _arena(
+        p0_hand=[luminary],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 4,
+    )
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)
+    resolve_top_of_stack(state)
+    tokens = [o for o in state.battlefield if o.printing.is_token]
+    assert len(tokens) == 1
+
+
+def test_soldier_token_dies_in_combat_and_vanishes():
+    """Token destroyed in combat must not show up in any graveyard — it
+    ceases to exist per rule 704.5d."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    captain = EOE_CREATURES["Honored Knight-Captain"]
+    state = _arena(
+        p0_hand=[captain],
+        p0_battlefield=[BASIC_LANDS["Plains"]] * 2,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],  # 2/2
+    )
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # captain enters
+    resolve_top_of_stack(state)  # token created
+
+    soldier = next(o for o in state.battlefield if o.printing.is_token)
+    soldier.summoning_sick = False  # pretend a turn passed so it can block
+    # Opponent's Wild Bear attacks; soldier blocks. Bear 2/2 vs Soldier 1/1.
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    bear.summoning_sick = False
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({bear.id})), player_id=1)
+    state.step = Step.DECLARE_BLOCKERS
+    apply(state, DeclareBlockers(assignments=((soldier.id, bear.id),)), player_id=0)
+    state.step = Step.COMBAT_DAMAGE
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.turn import state_based_actions
+    resolve_combat_damage(state, defending_player_id=0)
+    state_based_actions(state)
+
+    assert soldier not in state.battlefield
+    # Soldier token must NOT be in P0's graveyard
+    token_names_in_gy = [c.printing.name for c in state.players[0].graveyard]
+    assert "Human Soldier" not in token_names_in_gy
+    assert any("ceases to exist" in e for e in state.log)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
