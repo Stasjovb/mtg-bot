@@ -746,6 +746,60 @@ def test_marked_lethal_resets_on_cleanup():
 
 
 # --------------------------------------------------------------------------
+# Rule: LIFELINK — damage dealt also gains the source's controller life
+# --------------------------------------------------------------------------
+
+
+def _lifelinker(name="Test Lifelinker", power=2, toughness=2):
+    return make_creature(name, "{2}{W}", power, toughness, keywords={"lifelink"})
+
+
+def test_lifelink_attacker_unblocked_gains_life_equal_to_damage():
+    state = _arena(p0_battlefield=[_lifelinker("Cleric", 3, 3)], p0_life=15)
+    attacker = state.battlefield[0]
+    _simulate_combat_step(state, [attacker.id])
+    assert state.players[1].life == 20 - 3
+    assert state.players[0].life == 15 + 3
+
+
+def test_lifelink_blocker_gains_life_from_damage_to_attacker():
+    state = _arena(
+        p0_battlefield=[_ground("Bear", 2, 2)],
+        p1_battlefield=[_lifelinker("Cleric", 2, 2)],
+        p1_life=15,
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Blocker deals 2 to attacker → gains 2 life for P1
+    assert state.players[1].life == 15 + 2
+
+
+def test_lifelink_and_damage_both_happen_in_same_combat():
+    state = _arena(
+        p0_battlefield=[_lifelinker("Cleric", 3, 3)],
+        p1_battlefield=[_ground("Bear", 2, 2)],
+        p0_life=10,
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Attacker deals 3 → gains 3 life. Attacker takes 2 → damaged, alive.
+    assert state.players[0].life == 10 + 3
+    assert blocker not in state.battlefield
+    assert attacker in state.battlefield
+    assert attacker.damage == 2
+
+
+def test_no_lifelink_does_not_gain_life():
+    state = _arena(
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],  # no lifelink
+        p0_life=10,
+    )
+    bear = state.battlefield[0]
+    _simulate_combat_step(state, [bear.id])
+    assert state.players[0].life == 10  # no change
+
+
+# --------------------------------------------------------------------------
 # Rule: HASTE — ignores summoning sickness
 # --------------------------------------------------------------------------
 

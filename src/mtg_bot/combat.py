@@ -67,9 +67,11 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
     # trample, leftover damage past all blockers is lost.
     damage_events: list[tuple[str, int, int]] = []  # (kind, target_id, amount)
 
-    # Each damage event carries the source's keywords so downstream handling
-    # (deathtouch marking) knows about them.
-    damage_events_typed: list[tuple[str, int, int, frozenset[str]]] = []
+    # Each damage event carries the source's keywords and the source's
+    # controller id so downstream handling (deathtouch marking, lifelink life
+    # gain) has the context it needs.
+    # Tuple layout: (kind, target_id, amount, source_keywords, source_controller_id)
+    damage_events_typed: list[tuple[str, int, int, frozenset[str], int]] = []
 
     for attacker in state.battlefield:
         if not attacker.attacking:
@@ -77,11 +79,13 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_power = attacker.printing.power or 0
         attacker_kws = attacker.printing.keywords
+        attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
         has_deathtouch = "deathtouch" in attacker_kws
         if not blockers:
             damage_events_typed.append(
-                ("player", defending_player_id, attacker_power, attacker_kws)
+                ("player", defending_player_id, attacker_power,
+                 attacker_kws, attacker_controller)
             )
         else:
             remaining = attacker_power
@@ -98,22 +102,24 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                 else:
                     assigned = min(remaining, need)
                 damage_events_typed.append(
-                    ("creature", blocker.id, assigned, attacker_kws)
+                    ("creature", blocker.id, assigned,
+                     attacker_kws, attacker_controller)
                 )
                 remaining -= assigned
             if has_trample and remaining > 0:
                 damage_events_typed.append(
-                    ("player", defending_player_id, remaining, attacker_kws)
+                    ("player", defending_player_id, remaining,
+                     attacker_kws, attacker_controller)
                 )
             for blocker in blockers:
                 blocker_power = blocker.printing.power or 0
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
-                         blocker.printing.keywords)
+                         blocker.printing.keywords, blocker.controller_id)
                     )
 
-    for kind, target_id, amount, source_kws in damage_events_typed:
+    for kind, target_id, amount, source_kws, source_controller in damage_events_typed:
         if amount <= 0:
             continue
         if kind == "player":
@@ -126,6 +132,14 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                 obj.damage += amount
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
+        # Lifelink: the source's controller gains life equal to the damage
+        # dealt, regardless of target kind.
+        if "lifelink" in source_kws:
+            gainer = state.player_by_id(source_controller)
+            gainer.life += amount
+            state.log.append(
+                f"P{source_controller} gains {amount} life (life: {gainer.life})"
+            )
 
 
 def clear_combat_state(state: GameState) -> None:
