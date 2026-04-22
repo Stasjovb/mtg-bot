@@ -1142,6 +1142,32 @@ def test_bombard_is_legal_at_instant_speed():
     )
 
 
+def test_vote_out_destroys_a_creature():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    vote_out = EOE_SPELLS["Vote Out"]
+    state = _arena(
+        p0_hand=[vote_out],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 4,
+        p1_battlefield=[SYNTHETIC_CREATURES["Forest Giant"]],  # 3/3
+    )
+    giant = next(o for o in state.battlefield if o.printing.name == "Forest Giant")
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Giant destroyed — in P1's graveyard
+    assert giant not in state.battlefield
+    assert giant in state.players[1].graveyard
+    # Vote Out itself went to P0's graveyard
+    assert spell in state.players[0].graveyard
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

@@ -64,6 +64,38 @@ def run_draw_step(state: GameState) -> None:
     draw_card(state, state.active_player().id)
 
 
+def move_off_battlefield(
+    state: GameState, obj: "GameObject", destination: str = "graveyard"
+) -> None:
+    """Remove ``obj`` from the battlefield and place it in ``destination``.
+
+    ``destination`` is ``"graveyard"`` or ``"exile"``. Tokens cease to exist
+    per rule 704.5d regardless of destination. Combat state (damage, tapped,
+    attacking, blocking) is cleared. No-op if the object isn't on the
+    battlefield.
+    """
+    if obj not in state.battlefield:
+        return
+    state.battlefield.remove(obj)
+    obj.damage = 0
+    obj.marked_lethal = False
+    obj.tapped = False
+    obj.attacking = False
+    obj.blocking = None
+    obj.blocked_by = []
+    if obj.printing.is_token:
+        state.log.append(f"{obj.printing.name} token ceases to exist")
+        return
+    if destination == "graveyard":
+        obj.zone = Zone.GRAVEYARD
+        state.player_by_id(obj.owner_id).graveyard.append(obj)
+    elif destination == "exile":
+        obj.zone = Zone.EXILE
+        state.player_by_id(obj.owner_id).exile.append(obj)
+    else:
+        raise ValueError(f"unknown destination: {destination!r}")
+
+
 def run_cleanup_step(state: GameState) -> None:
     ap = state.active_player()
     while len(ap.hand) > 7:
@@ -94,23 +126,10 @@ def state_based_actions(state: GameState) -> bool:
             destroyed.append(obj)
 
     for obj in destroyed:
-        state.battlefield.remove(obj)
-        obj.damage = 0
-        obj.marked_lethal = False
-        obj.tapped = False
-        obj.attacking = False
-        obj.blocking = None
-        obj.blocked_by = []
-        if obj.printing.is_token:
-            # Rule 704.5d: a token in any zone other than the battlefield
-            # ceases to exist. Skip the graveyard entirely.
-            state.log.append(
-                f"{obj.printing.name} token ceases to exist"
-            )
-        else:
-            obj.zone = Zone.GRAVEYARD
-            state.player_by_id(obj.owner_id).graveyard.append(obj)
+        # Log before moving (move_off_battlefield logs for tokens too).
+        if not obj.printing.is_token:
             state.log.append(f"{obj.printing.name} destroyed (lethal damage)")
+        move_off_battlefield(state, obj, destination="graveyard")
         changed = True
 
     alive = [p for p in state.players if not p.has_lost]

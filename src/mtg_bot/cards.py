@@ -16,6 +16,7 @@ from mtg_bot.effects import (
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
+    DestroyTargetCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -409,6 +410,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         ),
         make_instant(
             "Bombard", "{2}{R}", effect=DealDamageToTargetCreature(amount=4),
+        ),
+        # Real Vote Out has Convoke (pay cost with creatures tapping as mana)
+        # in addition to its mana cost. Convoke isn't implemented, so this
+        # plays at its full printed cost only.
+        make_sorcery(
+            "Vote Out", "{3}{B}", effect=DestroyTargetCreature(),
         ),
     ]
 }

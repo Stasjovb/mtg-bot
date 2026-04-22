@@ -7,6 +7,7 @@ from mtg_bot.effects import (
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
+    DestroyTargetCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -521,6 +522,67 @@ def test_sequence_rejects_multiple_targeting_sub_effects():
             PutPlusOneCounterOnCreatureYouControl(),
             DealDamageToOpponentCreature(amount=1),
         ))
+
+
+def test_destroy_target_creature_requires_target():
+    assert DestroyTargetCreature().requires_target() is True
+
+
+def test_destroy_target_creature_legal_targets_any_creature():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+    targets = DestroyTargetCreature().legal_targets(state, 0)
+    assert ("creature", mine.id) in targets
+    assert ("creature", theirs.id) in targets
+
+
+def test_destroy_target_creature_moves_to_graveyard():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+    DestroyTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear not in state.battlefield
+    assert bear in state.players[0].graveyard
+
+
+def test_destroy_target_creature_on_token_ceases_to_exist():
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    token = state.new_object(
+        TOKEN_PRINTINGS["Human Soldier"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(token)
+    DestroyTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", token.id),)
+    )
+    assert token not in state.battlefield
+    assert token not in state.players[0].graveyard
+    assert any("ceases to exist" in e for e in state.log)
+
+
+def test_destroy_target_creature_empty_or_wrong_kind_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    DestroyTargetCreature().resolve(state, 0, targets=())
+    DestroyTargetCreature().resolve(state, 0, targets=(("player", 0),))
+    DestroyTargetCreature().resolve(state, 0, targets=(("creature", 99999),))
+
+
+def test_destroy_target_creature_describe():
+    assert DestroyTargetCreature().describe() == "destroy target creature"
 
 
 def test_sequence_describe_joins_sub_effects():

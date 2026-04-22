@@ -226,6 +226,49 @@ class CreateToken(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetCreature(Effect):
+    """Destroy any target creature on the battlefield.
+
+    Matches oracle text like "destroy target creature" (Vote Out). The
+    creature is moved to its owner's graveyard (tokens cease to exist).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return "destroy target creature"
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnCreatureYouControl(Effect):
     """Put N +1/+1 counter(s) on target creature you control.
 
