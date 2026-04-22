@@ -39,6 +39,7 @@ from mtg_bot.effects import (
     Sequence,
     StaticAbility,
     StaticScope,
+    Surveil,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -626,6 +627,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Thawbringer: surveil 1 on ETB or dies.
+        make_creature(
+            "Thawbringer", "{2}{G}", 4, 2,
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=Surveil(amount=1)),
+                TriggeredAbility(trigger="dies", effect=Surveil(amount=1)),
+            ),
+        ),
         # Glacier Godmaw: Trample; ETB create a Lander; Landfall pumps +1/+1
         # and grants vigilance+haste until end of turn.
         make_creature(
@@ -666,6 +675,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=DrawCards(amount=1),
                 ),
             ),
+        ),
+        # Starbreach Whale: Flying + ETB surveil 2 + warp {1}{U}
+        make_creature(
+            "Starbreach Whale", "{4}{U}", 3, 5,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Surveil(amount=2),
+                ),
+            ),
+            warp="{1}{U}",
         ),
         # Red
         make_creature(
@@ -876,11 +897,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             )),
         ),
         # Hymn of the Faller: "Surveil 1, then you draw a card and lose 1
-        # life. Void — draw another card." Surveil is not implemented yet,
-        # so this version drops the surveil step and plays the rest.
+        # life. Void — draw another card."
         make_sorcery(
             "Hymn of the Faller", "{1}{B}",
             effect=Sequence(effects=(
+                Surveil(amount=1),
                 DrawCards(amount=1),
                 LoseLife(amount=1),
                 ConditionalIfVoid(then_effect=DrawCards(amount=1)),

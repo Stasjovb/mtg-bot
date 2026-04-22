@@ -144,6 +144,43 @@ class DiscardSelf(Effect):
 
 
 @dataclass(frozen=True)
+class Surveil(Effect):
+    """Surveil N: look at the top N cards of your library; for each one, you
+    may put it into your graveyard. The rest stay on top in their original
+    order. Decision delegated to the controller's agent (choose_surveil).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        milled = 0
+        # Examine the top N cards in order. Mill ones the agent chooses;
+        # keep the rest on top in their original order.
+        examined = p.library[: self.amount]
+        keep: list = []
+        for card in examined:
+            if p.agent is not None and p.agent.choose_surveil(state, p.id, card.id):
+                p.library.remove(card)
+                card.zone = Zone.GRAVEYARD
+                p.graveyard.append(card)
+                milled += 1
+            else:
+                keep.append(card)
+        state.log.append(
+            f"P{controller_id} surveils {self.amount} ({milled} milled)"
+        )
+
+    def describe(self) -> str:
+        return f"surveil {self.amount}"
+
+
+@dataclass(frozen=True)
 class DrawCards(Effect):
     amount: int
 

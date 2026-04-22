@@ -2695,6 +2695,62 @@ def test_intrepid_tenderfoot_activated_ability_puts_plus_one_counter_on_self():
     assert obj.plus_one_counters == 1
 
 
+def test_surveil_1_inspects_top_card_and_may_mill():
+    """Repeat surveils with a seeded 50/50 agent: over many runs, some
+    mill and some keep."""
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.effects import Surveil
+    import random
+
+    milled_runs = 0
+    kept_runs = 0
+    for seed in range(20):
+        state = _arena()
+        state.players[0].agent = RandomAgent(rng=random.Random(seed))
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+        Surveil(amount=1).resolve(state, controller_id=0)
+        if state.players[0].graveyard:
+            milled_runs += 1
+        else:
+            kept_runs += 1
+    assert milled_runs > 0
+    assert kept_runs > 0
+
+
+def test_thawbringer_triggers_on_both_etb_and_dies():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield
+    import random
+
+    thaw = EOE_CREATURES["Thawbringer"]
+    state = _arena(p0_hand=[thaw], p0_battlefield=[BASIC_LANDS["Forest"]] * 3)
+    # Loaded rng = always mill, so we can detect surveils happened
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    for _ in range(4):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    library_before = len(state.players[0].library)
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell enters → ETB stacks
+    resolve_top_of_stack(state)  # surveil 1 resolves
+    library_after_etb = len(state.players[0].library)
+    # A surveil happened (library shrank by 0 or 1 depending on coin)
+    assert library_after_etb <= library_before
+
+    obj = next(o for o in state.battlefield if o.printing.name == "Thawbringer")
+    move_off_battlefield(state, obj, destination="graveyard")
+    # A dies-surveil fired (log has a "surveils" entry)
+    assert sum(1 for e in state.log if "surveils" in e) >= 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

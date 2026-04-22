@@ -54,6 +54,16 @@ class Agent:
         """Pick which of the player's hand cards to discard."""
         raise NotImplementedError
 
+    def choose_surveil(
+        self,
+        state: "GameState",
+        player_id: int,
+        top_card_id: int,
+    ) -> bool:
+        """When surveilling, decide for the top card: True = mill it to the
+        graveyard, False = leave it on top of the library."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -92,3 +102,7 @@ class RandomAgent(Agent):
 
     def choose_discard(self, state, player_id, hand_card_ids):
         return self.rng.choice(hand_card_ids)
+
+    def choose_surveil(self, state, player_id, top_card_id):
+        # Coin flip: mill or keep. Good enough for a random-action baseline.
+        return self.rng.random() < 0.5
