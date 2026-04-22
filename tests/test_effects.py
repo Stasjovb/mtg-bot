@@ -20,6 +20,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
     StaticScope,
@@ -929,6 +930,46 @@ def test_effective_power_folds_in_static_anthem_bonus():
     assert effective_toughness(state, ally) == 3
     # Enemy unaffected
     assert effective_power(state, enemy) == 2
+
+
+def test_search_library_for_basic_land_moves_one_to_battlefield_tapped():
+    state = GameState()
+    state.players.append(Player(id=0))
+    # Put a couple of lands in library + one creature in the middle
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+    # Library has one fewer land; one Plains is on the battlefield tapped.
+    assert len(state.players[0].library) == 2
+    lands_on_bf = [o for o in state.battlefield if o.printing.is_basic_land]
+    assert len(lands_on_bf) == 1
+    assert lands_on_bf[0].tapped is True
+    assert lands_on_bf[0].controller_id == 0
+
+
+def test_search_library_for_basic_land_noop_when_no_basic_land():
+    """If library has no basic land, the effect silently does nothing."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    # Library has a creature but no basic land
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY
+        )
+    )
+    SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+    assert len(state.players[0].library) == 1
+    assert not any(o.printing.is_basic_land for o in state.battlefield)
+
+
+def test_search_library_for_basic_land_describe():
+    d = SearchLibraryForBasicLandTapped().describe()
+    assert "basic land" in d
+    assert "tapped" in d
 
 
 def test_triggered_ability_describe_beginning_of_end_step():

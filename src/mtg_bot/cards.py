@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
     StaticScope,
@@ -342,6 +343,35 @@ BASIC_LANDS: dict[str, CardPrinting] = {
 
 # Token printings reused by effects. Not part of CREATURE_POOL — tokens are
 # never cast or drawn, only created by effects resolving on the battlefield.
+def _make_lander_token() -> CardPrinting:
+    """EoE Lander: a colorless artifact token with an activated ability.
+
+    "{2}, Sacrifice this artifact: Search your library for a basic land
+    card, put it onto the battlefield tapped, then shuffle."
+    """
+    type_line = "Token Artifact — Lander"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name="Lander",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"),
+                    mana_str="{2}",
+                    sacrifice_self=True,
+                ),
+                effect=SearchLibraryForBasicLandTapped(),
+            ),
+        ),
+    )
+
+
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Human Soldier": make_token_creature(
         "Human Soldier", 1, 1, subtypes=("Human", "Soldier")
@@ -351,6 +381,9 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Robot": make_token_creature(
         "Robot", 2, 2, subtypes=("Robot",), artifact=True
     ),
+    # Lander — artifact token (not a creature) with a sacrifice-to-ramp
+    # activated ability. Created by many EoE spells and triggers.
+    "Lander": _make_lander_token(),
 }
 
 _COLOR_TO_BASIC: dict[str, str] = {
@@ -627,6 +660,17 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DrawCards(amount=1),
                 LoseLife(amount=1),
                 ConditionalIfVoid(then_effect=DrawCards(amount=1)),
+            )),
+        ),
+        # Sami's Curiosity: "You gain 2 life. Create a Lander token."
+        make_sorcery(
+            "Sami's Curiosity", "{G}",
+            effect=Sequence(effects=(
+                GainLife(amount=2),
+                CreateToken(
+                    token_printing=TOKEN_PRINTINGS["Lander"],
+                    count=1,
+                ),
             )),
         ),
     ]

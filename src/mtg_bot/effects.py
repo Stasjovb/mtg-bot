@@ -161,6 +161,45 @@ class EachPlayerDraws(Effect):
 
 
 @dataclass(frozen=True)
+class SearchLibraryForBasicLandTapped(Effect):
+    """Search the controller's library for a basic land card, put it onto
+    the battlefield tapped, then shuffle.
+
+    Stage 3 simplification: picks the FIRST basic land in library order
+    (the library was shuffled at game start; no extra shuffle here). If no
+    basic land is present, the effect does nothing.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        land = next((c for c in p.library if c.printing.is_basic_land), None)
+        if land is None:
+            state.log.append(
+                f"P{controller_id} searches but finds no basic land"
+            )
+            return
+        p.library.remove(land)
+        land.zone = Zone.BATTLEFIELD
+        land.tapped = True
+        state.battlefield.append(land)
+        state.log.append(
+            f"P{controller_id} puts {land.printing.name} onto the "
+            f"battlefield tapped"
+        )
+
+    def describe(self) -> str:
+        return (
+            "search your library for a basic land card, put it onto the "
+            "battlefield tapped, then shuffle"
+        )
+
+
+@dataclass(frozen=True)
 class Sequence(Effect):
     """Run multiple effects in order as a single composite effect.
 

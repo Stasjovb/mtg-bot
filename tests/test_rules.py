@@ -1849,6 +1849,87 @@ def test_haste_anthem_stops_when_tannuk_leaves_the_battlefield():
     assert "haste" not in effective_keywords(state, bear)
 
 
+def test_samis_curiosity_gains_life_and_creates_lander():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    import random
+
+    sami = EOE_SPELLS["Sami's Curiosity"]
+    state = _arena(
+        p0_hand=[sami],
+        p0_battlefield=[BASIC_LANDS["Forest"]],
+        p0_life=15,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Life gain
+    assert state.players[0].life == 17
+    # Lander token on the battlefield, controlled by P0
+    landers = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Lander"]
+    ]
+    assert len(landers) == 1
+    assert landers[0].controller_id == 0
+
+
+def test_lander_can_be_sacrificed_to_search_for_basic_land():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    import random
+
+    state = _arena(p0_battlefield=[BASIC_LANDS["Plains"]] * 2)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed library with a Forest the Lander should find.
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    # Spawn a Lander token on P0's battlefield
+    lander = state.new_object(TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD)
+    lander.summoning_sick = False
+    state.battlefield.append(lander)
+
+    # Both of P0's Plains are untapped (state already has them); cost is {2}.
+    apply(state, ActivateAbility(source_id=lander.id, ability_index=0), player_id=0)
+    # Lander has been sacrificed (tokens cease to exist in the graveyard).
+    assert lander not in state.battlefield
+    assert lander not in state.players[0].graveyard  # ceased to exist
+    # The ability is on the stack waiting to resolve.
+    assert len(state.stack) == 1
+    resolve_top_of_stack(state)
+    # A Forest is now on the battlefield, tapped.
+    forests = [
+        o for o in state.battlefield
+        if o.printing is BASIC_LANDS["Forest"]
+    ]
+    assert len(forests) == 1
+    assert forests[0].tapped is True
+
+
+def test_lander_activation_not_legal_without_enough_mana():
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = _arena()
+    # Lander needs {2}; give P0 only ONE untapped Plains.
+    state.battlefield.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD)
+    )
+    lander = state.new_object(TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD)
+    lander.summoning_sick = False
+    state.battlefield.append(lander)
+
+    moves = legal_moves(state, player_id=0)
+    assert not any(isinstance(m, ActivateAbility) for m in moves)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
