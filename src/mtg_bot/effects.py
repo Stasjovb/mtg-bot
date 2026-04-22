@@ -830,6 +830,64 @@ class DestroyTargetArtifactOrTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DepressurizeEffect(Effect):
+    """Target creature gets -3/-0 UEOT; then if its power is 0 or less,
+    destroy it.
+
+    Dedicated effect because the conditional destroy reads the pumped
+    creature's post-modification power — an inline check after the pump
+    is clearer than stitching Sequence + ConditionalDestroyIfPowerLEQ.
+    """
+
+    power_penalty: int = 3  # applied as a negative to temp_power_bonus
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_power_bonus -= self.power_penalty
+        state.log.append(
+            f"{obj.printing.name} gets -{self.power_penalty}/-0 until end "
+            f"of turn"
+        )
+        # "Then if that creature's power is 0 or less, destroy it."
+        if effective_power(state, obj) <= 0:
+            state.log.append(f"{obj.printing.name} is destroyed (depressurized)")
+            move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return (
+            f"target creature gets -{self.power_penalty}/-0 until end of "
+            f"turn; then if its power is 0 or less, destroy it"
+        )
+
+
+@dataclass(frozen=True)
 class ExileTargetCreature(Effect):
     """Exile any target creature on the battlefield.
 

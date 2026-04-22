@@ -3152,6 +3152,53 @@ def test_radiant_strike_noop_paths_and_untap_invalidates_target():
     assert creature in state.battlefield  # not destroyed
 
 
+def test_depressurize_kills_small_creature():
+    """Depressurize on a 2/2: power becomes -1, creature is destroyed."""
+    from mtg_bot.effects import DepressurizeEffect
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    e = DepressurizeEffect(power_penalty=3)
+    assert e.requires_target() is True
+    assert "destroy" in e.describe()
+    legal = e.legal_targets(state, controller_id=0)
+    assert ("creature", victim.id) in legal
+    e.resolve(state, controller_id=0, targets=(("creature", victim.id),))
+    assert victim not in state.battlefield
+
+
+def test_depressurize_does_not_kill_big_creature():
+    """Depressurize on a 4/4: power becomes 1, creature survives with debuff."""
+    from mtg_bot.effects import DepressurizeEffect
+
+    state = _arena()
+    # Build a synthetic 4/4 on the fly by reusing an existing 4-power card
+    # if available, else use Wild Bear and pre-buff it.
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    victim.temp_power_bonus = 2  # now a 4/4
+    state.battlefield.append(victim)
+    e = DepressurizeEffect(power_penalty=3)
+    e.resolve(state, controller_id=0, targets=(("creature", victim.id),))
+    assert victim in state.battlefield  # still alive: 4 - 3 = 1 power
+    from mtg_bot.game import effective_power
+    assert effective_power(state, victim) == 1
+
+
+def test_depressurize_noop_paths():
+    from mtg_bot.effects import DepressurizeEffect
+
+    state = _arena()
+    e = DepressurizeEffect()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,

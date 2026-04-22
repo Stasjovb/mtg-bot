@@ -41,6 +41,7 @@ from mtg_bot.effects import (
     ReturnTargetCreatureToOwnersHand,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
+    DepressurizeEffect,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1058,6 +1059,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DestroyTargetArtifactOrTappedCreature(),
                 GainLife(amount=3),
             )),
+        ),
+        # Depressurize — -3/-0 UEOT + if power <=0, destroy.
+        make_instant(
+            "Depressurize", "{1}{B}",
+            effect=DepressurizeEffect(power_penalty=3),
         ),
     ]
 }
