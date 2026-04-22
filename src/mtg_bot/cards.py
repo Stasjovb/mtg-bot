@@ -30,6 +30,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
+    StaticAbility,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -99,6 +100,9 @@ class CardPrinting:
     # non-Spacecraft cards.
     station_threshold: int | None = None
     stationed_keywords: frozenset[str] = frozenset()
+    # Continuous abilities that buff other permanents while this permanent
+    # is on the battlefield (anthems, keyword grants).
+    static_abilities: tuple[StaticAbility, ...] = ()
 
     @property
     def is_land(self) -> bool:
@@ -165,9 +169,12 @@ def make_creature(
     toughness: int,
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
     warp: str | None = None,
+    legendary: bool = False,
 ) -> CardPrinting:
-    type_line = "Creature"
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Creature"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -181,6 +188,7 @@ def make_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
     )

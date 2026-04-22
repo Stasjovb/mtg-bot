@@ -758,6 +758,67 @@ class TargetOpponentDiscards(Effect):
         return f"target opponent discards {self.count} cards"
 
 
+class StaticScope:
+    """Scope of a static ability — which permanents it affects.
+
+    Values are strings (not an Enum) to keep StaticAbility hashable and
+    frozen-friendly.
+    """
+
+    OTHER_CREATURES_YOU_CONTROL = "other_creatures_you_control"
+    CREATURES_YOU_CONTROL = "creatures_you_control"
+
+
+@dataclass(frozen=True)
+class StaticAbility:
+    """A continuous ability on a permanent that grants keywords and/or P/T
+    bonuses to matching permanents while the source is on the battlefield.
+
+    Stage 3 supports anthem-style scopes. Consumers (effective_keywords,
+    effective_power, effective_toughness) walk the battlefield at query
+    time and fold in applicable bonuses — no layers system yet, so the
+    ordering-of-continuous-effects subtleties from the comprehensive rules
+    don't apply.
+    """
+
+    scope: str
+    granted_keywords: frozenset[str] = frozenset()
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+
+    def applies_to(self, source, target) -> bool:
+        """True if this ability, on ``source``, currently buffs ``target``."""
+        from mtg_bot.game import is_creature_now
+
+        # Creatures only, under the source's controller.
+        if not is_creature_now(target):
+            return False
+        if target.controller_id != source.controller_id:
+            return False
+        if self.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL:
+            return target.id != source.id
+        if self.scope == StaticScope.CREATURES_YOU_CONTROL:
+            return True
+        return False
+
+    def describe(self) -> str:
+        who = {
+            StaticScope.OTHER_CREATURES_YOU_CONTROL: "Other creatures you control",
+            StaticScope.CREATURES_YOU_CONTROL: "Creatures you control",
+        }.get(self.scope, self.scope)
+        parts: list[str] = []
+        if self.power_bonus or self.toughness_bonus:
+            sign_p = "+" if self.power_bonus >= 0 else ""
+            sign_t = "+" if self.toughness_bonus >= 0 else ""
+            parts.append(
+                f"get {sign_p}{self.power_bonus}/{sign_t}{self.toughness_bonus}"
+            )
+        if self.granted_keywords:
+            kws = ", ".join(sorted(self.granted_keywords))
+            parts.append(f"have {kws}")
+        return f"{who} {' and '.join(parts)}." if parts else f"{who} (no effect)."
+
+
 @dataclass(frozen=True)
 class TriggeredAbility:
     """An ability that fires on a specific event.

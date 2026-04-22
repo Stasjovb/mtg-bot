@@ -1404,8 +1404,8 @@ def test_spacecraft_becomes_creature_when_threshold_reached():
     # 3 ≥ 3 → stationed
     assert is_creature_now(ship)
     # Station unlocks flying + haste
-    assert "flying" in effective_keywords(ship)
-    assert "haste" in effective_keywords(ship)
+    assert "flying" in effective_keywords(state, ship)
+    assert "haste" in effective_keywords(state, ship)
     # Haste means it can attack even though it just "became" a creature.
     # (Summoning sickness based on when it entered — it entered earlier.)
     ship.summoning_sick = False  # normalize; entered_bf was in _arena setup

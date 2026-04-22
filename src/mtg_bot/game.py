@@ -79,24 +79,48 @@ def is_creature_now(obj: GameObject) -> bool:
     return obj.printing.is_creature or is_stationed(obj)
 
 
-def effective_keywords(obj: GameObject) -> frozenset[str]:
-    """Keywords in effect right now — printing + stationed_keywords if the
-    Spacecraft is currently stationed."""
+def _static_bonuses(
+    state: GameState, obj: GameObject
+) -> tuple[int, int, frozenset[str]]:
+    """Walk the battlefield for static abilities that buff ``obj``.
+
+    Returns (power_bonus, toughness_bonus, granted_keywords). Used by the
+    effective_* helpers below.
+    """
+    power_bonus = 0
+    toughness_bonus = 0
+    granted: set[str] = set()
+    for source in state.battlefield:
+        for ability in source.printing.static_abilities:
+            if ability.applies_to(source, obj):
+                power_bonus += ability.power_bonus
+                toughness_bonus += ability.toughness_bonus
+                granted |= ability.granted_keywords
+    return power_bonus, toughness_bonus, frozenset(granted)
+
+
+def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
+    """Keywords in effect right now — printing + stationed_keywords +
+    keywords granted by static abilities on other permanents."""
+    kws = obj.printing.keywords
     if is_stationed(obj):
-        return obj.printing.keywords | obj.printing.stationed_keywords
-    return obj.printing.keywords
+        kws = kws | obj.printing.stationed_keywords
+    _, _, granted = _static_bonuses(state, obj)
+    return kws | granted
 
 
-def effective_power(obj: GameObject) -> int:
-    """Power including +1/+1 counters. Falls back to 0 for non-creatures."""
+def effective_power(state: GameState, obj: GameObject) -> int:
+    """Power including +1/+1 counters and static-ability bonuses."""
     base = obj.printing.power or 0
-    return base + obj.plus_one_counters
+    power_bonus, _, _ = _static_bonuses(state, obj)
+    return base + obj.plus_one_counters + power_bonus
 
 
-def effective_toughness(obj: GameObject) -> int:
-    """Toughness including +1/+1 counters. Falls back to 0 for non-creatures."""
+def effective_toughness(state: GameState, obj: GameObject) -> int:
+    """Toughness including +1/+1 counters and static-ability bonuses."""
     base = obj.printing.toughness or 0
-    return base + obj.plus_one_counters
+    _, toughness_bonus, _ = _static_bonuses(state, obj)
+    return base + obj.plus_one_counters + toughness_bonus
 
 
 @dataclass

@@ -19,7 +19,7 @@ def test_serialize_permanent_captures_state():
     bear.damage = 1
     bear.attacking = True
     state.battlefield.append(bear)
-    d = serialize_permanent(bear)
+    d = serialize_permanent(state, bear)
     assert d["name"] == "Wild Bear"
     assert d["is_creature"] is True
     assert d["is_land"] is False
@@ -48,7 +48,7 @@ def test_serialize_permanent_includes_keywords():
     flier_printing = make_creature("Sky Drake", "{2}{U}", 2, 2, keywords={"flying"})
     flier = state.new_object(flier_printing, owner_id=0, zone=Zone.BATTLEFIELD)
     state.battlefield.append(flier)
-    d = serialize_permanent(flier)
+    d = serialize_permanent(state, flier)
     assert d["keywords"] == ["flying"]
 
 

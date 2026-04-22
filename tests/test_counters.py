@@ -31,16 +31,16 @@ def _setup_two_players():
 def test_effective_power_adds_counters():
     state = _setup_two_players()
     bear = _put_on_bf(state, SYNTHETIC_CREATURES["Wild Bear"], counters=2)  # 2/2 base
-    assert effective_power(bear) == 4
-    assert effective_toughness(bear) == 4
+    assert effective_power(state, bear) == 4
+    assert effective_toughness(state, bear) == 4
 
 
 def test_effective_power_of_non_creature_is_zero():
     state = _setup_two_players()
     from mtg_bot.cards import BASIC_LANDS
     forest = _put_on_bf(state, BASIC_LANDS["Forest"])
-    assert effective_power(forest) == 0
-    assert effective_toughness(forest) == 0
+    assert effective_power(state, forest) == 0
+    assert effective_toughness(state, forest) == 0
 
 
 def test_counter_prevents_lethal_damage():
@@ -92,7 +92,7 @@ def test_serialize_exposes_counter_count_and_effective_pt():
 
     state = _setup_two_players()
     bear = _put_on_bf(state, SYNTHETIC_CREATURES["Wild Bear"], counters=2)
-    d = serialize_permanent(bear)
+    d = serialize_permanent(state, bear)
     assert d["plus_one_counters"] == 2
     assert d["effective_power"] == 4
     assert d["effective_toughness"] == 4

@@ -228,7 +228,7 @@ def _activate_station(
         # summoning-sick creatures, even for Station.
         return
 
-    added = effective_power(crew)
+    added = effective_power(state, crew)
     crew.tapped = True
     spacecraft.charge_counters += added
     state.log.append(
@@ -266,7 +266,7 @@ def _declare_blockers(
             continue
         if blocker_id not in blockers_on_bf:
             continue
-        if not can_block(blockers_on_bf[blocker_id], attackers[attacker_id]):
+        if not can_block(state, blockers_on_bf[blocker_id], attackers[attacker_id]):
             continue
         validated[blocker_id] = attacker_id
 

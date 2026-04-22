@@ -206,7 +206,7 @@ def state_based_actions(state: GameState) -> bool:
     for obj in state.battlefield:
         if not is_creature_now(obj):
             continue
-        tough = effective_toughness(obj)
+        tough = effective_toughness(state, obj)
         if tough <= 0 or obj.damage >= tough or obj.marked_lethal:
             destroyed.append(obj)
 

@@ -20,7 +20,7 @@ from mtg_bot.game import (
 )
 
 
-def serialize_permanent(obj: GameObject) -> dict[str, Any]:
+def serialize_permanent(state: GameState, obj: GameObject) -> dict[str, Any]:
     p = obj.printing
     return {
         "id": obj.id,
@@ -29,8 +29,8 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "mana_cost": p.mana_cost_str,
         "power": p.power,
         "toughness": p.toughness,
-        "effective_power": effective_power(obj) if is_creature_now(obj) else None,
-        "effective_toughness": effective_toughness(obj) if is_creature_now(obj) else None,
+        "effective_power": effective_power(state, obj) if is_creature_now(obj) else None,
+        "effective_toughness": effective_toughness(state, obj) if is_creature_now(obj) else None,
         "is_creature": p.is_creature,
         "is_creature_now": is_creature_now(obj),
         "is_land": p.is_land,
@@ -39,8 +39,9 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "is_stationed": is_stationed(obj),
         "station_threshold": p.station_threshold,
         "charge_counters": obj.charge_counters,
-        "keywords": sorted(effective_keywords(obj)),
+        "keywords": sorted(effective_keywords(state, obj)),
         "abilities": [a.describe() for a in p.triggered_abilities],
+        "static_abilities": [sa.describe() for sa in p.static_abilities],
         "warp_cost": p.warp_cost_str or None,
         "tapped": obj.tapped,
         "damage": obj.damage,
@@ -89,7 +90,7 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             "lost_reason": p.lost_reason,
             "lands_played_this_turn": p.lands_played_this_turn,
             "battlefield": [
-                serialize_permanent(o)
+                serialize_permanent(state, o)
                 for o in state.battlefield
                 if o.controller_id == p.id
             ],

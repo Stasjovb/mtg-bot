@@ -21,6 +21,8 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
+    StaticAbility,
+    StaticScope,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -810,6 +812,123 @@ def test_conditional_if_void_describe_includes_void_or_both_branches():
     d = two.describe()
     assert "if Void is active" in d
     assert "otherwise" in d
+
+
+def test_static_ability_other_creatures_you_control_excludes_self():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    source_printing = SYNTHETIC_CREATURES["Wild Bear"]
+    target_printing = SYNTHETIC_CREATURES["Wild Bear"]
+    state = GameState()
+    state.players.append(Player(id=0))
+    src = state.new_object(source_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    other = state.new_object(target_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([src, other])
+
+    ability = StaticAbility(
+        scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+        granted_keywords=frozenset({"haste"}),
+    )
+    assert ability.applies_to(src, other) is True
+    assert ability.applies_to(src, src) is False
+
+
+def test_static_ability_creatures_you_control_includes_self():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    printing = SYNTHETIC_CREATURES["Wild Bear"]
+    state = GameState()
+    state.players.append(Player(id=0))
+    src = state.new_object(printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(src)
+
+    ability = StaticAbility(scope=StaticScope.CREATURES_YOU_CONTROL, power_bonus=1)
+    assert ability.applies_to(src, src) is True
+
+
+def test_static_ability_does_not_apply_to_opponent_creatures():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    printing = SYNTHETIC_CREATURES["Wild Bear"]
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(printing, owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+
+    ability = StaticAbility(scope=StaticScope.OTHER_CREATURES_YOU_CONTROL, power_bonus=2)
+    assert ability.applies_to(mine, theirs) is False
+
+
+def test_static_ability_does_not_apply_to_non_creatures():
+    from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
+    state = GameState()
+    state.players.append(Player(id=0))
+    src = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    land = state.new_object(BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([src, land])
+
+    ability = StaticAbility(scope=StaticScope.CREATURES_YOU_CONTROL, power_bonus=1)
+    assert ability.applies_to(src, land) is False
+
+
+def test_static_ability_describe_keywords_and_pt():
+    ab = StaticAbility(
+        scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+        granted_keywords=frozenset({"haste"}),
+    )
+    assert "Other creatures you control" in ab.describe()
+    assert "haste" in ab.describe()
+
+    ab2 = StaticAbility(
+        scope=StaticScope.CREATURES_YOU_CONTROL,
+        power_bonus=1, toughness_bonus=1,
+    )
+    d = ab2.describe()
+    assert "+1/+1" in d
+
+    ab3 = StaticAbility(scope=StaticScope.CREATURES_YOU_CONTROL)  # no effects
+    assert ab3.describe().endswith("(no effect).")
+
+
+def test_static_unknown_scope_does_not_apply():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    state = GameState()
+    state.players.append(Player(id=0))
+    src = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(src)
+
+    ab = StaticAbility(scope="bogus_scope")
+    assert ab.applies_to(src, src) is False
+
+
+def test_effective_power_folds_in_static_anthem_bonus():
+    from mtg_bot.cards import SYNTHETIC_CREATURES, make_creature
+    from mtg_bot.game import effective_power, effective_toughness
+
+    # Source with an anthem: other creatures you control get +1/+1
+    anthem_src_printing = make_creature(
+        "Test Lord", "{2}{G}", 2, 2,
+        static_abilities=(
+            StaticAbility(
+                scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                power_bonus=1, toughness_bonus=1,
+            ),
+        ),
+    )
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    lord = state.new_object(anthem_src_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    ally = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)  # 2/2
+    enemy = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)  # 2/2
+    state.battlefield.extend([lord, ally, enemy])
+
+    # Lord doesn't buff itself (OTHER creatures)
+    assert effective_power(state, lord) == 2
+    # Ally gets +1/+1
+    assert effective_power(state, ally) == 3
+    assert effective_toughness(state, ally) == 3
+    # Enemy unaffected
+    assert effective_power(state, enemy) == 2
 
 
 def test_triggered_ability_describe_beginning_of_end_step():
