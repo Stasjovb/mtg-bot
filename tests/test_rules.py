@@ -645,6 +645,98 @@ def test_virus_beetle_trigger_does_nothing_if_target_has_empty_hand():
     assert len(state.players[1].graveyard) == 0
 
 
+# --------------------------------------------------------------------------
+# REAL EDGE OF ETERNITIES CARDS — end-to-end scenarios on the real oracle text
+# --------------------------------------------------------------------------
+
+
+def test_hullcarver_is_playable_and_has_deathtouch():
+    from mtg_bot.cards import EOE_CREATURES
+    hull = EOE_CREATURES["Hullcarver"]
+    assert hull.mana_cost_str == "{B}"
+    assert hull.power == 1 and hull.toughness == 1
+    assert "deathtouch" in hull.keywords
+
+
+def test_monoist_sentry_cannot_attack_but_can_block():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers, eligible_blockers
+
+    sentry = EOE_CREATURES["Monoist Sentry"]
+    state = _arena(p0_battlefield=[sentry], p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]])
+    obj = state.battlefield[0]
+    assert obj not in eligible_attackers(state, 0)
+    assert obj in eligible_blockers(state, 0)
+
+
+def test_germinating_wurm_etb_gains_two_life():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    wurm = EOE_CREATURES["Germinating Wurm"]
+    state = _arena(
+        p0_hand=[wurm],
+        p0_battlefield=[BASIC_LANDS["Forest"]] * 5,
+        p0_life=15,
+    )
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    resolve_top_of_stack(state)  # ability
+    assert state.players[0].life == 15 + 2
+
+
+def test_quantum_riddler_etb_draws_a_card():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    riddler = EOE_CREATURES["Quantum Riddler"]
+    state = _arena(
+        p0_hand=[riddler],
+        p0_battlefield=[BASIC_LANDS["Island"]] * 5,
+    )
+    # Seed library so there's something to draw
+    for _ in range(3):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    assert len(state.players[0].hand) == 0
+    resolve_top_of_stack(state)  # draw trigger
+    assert len(state.players[0].hand) == 1
+
+
+def test_real_virus_beetle_makes_every_opponent_discard():
+    """The real EoE Virus Beetle ({1}{B} 1/1) hits EACH opponent, not a
+    single target. Distinct from our earlier synthetic "target opponent"
+    version."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    beetle = EOE_CREATURES["Virus Beetle"]
+    state = _arena(
+        p0_hand=[beetle],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Give each opponent a card
+    p1_card = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.HAND)
+    state.players[1].hand.append(p1_card)
+
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    # The real Virus Beetle is untargeted, so no target was chosen
+    assert state.stack[0].targets == ()
+    resolve_top_of_stack(state)  # ability
+    assert len(state.players[1].hand) == 0
+    assert len(state.players[1].graveyard) == 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

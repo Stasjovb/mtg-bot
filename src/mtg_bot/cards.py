@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from mtg_bot.effects import (
     DrawCards,
+    EachOpponentDiscards,
     EachPlayerDraws,
     GainLife,
     TargetOpponentDiscards,
@@ -191,15 +192,6 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Infernal Horror", "{2}{B}{B}", 4, 4),
         make_creature("Ebon Bat", "{1}{B}", 2, 1, keywords={"flying"}),
         make_creature("Venomous Serpent", "{1}{B}", 1, 1, keywords={"deathtouch"}),
-        make_creature(
-            "Virus Beetle", "{B}", 1, 2,
-            triggered_abilities=(
-                TriggeredAbility(
-                    trigger="etb",
-                    effect=TargetOpponentDiscards(count=1),
-                ),
-            ),
-        ),
         # Red
         make_creature("Raging Goblin", "{R}", 2, 1),
         make_creature("Blood Warrior", "{1}{R}", 2, 2),
@@ -220,8 +212,48 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
 }
 
 
+# Real Edge of Eternities cards. These match actual Scryfall oracle text (set
+# code: eoe) using the Stage-3 primitives we've built. More EoE cards unlock
+# as we add new keywords, effects, and mechanics.
+EOE_CREATURES: dict[str, CardPrinting] = {
+    c.name: c
+    for c in [
+        # Black
+        make_creature("Hullcarver", "{B}", 1, 1, keywords={"deathtouch"}),
+        make_creature("Monoist Sentry", "{B}", 4, 1, keywords={"defender"}),
+        make_creature(
+            "Virus Beetle", "{1}{B}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb", effect=EachOpponentDiscards(count=1)
+                ),
+            ),
+        ),
+        # Blue
+        make_creature(
+            "Quantum Riddler", "{3}{U}{U}", 4, 6,
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+            ),
+        ),
+        # Green
+        make_creature(
+            "Germinating Wurm", "{4}{G}", 5, 5,
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+            ),
+        ),
+    ]
+}
+
+
+# The pool used for games — synthetic placeholders plus every real EoE card
+# we've implemented so far.
+CREATURE_POOL: dict[str, CardPrinting] = {**SYNTHETIC_CREATURES, **EOE_CREATURES}
+
+
 def all_printings() -> dict[str, CardPrinting]:
-    return {**BASIC_LANDS, **SYNTHETIC_CREATURES}
+    return {**BASIC_LANDS, **CREATURE_POOL}
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
@@ -232,11 +264,11 @@ def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
     land_name = _COLOR_TO_BASIC[color]
     creatures = [
         name
-        for name, p in SYNTHETIC_CREATURES.items()
+        for name, p in CREATURE_POOL.items()
         if color in p.mana_cost.colors
     ]
     if not creatures:
-        raise ValueError(f"no synthetic creatures in color {color}")
+        raise ValueError(f"no creatures in color {color}")
     deck: list[str] = [creatures[i % len(creatures)] for i in range(36)]
     deck.extend([land_name] * 24)
     rng.shuffle(deck)
