@@ -144,6 +144,73 @@ class DiscardSelf(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnTargetCreatureToOwnersHand(Effect):
+    """Target creature on the battlefield returns to its owner's hand.
+
+    Tokens cease to exist when bounced (they'd briefly be in hand, then
+    rule 704.5d kicks in). Matches oracle text like "Return target
+    creature to its owner's hand."
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is None:
+            return
+        state.battlefield.remove(obj)
+        # Reset combat/damage state on the way off the battlefield
+        obj.damage = 0
+        obj.marked_lethal = False
+        obj.tapped = False
+        obj.attacking = False
+        obj.blocking = None
+        obj.blocked_by = []
+        obj.cast_via_warp = False
+        obj.plus_one_counters = 0
+        obj.charge_counters = 0
+        obj.temp_power_bonus = 0
+        obj.temp_toughness_bonus = 0
+        obj.temp_keywords = frozenset()
+        # Track the leave-BF for Void
+        if not obj.printing.is_land:
+            state.permanent_left_battlefield_this_turn = True
+        if obj.printing.is_token:
+            state.log.append(
+                f"{obj.printing.name} token ceases to exist (bounced)"
+            )
+            return
+        obj.zone = Zone.HAND
+        state.player_by_id(obj.owner_id).hand.append(obj)
+        state.log.append(
+            f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
+        )
+
+    def describe(self) -> str:
+        return "return target creature to its owner's hand"
+
+
+@dataclass(frozen=True)
 class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
     """Target creature card from your graveyard enters the battlefield under
     your control. Fires ETB triggers (via put_into_battlefield).

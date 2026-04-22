@@ -38,6 +38,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1033,6 +1034,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 granted_keywords=frozenset({"double strike"}),
                 you_control_only=True,
             ),
+        ),
+        # Desculpting Blast — real card says "nonland permanent"; we
+        # simplify to creatures only. The "if it was attacking, create
+        # a Drone token" rider is also skipped.
+        make_instant(
+            "Desculpting Blast", "{1}{U}",
+            effect=ReturnTargetCreatureToOwnersHand(),
         ),
     ]
 }

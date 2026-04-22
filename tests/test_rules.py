@@ -2930,6 +2930,46 @@ def test_mechan_navigator_triggers_on_station_crew():
     assert any("Mechan Navigator's becomes-tapped" in e for e in state.log)
 
 
+def test_desculpting_blast_bounces_creature_to_hand():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    blast = EOE_SPELLS["Desculpting Blast"]
+    state = _arena(
+        p0_hand=[blast],
+        p0_battlefield=[BASIC_LANDS["Island"], BASIC_LANDS["Island"]],
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    enemy_bear = next(o for o in state.battlefield if o.controller_id == 1)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # Bear back in P1's hand, not on battlefield
+    assert enemy_bear in state.players[1].hand
+    assert enemy_bear not in state.battlefield
+
+
+def test_bouncing_a_token_makes_it_cease():
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.effects import ReturnTargetCreatureToOwnersHand
+
+    state = _arena()
+    token = state.new_object(
+        TOKEN_PRINTINGS["Human Soldier"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(token)
+    ReturnTargetCreatureToOwnersHand().resolve(
+        state, controller_id=1, targets=(("creature", token.id),)
+    )
+    # Token ceased — not on battlefield, not in hand
+    assert token not in state.battlefield
+    assert token not in state.players[0].hand
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
