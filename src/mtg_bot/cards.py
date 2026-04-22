@@ -461,6 +461,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Flying + dies trigger to create a tapped 2/2 Robot.
+        make_creature(
+            "Gravpack Monoist", "{2}{B}", 2, 1,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="dies",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                        tapped=True,
+                    ),
+                ),
+            ),
+        ),
         # Blue
         make_creature(
             "Quantum Riddler", "{3}{U}{U}", 4, 6,

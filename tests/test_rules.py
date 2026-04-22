@@ -1697,6 +1697,94 @@ def test_hymn_of_the_faller_void_mode_draws_extra():
     assert state.players[0].life == 14
 
 
+# --------------------------------------------------------------------------
+# Rule: DIES TRIGGERS — fire when a creature moves from battlefield to graveyard
+# --------------------------------------------------------------------------
+
+
+def test_gravpack_monoist_dies_creates_tapped_robot_token():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import move_off_battlefield
+
+    grav = EOE_CREATURES["Gravpack Monoist"]
+    state = _arena(p0_battlefield=[grav])
+    obj = state.battlefield[0]
+    move_off_battlefield(state, obj, destination="graveyard")
+    # Monoist went to graveyard AND fired its dies trigger
+    assert obj in state.players[0].graveyard
+    tokens = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Robot"]
+    ]
+    assert len(tokens) == 1
+    assert tokens[0].controller_id == 0
+    assert tokens[0].tapped is True
+
+
+def test_dies_trigger_does_not_fire_when_exiled_instead():
+    """Being exiled isn't dying — dies triggers must not fire."""
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import move_off_battlefield
+
+    grav = EOE_CREATURES["Gravpack Monoist"]
+    state = _arena(p0_battlefield=[grav])
+    obj = state.battlefield[0]
+    move_off_battlefield(state, obj, destination="exile")
+    # No Robot created — exile doesn't fire "dies" triggers.
+    tokens = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Robot"]
+    ]
+    assert len(tokens) == 0
+
+
+def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import state_based_actions
+
+    grav = EOE_CREATURES["Gravpack Monoist"]
+    state = _arena(p0_battlefield=[grav])
+    obj = state.battlefield[0]
+    obj.damage = 2  # lethal for 2/1
+    state_based_actions(state)
+    assert obj not in state.battlefield
+    # Dies trigger fired during the SBA → Robot token appeared.
+    tokens = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Robot"]
+    ]
+    assert len(tokens) == 1
+
+
+def test_dies_trigger_fires_in_combat_full_flow():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.turn import state_based_actions
+
+    grav = EOE_CREATURES["Gravpack Monoist"]  # 2/1 flying
+    state = _arena(
+        p0_battlefield=[grav],
+        p1_battlefield=[SYNTHETIC_CREATURES["Scale Drake"]],  # 2/3 flying
+    )
+    attacker = state.battlefield[0]
+    blocker = state.battlefield[1]
+    # Monoist attacks, drake blocks.
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({attacker.id})), player_id=0)
+    state.step = Step.DECLARE_BLOCKERS
+    apply(state, DeclareBlockers(assignments=((blocker.id, attacker.id),)), player_id=1)
+    state.step = Step.COMBAT_DAMAGE
+    resolve_combat_damage(state, defending_player_id=1)
+    state_based_actions(state)
+    # Monoist 2/1 vs Drake 2/3: Monoist takes 2 (dies), Drake takes 2 (lives).
+    assert attacker not in state.battlefield
+    assert blocker in state.battlefield
+    # Dies trigger fired → Robot token for P0.
+    tokens = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(tokens) == 1
+    assert tokens[0].controller_id == 0
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
