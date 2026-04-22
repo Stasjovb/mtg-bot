@@ -1930,6 +1930,75 @@ def test_lander_activation_not_legal_without_enough_mana():
     assert not any(isinstance(m, ActivateAbility) for m in moves)
 
 
+def test_dual_sun_adepts_activated_ability_pumps_allies():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+    import random
+
+    adepts = EOE_CREATURES["Dual-Sun Adepts"]
+    state = _arena(
+        p0_battlefield=[adepts, SYNTHETIC_CREATURES["Wild Bear"]]
+                        + [BASIC_LANDS["Plains"]] * 5,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    adept_obj = next(o for o in state.battlefield if o.printing.name == "Dual-Sun Adepts")
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+
+    apply(state, ActivateAbility(source_id=adept_obj.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    # Both own creatures get +1/+1
+    assert effective_power(state, adept_obj) == 2 + 1
+    assert effective_power(state, bear) == 2 + 1
+
+
+def test_zealous_display_pumps_only_controllers_creatures():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_power
+    import random
+
+    zeal = EOE_SPELLS["Zealous Display"]
+    state = _arena(
+        p0_hand=[zeal],
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"]],
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    my_bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear" and o.controller_id == 0)
+    enemy_bear = next(o for o in state.battlefield if o.controller_id == 1)
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # My bear got +2/+0; opponent's didn't
+    assert effective_power(state, my_bear) == 4
+    assert effective_power(state, enemy_bear) == 2
+
+
+def test_cleanup_wipes_eot_pumps():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+    from mtg_bot.turn import run_cleanup_step
+
+    adepts = EOE_CREATURES["Dual-Sun Adepts"]
+    state = _arena(
+        p0_battlefield=[adepts] + [BASIC_LANDS["Plains"]] * 5,
+    )
+    adept_obj = next(o for o in state.battlefield if o.printing.name == "Dual-Sun Adepts")
+    apply(state, ActivateAbility(source_id=adept_obj.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    assert effective_power(state, adept_obj) == 3  # pumped
+
+    run_cleanup_step(state)
+    assert effective_power(state, adept_obj) == 2  # back to base
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

@@ -28,6 +28,8 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     LoseLife,
+    PumpCreaturesYouControlUntilEOT,
+    PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -484,6 +486,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Dual-Sun Adepts: "Double strike. {5}: Creatures you control get
+        # +1/+1 until end of turn." Double strike isn't implemented yet,
+        # so this version ships without that keyword — the activated
+        # ability works.
+        make_creature(
+            "Dual-Sun Adepts", "{2}{W}", 2, 2,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{5}"),
+                    effect=PumpCreaturesYouControlUntilEOT(
+                        power_bonus=1, toughness_bonus=1,
+                    ),
+                ),
+            ),
+        ),
         # Knight Luminary has warp {1}{W} — warp is not implemented yet, so
         # Luminary only plays at its regular cost.
         make_creature(
@@ -672,6 +689,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     count=1,
                 ),
             )),
+        ),
+        # Zealous Display: "Creatures you control get +2/+0 until end of
+        # turn. If it's not your turn, untap those creatures." We ship
+        # the pump part; the conditional untap rider (a niche combat
+        # trick) is flagged and skipped for now.
+        make_instant(
+            "Zealous Display", "{2}{W}",
+            effect=PumpCreaturesYouControlUntilEOT(
+                power_bonus=2, toughness_bonus=0,
+            ),
         ),
     ]
 }
