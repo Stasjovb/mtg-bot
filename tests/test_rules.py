@@ -402,3 +402,102 @@ def test_cast_creature_enters_with_summoning_sickness():
 def test_creature_keyword_set_is_exposed_on_printing():
     flier = make_creature("Test Flier", "{U}", 1, 1, keywords={"flying"})
     assert "flying" in flier.keywords
+
+
+# --------------------------------------------------------------------------
+# Rule: FLYING — can only be blocked by creatures with flying or reach
+# --------------------------------------------------------------------------
+
+
+def _flier(name="Test Flier", power=2, toughness=2):
+    return make_creature(name, "{1}{U}", power, toughness, keywords={"flying"})
+
+
+def _ground(name="Test Ground", power=2, toughness=2):
+    return make_creature(name, "{1}{G}", power, toughness)
+
+
+def _reach(name="Test Reacher", power=1, toughness=3):
+    return make_creature(name, "{2}{G}", power, toughness, keywords={"reach"})
+
+
+def test_ground_creature_cannot_block_a_flier():
+    state = _arena(
+        p0_battlefield=[_flier()],
+        p1_battlefield=[_ground()],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Block was filtered → flier got through unblocked
+    assert state.players[1].life == 20 - 2
+    assert blocker.blocking is None
+    assert blocker in state.battlefield  # untouched
+
+
+def test_flier_can_block_a_flier():
+    state = _arena(
+        p0_battlefield=[_flier("A", 2, 2)],
+        p1_battlefield=[_flier("B", 2, 2)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Both 2/2 fliers trade
+    assert attacker not in state.battlefield
+    assert blocker not in state.battlefield
+    assert state.players[1].life == 20
+
+
+def test_reach_creature_can_block_a_flier():
+    state = _arena(
+        p0_battlefield=[_flier("A", 2, 2)],
+        p1_battlefield=[_reach("Spider", 1, 3)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # 2/2 flier vs 1/3 reacher: both survive (attacker takes 1, blocker takes 2)
+    assert attacker in state.battlefield
+    assert blocker in state.battlefield
+    assert attacker.damage == 1
+    assert blocker.damage == 2
+    # The reach blocker successfully blocked the flier — no damage to player
+    assert state.players[1].life == 20
+
+
+def test_non_flying_attacker_can_be_blocked_normally():
+    state = _arena(
+        p0_battlefield=[_ground("A", 2, 2)],
+        p1_battlefield=[_ground("B", 2, 2)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    assert attacker not in state.battlefield
+    assert blocker not in state.battlefield
+
+
+def test_flier_can_block_non_flying_attacker():
+    # A flier CAN still choose to block a non-flier (not restricted from below).
+    state = _arena(
+        p0_battlefield=[_ground("A", 2, 2)],
+        p1_battlefield=[_flier("B", 2, 2)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    assert attacker not in state.battlefield
+    assert blocker not in state.battlefield
+
+
+def test_flier_blocked_by_multiple_eligible_blockers():
+    # Flier attacker, two reach blockers — both can block.
+    state = _arena(
+        p0_battlefield=[_flier("Dragon", 4, 4)],
+        p1_battlefield=[_reach("Spider A", 2, 2), _reach("Spider B", 2, 2)],
+    )
+    attacker, b1, b2 = state.battlefield
+    _simulate_combat_step(
+        state, [attacker.id], [(b1.id, attacker.id), (b2.id, attacker.id)]
+    )
+    # Dragon 4/4 takes 2+2=4 → dies; blockers take 2 each (assignment order)
+    # and also die since both are 2-tough
+    assert attacker not in state.battlefield
+    assert b1 not in state.battlefield
+    assert b2 not in state.battlefield

@@ -141,22 +141,32 @@ _COLOR_TO_BASIC: dict[str, str] = {
 SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
     c.name: c
     for c in [
+        # White
         make_creature("Battlefield Recruit", "{W}", 1, 2),
         make_creature("Trained Soldier", "{1}{W}", 2, 2),
         make_creature("Stalwart Knight", "{2}{W}", 3, 3),
+        make_creature("Sky Sentinel", "{1}{W}", 1, 3, keywords={"flying"}),
+        # Blue
         make_creature("Coastal Scout", "{U}", 1, 2),
         make_creature("Tidal Warrior", "{1}{U}", 2, 2),
         make_creature("Deep Leviathan", "{3}{U}", 4, 4),
+        make_creature("Scale Drake", "{2}{U}", 2, 3, keywords={"flying"}),
+        # Black
         make_creature("Cemetery Rat", "{B}", 2, 1),
         make_creature("Grave Brute", "{1}{B}", 2, 2),
         make_creature("Infernal Horror", "{2}{B}{B}", 4, 4),
+        make_creature("Ebon Bat", "{1}{B}", 2, 1, keywords={"flying"}),
+        # Red
         make_creature("Raging Goblin", "{R}", 2, 1),
         make_creature("Blood Warrior", "{1}{R}", 2, 2),
         make_creature("Stone Ogre", "{2}{R}", 3, 3),
+        make_creature("Dragon Whelp", "{2}{R}", 2, 2, keywords={"flying"}),
+        # Green
         make_creature("Sapling", "{G}", 1, 2),
         make_creature("Wild Bear", "{1}{G}", 2, 2),
         make_creature("Forest Giant", "{2}{G}", 3, 3),
         make_creature("Great Wurm", "{3}{G}{G}", 6, 6),
+        make_creature("Spider Sentinel", "{2}{G}", 1, 4, keywords={"reach"}),
     ]
 }
 

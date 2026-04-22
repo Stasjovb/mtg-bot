@@ -27,10 +27,15 @@ def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
 def can_block(blocker: GameObject, attacker: GameObject) -> bool:
     """Return True if ``blocker`` may legally declare a block against ``attacker``.
 
-    Stage-2 keyword rules (flying/reach/menace/etc.) get layered in as each
-    keyword lands. For now, every creature can block every creature.
+    Flying: a creature with flying can only be blocked by creatures with flying
+    or reach.
     """
-    del blocker, attacker  # unused until keyword rules land
+    if "flying" in attacker.printing.keywords:
+        if not (
+            "flying" in blocker.printing.keywords
+            or "reach" in blocker.printing.keywords
+        ):
+            return False
     return True
 
 
