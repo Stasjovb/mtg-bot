@@ -175,6 +175,44 @@ class DealDamageAnyTarget(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreature(Effect):
+    """Deal ``amount`` damage to target creature an opponent controls.
+
+    Matches oracle text like "deals N damage to target creature an opponent
+    controls" (Nova Hellkite). Only enemy creatures are legal targets — the
+    controller can't target their own creatures with this.
+    """
+
+    amount: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, _ = targets[0]
+        if kind != "creature":
+            return
+        _apply_damage(state, targets[0], self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to target creature an opponent controls"
+
+
+@dataclass(frozen=True)
 class EachOpponentDiscards(Effect):
     """Each opponent discards ``count`` cards (untargeted; no choice of target).
 

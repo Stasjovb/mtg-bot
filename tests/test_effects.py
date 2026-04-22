@@ -5,6 +5,7 @@ import pytest
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
     DealDamageAnyTarget,
+    DealDamageToOpponentCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -301,3 +302,58 @@ def test_deal_damage_any_target_to_missing_creature_is_noop():
 
 def test_deal_damage_any_target_describe():
     assert DealDamageAnyTarget(amount=3).describe() == "deals 3 damage to any target"
+
+
+def test_deal_damage_opponent_creature_excludes_own_creatures():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    mine = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.extend([mine, theirs])
+
+    targets = DealDamageToOpponentCreature(amount=1).legal_targets(state, controller_id=0)
+    assert ("creature", theirs.id) in targets
+    assert ("creature", mine.id) not in targets
+    # Players are not legal targets for this filter
+    assert not any(kind == "player" for kind, _ in targets)
+
+
+def test_deal_damage_opponent_creature_applies_damage():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    theirs = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(theirs)
+    DealDamageToOpponentCreature(amount=1).resolve(
+        state, controller_id=0, targets=(("creature", theirs.id),)
+    )
+    assert theirs.damage == 1
+
+
+def test_deal_damage_opponent_creature_rejects_non_creature_target_kind():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1, life=20))
+    # Pretend someone passed a ("player", id) — effect should no-op silently
+    DealDamageToOpponentCreature(amount=3).resolve(
+        state, controller_id=0, targets=(("player", 1),)
+    )
+    assert state.players[1].life == 20
+
+
+def test_deal_damage_opponent_creature_no_targets_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    DealDamageToOpponentCreature(amount=1).resolve(state, controller_id=0, targets=())
+
+
+def test_deal_damage_opponent_creature_describe():
+    assert (
+        DealDamageToOpponentCreature(amount=1).describe()
+        == "deals 1 damage to target creature an opponent controls"
+    )

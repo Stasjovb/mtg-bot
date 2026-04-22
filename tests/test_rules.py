@@ -802,6 +802,60 @@ def test_nebula_dragon_fizzles_if_no_legal_targets():
     assert len(state.stack) == 1
 
 
+def test_nova_hellkite_etb_pings_an_enemy_creature():
+    """Nova Hellkite {3}{R}{R} ETB: it deals 1 damage to target creature an
+    opponent controls. The 1/1 goblin-sized target should die from the ping."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    hellkite = EOE_CREATURES["Nova Hellkite"]
+    state = _arena(
+        p0_hand=[hellkite],
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 5,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Opponent's only creature — a 1/1.
+    goblin_printing = SYNTHETIC_CREATURES["Cemetery Rat"]  # 2/1
+    goblin = state.new_object(goblin_printing, owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(goblin)
+
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    assert len(state.stack) == 1
+    # Only legal target was the opposing 2/1
+    assert state.stack[0].targets == (("creature", goblin.id),)
+    resolve_top_of_stack(state)  # ability — 1 damage
+    # Goblin has 1 damage (1-tough → lethal state-based action destroys it)
+    from mtg_bot.turn import state_based_actions
+    state_based_actions(state)
+    assert goblin not in state.battlefield
+
+
+def test_nova_hellkite_fizzles_with_no_enemy_creatures():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    hellkite = EOE_CREATURES["Nova Hellkite"]
+    state = _arena(
+        p0_hand=[hellkite],
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 5,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # No opposing creatures
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell; ability tries to trigger but fizzles
+    assert not state.stack
+    assert any("fizzles" in entry for entry in state.log)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

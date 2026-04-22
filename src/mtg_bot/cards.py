@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from mtg_bot.effects import (
     DealDamageAnyTarget,
+    DealDamageToOpponentCreature,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -244,6 +245,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb", effect=DealDamageAnyTarget(amount=3)
+                ),
+            ),
+        ),
+        # Nova Hellkite has warp {2}{R} on the real card; warp isn't
+        # implemented yet, so here it only plays at its regular cost.
+        make_creature(
+            "Nova Hellkite", "{3}{R}{R}", 4, 5,
+            keywords={"flying", "haste"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=DealDamageToOpponentCreature(amount=1),
                 ),
             ),
         ),
