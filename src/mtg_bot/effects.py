@@ -117,6 +117,63 @@ class EachPlayerDraws(Effect):
         return f"each player draws {self.amount} cards"
 
 
+def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
+    """Apply ``amount`` damage to ``target``. Used by damage effects.
+
+    Stage-3 scope: no source-tracking (so deathtouch on a pinger wouldn't
+    mark its target lethal yet — that'd layer in when we thread damage
+    sources through the ETB / ability pipeline).
+    """
+    kind, target_id = target
+    if kind == "player":
+        p = state.player_by_id(target_id)
+        p.life -= amount
+        state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
+    elif kind == "creature":
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is not None:
+            obj.damage += amount
+            state.log.append(f"{obj.printing.name} takes {amount} damage")
+
+
+@dataclass(frozen=True)
+class DealDamageAnyTarget(Effect):
+    """Deal ``amount`` damage to any target (creature or player).
+
+    Matches "deals N damage to any target" on cards like Nebula Dragon.
+    Planeswalkers and battles are valid MTG targets too — they just don't
+    exist yet in our engine.
+    """
+
+    amount: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        targets: list[Target] = []
+        for o in state.battlefield:
+            if o.printing.is_creature:
+                targets.append(("creature", o.id))
+        for p in state.players:
+            if not p.has_lost:
+                targets.append(("player", p.id))
+        return targets
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        _apply_damage(state, targets[0], self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to any target"
+
+
 @dataclass(frozen=True)
 class EachOpponentDiscards(Effect):
     """Each opponent discards ``count`` cards (untargeted; no choice of target).

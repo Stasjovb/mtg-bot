@@ -4,6 +4,7 @@ import pytest
 
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
+    DealDamageAnyTarget,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -235,3 +236,68 @@ def test_each_opponent_discards_skips_lost_players_and_empty_hands():
 def test_each_opponent_discards_describe_singular_and_plural():
     assert EachOpponentDiscards(count=1).describe() == "each opponent discards a card"
     assert EachOpponentDiscards(count=2).describe() == "each opponent discards 2 cards"
+
+
+def test_deal_damage_any_target_requires_target():
+    assert DealDamageAnyTarget(amount=3).requires_target() is True
+
+
+def test_deal_damage_any_target_enumerates_creatures_and_players():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    state.players.append(Player(id=2))
+    state.players[2].has_lost = True
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+
+    targets = DealDamageAnyTarget(amount=3).legal_targets(state, controller_id=0)
+    assert ("creature", bear.id) in targets
+    assert ("player", 0) in targets
+    assert ("player", 1) in targets
+    assert ("player", 2) not in targets  # lost player excluded
+
+
+def test_deal_damage_any_target_to_player_reduces_life():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1, life=20))
+    DealDamageAnyTarget(amount=3).resolve(
+        state, controller_id=0, targets=(("player", 1),)
+    )
+    assert state.players[1].life == 17
+
+
+def test_deal_damage_any_target_to_creature_adds_damage():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+    DealDamageAnyTarget(amount=1).resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.damage == 1
+
+
+def test_deal_damage_any_target_with_no_targets_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    # Should not raise
+    DealDamageAnyTarget(amount=3).resolve(state, controller_id=0, targets=())
+
+
+def test_deal_damage_any_target_to_missing_creature_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    # No creature with id 999 — no crash, no damage
+    DealDamageAnyTarget(amount=3).resolve(
+        state, controller_id=0, targets=(("creature", 999),)
+    )
+
+
+def test_deal_damage_any_target_describe():
+    assert DealDamageAnyTarget(amount=3).describe() == "deals 3 damage to any target"

@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from mtg_bot.effects import (
+    DealDamageAnyTarget,
     DrawCards,
     EachOpponentDiscards,
     EachPlayerDraws,
@@ -234,6 +235,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Quantum Riddler", "{3}{U}{U}", 4, 6,
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+            ),
+        ),
+        # Red
+        make_creature(
+            "Nebula Dragon", "{6}{R}", 4, 4,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb", effect=DealDamageAnyTarget(amount=3)
+                ),
             ),
         ),
         # Green
