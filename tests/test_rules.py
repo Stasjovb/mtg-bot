@@ -525,6 +525,43 @@ def test_vigilance_attacker_still_eligible_blocker_this_turn():
 
 
 # --------------------------------------------------------------------------
+# Rule: DEFENDER — can't attack
+# --------------------------------------------------------------------------
+
+
+def _defender(name="Test Wall", power=0, toughness=5):
+    return make_creature(name, "{1}{W}", power, toughness, keywords={"defender"})
+
+
+def test_defender_cannot_be_declared_as_attacker():
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[_defender()])
+    wall = state.battlefield[0]
+    assert wall not in eligible_attackers(state, player_id=0)
+
+
+def test_defender_filtered_out_when_forced_as_attacker():
+    state = _arena(p0_battlefield=[_defender()])
+    wall = state.battlefield[0]
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({wall.id})))
+    assert wall.attacking is False
+    assert wall.tapped is False
+
+
+def test_defender_can_still_block():
+    from mtg_bot.combat import eligible_blockers
+
+    state = _arena(
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+        p1_battlefield=[_defender("Wall", 0, 5)],
+    )
+    wall = state.battlefield[1]
+    assert wall in eligible_blockers(state, player_id=1)
+
+
+# --------------------------------------------------------------------------
 # Rule: HASTE — ignores summoning sickness
 # --------------------------------------------------------------------------
 

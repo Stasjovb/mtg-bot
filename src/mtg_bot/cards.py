@@ -147,6 +147,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Stalwart Knight", "{2}{W}", 3, 3),
         make_creature("Sky Sentinel", "{1}{W}", 1, 3, keywords={"flying"}),
         make_creature("Vigilant Guard", "{2}{W}", 2, 3, keywords={"vigilance"}),
+        make_creature("Wall of Stone", "{1}{W}", 0, 5, keywords={"defender"}),
         # Blue
         make_creature("Coastal Scout", "{U}", 1, 2),
         make_creature("Tidal Warrior", "{1}{U}", 2, 2),
