@@ -68,13 +68,15 @@ def test_build_deck_is_60_cards():
     deck = build_mono_color_deck("G", seed=1)
     assert len(deck) == 60
     assert deck.count("Forest") == 24
-    # Every non-Forest card must be a green creature in the pool
+    # Every non-Forest card must be a card in the pool whose color is either
+    # green or colorless (colorless cards get included in any mono-color deck).
     from mtg_bot.cards import CREATURE_POOL
     for name in deck:
         if name == "Forest":
             continue
         assert name in CREATURE_POOL
-        assert "G" in CREATURE_POOL[name].mana_cost.colors
+        colors = CREATURE_POOL[name].mana_cost.colors
+        assert "G" in colors or not colors
 
 
 def test_build_deck_is_deterministic_with_seed():

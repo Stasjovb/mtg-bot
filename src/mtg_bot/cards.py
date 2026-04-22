@@ -389,8 +389,6 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Nova Hellkite has warp {2}{R} on the real card; warp isn't
-        # implemented yet, so here it only plays at its regular cost.
         make_creature(
             "Nova Hellkite", "{3}{R}{R}", 4, 5,
             keywords={"flying", "haste"},
@@ -400,6 +398,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=DealDamageToOpponentCreature(amount=1),
                 ),
             ),
+            warp="{2}{R}",
+        ),
+        make_creature(
+            "Red Tiger Mechan", "{3}{R}", 3, 3,
+            keywords={"haste"},
+            warp="{1}{R}",
+        ),
+        # Bygone Colossus is colorless ({9}) so it shows up in every deck
+        # thanks to the colorless-inclusion rule in build_mono_color_deck.
+        make_creature(
+            "Bygone Colossus", "{9}", 9, 9,
+            warp="{3}",
         ),
         # Green
         make_creature(

@@ -1229,6 +1229,130 @@ def test_honor_gives_counter_and_draws_card_as_one_spell():
     assert spell in state.players[0].graveyard
 
 
+# --------------------------------------------------------------------------
+# Rule: WARP — cheaper first cast from hand, exile at end step, recast later
+# --------------------------------------------------------------------------
+
+
+def test_warp_cost_is_parsed_and_stored():
+    from mtg_bot.cards import EOE_CREATURES
+
+    hellkite = EOE_CREATURES["Nova Hellkite"]
+    assert hellkite.warp_cost is not None
+    assert hellkite.warp_cost_str == "{2}{R}"
+
+
+def test_legal_moves_proposes_warp_cast_when_only_warp_cost_is_payable():
+    from mtg_bot.cards import EOE_CREATURES
+
+    hellkite = EOE_CREATURES["Nova Hellkite"]  # {3}{R}{R} normal, {2}{R} warp
+    state = _arena(
+        p0_hand=[hellkite],
+        # Three Mountains — enough for warp ({2}{R}), not for normal cost
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 3,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    card = state.players[0].hand[0]
+    moves = legal_moves(state)
+    warp_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and m.use_warp
+    ]
+    normal_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and not m.use_warp
+    ]
+    assert warp_casts, "warp-cost cast should be legal"
+    assert not normal_casts, "normal-cost cast should NOT be legal"
+
+
+def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_end_step_warp_exile
+    import random
+
+    colossus = EOE_CREATURES["Bygone Colossus"]  # {9} normal, {3} warp
+    state = _arena(
+        p0_hand=[colossus],
+        p0_battlefield=[BASIC_LANDS["Forest"]] * 3,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    card = state.players[0].hand[0]
+
+    # Cast via warp for {3}
+    apply(state, CastSpell(card.id, use_warp=True))
+    resolve_top_of_stack(state)  # spell resolves → Colossus on battlefield
+    assert card in state.battlefield
+    assert card.cast_via_warp is True
+
+    # End step fires: warp-cast permanents get exiled + marked warped
+    run_end_step_warp_exile(state)
+    assert card not in state.battlefield
+    assert card in state.players[0].exile
+    assert card.warped is True
+    assert card.cast_via_warp is False
+
+
+def test_warped_card_can_be_recast_from_exile_at_normal_cost():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    colossus = EOE_CREATURES["Bygone Colossus"]
+    state = _arena(
+        p0_battlefield=[BASIC_LANDS["Forest"]] * 9,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed the exile with a warped Colossus (as if the end-step exile has
+    # already fired earlier).
+    warped_card = state.new_object(colossus, owner_id=0, zone=Zone.EXILE)
+    warped_card.warped = True
+    state.players[0].exile.append(warped_card)
+
+    moves = legal_moves(state, player_id=0)
+    recast = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == warped_card.id
+    ]
+    assert recast, "warped-exile recast should be legal"
+    apply(state, recast[0])
+    # Card is now on the stack; lands got tapped to pay {9}
+    assert len([l for l in state.battlefield if l.tapped]) == 9
+    resolve_top_of_stack(state)
+    assert warped_card in state.battlefield
+    # Recasting from exile is NOT a warp cast — should NOT re-trigger exile
+    assert warped_card.cast_via_warp is False
+    assert warped_card.warped is False
+
+
+def test_warp_cast_creature_dying_before_end_step_does_not_exile():
+    """If the warp-cast permanent dies before its end step, the delayed
+    exile trigger has no creature to exile — it just dies normally."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield, run_end_step_warp_exile
+
+    tiger = EOE_CREATURES["Red Tiger Mechan"]
+    state = _arena()
+    # Pretend Red Tiger was cast via warp and entered the battlefield.
+    obj = state.new_object(tiger, owner_id=0, zone=Zone.BATTLEFIELD)
+    obj.cast_via_warp = True
+    state.battlefield.append(obj)
+    # It dies (e.g. to combat)
+    move_off_battlefield(state, obj, destination="graveyard")
+    assert obj.cast_via_warp is False  # cleared on leaving battlefield
+
+    # End step: nothing to exile. Red Tiger stays in the graveyard.
+    run_end_step_warp_exile(state)
+    assert obj in state.players[0].graveyard
+    assert obj not in state.players[0].exile
+    assert obj.warped is False
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
