@@ -1491,6 +1491,92 @@ def test_stationed_spacecraft_takes_combat_damage_and_can_die():
     assert ship not in state.battlefield
 
 
+# --------------------------------------------------------------------------
+# Rule: VOID — end-step triggers that care about turn-state
+# --------------------------------------------------------------------------
+
+
+def test_skittermaw_has_menace_and_void_end_step_ability():
+    from mtg_bot.cards import EOE_CREATURES
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    assert "menace" in mw.keywords
+    assert len(mw.triggered_abilities) == 1
+    ab = mw.triggered_abilities[0]
+    assert ab.trigger == "beginning_of_end_step"
+    assert ab.requires_void is True
+
+
+def test_skittermaw_does_not_fire_when_void_inactive():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    state = _arena(p0_battlefield=[mw])
+    skitter = state.battlefield[0]
+    # No nonland permanent left BF this turn, no spell warped — Void inactive.
+    run_beginning_of_end_step_triggers(state)
+    assert skitter.plus_one_counters == 0
+
+
+def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    state = _arena(p0_battlefield=[mw])
+    skitter = state.battlefield[0]
+    # A creature died earlier this turn — Void is active.
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert skitter.plus_one_counters == 1
+
+
+def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    state = _arena(p0_battlefield=[mw])
+    skitter = state.battlefield[0]
+    state.spell_warped_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert skitter.plus_one_counters == 1
+
+
+def test_skittermaw_only_fires_on_its_controllers_end_step():
+    """End-step triggers fire on the active player's end step. A Skittermaw
+    under P1 shouldn't grow when it's P0's end step."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    state = _arena(p1_battlefield=[mw])  # under P1
+    skitter = state.battlefield[0]
+    state.active_player_idx = 0  # P0 is the active player
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    # Not P1's end step, so Skittermaw shouldn't fire.
+    assert skitter.plus_one_counters == 0
+
+
+def test_void_end_step_trigger_stacks_across_turns():
+    """Over multiple turns with Void active each time, Skittermaw piles up
+    counters — sanity that counters persist across turns."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers, run_cleanup_step
+
+    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    state = _arena(p0_battlefield=[mw])
+    skitter = state.battlefield[0]
+
+    for _ in range(3):
+        state.permanent_left_battlefield_this_turn = True
+        run_beginning_of_end_step_triggers(state)
+        run_cleanup_step(state)  # resets Void flags for next turn
+    assert skitter.plus_one_counters == 3
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

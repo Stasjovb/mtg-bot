@@ -15,6 +15,7 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
     TargetOpponentDiscards,
@@ -667,6 +668,55 @@ def test_plus_one_counter_on_target_creature_empty_and_wrong_kind_noops():
     PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=())
     PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=(("player", 0),))
     PutPlusOneCounterOnTargetCreature().resolve(state, 0, targets=(("creature", 99999),))
+
+
+def test_plus_one_counter_on_self_adds_to_resolving_source():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+    state.resolving_source = bear
+    PutPlusOneCounterOnSelf(amount=2).resolve(state, controller_id=0)
+    assert bear.plus_one_counters == 2
+
+
+def test_plus_one_counter_on_self_noop_without_resolving_source():
+    state = GameState()
+    state.players.append(Player(id=0))
+    # No resolving_source set — effect does nothing, doesn't crash.
+    PutPlusOneCounterOnSelf().resolve(state, controller_id=0)
+
+
+def test_plus_one_counter_on_self_describe():
+    assert (
+        PutPlusOneCounterOnSelf(amount=1).describe()
+        == "put a +1/+1 counter on this creature"
+    )
+    assert (
+        PutPlusOneCounterOnSelf(amount=3).describe()
+        == "put 3 +1/+1 counters on this creature"
+    )
+
+
+def test_triggered_ability_describe_void_prefix():
+    ab = TriggeredAbility(
+        trigger="beginning_of_end_step",
+        effect=GainLife(amount=1),
+        requires_void=True,
+    )
+    desc = ab.describe()
+    assert desc.startswith("Void — ")
+    assert "end step" in desc
+
+
+def test_triggered_ability_describe_beginning_of_end_step():
+    ab = TriggeredAbility(
+        trigger="beginning_of_end_step",
+        effect=GainLife(amount=1),
+    )
+    assert "At the beginning of your end step" in ab.describe()
 
 
 def test_plus_one_counter_on_target_creature_describe():

@@ -294,7 +294,11 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.log.append(
             f"{item.source.printing.name}'s triggered ability resolves"
         )
-        item.ability.effect.resolve(state, item.controller_id, item.targets)
+        state.resolving_source = item.source
+        try:
+            item.ability.effect.resolve(state, item.controller_id, item.targets)
+        finally:
+            state.resolving_source = None
         return
 
     # Spell resolution

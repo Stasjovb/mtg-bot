@@ -103,6 +103,39 @@ def move_off_battlefield(
         raise ValueError(f"unknown destination: {destination!r}")
 
 
+def run_beginning_of_end_step_triggers(state: GameState) -> None:
+    """Fire "At the beginning of your end step, ..." triggered abilities on
+    permanents controlled by the active player. EoE "Void —" abilities carry
+    a requires_void flag and only fire when is_void_active(state).
+
+    Simplified model: triggers fire directly (no stack) — functionally
+    equivalent in our current rules set where nothing can counter a
+    triggered ability.
+    """
+    from mtg_bot.game import is_void_active
+
+    ap_id = state.active_player().id
+    # Snapshot the battlefield so mid-iteration effects don't confuse us.
+    candidates = list(state.battlefield)
+    void_is_active = is_void_active(state)
+    for obj in candidates:
+        if obj.controller_id != ap_id:
+            continue
+        for ability in obj.printing.triggered_abilities:
+            if ability.trigger != "beginning_of_end_step":
+                continue
+            if ability.requires_void and not void_is_active:
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s end-step ability triggers"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, obj.controller_id, ())
+            finally:
+                state.resolving_source = None
+
+
 def run_end_step_warp_exile(state: GameState) -> None:
     """At the beginning of the end step, exile every creature that was cast
     via its warp cost. The card moves to its owner's exile zone and is marked

@@ -24,6 +24,7 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
     TargetOpponentDiscards,
@@ -428,6 +429,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb", effect=EachOpponentDiscards(count=1)
+                ),
+            ),
+        ),
+        # EoE Void: "At the beginning of your end step, if a nonland permanent
+        # left the battlefield this turn or a spell was warped this turn, put
+        # a +1/+1 counter on this creature."
+        make_creature(
+            "Insatiable Skittermaw", "{2}{B}", 2, 2,
+            keywords={"menace"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                    requires_void=True,
                 ),
             ),
         ),

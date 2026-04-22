@@ -361,6 +361,35 @@ class PutPlusOneCounterOnTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCounterOnSelf(Effect):
+    """Put ``amount`` +1/+1 counter(s) on the ability's source ("this creature").
+
+    Reads ``state.resolving_source`` to find the source — it's set by
+    ``resolve_top_of_stack`` during ability resolution.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        source.plus_one_counters += self.amount
+        state.log.append(
+            f"{source.printing.name} gets a +1/+1 counter "
+            f"(now {source.plus_one_counters})"
+        )
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return "put a +1/+1 counter on this creature"
+        return f"put {self.amount} +1/+1 counters on this creature"
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnCreatureYouControl(Effect):
     """Put N +1/+1 counter(s) on target creature you control.
 
@@ -622,14 +651,25 @@ class TargetOpponentDiscards(Effect):
 class TriggeredAbility:
     """An ability that fires on a specific event.
 
-    Stage 3 only supports ``trigger == "etb"`` (enters the battlefield).
+    Supported triggers:
+      - ``"etb"`` — when the permanent enters the battlefield
+      - ``"beginning_of_end_step"`` — at the start of its controller's end step
+
+    ``requires_void`` is True for EoE "Void —" abilities, which only fire when
+    ``is_void_active(state)`` (a nonland permanent left the battlefield this
+    turn or a spell was warped this turn).
     """
 
     trigger: str
     effect: Effect
+    requires_void: bool = False
 
     def describe(self) -> str:
         prefix = {
             "etb": "When ~ enters the battlefield",
+            "beginning_of_end_step": "At the beginning of your end step",
         }.get(self.trigger, self.trigger)
-        return f"{prefix}, {self.effect.describe()}."
+        head = f"{prefix}, {self.effect.describe()}."
+        if self.requires_void:
+            return "Void — " + head
+        return head
