@@ -39,6 +39,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
+    DestroyTargetNonlandPermanentWithLanderForController,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1041,6 +1042,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Desculpting Blast", "{1}{U}",
             effect=ReturnTargetCreatureToOwnersHand(),
+        ),
+        # Emergency Eject — destroy any nonland permanent; its controller
+        # creates a Lander token as consolation ramp.
+        make_instant(
+            "Emergency Eject", "{2}{W}",
+            effect=DestroyTargetNonlandPermanentWithLanderForController(),
         ),
     ]
 }

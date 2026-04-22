@@ -822,6 +822,65 @@ class ExileTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetNonlandPermanentWithLanderForController(Effect):
+    """Destroy target nonland permanent. Its (former) controller creates a
+    Lander token.
+
+    Matches Emergency Eject's oracle text. Uses a new "permanent" target kind
+    (any non-land battlefield object) so this can hit creatures, artifacts,
+    and enchantments uniformly.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if not o.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        former_controller = obj.controller_id
+        state.log.append(f"{obj.printing.name} is destroyed")
+        move_off_battlefield(state, obj, destination="graveyard")
+        lander = state.new_object(
+            TOKEN_PRINTINGS["Lander"],
+            owner_id=former_controller,
+            zone=Zone.BATTLEFIELD,
+        )
+        state.log.append(f"P{former_controller} creates a Lander token")
+        put_into_battlefield(state, lander, former_controller)
+
+    def describe(self) -> str:
+        return (
+            "destroy target nonland permanent; its controller creates a "
+            "Lander token"
+        )
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnTargetCreature(Effect):
     """Put ``amount`` +1/+1 counter(s) on any target creature (yours or theirs).
 

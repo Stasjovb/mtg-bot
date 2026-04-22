@@ -3007,6 +3007,89 @@ def test_conditional_if_void_legal_targets_only_else_requires():
     assert targets  # at least one legal creature target
 
 
+def test_emergency_eject_destroys_creature_and_makes_lander():
+    """Emergency Eject kills a creature the target's controller owns and
+    leaves that player with a Lander token."""
+    from mtg_bot.effects import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+    )
+
+    state = _arena()
+    enemy_creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy_creature)
+
+    e = DestroyTargetNonlandPermanentWithLanderForController()
+    assert e.requires_target() is True
+    legal = e.legal_targets(state, controller_id=0)
+    assert ("permanent", enemy_creature.id) in legal
+
+    e.resolve(state, controller_id=0, targets=(("permanent", enemy_creature.id),))
+
+    # The creature is gone from the battlefield…
+    assert enemy_creature not in state.battlefield
+    # …and into its owner's graveyard.
+    assert enemy_creature in state.players[1].graveyard
+    # …and its former controller has a Lander token.
+    landers = [o for o in state.battlefield
+               if o.printing.name == "Lander" and o.controller_id == 1]
+    assert len(landers) == 1
+
+
+def test_emergency_eject_destroys_artifact_not_land():
+    """Legal targets include artifacts but NOT lands (nonland permanent)."""
+    from mtg_bot.effects import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+    )
+    from mtg_bot.cards import BASIC_LANDS, TOKEN_PRINTINGS
+
+    state = _arena()
+    # Give player 1 a land (should not be targetable) and a Lander token
+    # (artifact, should be targetable).
+    land = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    artifact_token = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(artifact_token)
+
+    e = DestroyTargetNonlandPermanentWithLanderForController()
+    legal = e.legal_targets(state, controller_id=0)
+    ids = {tid for _, tid in legal}
+    assert land.id not in ids
+    assert artifact_token.id in ids
+
+    # Destroying the Lander artifact token makes P1 immediately gain a new
+    # Lander (token ceases to exist; a fresh one enters).
+    e.resolve(
+        state, controller_id=0, targets=(("permanent", artifact_token.id),)
+    )
+    # Old token is gone from battlefield (token rule 704.5d applied).
+    assert artifact_token not in state.battlefield
+    # Fresh Lander exists for P1.
+    landers_p1 = [
+        o for o in state.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 1
+    ]
+    assert len(landers_p1) == 1
+    assert landers_p1[0].id != artifact_token.id
+
+
+def test_emergency_eject_describe_and_noop_paths():
+    from mtg_bot.effects import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+    )
+
+    state = _arena()
+    e = DestroyTargetNonlandPermanentWithLanderForController()
+    assert "Lander" in e.describe()
+    # No-op paths: empty targets, wrong kind, missing id.
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
