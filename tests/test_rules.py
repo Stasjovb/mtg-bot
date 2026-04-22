@@ -3076,6 +3076,82 @@ def test_emergency_eject_destroys_artifact_not_land():
     assert landers_p1[0].id != artifact_token.id
 
 
+def test_radiant_strike_destroys_tapped_creature_and_gains_life():
+    from mtg_bot.effects import DestroyTargetArtifactOrTappedCreature
+
+    state = _arena()
+    life_before = state.players[0].life
+    tapped = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    tapped.tapped = True
+    state.battlefield.append(tapped)
+    untapped = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(untapped)
+
+    dest = DestroyTargetArtifactOrTappedCreature()
+    legal = dest.legal_targets(state, controller_id=0)
+    ids = {tid for _, tid in legal}
+    assert tapped.id in ids
+    assert untapped.id not in ids
+
+    # Resolve the full Radiant Strike (destroy + gain 3 life).
+    from mtg_bot.cards import EOE_SPELLS
+    radiant = EOE_SPELLS["Radiant Strike"]
+    # The card stores a spell effect; resolve it directly.
+    spell_effect = radiant.spell_effect
+    spell_effect.resolve(
+        state, controller_id=0, targets=(("permanent", tapped.id),)
+    )
+    assert tapped not in state.battlefield
+    assert state.players[0].life == life_before + 3
+
+
+def test_radiant_strike_destroys_artifact():
+    from mtg_bot.effects import DestroyTargetArtifactOrTappedCreature
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = _arena()
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+
+    dest = DestroyTargetArtifactOrTappedCreature()
+    legal = dest.legal_targets(state, controller_id=0)
+    assert ("permanent", lander.id) in legal
+    dest.resolve(state, controller_id=0, targets=(("permanent", lander.id),))
+    assert lander not in state.battlefield
+
+
+def test_radiant_strike_noop_paths_and_untap_invalidates_target():
+    from mtg_bot.effects import DestroyTargetArtifactOrTappedCreature
+
+    state = _arena()
+    dest = DestroyTargetArtifactOrTappedCreature()
+    assert dest.requires_target() is True
+    assert "tapped" in dest.describe()
+    # No targets / wrong kind / missing id.
+    dest.resolve(state, controller_id=0, targets=())
+    dest.resolve(state, controller_id=0, targets=(("creature", 5),))
+    dest.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+    # Target becomes illegal between cast and resolve (untapped): effect
+    # silently fizzles.
+    creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    creature.tapped = True
+    state.battlefield.append(creature)
+    creature.tapped = False  # someone untapped it
+    dest.resolve(
+        state, controller_id=0, targets=(("permanent", creature.id),)
+    )
+    assert creature in state.battlefield  # not destroyed
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,

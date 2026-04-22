@@ -778,6 +778,58 @@ class DestroyTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetArtifactOrTappedCreature(Effect):
+    """Destroy target artifact, or tapped creature.
+
+    Matches Radiant Strike's destroy clause. Uses the "permanent" target kind
+    since either artifacts or creatures can be hit; legality is filtered by
+    the more specific "artifact OR tapped creature" predicate.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        out: list[Target] = []
+        for o in state.battlefield:
+            if o.printing.is_artifact:
+                out.append(("permanent", o.id))
+            elif o.printing.is_creature and o.tapped:
+                out.append(("permanent", o.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # Re-verify legality at resolution (target may have untapped).
+        if not (
+            obj.printing.is_artifact
+            or (obj.printing.is_creature and obj.tapped)
+        ):
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return "destroy target artifact or tapped creature"
+
+
+@dataclass(frozen=True)
 class ExileTargetCreature(Effect):
     """Exile any target creature on the battlefield.
 

@@ -40,6 +40,7 @@ from mtg_bot.effects import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     DestroyTargetNonlandPermanentWithLanderForController,
+    DestroyTargetArtifactOrTappedCreature,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1048,6 +1049,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Emergency Eject", "{2}{W}",
             effect=DestroyTargetNonlandPermanentWithLanderForController(),
+        ),
+        # Radiant Strike — destroy an artifact or a tapped creature, and
+        # gain 3 life as a rider.
+        make_instant(
+            "Radiant Strike", "{3}{W}",
+            effect=Sequence(effects=(
+                DestroyTargetArtifactOrTappedCreature(),
+                GainLife(amount=3),
+            )),
         ),
     ]
 }
