@@ -667,6 +667,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Memorial Team Leader: "During your turn, other creatures you
+        # control get +1/+0. Warp {1}{R}."
+        make_creature(
+            "Memorial Team Leader", "{3}{R}", 4, 3,
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    power_bonus=1, toughness_bonus=0,
+                    active_turn_only=True,
+                ),
+            ),
+            warp="{1}{R}",
+        ),
         # Bygone Colossus is colorless ({9}) so it shows up in every deck
         # thanks to the colorless-inclusion rule in build_mono_color_deck.
         make_creature(

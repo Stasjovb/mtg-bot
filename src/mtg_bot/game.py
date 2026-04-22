@@ -98,7 +98,7 @@ def _static_bonuses(
     granted: set[str] = set()
     for source in state.battlefield:
         for ability in source.printing.static_abilities:
-            if ability.applies_to(source, obj):
+            if ability.applies_to(source, obj, state):
                 power_bonus += ability.power_bonus
                 toughness_bonus += ability.toughness_bonus
                 granted |= ability.granted_keywords

@@ -2411,6 +2411,36 @@ def test_molecular_modifier_self_targets_when_solo():
     assert mod_obj.temp_power_bonus == 1
 
 
+def test_memorial_team_leader_anthem_only_active_on_your_turn():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    mtl = EOE_CREATURES["Memorial Team Leader"]
+    state = _arena(p0_battlefield=[mtl, SYNTHETIC_CREATURES["Wild Bear"]])
+    leader = next(o for o in state.battlefield if o.printing.name == "Memorial Team Leader")
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+
+    # P0 is active → anthem active → bear is +1/+0.
+    state.active_player_idx = 0
+    assert effective_power(state, bear) == 3
+
+    # P1 is active → anthem inactive → bear back to 2/2.
+    state.active_player_idx = 1
+    assert effective_power(state, bear) == 2
+
+
+def test_memorial_team_leader_does_not_pump_itself():
+    """Scope is "OTHER creatures" — leader excluded from its own anthem."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    mtl = EOE_CREATURES["Memorial Team Leader"]
+    state = _arena(p0_battlefield=[mtl])
+    leader = state.battlefield[0]
+    state.active_player_idx = 0
+    assert effective_power(state, leader) == 4  # base 4
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

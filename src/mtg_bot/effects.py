@@ -976,14 +976,19 @@ class StaticAbility:
     time and fold in applicable bonuses — no layers system yet, so the
     ordering-of-continuous-effects subtleties from the comprehensive rules
     don't apply.
+
+    ``active_turn_only=True`` gates the ability on "it's the source
+    controller's turn", matching EoE riders like "During your turn,
+    [anthem]".
     """
 
     scope: str
     granted_keywords: frozenset[str] = frozenset()
     power_bonus: int = 0
     toughness_bonus: int = 0
+    active_turn_only: bool = False
 
-    def applies_to(self, source, target) -> bool:
+    def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
         from mtg_bot.game import is_creature_now
 
@@ -992,6 +997,12 @@ class StaticAbility:
             return False
         if target.controller_id != source.controller_id:
             return False
+        # "During your turn" gate.
+        if self.active_turn_only:
+            if state is None:
+                return False
+            if state.players[state.active_player_idx].id != source.controller_id:
+                return False
         if self.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL:
             return target.id != source.id
         if self.scope == StaticScope.CREATURES_YOU_CONTROL:
