@@ -113,6 +113,37 @@ class EachOpponentLosesLife(Effect):
 
 
 @dataclass(frozen=True)
+class DiscardSelf(Effect):
+    """Controller discards ``amount`` card(s) from their hand. The discarding
+    player's agent picks which cards via ``choose_discard``."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        for _ in range(self.amount):
+            if not p.hand:
+                break
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(f"P{p.id} discards {card.printing.name}")
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return "you discard a card"
+        return f"you discard {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class DrawCards(Effect):
     amount: int
 

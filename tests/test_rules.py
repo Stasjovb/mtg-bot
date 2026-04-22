@@ -2556,6 +2556,37 @@ def test_atmospheric_greenhouse_etb_buffs_each_own_creature():
     assert enemy_bear.plus_one_counters == 0
 
 
+def test_uthros_scanship_etb_draws_two_discards_one():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    uthros = EOE_CREATURES["Uthros Scanship"]
+    state = _arena(
+        p0_hand=[uthros],
+        p0_battlefield=[BASIC_LANDS["Island"]] * 4,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed library with cards to draw
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        )
+    hand_before = len(state.players[0].hand) - 1  # after cast
+    gy_before = len(state.players[0].graveyard)
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell → ship + ETB stacks
+    resolve_top_of_stack(state)  # ETB resolves: draw 2, discard 1
+    # Net: +2 drawn - 1 discarded = +1 card in hand
+    assert len(state.players[0].hand) == hand_before + 1
+    # And one card in graveyard
+    assert len(state.players[0].graveyard) == gy_before + 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

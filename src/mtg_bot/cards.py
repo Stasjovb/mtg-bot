@@ -20,6 +20,7 @@ from mtg_bot.effects import (
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
     DestroyTargetCreature,
+    DiscardSelf,
     DrawCards,
     EachOpponentDiscards,
     EachOpponentLosesLife,
@@ -755,6 +756,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
+                ),
+            ),
+        ),
+        # Uthros Scanship: ETB "draw two cards, then discard a card", 8+ flying.
+        make_spacecraft(
+            "Uthros Scanship", "{3}{U}", 4, 4,
+            station_threshold=8,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=1),
+                    )),
                 ),
             ),
         ),
