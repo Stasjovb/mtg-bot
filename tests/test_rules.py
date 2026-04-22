@@ -2970,6 +2970,43 @@ def test_bouncing_a_token_makes_it_cease():
     assert token not in state.players[0].hand
 
 
+def test_bounce_edge_cases():
+    """No-op paths in ReturnTargetCreatureToOwnersHand."""
+    from mtg_bot.effects import ReturnTargetCreatureToOwnersHand
+
+    state = _arena()
+    e = ReturnTargetCreatureToOwnersHand()
+    # No targets
+    e.resolve(state, controller_id=0, targets=())
+    # Wrong kind
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    # Missing id
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+    assert e.requires_target() is True
+    assert "hand" in e.describe()
+
+
+def test_conditional_if_void_legal_targets_only_else_requires():
+    """Cover the else-requires-but-then-doesn't branch in legal_targets."""
+    from mtg_bot.effects import ConditionalIfVoid, GainLife
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
+
+    state = _arena()
+    state.players[0].agent = None
+    state.players[1].agent = None
+    # Seed a target so legal_targets has something to return
+    state.battlefield.append(
+        state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    )
+    cond = ConditionalIfVoid(
+        then_effect=GainLife(amount=1),
+        else_effect=PumpTargetCreatureUntilEOT(power_bonus=1),
+    )
+    # then doesn't target, else does → legal_targets comes from else
+    targets = cond.legal_targets(state, controller_id=0)
+    assert targets  # at least one legal creature target
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
