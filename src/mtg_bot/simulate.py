@@ -29,6 +29,7 @@ from mtg_bot.turn import (
     draw_card,
     run_cleanup_step,
     run_draw_step,
+    run_end_step_warp_exile,
     run_untap_step,
     state_based_actions,
 )
@@ -172,6 +173,14 @@ def run_step(state: GameState, step: Step) -> None:
     elif step == Step.CLEANUP:
         run_cleanup_step(state)
         return
+
+    # Turn-based actions at the beginning of the end step: warp-exile any
+    # permanents cast via their warp cost this turn.
+    if step == Step.END:
+        run_end_step_warp_exile(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
 
     if step in STEPS_WITH_PRIORITY:
         priority_loop(state)

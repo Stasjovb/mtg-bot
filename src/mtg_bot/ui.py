@@ -55,6 +55,8 @@ form button:hover { background: #558; }
 .card .dmg { color: #f77; }
 .card .counters { color: #ff9; font-weight: bold; }
 .card .kw { color: #9df; font-style: italic; font-size: 0.85em; margin-left: 0.3em; }
+.card .warp { color: #f9f; font-size: 0.8em; margin-left: 0.3em; }
+.card.warped { border: 1px dashed #f9f; }
 .card .ab { color: #fd9; font-size: 0.8em; display: block; margin-top: 0.1em; max-width: 18em; white-space: normal; }
 .result { padding: 0.8em 1em; border-radius: 6px; margin-bottom: 1em;
           font-size: 1.15em; background: #2a2a4e; }
@@ -110,11 +112,19 @@ _PAGE_HTML = """<!DOCTYPE html>
       </h2>
       <span class="life {% if p.life <= 5 %}low{% elif p.life >= 15 %}high{% endif %}">{{ p.life }}</span>
       <span class="meta">life • library {{ p.library_size }} • graveyard {{ p.graveyard_size }} • hand {{ p.hand_size }}</span>
+      {% if p.exile %}
+        <div><strong>Exile ({{ p.exile | length }}):</strong></div>
+        <div class="cards">
+          {% for c in p.exile %}
+            <span class="card {% if c.warped %}warped{% endif %}">{{ c.name }}{% if c.warped %}<span class="warp">warped</span>{% endif %}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% if p.hand %}
         <div><strong>Hand:</strong></div>
         <div class="cards">
           {% for c in p.hand %}
-            <span class="card">{{ c.name }}{% if c.mana_cost %} {{ c.mana_cost }}{% endif %}{% if c.power is not none %} <span class="pt">{{ c.power }}/{{ c.toughness }}</span>{% endif %}{% if c.keywords %}<span class="kw">{{ c.keywords | join(', ') }}</span>{% endif %}{% for ab in c.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}</span>
+            <span class="card">{{ c.name }}{% if c.mana_cost %} {{ c.mana_cost }}{% endif %}{% if c.warp_cost %}<span class="warp">warp {{ c.warp_cost }}</span>{% endif %}{% if c.power is not none %} <span class="pt">{{ c.power }}/{{ c.toughness }}</span>{% endif %}{% if c.keywords %}<span class="kw">{{ c.keywords | join(', ') }}</span>{% endif %}{% for ab in c.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}</span>
           {% endfor %}
         </div>
       {% endif %}

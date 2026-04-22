@@ -26,6 +26,10 @@ class PlayLand(Action):
 @dataclass(frozen=True)
 class CastSpell(Action):
     card_id: int
+    # If True, cast from hand for the card's warp alt-cost (and trigger an
+    # end-of-turn exile). If False (default), cast at the normal cost — from
+    # hand OR from the "warped" exile zone if the card is sitting there.
+    use_warp: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,7 +101,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
         _play_land(state, player_id, action.card_id)
         return
     if isinstance(action, CastSpell):
-        _cast_spell(state, player_id, action.card_id)
+        _cast_spell(state, player_id, action.card_id, use_warp=action.use_warp)
         return
     if isinstance(action, DeclareAttackers):
         _declare_attackers(state, player_id, action.attacker_ids)
@@ -120,23 +124,50 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     state.log.append(f"P{player_id} plays {card.printing.name}")
 
 
-def _cast_spell(state: GameState, player_id: int, card_id: int) -> None:
+def _cast_spell(
+    state: GameState, player_id: int, card_id: int, use_warp: bool = False
+) -> None:
     p = state.player_by_id(player_id)
-    card = next(c for c in p.hand if c.id == card_id)
-    p.hand.remove(card)
-    auto_tap_for_cost(state, player_id, card.printing.mana_cost)
+
+    # A spell can be cast from the hand (normal or warp cost) or from the
+    # "warped" exile zone (normal cost only).
+    card = next((c for c in p.hand if c.id == card_id), None)
+    if card is not None:
+        cost = (
+            card.printing.warp_cost
+            if use_warp
+            else card.printing.mana_cost
+        )
+        p.hand.remove(card)
+        # Mark the spell as warp-cast so it triggers the end-step exile once
+        # it resolves onto the battlefield.
+        card.cast_via_warp = bool(use_warp)
+    else:
+        # Cast from exile: only legal for cards previously exiled by warp
+        # (warped=True), and only at their normal cost.
+        card = next(
+            (c for c in p.exile if c.id == card_id and c.warped), None
+        )
+        if card is None:
+            raise ValueError(
+                f"card {card_id} not castable by P{player_id}"
+            )
+        cost = card.printing.mana_cost
+        p.exile.remove(card)
+        card.warped = False
+        # A warp-exile recast pays its normal cost and is a plain cast — it
+        # does NOT re-trigger the warp-exile cycle.
+        card.cast_via_warp = False
+
+    auto_tap_for_cost(state, player_id, cost)
     card.zone = Zone.STACK
     card.controller_id = player_id
 
-    # If this spell has a targeted spell_effect, select a target now (before
-    # the spell settles on the stack) via the caster's agent — same pattern
-    # as _trigger_etb_abilities.
+    # If this spell has a targeted spell_effect, select a target now.
     targets: tuple[tuple[str, int], ...] = ()
     spell_effect = card.printing.spell_effect
     if spell_effect is not None and spell_effect.requires_target():
         legal = spell_effect.legal_targets(state, player_id)
-        # legal_actions should already filter spells with no legal targets,
-        # so this is defense-in-depth.
         if legal:
             chosen = p.agent.choose_target(state, player_id, legal)
             if chosen is not None:
@@ -145,7 +176,8 @@ def _cast_spell(state: GameState, player_id: int, card_id: int) -> None:
     state.stack.append(
         StackItem(source=card, controller_id=player_id, targets=targets)
     )
-    state.log.append(f"P{player_id} casts {card.printing.name}")
+    mode = " (warp)" if use_warp else ""
+    state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
 
 
 def _declare_attackers(

@@ -27,6 +27,7 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "is_token": p.is_token,
         "keywords": sorted(p.keywords),
         "abilities": [a.describe() for a in p.triggered_abilities],
+        "warp_cost": p.warp_cost_str or None,
         "tapped": obj.tapped,
         "damage": obj.damage,
         "summoning_sick": obj.summoning_sick,
@@ -42,11 +43,13 @@ def serialize_hand_card(obj: GameObject) -> dict[str, Any]:
         "id": obj.id,
         "name": p.name,
         "mana_cost": p.mana_cost_str,
+        "warp_cost": p.warp_cost_str or None,
         "type_line": p.type_line,
         "power": p.power,
         "toughness": p.toughness,
         "keywords": sorted(p.keywords),
         "abilities": [a.describe() for a in p.triggered_abilities],
+        "warped": obj.warped,
     }
 
 
@@ -66,6 +69,8 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             "library_size": len(p.library),
             "graveyard": [c.printing.name for c in p.graveyard],
             "graveyard_size": len(p.graveyard),
+            "exile": [serialize_hand_card(c) for c in p.exile],
+            "exile_size": len(p.exile),
             "has_lost": p.has_lost,
             "lost_reason": p.lost_reason,
             "lands_played_this_turn": p.lands_played_this_turn,

@@ -44,6 +44,12 @@ class GameObject:
     # +1/+1 counters raise effective power and toughness by equal amounts.
     # Persist across turns (never wear off on their own).
     plus_one_counters: int = 0
+    # Warp-cast state. ``cast_via_warp`` is set True when this card was cast
+    # from hand for its warp cost — it triggers an exile at the next end step.
+    # ``warped`` is set True when this card sits in exile having been exiled
+    # via that trigger — it can be cast from exile at its normal cost.
+    cast_via_warp: bool = False
+    warped: bool = False
 
 
 def effective_power(obj: GameObject) -> int:

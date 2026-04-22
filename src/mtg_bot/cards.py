@@ -83,6 +83,12 @@ class CardPrinting:
     # resolves. After resolution the spell goes to its owner's graveyard.
     # None for creatures, lands, and spells whose effect is implicit (rare).
     spell_effect: Effect | None = None
+    # Edge of Eternities "warp" alt-cost. If set, the card may be cast from
+    # hand for this cost instead of its normal cost; when cast via warp it's
+    # exiled at the next end step and can then be cast from exile at its
+    # normal cost on a later turn.
+    warp_cost: ManaCost | None = None
+    warp_cost_str: str = ""
 
     @property
     def is_land(self) -> bool:
@@ -130,6 +136,7 @@ def make_creature(
     toughness: int,
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    warp: str | None = None,
 ) -> CardPrinting:
     type_line = "Creature"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -145,6 +152,8 @@ def make_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
+        warp_cost=parse_mana_cost(warp) if warp else None,
+        warp_cost_str=warp or "",
     )
 
 
@@ -452,7 +461,11 @@ def all_printings() -> dict[str, CardPrinting]:
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
-    """60 cards: 24 basics of the chosen color + 36 non-land cards of that color."""
+    """60 cards: 24 basics of the chosen color + 36 non-land cards in that color.
+
+    "In that color" includes colorless cards (empty ``mana_cost.colors``) since
+    colorless generic costs can be paid from any basic land.
+    """
     if color not in _COLOR_TO_BASIC:
         raise ValueError(f"unknown color: {color}")
     rng = random.Random(seed)
@@ -460,7 +473,7 @@ def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
     creatures = [
         name
         for name, p in NONLAND_POOL.items()
-        if color in p.mana_cost.colors
+        if color in p.mana_cost.colors or not p.mana_cost.colors
     ]
     if not creatures:
         raise ValueError(f"no creatures in color {color}")

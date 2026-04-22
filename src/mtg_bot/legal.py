@@ -38,8 +38,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     At any priority moment (on or off your turn), instants in hand whose cost
     is payable and whose targets are satisfiable are legal. At sorcery timing
-    (your main phase, stack empty, your priority) creatures, sorceries, and
-    one land play per turn are also legal.
+    (your main phase, stack empty, your priority) creatures, sorceries, land
+    plays, and warp-exile recasts are also legal. A card in hand with a warp
+    cost can be cast either at its normal cost or for its warp alt-cost
+    whenever a normal cast would be legal — proposed separately.
     """
     actions: list[Action] = [PassPriority()]
 
@@ -48,14 +50,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     p = state.player_by_id(player_id)
 
-    # Instants: legal any time you have priority.
+    # Instants: legal any time you have priority. Warp variants of an
+    # instant (rare — EoE warp is creature-focused) would also be legal here.
     for card in p.hand:
-        if (
-            card.printing.is_instant
-            and can_pay_cost(state, player_id, card.printing.mana_cost)
-            and _targets_are_satisfiable(state, player_id, card)
-        ):
+        if not card.printing.is_instant:
+            continue
+        if can_pay_cost(
+            state, player_id, card.printing.mana_cost
+        ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id))
+        if card.printing.warp_cost is not None and can_pay_cost(
+            state, player_id, card.printing.warp_cost
+        ) and _targets_are_satisfiable(state, player_id, card):
+            actions.append(CastSpell(card.id, use_warp=True))
 
     if not _is_sorcery_timing(state, player_id):
         return actions
@@ -73,5 +80,22 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 state, player_id, card.printing.mana_cost
             ) and _targets_are_satisfiable(state, player_id, card):
                 actions.append(CastSpell(card.id))
+            if card.printing.warp_cost is not None and can_pay_cost(
+                state, player_id, card.printing.warp_cost
+            ) and _targets_are_satisfiable(state, player_id, card):
+                actions.append(CastSpell(card.id, use_warp=True))
+
+    # Warp-exile recasts at sorcery speed (for creatures / sorceries).
+    # Instants in warp-exile could be recast at instant speed, but we don't
+    # have any such cards yet — extend if/when we do.
+    for card in p.exile:
+        if not card.warped:
+            continue
+        if card.printing.is_instant:
+            continue  # handled above at instant speed (none yet in the pool)
+        if can_pay_cost(
+            state, player_id, card.printing.mana_cost
+        ) and _targets_are_satisfiable(state, player_id, card):
+            actions.append(CastSpell(card.id))
 
     return actions
