@@ -43,7 +43,9 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     for oid in attacker_ids:
         obj = next(o for o in state.battlefield if o.id == oid)
         obj.attacking = True
-        obj.tapped = True
+        # Vigilance: attacking doesn't tap
+        if "vigilance" not in obj.printing.keywords:
+            obj.tapped = True
         state.log.append(f"{obj.printing.name} attacks")
 
 

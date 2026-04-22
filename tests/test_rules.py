@@ -486,6 +486,44 @@ def test_flier_can_block_non_flying_attacker():
     assert blocker not in state.battlefield
 
 
+# --------------------------------------------------------------------------
+# Rule: VIGILANCE — attacking doesn't tap
+# --------------------------------------------------------------------------
+
+
+def _vigilant(name="Test Vigilant", power=2, toughness=3):
+    return make_creature(name, "{1}{W}", power, toughness, keywords={"vigilance"})
+
+
+def test_vigilance_attacker_does_not_tap():
+    state = _arena(p0_battlefield=[_vigilant()])
+    guard = state.battlefield[0]
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({guard.id})))
+    assert guard.attacking is True
+    assert guard.tapped is False
+
+
+def test_non_vigilance_attacker_still_taps():
+    state = _arena(p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]])
+    bear = state.battlefield[0]
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({bear.id})))
+    assert bear.attacking is True
+    assert bear.tapped is True
+
+
+def test_vigilance_attacker_still_eligible_blocker_this_turn():
+    # Not strictly a keyword test but the natural consequence — since the
+    # attacker didn't tap, it remains an eligible blocker if we needed to block.
+    from mtg_bot.combat import eligible_blockers
+    state = _arena(p0_battlefield=[_vigilant()])
+    guard = state.battlefield[0]
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({guard.id})))
+    assert guard in eligible_blockers(state, player_id=0)
+
+
 def test_flier_blocked_by_multiple_eligible_blockers():
     # Flier attacker, two reach blockers — both can block.
     state = _arena(

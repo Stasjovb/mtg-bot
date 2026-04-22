@@ -146,6 +146,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Trained Soldier", "{1}{W}", 2, 2),
         make_creature("Stalwart Knight", "{2}{W}", 3, 3),
         make_creature("Sky Sentinel", "{1}{W}", 1, 3, keywords={"flying"}),
+        make_creature("Vigilant Guard", "{2}{W}", 2, 3, keywords={"vigilance"}),
         # Blue
         make_creature("Coastal Scout", "{U}", 1, 2),
         make_creature("Tidal Warrior", "{1}{U}", 2, 2),
@@ -167,6 +168,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Forest Giant", "{2}{G}", 3, 3),
         make_creature("Great Wurm", "{3}{G}{G}", 6, 6),
         make_creature("Spider Sentinel", "{2}{G}", 1, 4, keywords={"reach"}),
+        make_creature("Cliff Elk", "{3}{G}", 3, 4, keywords={"vigilance"}),
     ]
 }
 
