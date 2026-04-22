@@ -161,6 +161,108 @@ class EachPlayerDraws(Effect):
 
 
 @dataclass(frozen=True)
+class PumpTargetCreatureUntilEOT(Effect):
+    """Target creature gets +power/+toughness and optionally gains keywords
+    until end of turn.
+
+    Matches oracle text like "Target creature gets +3/+0 and gains first
+    strike and reach until end of turn." Bonuses stack additively and are
+    cleared at cleanup.
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_power_bonus += self.power_bonus
+        obj.temp_toughness_bonus += self.toughness_bonus
+        if self.granted_keywords:
+            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        state.log.append(
+            f"{obj.printing.name} gets "
+            f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
+            + (f" and gains {', '.join(sorted(self.granted_keywords))}"
+               if self.granted_keywords else "")
+        )
+
+    def describe(self) -> str:
+        parts: list[str] = []
+        if self.power_bonus or self.toughness_bonus:
+            parts.append(
+                f"target creature gets +{self.power_bonus}/+{self.toughness_bonus}"
+            )
+        if self.granted_keywords:
+            parts.append(
+                f"gains {', '.join(sorted(self.granted_keywords))}"
+            )
+        return " and ".join(parts) + " until end of turn."
+
+
+@dataclass(frozen=True)
+class PumpCreaturesYouControlUntilEOT(Effect):
+    """Each creature the controller controls gets +power/+toughness until
+    end of turn (applied at resolution; creatures entering later don't get
+    the bonus — Stage-3 simplification vs. a continuous effect).
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        count = 0
+        for obj in state.battlefield:
+            if obj.controller_id != controller_id:
+                continue
+            if not obj.printing.is_creature:
+                continue
+            obj.temp_power_bonus += self.power_bonus
+            obj.temp_toughness_bonus += self.toughness_bonus
+            if self.granted_keywords:
+                obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            count += 1
+        state.log.append(
+            f"P{controller_id}'s creatures ({count}) get "
+            f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"creatures you control get "
+            f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class SearchLibraryForBasicLandTapped(Effect):
     """Search the controller's library for a basic land card, put it onto
     the battlefield tapped, then shuffle.

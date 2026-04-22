@@ -53,6 +53,12 @@ class GameObject:
     # EoE Spacecraft charge counters. A Spacecraft at ``station_threshold`` or
     # more is a creature (see ``is_creature_now``).
     charge_counters: int = 0
+    # Until-end-of-turn bonuses applied by pump effects (e.g. "+3/+0 until
+    # end of turn"). Cleared on the cleanup step. Stacked additively when
+    # multiple pumps hit the same object.
+    temp_power_bonus: int = 0
+    temp_toughness_bonus: int = 0
+    temp_keywords: frozenset[str] = field(default_factory=frozenset)
 
 
 def is_void_active(state: GameState) -> bool:
@@ -101,26 +107,31 @@ def _static_bonuses(
 
 def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     """Keywords in effect right now — printing + stationed_keywords +
-    keywords granted by static abilities on other permanents."""
+    keywords granted by static abilities on other permanents + UEOT
+    keyword grants from pump effects."""
     kws = obj.printing.keywords
     if is_stationed(obj):
         kws = kws | obj.printing.stationed_keywords
     _, _, granted = _static_bonuses(state, obj)
-    return kws | granted
+    return kws | granted | obj.temp_keywords
 
 
 def effective_power(state: GameState, obj: GameObject) -> int:
-    """Power including +1/+1 counters and static-ability bonuses."""
+    """Power including +1/+1 counters, static bonuses, and UEOT pumps."""
     base = obj.printing.power or 0
     power_bonus, _, _ = _static_bonuses(state, obj)
-    return base + obj.plus_one_counters + power_bonus
+    return (
+        base + obj.plus_one_counters + power_bonus + obj.temp_power_bonus
+    )
 
 
 def effective_toughness(state: GameState, obj: GameObject) -> int:
-    """Toughness including +1/+1 counters and static-ability bonuses."""
+    """Toughness including +1/+1 counters, static bonuses, and UEOT pumps."""
     base = obj.printing.toughness or 0
     _, toughness_bonus, _ = _static_bonuses(state, obj)
-    return base + obj.plus_one_counters + toughness_bonus
+    return (
+        base + obj.plus_one_counters + toughness_bonus + obj.temp_toughness_bonus
+    )
 
 
 @dataclass

@@ -187,6 +187,9 @@ def run_cleanup_step(state: GameState) -> None:
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
+        obj.temp_power_bonus = 0
+        obj.temp_toughness_bonus = 0
+        obj.temp_keywords = frozenset()
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
