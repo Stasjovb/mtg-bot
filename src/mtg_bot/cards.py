@@ -173,6 +173,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Great Wurm", "{3}{G}{G}", 6, 6),
         make_creature("Spider Sentinel", "{2}{G}", 1, 4, keywords={"reach"}),
         make_creature("Cliff Elk", "{3}{G}", 3, 4, keywords={"vigilance"}),
+        make_creature("Charging Rhino", "{2}{G}", 3, 3, keywords={"trample"}),
     ]
 }
 

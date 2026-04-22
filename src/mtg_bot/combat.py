@@ -72,6 +72,7 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
             continue
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_power = attacker.printing.power or 0
+        has_trample = "trample" in attacker.printing.keywords
         if not blockers:
             damage_events.append(("player", defending_player_id, attacker_power))
         else:
@@ -80,12 +81,21 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                 if remaining <= 0:
                     break
                 need = max(0, (blocker.printing.toughness or 0) - blocker.damage)
-                if i == len(blockers) - 1:
+                is_last = i == len(blockers) - 1
+                if is_last and not has_trample:
+                    # Without trample, leftover dumps onto the last blocker.
                     assigned = remaining
                 else:
+                    # With trample (or earlier blocker): assign lethal only.
                     assigned = min(remaining, need)
                 damage_events.append(("creature", blocker.id, assigned))
                 remaining -= assigned
+            # Trample: any remaining damage after assigning lethal to every
+            # blocker in order spills over to the defending player.
+            if has_trample and remaining > 0:
+                damage_events.append(
+                    ("player", defending_player_id, remaining)
+                )
             for blocker in blockers:
                 blocker_power = blocker.printing.power or 0
                 if blocker_power > 0:

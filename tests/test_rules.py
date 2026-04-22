@@ -608,6 +608,66 @@ def test_menace_attacker_unblocked_is_unchanged():
 
 
 # --------------------------------------------------------------------------
+# Rule: TRAMPLE — excess combat damage spills to defending player
+# --------------------------------------------------------------------------
+
+
+def _trampler(name="Test Trampler", power=4, toughness=4):
+    return make_creature(name, "{2}{G}", power, toughness, keywords={"trample"})
+
+
+def test_trample_attacker_spills_excess_damage_to_player():
+    state = _arena(
+        p0_battlefield=[_trampler("Rhino", 4, 4)],
+        p1_battlefield=[_ground("Chump", 1, 2)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # 4 power, blocker needs 2 to kill → 2 trample through
+    assert state.players[1].life == 20 - 2
+    assert blocker not in state.battlefield
+    assert attacker in state.battlefield
+    assert attacker.damage == 1  # blocker dealt 1 back
+
+
+def test_trample_with_exactly_lethal_spills_nothing():
+    state = _arena(
+        p0_battlefield=[_trampler("Rhino", 3, 3)],
+        p1_battlefield=[_ground("Blocker", 3, 3)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    assert state.players[1].life == 20
+    # 3/3 vs 3/3 → both die, no trample spillover
+    assert attacker not in state.battlefield
+    assert blocker not in state.battlefield
+
+
+def test_trample_against_multiple_blockers_spills_after_all_lethal():
+    state = _arena(
+        p0_battlefield=[_trampler("Giant Rhino", 6, 6)],
+        p1_battlefield=[_ground("B1", 1, 2), _ground("B2", 1, 2)],
+    )
+    attacker, b1, b2 = state.battlefield
+    _simulate_combat_step(
+        state, [attacker.id], [(b1.id, attacker.id), (b2.id, attacker.id)]
+    )
+    # Lethal 2 to each blocker (4 total), 2 tramples through
+    assert state.players[1].life == 20 - 2
+
+
+def test_non_trample_excess_damage_stays_on_last_blocker():
+    # Sanity check: without trample, over-assigned damage doesn't leak.
+    state = _arena(
+        p0_battlefield=[SYNTHETIC_CREATURES["Great Wurm"]],  # 6/6, no trample
+        p1_battlefield=[SYNTHETIC_CREATURES["Sapling"]],  # 1/2
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    assert state.players[1].life == 20
+
+
+# --------------------------------------------------------------------------
 # Rule: HASTE — ignores summoning sickness
 # --------------------------------------------------------------------------
 
