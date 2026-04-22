@@ -95,15 +95,22 @@ def state_based_actions(state: GameState) -> bool:
 
     for obj in destroyed:
         state.battlefield.remove(obj)
-        obj.zone = Zone.GRAVEYARD
         obj.damage = 0
         obj.marked_lethal = False
         obj.tapped = False
         obj.attacking = False
         obj.blocking = None
         obj.blocked_by = []
-        state.player_by_id(obj.owner_id).graveyard.append(obj)
-        state.log.append(f"{obj.printing.name} destroyed (lethal damage)")
+        if obj.printing.is_token:
+            # Rule 704.5d: a token in any zone other than the battlefield
+            # ceases to exist. Skip the graveyard entirely.
+            state.log.append(
+                f"{obj.printing.name} token ceases to exist"
+            )
+        else:
+            obj.zone = Zone.GRAVEYARD
+            state.player_by_id(obj.owner_id).graveyard.append(obj)
+            state.log.append(f"{obj.printing.name} destroyed (lethal damage)")
         changed = True
 
     alive = [p for p in state.players if not p.has_lost]

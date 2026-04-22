@@ -85,6 +85,10 @@ class CardPrinting:
     def is_basic_land(self) -> bool:
         return self.is_land and "Basic" in self.supertypes
 
+    @property
+    def is_token(self) -> bool:
+        return "Token" in self.supertypes
+
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
 
@@ -125,6 +129,36 @@ def make_creature(
     )
 
 
+def make_token_creature(
+    name: str,
+    power: int,
+    toughness: int,
+    subtypes: tuple[str, ...] = (),
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+) -> CardPrinting:
+    """Build a CardPrinting representing a creature token.
+
+    Tokens have no mana cost; they're created by effects rather than cast.
+    The "Token" supertype distinguishes them so the engine can remove them
+    from any non-battlefield zone per MTG rule 704.5d.
+    """
+    subtypes_str = " ".join(subtypes)
+    type_line = f"Token Creature — {subtypes_str}" if subtypes else "Token Creature"
+    supertypes, card_types, subtypes_tup = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes_tup,
+        power=power,
+        toughness=toughness,
+        keywords=frozenset(keywords),
+    )
+
+
 def make_basic_land(name: str, color: str) -> CardPrinting:
     type_line = f"Basic Land — {name}"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -146,6 +180,15 @@ BASIC_LANDS: dict[str, CardPrinting] = {
     "Swamp": make_basic_land("Swamp", "B"),
     "Mountain": make_basic_land("Mountain", "R"),
     "Forest": make_basic_land("Forest", "G"),
+}
+
+
+# Token printings reused by effects. Not part of CREATURE_POOL — tokens are
+# never cast or drawn, only created by effects resolving on the battlefield.
+TOKEN_PRINTINGS: dict[str, CardPrinting] = {
+    "Human Soldier": make_token_creature(
+        "Human Soldier", 1, 1, subtypes=("Human", "Soldier")
+    ),
 }
 
 _COLOR_TO_BASIC: dict[str, str] = {

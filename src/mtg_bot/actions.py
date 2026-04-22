@@ -194,15 +194,26 @@ def resolve_top_of_stack(state: GameState) -> None:
     # Spell resolution
     card = item.source
     if card.printing.is_creature:
-        card.zone = Zone.BATTLEFIELD
-        card.controller_id = item.controller_id
-        card.tapped = False
-        card.summoning_sick = True
-        state.battlefield.append(card)
         state.log.append(f"{card.printing.name} resolves onto the battlefield")
-        _trigger_etb_abilities(state, card)
+        put_into_battlefield(state, card, item.controller_id)
         return
     raise ValueError(f"don't know how to resolve {card.printing.name}")
+
+
+def put_into_battlefield(
+    state: GameState, obj: "GameObject", controller_id: int
+) -> None:
+    """Move ``obj`` onto the battlefield and fire any ETB triggers.
+
+    Shared by spell resolution and token-creation effects so both flows go
+    through the same state transition and trigger pipeline.
+    """
+    obj.zone = Zone.BATTLEFIELD
+    obj.controller_id = controller_id
+    obj.tapped = False
+    obj.summoning_sick = True
+    state.battlefield.append(obj)
+    _trigger_etb_abilities(state, obj)
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:

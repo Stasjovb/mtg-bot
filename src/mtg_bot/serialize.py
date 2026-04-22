@@ -24,6 +24,7 @@ def serialize_permanent(obj: GameObject) -> dict[str, Any]:
         "effective_toughness": effective_toughness(obj) if p.is_creature else None,
         "is_creature": p.is_creature,
         "is_land": p.is_land,
+        "is_token": p.is_token,
         "keywords": sorted(p.keywords),
         "abilities": [a.describe() for a in p.triggered_abilities],
         "tapped": obj.tapped,

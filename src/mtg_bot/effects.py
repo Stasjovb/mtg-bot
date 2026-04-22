@@ -137,6 +137,49 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
 
 
 @dataclass(frozen=True)
+class CreateToken(Effect):
+    """Create ``count`` creature tokens of the given printing under the
+    ability's controller.
+
+    ``token_printing`` must be a CardPrinting with the Token supertype (built
+    via ``cards.make_token_creature``). Tokens enter the battlefield through
+    the same helper as spells, so any ETBs they themselves have fire
+    correctly.
+    """
+
+    token_printing: "CardPrinting"
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        for _ in range(self.count):
+            obj = state.new_object(
+                self.token_printing, owner_id=controller_id, zone=Zone.BATTLEFIELD
+            )
+            state.log.append(
+                f"P{controller_id} creates a {self.token_printing.name} token"
+            )
+            put_into_battlefield(state, obj, controller_id)
+
+    def describe(self) -> str:
+        p = self.token_printing
+        color_word = ""  # we don't track color on tokens explicitly yet
+        pt = f"{p.power}/{p.toughness}" if p.is_creature else ""
+        subtype = " ".join(p.subtypes)
+        if self.count == 1:
+            article = "a"
+        else:
+            article = str(self.count)
+        pieces = [article, pt, color_word, subtype, "creature token"]
+        return "create " + " ".join(x for x in pieces if x)
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnCreatureYouControl(Effect):
     """Put N +1/+1 counter(s) on target creature you control.
 
