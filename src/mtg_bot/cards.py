@@ -487,11 +487,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Dual-Sun Adepts: "Double strike. {5}: Creatures you control get
-        # +1/+1 until end of turn." Double strike isn't implemented yet,
-        # so this version ships without that keyword — the activated
-        # ability works.
+        # +1/+1 until end of turn."
         make_creature(
             "Dual-Sun Adepts", "{2}{W}", 2, 2,
+            keywords={"double strike"},
             activated_abilities=(
                 ActivatedAbility(
                     cost=cost(mana="{5}"),
@@ -698,6 +697,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Zealous Display", "{2}{W}",
             effect=PumpCreaturesYouControlUntilEOT(
                 power_bonus=2, toughness_bonus=0,
+            ),
+        ),
+        # Rig for War: "Target creature gets +3/+0 and gains first strike
+        # and reach until end of turn."
+        make_instant(
+            "Rig for War", "{1}{R}",
+            effect=PumpTargetCreatureUntilEOT(
+                power_bonus=3, toughness_bonus=0,
+                granted_keywords=frozenset({"first strike", "reach"}),
             ),
         ),
     ]

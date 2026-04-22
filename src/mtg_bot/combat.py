@@ -68,25 +68,79 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")
 
 
-def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
-    """Assign and deal all combat damage simultaneously."""
-    # Stage 1: no first strike, no trample. Each attacker deals damage to its
-    # blockers in blocker-declaration order (lethal to each before next). Without
-    # trample, leftover damage past all blockers is lost.
-    damage_events: list[tuple[str, int, int]] = []  # (kind, target_id, amount)
+def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
+    """Whether a creature with ``kws`` deals damage in the given step.
 
-    # Each damage event carries the source's keywords and the source's
-    # controller id so downstream handling (deathtouch marking, lifelink life
-    # gain) has the context it needs.
-    # Tuple layout: (kind, target_id, amount, source_keywords, source_controller_id)
+    First-strike step: creatures with first strike or double strike.
+    Regular step: creatures with double strike OR without first strike.
+    Creatures with first strike only don't deal regular damage.
+    """
+    has_first = "first strike" in kws
+    has_double = "double strike" in kws
+    if first_strike_step:
+        return has_first or has_double
+    return has_double or not has_first
+
+
+def _any_first_or_double_strike_in_combat(state: GameState) -> bool:
+    for o in state.battlefield:
+        if not (o.attacking or o.blocking is not None):
+            continue
+        kws = effective_keywords(state, o)
+        if "first strike" in kws or "double strike" in kws:
+            return True
+    return False
+
+
+def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
+    """Assign and deal combat damage.
+
+    If any creature in combat has first or double strike, damage is split
+    into two steps with state-based actions between them:
+      1. First-strike step: first-strike and double-strike creatures deal.
+      2. Regular step: creatures without first strike (and double-strike
+         creatures again) deal.
+    Otherwise there's just the single regular step (common case).
+    """
+    from mtg_bot.turn import state_based_actions
+
+    if _any_first_or_double_strike_in_combat(state):
+        _resolve_damage_step(state, defending_player_id, first_strike_step=True)
+        state_based_actions(state)
+        if state.is_over():
+            return
+    _resolve_damage_step(state, defending_player_id, first_strike_step=False)
+
+
+def _resolve_damage_step(
+    state: GameState, defending_player_id: int, *, first_strike_step: bool
+) -> None:
+    """Build and apply the damage events for one combat damage step."""
+    # Event tuple layout: (kind, target_id, amount, source_keywords, source_controller_id)
     damage_events_typed: list[tuple[str, int, int, frozenset[str], int]] = []
 
     for attacker in state.battlefield:
         if not attacker.attacking:
             continue
+        attacker_kws = effective_keywords(state, attacker)
+        if not _deals_in_step(attacker_kws, first_strike_step=first_strike_step):
+            # Attacker doesn't deal damage in this step; blockers of this
+            # attacker may still deal damage back IF they qualify.
+            blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
+            for blocker in blockers:
+                blocker_kws = effective_keywords(state, blocker)
+                if not _deals_in_step(blocker_kws, first_strike_step=first_strike_step):
+                    continue
+                blocker_power = effective_power(state, blocker)
+                if blocker_power > 0:
+                    damage_events_typed.append(
+                        ("creature", attacker.id, blocker_power,
+                         blocker_kws, blocker.controller_id)
+                    )
+            continue
+
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_power = effective_power(state, attacker)
-        attacker_kws = effective_keywords(state, attacker)
         attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
         has_deathtouch = "deathtouch" in attacker_kws
@@ -100,7 +154,6 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
             for i, blocker in enumerate(blockers):
                 if remaining <= 0:
                     break
-                # Deathtouch: any 1 damage is lethal.
                 need = 1 if has_deathtouch else max(
                     0, effective_toughness(state, blocker) - blocker.damage
                 )
@@ -120,11 +173,14 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
                      attacker_kws, attacker_controller)
                 )
             for blocker in blockers:
+                blocker_kws = effective_keywords(state, blocker)
+                if not _deals_in_step(blocker_kws, first_strike_step=first_strike_step):
+                    continue
                 blocker_power = effective_power(state, blocker)
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
-                         effective_keywords(state, blocker), blocker.controller_id)
+                         blocker_kws, blocker.controller_id)
                     )
 
     for kind, target_id, amount, source_kws, source_controller in damage_events_typed:
