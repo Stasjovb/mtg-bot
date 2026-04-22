@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     SearchLibraryForBasicLandTapped,
@@ -727,6 +728,33 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
                     ),
+                ),
+            ),
+        ),
+        # Debris Field Crusher: ETB 3 damage to any target, 8+ flying.
+        # Real card has an activated ability "{1}{R}: this gets +2/+0 UEOT"
+        # which we don't include — it'd need a self-pump variant.
+        make_spacecraft(
+            "Debris Field Crusher", "{4}{R}", 1, 5,
+            station_threshold=8,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=DealDamageAnyTarget(amount=3),
+                ),
+            ),
+        ),
+        # Atmospheric Greenhouse: ETB puts a +1/+1 counter on each creature
+        # you control, 8+ flying+trample.
+        make_spacecraft(
+            "Atmospheric Greenhouse", "{4}{G}", 5, 4,
+            station_threshold=8,
+            stationed_keywords={"flying", "trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
                 ),
             ),
         ),

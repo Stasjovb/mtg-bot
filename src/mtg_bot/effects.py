@@ -627,6 +627,38 @@ class PutPlusOneCounterOnTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCounterOnEachCreatureYouControl(Effect):
+    """Put ``amount`` +1/+1 counter(s) on each creature the controller
+    controls at resolution. Matches Atmospheric Greenhouse's ETB."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        count = 0
+        for obj in state.battlefield:
+            if obj.controller_id != controller_id:
+                continue
+            if not obj.printing.is_creature:
+                continue
+            obj.plus_one_counters += self.amount
+            count += 1
+        state.log.append(
+            f"P{controller_id}'s {count} creature(s) each get "
+            f"a +1/+1 counter"
+        )
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return "put a +1/+1 counter on each creature you control"
+        return (
+            f"put {self.amount} +1/+1 counters on each creature you control"
+        )
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnSelf(Effect):
     """Put ``amount`` +1/+1 counter(s) on the ability's source ("this creature").
 

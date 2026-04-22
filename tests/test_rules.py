@@ -2504,6 +2504,58 @@ def test_wedgelight_rammer_etb_creates_robot():
     assert len(robots) == 1
 
 
+def test_debris_field_crusher_etb_deals_3_to_any_target():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    dfc = EOE_CREATURES["Debris Field Crusher"]
+    state = _arena(
+        p0_hand=[dfc],
+        p0_battlefield=[BASIC_LANDS["Mountain"]] * 5,
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # enters + trigger stacked
+    resolve_top_of_stack(state)  # 3 damage to something
+    # Either P0 or P1 (or a creature) took 3 damage — total = 3.
+    total = (20 - state.players[0].life) + (20 - state.players[1].life) + sum(
+        o.damage for o in state.battlefield if o.printing.is_creature
+    )
+    assert total == 3
+
+
+def test_atmospheric_greenhouse_etb_buffs_each_own_creature():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    green = EOE_CREATURES["Atmospheric Greenhouse"]
+    state = _arena(
+        p0_hand=[green],
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"], SYNTHETIC_CREATURES["Sapling"]]
+                        + [BASIC_LANDS["Forest"]] * 5,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    my_bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear" and o.controller_id == 0)
+    sapling = next(o for o in state.battlefield if o.printing.name == "Sapling")
+    enemy_bear = next(o for o in state.battlefield if o.controller_id == 1)
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # enters + ETB
+    resolve_top_of_stack(state)  # ETB resolves
+    assert my_bear.plus_one_counters == 1
+    assert sapling.plus_one_counters == 1
+    assert enemy_bear.plus_one_counters == 0
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
