@@ -765,6 +765,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Sami, Wildcat Captain — Legendary double-strike+vigilance body.
+        # Real card also has "Spells you cast have affinity for artifacts"
+        # (cost reduction based on artifact count) which we don't model.
+        make_creature(
+            "Sami, Wildcat Captain", "{4}{R}{W}", 4, 4,
+            keywords={"double strike", "vigilance"},
+            legendary=True,
+        ),
         # Memorial Team Leader: "During your turn, other creatures you
         # control get +1/+0. Warp {1}{R}."
         make_creature(
