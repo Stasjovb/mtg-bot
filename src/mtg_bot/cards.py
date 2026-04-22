@@ -578,6 +578,54 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Beamsaw Prospector: "When this creature dies, create a Lander token."
+        make_creature(
+            "Beamsaw Prospector", "{1}{B}", 2, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="dies",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Galactic Wayfarer: "When this creature enters, create a Lander token."
+        make_creature(
+            "Galactic Wayfarer", "{2}{G}", 3, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Eumidian Terrabotanist: Landfall — gain 1 life.
+        make_creature(
+            "Eumidian Terrabotanist", "{1}{G}", 2, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=GainLife(amount=1),
+                ),
+            ),
+        ),
+        # Intrepid Tenderfoot: "{3}: Put a +1/+1 counter on this creature.
+        # Activate only as a sorcery."
+        make_creature(
+            "Intrepid Tenderfoot", "{1}{G}", 2, 2,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{3}"),
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
         # Glacier Godmaw: Trample; ETB create a Lander; Landfall pumps +1/+1
         # and grants vigilance+haste until end of turn.
         make_creature(

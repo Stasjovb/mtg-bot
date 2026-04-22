@@ -2638,6 +2638,63 @@ def test_tragic_trajectory_void_mode_minus_10_10_kills():
     assert giant not in state.battlefield
 
 
+def test_beamsaw_prospector_dies_creates_lander_for_controller_only():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import move_off_battlefield
+
+    prospector = EOE_CREATURES["Beamsaw Prospector"]
+    state = _arena(p0_battlefield=[prospector])
+    obj = state.battlefield[0]
+    move_off_battlefield(state, obj, destination="graveyard")
+    landers = [o for o in state.battlefield if o.printing is TOKEN_PRINTINGS["Lander"]]
+    assert len(landers) == 1
+    assert landers[0].controller_id == 0
+
+
+def test_galactic_wayfarer_etb_creates_lander():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    import random
+
+    wayfarer = EOE_CREATURES["Galactic Wayfarer"]
+    state = _arena(p0_hand=[wayfarer], p0_battlefield=[BASIC_LANDS["Forest"]] * 3)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell
+    resolve_top_of_stack(state)  # ETB
+    landers = [o for o in state.battlefield if o.printing is TOKEN_PRINTINGS["Lander"]]
+    assert len(landers) == 1
+
+
+def test_eumidian_terrabotanist_gains_life_on_landfall():
+    from mtg_bot.cards import EOE_CREATURES
+
+    bot = EOE_CREATURES["Eumidian Terrabotanist"]
+    state = _arena(
+        p0_hand=[BASIC_LANDS["Forest"]],
+        p0_battlefield=[bot],
+        p0_life=15,
+    )
+    forest = state.players[0].hand[0]
+    apply(state, PlayLand(forest.id), player_id=0)
+    assert state.players[0].life == 16
+
+
+def test_intrepid_tenderfoot_activated_ability_puts_plus_one_counter_on_self():
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+
+    tender = EOE_CREATURES["Intrepid Tenderfoot"]
+    state = _arena(p0_battlefield=[tender] + [BASIC_LANDS["Forest"]] * 3)
+    obj = next(o for o in state.battlefield if o.printing.name == "Intrepid Tenderfoot")
+    apply(state, ActivateAbility(source_id=obj.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    assert obj.plus_one_counters == 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
