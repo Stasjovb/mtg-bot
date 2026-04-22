@@ -445,6 +445,7 @@ class CreateToken(Effect):
     token_printing: "CardPrinting"
     count: int = 1
     tapped: bool = False
+    each_player: bool = False  # if True, every living player creates the token
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -453,17 +454,24 @@ class CreateToken(Effect):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import Zone
 
-        for _ in range(self.count):
-            obj = state.new_object(
-                self.token_printing, owner_id=controller_id, zone=Zone.BATTLEFIELD
-            )
-            state.log.append(
-                f"P{controller_id} creates a {self.token_printing.name} token"
-                + (" (tapped)" if self.tapped else "")
-            )
-            put_into_battlefield(state, obj, controller_id)
-            if self.tapped:
-                obj.tapped = True
+        if self.each_player:
+            # Every living player creates the token(s) under their own control.
+            recipients = [p.id for p in state.players if not p.has_lost]
+        else:
+            recipients = [controller_id]
+
+        for recipient in recipients:
+            for _ in range(self.count):
+                obj = state.new_object(
+                    self.token_printing, owner_id=recipient, zone=Zone.BATTLEFIELD
+                )
+                state.log.append(
+                    f"P{recipient} creates a {self.token_printing.name} token"
+                    + (" (tapped)" if self.tapped else "")
+                )
+                put_into_battlefield(state, obj, recipient)
+                if self.tapped:
+                    obj.tapped = True
 
     def describe(self) -> str:
         p = self.token_printing

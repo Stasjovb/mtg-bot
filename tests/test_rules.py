@@ -2192,6 +2192,41 @@ def test_dual_sun_adepts_double_strike_deals_damage_twice():
     assert state.players[1].life == 20 - 4
 
 
+def test_edge_rover_dies_each_player_creates_a_lander():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import move_off_battlefield
+
+    rover = EOE_CREATURES["Edge Rover"]
+    state = _arena(p0_battlefield=[rover])
+    obj = state.battlefield[0]
+    move_off_battlefield(state, obj, destination="graveyard")
+    # Both P0 and P1 should have a Lander token now
+    p0_landers = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Lander"] and o.controller_id == 0
+    ]
+    p1_landers = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Lander"] and o.controller_id == 1
+    ]
+    assert len(p0_landers) == 1
+    assert len(p1_landers) == 1
+
+
+def test_create_token_each_player_skips_lost_players():
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.effects import CreateToken
+
+    state = _arena()
+    state.players[1].has_lost = True
+    CreateToken(
+        token_printing=TOKEN_PRINTINGS["Lander"], each_player=True,
+    ).resolve(state, controller_id=0)
+    # Only P0 (living) got a Lander
+    controllers = [o.controller_id for o in state.battlefield if o.printing.is_token]
+    assert controllers == [0]
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

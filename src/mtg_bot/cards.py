@@ -554,6 +554,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Edge Rover: real card is an Artifact Creature (we don't model the
+        # dual-type difference — it's a 2/2 reach for our purposes).
+        # "When this creature dies, each player creates a Lander token."
+        make_creature(
+            "Edge Rover", "{G}", 2, 2,
+            keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="dies",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                        each_player=True,
+                    ),
+                ),
+            ),
+        ),
         # Blue
         make_creature(
             "Quantum Riddler", "{3}{U}{U}", 4, 6,
