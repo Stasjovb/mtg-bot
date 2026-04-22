@@ -11,7 +11,13 @@ import random
 import re
 from dataclasses import dataclass
 
-from mtg_bot.effects import DrawCards, EachPlayerDraws, GainLife, TriggeredAbility
+from mtg_bot.effects import (
+    DrawCards,
+    EachPlayerDraws,
+    GainLife,
+    TargetOpponentDiscards,
+    TriggeredAbility,
+)
 
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
@@ -185,6 +191,15 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Infernal Horror", "{2}{B}{B}", 4, 4),
         make_creature("Ebon Bat", "{1}{B}", 2, 1, keywords={"flying"}),
         make_creature("Venomous Serpent", "{1}{B}", 1, 1, keywords={"deathtouch"}),
+        make_creature(
+            "Virus Beetle", "{B}", 1, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=TargetOpponentDiscards(count=1),
+                ),
+            ),
+        ),
         # Red
         make_creature("Raging Goblin", "{R}", 2, 1),
         make_creature("Blood Warrior", "{1}{R}", 2, 2),

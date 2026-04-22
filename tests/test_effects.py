@@ -3,7 +3,14 @@
 import pytest
 
 from mtg_bot.cards import BASIC_LANDS
-from mtg_bot.effects import DrawCards, EachPlayerDraws, Effect, GainLife, TriggeredAbility
+from mtg_bot.effects import (
+    DrawCards,
+    EachPlayerDraws,
+    Effect,
+    GainLife,
+    TargetOpponentDiscards,
+    TriggeredAbility,
+)
 from mtg_bot.game import GameState, Player, Zone
 
 
@@ -102,3 +109,86 @@ def test_each_player_draws_skips_already_lost_players():
 def test_each_player_draws_describe_singular_and_plural():
     assert EachPlayerDraws(amount=1).describe() == "each player draws a card"
     assert EachPlayerDraws(amount=2).describe() == "each player draws 2 cards"
+
+
+def test_target_opponent_discards_requires_target():
+    assert TargetOpponentDiscards().requires_target() is True
+
+
+def test_target_opponent_discards_legal_targets_excludes_self_and_lost():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    state.players.append(Player(id=2))
+    state.players[2].has_lost = True
+    targets = TargetOpponentDiscards().legal_targets(state, controller_id=0)
+    assert ("player", 1) in targets
+    assert ("player", 0) not in targets  # not yourself
+    assert ("player", 2) not in targets  # not a lost player
+
+
+def test_target_opponent_discards_moves_card_to_graveyard():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    # Give P1 one card
+    obj = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.HAND)
+    state.players[1].hand.append(obj)
+
+    TargetOpponentDiscards(count=1).resolve(
+        state, controller_id=0, targets=(("player", 1),)
+    )
+    assert len(state.players[1].hand) == 0
+    assert len(state.players[1].graveyard) == 1
+
+
+def test_target_opponent_discards_no_crash_when_hand_empty():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    TargetOpponentDiscards(count=2).resolve(
+        state, controller_id=0, targets=(("player", 1),)
+    )
+    assert len(state.players[1].graveyard) == 0
+
+
+def test_target_opponent_discards_resolve_with_no_targets_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    TargetOpponentDiscards().resolve(state, controller_id=0, targets=())
+    # Nothing happened; no exception
+
+
+def test_target_opponent_discards_resolve_with_wrong_kind_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    TargetOpponentDiscards().resolve(
+        state, controller_id=0, targets=(("creature", 999),)
+    )
+
+
+def test_target_opponent_discards_resolve_skips_if_target_already_lost():
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    obj = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.HAND)
+    state.players[1].hand.append(obj)
+    state.players[1].has_lost = True
+
+    TargetOpponentDiscards().resolve(
+        state, controller_id=0, targets=(("player", 1),)
+    )
+    # Still in hand — we don't yoink cards from dead players
+    assert len(state.players[1].hand) == 1
+
+
+def test_target_opponent_discards_describe_singular_and_plural():
+    assert TargetOpponentDiscards(count=1).describe() == "target opponent discards a card"
+    assert TargetOpponentDiscards(count=2).describe() == "target opponent discards 2 cards"

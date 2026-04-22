@@ -18,7 +18,13 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, make_creature
-from mtg_bot.effects import DrawCards, EachPlayerDraws, GainLife, TriggeredAbility
+from mtg_bot.effects import (
+    DrawCards,
+    EachPlayerDraws,
+    GainLife,
+    TargetOpponentDiscards,
+    TriggeredAbility,
+)
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import (
     Step,
@@ -548,6 +554,95 @@ def test_etb_each_player_draws_gives_both_players_a_card():
 
     assert len(state.players[0].hand) == p0_hand_before + 1
     assert len(state.players[1].hand) == p1_hand_before + 1
+
+
+# --------------------------------------------------------------------------
+# Rule: TARGETED ETB — Virus Beetle makes target opponent discard
+# --------------------------------------------------------------------------
+
+
+def _virus_beetle(name="Virus Beetle"):
+    return make_creature(
+        name, "{B}", 1, 2,
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="etb", effect=TargetOpponentDiscards(count=1)
+            ),
+        ),
+    )
+
+
+def _arena_with_agents():
+    """Like _arena but also seats agents on both players (needed for
+    target-selection and discard-choice callbacks)."""
+    from mtg_bot.agents import RandomAgent
+    import random
+    state = _arena()
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(42))
+    return state
+
+
+def test_virus_beetle_enters_and_stacks_discard_trigger_with_target():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _arena_with_agents()
+    beetle = state.new_object(_virus_beetle(), owner_id=0, zone=Zone.HAND)
+    state.players[0].hand.append(beetle)
+    # Mana available
+    for _ in range(2):
+        state.battlefield.append(
+            state.new_object(BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD)
+        )
+    # Give opponent a card to discard
+    card = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.HAND)
+    state.players[1].hand.append(card)
+
+    apply(state, CastCreature(beetle.id))
+    resolve_top_of_stack(state)  # spell → creature + trigger stacked
+    assert len(state.stack) == 1
+    assert state.stack[0].ability is not None
+    # Target was chosen and recorded: opponent id 1
+    assert state.stack[0].targets == (("player", 1),)
+
+    resolve_top_of_stack(state)  # trigger resolves → discard
+    assert len(state.players[1].hand) == 0
+    assert len(state.players[1].graveyard) == 1
+
+
+def test_virus_beetle_fizzles_when_opponent_has_already_lost():
+    """No legal opponent → trigger shouldn't even go on the stack."""
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _arena_with_agents()
+    state.players[1].has_lost = True
+    beetle = state.new_object(_virus_beetle(), owner_id=0, zone=Zone.HAND)
+    state.players[0].hand.append(beetle)
+    for _ in range(1):
+        state.battlefield.append(
+            state.new_object(BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD)
+        )
+    apply(state, CastCreature(beetle.id))
+    resolve_top_of_stack(state)  # spell resolves; no legal target → no trigger stacked
+    assert not state.stack
+    assert any("fizzles" in entry for entry in state.log)
+
+
+def test_virus_beetle_trigger_does_nothing_if_target_has_empty_hand():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _arena_with_agents()
+    beetle = state.new_object(_virus_beetle(), owner_id=0, zone=Zone.HAND)
+    state.players[0].hand.append(beetle)
+    state.battlefield.append(
+        state.new_object(BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD)
+    )
+    # Opponent hand is empty
+
+    apply(state, CastCreature(beetle.id))
+    resolve_top_of_stack(state)  # spell
+    resolve_top_of_stack(state)  # ability resolves but hand is empty
+    assert len(state.players[1].graveyard) == 0
 
 
 def test_etb_triggers_fire_in_full_game_flow():

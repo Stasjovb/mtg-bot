@@ -118,6 +118,61 @@ class EachPlayerDraws(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentDiscards(Effect):
+    """Target opponent discards ``count`` cards.
+
+    The discarding player (the target) chooses which cards to discard — the
+    target player's agent makes the pick via ``choose_discard``.
+    """
+
+    count: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id)
+            for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        p = state.player_by_id(target_id)
+        if p.has_lost:
+            return
+        for _ in range(self.count):
+            if not p.hand:
+                break
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{target_id} discards {card.printing.name}"
+            )
+
+    def describe(self) -> str:
+        if self.count == 1:
+            return "target opponent discards a card"
+        return f"target opponent discards {self.count} cards"
+
+
+@dataclass(frozen=True)
 class TriggeredAbility:
     """An ability that fires on a specific event.
 
