@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from mtg_bot.actions import Action, CastSpell, PassPriority, PlayLand, can_pay_cost
+from mtg_bot.actions import (
+    Action,
+    ActivateStation,
+    CastSpell,
+    PassPriority,
+    PlayLand,
+    can_pay_cost,
+)
 from mtg_bot.game import GameObject, GameState
 from mtg_bot.turn import MAIN_STEPS
 
@@ -106,5 +113,28 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             state, player_id, card.printing.mana_cost
         ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id))
+
+    # Station activations: for each Spacecraft this player controls, each
+    # untapped non-sick creature they control (not the Spacecraft itself) is
+    # a legal crew choice.
+    spacecraft = [
+        o for o in state.battlefield
+        if o.controller_id == player_id and o.printing.is_spacecraft
+    ]
+    if spacecraft:
+        crew_candidates = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and o.printing.is_creature
+            and not o.tapped
+            and not o.summoning_sick
+        ]
+        for ship in spacecraft:
+            for crew in crew_candidates:
+                if crew.id == ship.id:
+                    continue
+                actions.append(
+                    ActivateStation(spacecraft_id=ship.id, crew_id=crew.id)
+                )
 
     return actions

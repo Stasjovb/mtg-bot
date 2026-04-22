@@ -470,6 +470,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Bygone Colossus", "{9}", 9, 9,
             warp="{3}",
         ),
+        # First real Spacecraft. At 3+ charge counters it becomes an
+        # artifact creature with flying + haste. Station = tap a creature
+        # you control to add that creature's power in charge counters.
+        make_spacecraft(
+            "Galvanizing Sawship", "{5}{R}", 6, 5,
+            station_threshold=3,
+            stationed_keywords={"flying", "haste"},
+        ),
         # Green
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,

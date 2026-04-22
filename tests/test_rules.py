@@ -1353,6 +1353,144 @@ def test_warp_cast_creature_dying_before_end_step_does_not_exile():
     assert obj.warped is False
 
 
+# --------------------------------------------------------------------------
+# Rule: SPACECRAFT & STATION — non-creature artifacts that become creatures
+# --------------------------------------------------------------------------
+
+
+def test_unstationed_spacecraft_cannot_attack_or_block():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers, eligible_blockers
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(p0_battlefield=[sawship])
+    obj = state.battlefield[0]
+    # Spacecraft not yet stationed: not a creature, can't attack or block.
+    assert obj not in eligible_attackers(state, 0)
+    assert obj not in eligible_blockers(state, 0)
+
+
+def test_station_activation_adds_counters_equal_to_crew_power():
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.cards import EOE_CREATURES
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(
+        p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],  # 3/3
+    )
+    ship = state.battlefield[0]
+    crew = state.battlefield[1]
+    # Crew is not summoning sick (set by _arena helper)
+    assert not crew.summoning_sick
+
+    apply(state, ActivateStation(spacecraft_id=ship.id, crew_id=crew.id))
+    assert crew.tapped
+    assert ship.charge_counters == 3  # Giant's power
+
+
+def test_spacecraft_becomes_creature_when_threshold_reached():
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+    from mtg_bot.game import effective_keywords, is_creature_now
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]  # threshold 3
+    state = _arena(
+        p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],  # 3 power
+    )
+    ship = state.battlefield[0]
+    crew = state.battlefield[1]
+    apply(state, ActivateStation(spacecraft_id=ship.id, crew_id=crew.id))
+    # 3 ≥ 3 → stationed
+    assert is_creature_now(ship)
+    # Station unlocks flying + haste
+    assert "flying" in effective_keywords(ship)
+    assert "haste" in effective_keywords(ship)
+    # Haste means it can attack even though it just "became" a creature.
+    # (Summoning sickness based on when it entered — it entered earlier.)
+    ship.summoning_sick = False  # normalize; entered_bf was in _arena setup
+    assert ship in eligible_attackers(state, 0)
+
+
+def test_station_cannot_use_summoning_sick_crew():
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.cards import EOE_CREATURES
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(p0_battlefield=[sawship, SYNTHETIC_CREATURES["Wild Bear"]])
+    ship = state.battlefield[0]
+    crew = state.battlefield[1]
+    crew.summoning_sick = True
+
+    apply(state, ActivateStation(spacecraft_id=ship.id, crew_id=crew.id))
+    # Station silently refused: crew stayed untapped, no counters added.
+    assert not crew.tapped
+    assert ship.charge_counters == 0
+
+
+def test_station_cannot_use_spacecraft_as_crew():
+    """'Tap another creature' — the spacecraft can't crew itself even if
+    it happens to be a creature (via an earlier stationing)."""
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.cards import EOE_CREATURES
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(p0_battlefield=[sawship])
+    ship = state.battlefield[0]
+
+    apply(state, ActivateStation(spacecraft_id=ship.id, crew_id=ship.id))
+    assert ship.charge_counters == 0
+
+
+def test_station_not_legal_at_instant_speed():
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.cards import EOE_CREATURES
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(
+        p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],
+        step=Step.END,
+    )
+    moves = legal_moves(state)
+    assert not any(isinstance(a, ActivateStation) for a in moves)
+
+
+def test_stationed_spacecraft_takes_combat_damage_and_can_die():
+    """A Spacecraft that's a creature (stationed) dies like any other when
+    damage ≥ effective toughness."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import declare_attackers, resolve_combat_damage
+    from mtg_bot.game import is_creature_now
+    from mtg_bot.turn import state_based_actions
+
+    sawship = EOE_CREATURES["Galvanizing Sawship"]  # 6/5 once stationed
+    state = _arena(
+        p0_battlefield=[sawship],
+        p1_battlefield=[SYNTHETIC_CREATURES["Great Wurm"]],  # 6/6
+    )
+    ship = state.battlefield[0]
+    ship.charge_counters = 3  # manually station it
+    ship.summoning_sick = False
+    assert is_creature_now(ship)
+    wurm = state.battlefield[1]
+    wurm.summoning_sick = False
+
+    # Wurm attacks from P1's side; ship blocks.
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({wurm.id})), player_id=1)
+    state.step = Step.DECLARE_BLOCKERS
+    apply(
+        state,
+        DeclareBlockers(assignments=((ship.id, wurm.id),)),
+        player_id=0,
+    )
+    state.step = Step.COMBAT_DAMAGE
+    resolve_combat_damage(state, defending_player_id=0)
+    state_based_actions(state)
+    # Sawship (5 toughness) took 6 damage from the Wurm → dies
+    assert ship not in state.battlefield
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

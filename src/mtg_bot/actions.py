@@ -33,6 +33,19 @@ class CastSpell(Action):
 
 
 @dataclass(frozen=True)
+class ActivateStation(Action):
+    """Activate the Station ability of a Spacecraft.
+
+    Cost: tap ``crew_id`` (another untapped creature the player controls).
+    Effect: add charge counters to ``spacecraft_id`` equal to the crew's
+    power. Sorcery-speed only (enforced by ``legal_actions``).
+    """
+
+    spacecraft_id: int
+    crew_id: int
+
+
+@dataclass(frozen=True)
 class DeclareAttackers(Action):
     """Declare a set of creatures as attackers during the declare-attackers step.
 
@@ -109,6 +122,9 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
     if isinstance(action, DeclareBlockers):
         _declare_blockers(state, player_id, action.assignments)
         return
+    if isinstance(action, ActivateStation):
+        _activate_station(state, player_id, action.spacecraft_id, action.crew_id)
+        return
     raise ValueError(f"unknown action: {action!r}")
 
 
@@ -178,6 +194,45 @@ def _cast_spell(
     )
     mode = " (warp)" if use_warp else ""
     state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
+
+
+def _activate_station(
+    state: GameState, player_id: int, spacecraft_id: int, crew_id: int
+) -> None:
+    """Validate and apply a Station activation. Silently no-ops on invalid
+    inputs (crew isn't eligible, spacecraft isn't under our control, etc.)."""
+    from mtg_bot.game import effective_power
+
+    spacecraft = next(
+        (o for o in state.battlefield if o.id == spacecraft_id), None
+    )
+    crew = next((o for o in state.battlefield if o.id == crew_id), None)
+    if spacecraft is None or crew is None:
+        return
+    if not spacecraft.printing.is_spacecraft:
+        return
+    if spacecraft.controller_id != player_id:
+        return
+    if crew.controller_id != player_id:
+        return
+    if crew.id == spacecraft.id:
+        return  # "another creature"
+    if not crew.printing.is_creature:
+        return  # spacecraft can't crew another spacecraft in Stage 3
+    if crew.tapped:
+        return
+    if crew.summoning_sick:
+        # Activated abilities with tap in their cost can't be used on
+        # summoning-sick creatures, even for Station.
+        return
+
+    added = effective_power(crew)
+    crew.tapped = True
+    spacecraft.charge_counters += added
+    state.log.append(
+        f"{crew.printing.name} stations {spacecraft.printing.name} "
+        f"(+{added} counters, now {spacecraft.charge_counters})"
+    )
 
 
 def _declare_attackers(
