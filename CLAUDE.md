@@ -19,7 +19,10 @@
 - Virtual env is at `.venv/`. Use `.venv/Scripts/python.exe` on Windows / `.venv/bin/python` on macOS-Linux.
 - Run tests: `.venv/Scripts/python.exe -m pytest`
 - Run a game: `.venv/Scripts/python.exe -m mtg_bot`
-- Run the UI: `.venv/Scripts/python.exe -m mtg_bot.ui`
+- Run the UI (localhost): `.venv/Scripts/python.exe -m mtg_bot.ui`
+- Run the UI over Tailscale (reachable from phone/laptop on the tailnet):
+  `powershell -ExecutionPolicy Bypass -File scripts\serve.ps1`
+  First-time firewall rule setup needs an elevated PowerShell.
 
 ## Scope reminders
 
