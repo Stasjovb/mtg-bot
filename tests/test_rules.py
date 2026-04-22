@@ -18,7 +18,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, make_creature
-from mtg_bot.effects import GainLife, TriggeredAbility
+from mtg_bot.effects import DrawCards, GainLife, TriggeredAbility
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import (
     Step,
@@ -491,6 +491,33 @@ def test_multiple_etb_triggers_stack_in_printing_order():
     assert state.players[0].life == 10 + 3
     resolve_top_of_stack(state)
     assert state.players[0].life == 10 + 3 + 1
+
+
+def test_etb_draw_card_gives_controller_a_card():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    scholar_printing = make_creature(
+        "Inquirer", "{2}{U}", 2, 2,
+        triggered_abilities=(
+            TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+        ),
+    )
+    state = _arena(
+        p0_hand=[scholar_printing],
+        p0_battlefield=[BASIC_LANDS["Island"]] * 3,
+    )
+    # Put some lands on top of library so the draw has something to fetch.
+    for _ in range(3):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+
+    scholar = state.players[0].hand[0]
+    hand_size_before = len(state.players[0].hand) - 1  # after cast
+    apply(state, CastCreature(scholar.id))
+    resolve_top_of_stack(state)  # spell → creature on bf + trigger stacked
+    resolve_top_of_stack(state)  # ability → draw 1
+    # One more card now in hand than we had after the cast
+    assert len(state.players[0].hand) == hand_size_before + 1
 
 
 def test_etb_triggers_fire_in_full_game_flow():

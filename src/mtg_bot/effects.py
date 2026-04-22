@@ -44,6 +44,23 @@ class GainLife(Effect):
 
 
 @dataclass(frozen=True)
+class DrawCards(Effect):
+    amount: int
+
+    def resolve(self, state: "GameState", controller_id: int) -> None:
+        from mtg_bot.turn import draw_card
+
+        for _ in range(self.amount):
+            draw_card(state, controller_id)
+        state.log.append(f"P{controller_id} draws {self.amount} card(s)")
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return "you draw a card"
+        return f"you draw {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class TriggeredAbility:
     """An ability that fires on a specific event.
 

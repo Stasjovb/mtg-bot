@@ -11,7 +11,7 @@ import random
 import re
 from dataclasses import dataclass
 
-from mtg_bot.effects import GainLife, TriggeredAbility
+from mtg_bot.effects import DrawCards, GainLife, TriggeredAbility
 
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
@@ -165,6 +165,12 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Tidal Warrior", "{1}{U}", 2, 2),
         make_creature("Deep Leviathan", "{3}{U}", 4, 4),
         make_creature("Scale Drake", "{2}{U}", 2, 3, keywords={"flying"}),
+        make_creature(
+            "Inquisitive Scholar", "{2}{U}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+            ),
+        ),
         # Black
         make_creature("Cemetery Rat", "{B}", 2, 1),
         make_creature("Grave Brute", "{1}{B}", 2, 2),
