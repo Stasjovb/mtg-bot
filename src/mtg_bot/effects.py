@@ -144,6 +144,34 @@ class DiscardSelf(Effect):
 
 
 @dataclass(frozen=True)
+class ExileEachOpponentsGraveyard(Effect):
+    """Move every card in each opponent's graveyard to that player's exile."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        total = 0
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            cards_to_exile = list(p.graveyard)
+            for card in cards_to_exile:
+                p.graveyard.remove(card)
+                card.zone = Zone.EXILE
+                p.exile.append(card)
+                total += 1
+        state.log.append(
+            f"P{controller_id} exiles {total} card(s) from opponent graveyards"
+        )
+
+    def describe(self) -> str:
+        return "exile each opponent's graveyard"
+
+
+@dataclass(frozen=True)
 class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original

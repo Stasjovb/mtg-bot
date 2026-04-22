@@ -2751,6 +2751,41 @@ def test_thawbringer_triggers_on_both_etb_and_dies():
     assert sum(1 for e in state.log if "surveils" in e) >= 1
 
 
+def test_dauntless_scrapbot_exiles_opponent_graveyard_and_creates_lander():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    import random
+
+    bot = EOE_CREATURES["Dauntless Scrapbot"]
+    state = _arena(
+        p0_hand=[bot],
+        p0_battlefield=[BASIC_LANDS["Forest"]] * 3,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed opponent graveyard with real (non-token) cards
+    for _ in range(3):
+        state.players[1].graveyard.append(
+            state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.GRAVEYARD)
+        )
+    assert len(state.players[1].graveyard) == 3
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)  # spell enters + ETB stacks
+    resolve_top_of_stack(state)  # ETB: exile opp grave + create Lander
+    # P1 graveyard is empty; their exile has 3 cards.
+    assert len(state.players[1].graveyard) == 0
+    assert len(state.players[1].exile) == 3
+    # Lander token under P0
+    landers = [
+        o for o in state.battlefield
+        if o.printing is TOKEN_PRINTINGS["Lander"] and o.controller_id == 0
+    ]
+    assert len(landers) == 1
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

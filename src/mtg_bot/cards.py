@@ -26,6 +26,7 @@ from mtg_bot.effects import (
     EachOpponentLosesLife,
     EachPlayerDraws,
     Effect,
+    ExileEachOpponentsGraveyard,
     ExileTargetCreature,
     GainLife,
     LoseLife,
@@ -633,6 +634,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=Surveil(amount=1)),
                 TriggeredAbility(trigger="dies", effect=Surveil(amount=1)),
+            ),
+        ),
+        # Dauntless Scrapbot {3} 3/1 colorless — "ETB exile each opponent's
+        # graveyard. Create a Lander token."
+        make_creature(
+            "Dauntless Scrapbot", "{3}", 3, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        ExileEachOpponentsGraveyard(),
+                        CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Lander"],
+                            count=1,
+                        ),
+                    )),
+                ),
             ),
         ),
         # Glacier Godmaw: Trample; ETB create a Lander; Landfall pumps +1/+1
