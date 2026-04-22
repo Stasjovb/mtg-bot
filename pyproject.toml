@@ -3,7 +3,9 @@ name = "mtg-bot"
 version = "0.0.1"
 description = "A bot that plays Magic: The Gathering and tries to win."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "flask>=3.0",
+]
 
 [project.optional-dependencies]
 dev = [
