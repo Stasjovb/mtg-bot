@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnTargetCreature,
     Sequence,
     StaticAbility,
+    StaticScope,
     TargetOpponentDiscards,
     TriggeredAbility,
 )
@@ -511,6 +512,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
             warp="{2}{R}",
+        ),
+        # Real Tannuk's second clause ("Artifact cards and red creature cards
+        # in your hand have warp {2}{R}") is a weird grant-on-cards-in-hand
+        # effect we don't model. This version ships only the first line.
+        make_creature(
+            "Tannuk, Steadfast Second", "{2}{R}{R}", 3, 5,
+            legendary=True,
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    granted_keywords=frozenset({"haste"}),
+                ),
+            ),
         ),
         make_creature(
             "Red Tiger Mechan", "{3}{R}", 3, 3,

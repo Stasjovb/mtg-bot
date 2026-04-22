@@ -1785,6 +1785,70 @@ def test_dies_trigger_fires_in_combat_full_flow():
     assert tokens[0].controller_id == 0
 
 
+# --------------------------------------------------------------------------
+# Rule: STATIC ANTHEM — "Other creatures you control have haste" (Tannuk)
+# --------------------------------------------------------------------------
+
+
+def test_tannuk_grants_haste_to_other_creatures_you_control():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+    from mtg_bot.game import effective_keywords
+
+    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    state = _arena(p0_battlefield=[tannuk, SYNTHETIC_CREATURES["Wild Bear"]])
+    t_obj = next(o for o in state.battlefield if o.printing.name.startswith("Tannuk"))
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+
+    # Bear (another creature you control) gains haste from Tannuk.
+    assert "haste" in effective_keywords(state, bear)
+
+    # Haste means it can attack on the turn it enters (summoning-sick).
+    bear.summoning_sick = True
+    assert bear in eligible_attackers(state, 0)
+
+
+def test_tannuk_does_not_give_itself_haste():
+    """The anthem says "Other creatures you control" — Tannuk is excluded."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords
+
+    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    state = _arena(p0_battlefield=[tannuk])
+    t_obj = state.battlefield[0]
+    assert "haste" not in effective_keywords(state, t_obj)
+
+
+def test_tannuk_does_not_grant_haste_to_opponents_creatures():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords
+
+    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    state = _arena(
+        p0_battlefield=[tannuk],
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    enemy_bear = next(o for o in state.battlefield if o.controller_id == 1)
+    assert "haste" not in effective_keywords(state, enemy_bear)
+
+
+def test_haste_anthem_stops_when_tannuk_leaves_the_battlefield():
+    """Static abilities only apply while the source is on the battlefield."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import move_off_battlefield
+
+    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    state = _arena(p0_battlefield=[tannuk, SYNTHETIC_CREATURES["Wild Bear"]])
+    t_obj = next(o for o in state.battlefield if o.printing.name.startswith("Tannuk"))
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    assert "haste" in effective_keywords(state, bear)
+
+    move_off_battlefield(state, t_obj, destination="graveyard")
+    # Anthem source is gone — bear loses the grant.
+    assert "haste" not in effective_keywords(state, bear)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
