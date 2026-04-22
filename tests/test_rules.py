@@ -2859,6 +2859,28 @@ def test_rescue_skiff_etb_fizzles_with_empty_graveyard():
     assert any("fizzles" in e for e in state.log)
 
 
+def test_dual_sun_technique_grants_double_strike_ueot():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_keywords
+    import random
+
+    technique = EOE_SPELLS["Dual-Sun Technique"]
+    state = _arena(
+        p0_hand=[technique],
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"]],
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    assert "double strike" in effective_keywords(state, bear)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
