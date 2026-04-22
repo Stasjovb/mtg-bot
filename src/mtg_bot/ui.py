@@ -1,10 +1,18 @@
 """Flask web UI for viewing simulated games.
 
-Run as a script:  python -m mtg_bot.ui
-Then visit http://127.0.0.1:5000/.
+Run locally on this machine only:
+    python -m mtg_bot.ui
+Expose on Tailscale / LAN (see scripts/serve.ps1 for the Windows helper):
+    python -m mtg_bot.ui --host 0.0.0.0 --port 5000
+Then visit http://<tailscale-hostname-or-ip>:5000/ from any tailnet peer.
 """
 
 from __future__ import annotations
+
+import argparse
+import subprocess
+from dataclasses import dataclass
+from typing import Optional
 
 from flask import Flask, abort, render_template_string, request
 
@@ -193,8 +201,76 @@ def create_app() -> Flask:
     return app
 
 
-def main() -> None:  # pragma: no cover
-    create_app().run(host="127.0.0.1", port=5000, debug=False)
+@dataclass(frozen=True)
+class CliArgs:
+    host: str
+    port: int
+
+
+def parse_args(argv: Optional[list[str]] = None) -> CliArgs:
+    parser = argparse.ArgumentParser(
+        prog="mtg_bot.ui",
+        description="Flask web UI for the MTG bot.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Host to bind to (default: 127.0.0.1). "
+            "Use 0.0.0.0 to expose on LAN / Tailscale."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Port to listen on (default: 5000).",
+    )
+    ns = parser.parse_args(argv)
+    return CliArgs(host=ns.host, port=ns.port)
+
+
+def detect_tailscale_ip() -> Optional[str]:
+    """Return this machine's IPv4 Tailscale address, or None if unavailable.
+
+    Shells out to the ``tailscale`` CLI. Returns None if Tailscale isn't
+    installed, the command times out, the command exits non-zero, or the
+    output is empty.
+    """
+    try:
+        result = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return None
+    return stdout.splitlines()[0].strip() or None
+
+
+def describe_urls(host: str, port: int) -> list[str]:
+    """Return human-readable URLs to show on startup."""
+    if host in ("0.0.0.0", "::", ""):
+        urls = [f"http://localhost:{port}"]
+        ip = detect_tailscale_ip()
+        if ip:
+            urls.append(f"http://{ip}:{port}  (Tailscale)")
+        return urls
+    return [f"http://{host}:{port}"]
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    args = parse_args(argv)
+    for url in describe_urls(args.host, args.port):
+        print(f"Serving at {url}")
+    create_app().run(host=args.host, port=args.port, debug=False)
 
 
 if __name__ == "__main__":  # pragma: no cover
