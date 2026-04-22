@@ -849,6 +849,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             )),
         ),
+        # Tragic Trajectory: "Target creature gets -2/-2 UEOT. Void — That
+        # creature gets -10/-10 UEOT instead..."
+        make_sorcery(
+            "Tragic Trajectory", "{B}",
+            effect=ConditionalIfVoid(
+                then_effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=-10, toughness_bonus=-10,
+                ),
+                else_effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=-2, toughness_bonus=-2,
+                ),
+            ),
+        ),
         # Zealous Display: "Creatures you control get +2/+0 until end of
         # turn. If it's not your turn, untap those creatures." We ship
         # the pump part; the conditional untap rider (a niche combat

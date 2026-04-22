@@ -2587,6 +2587,57 @@ def test_uthros_scanship_etb_draws_two_discards_one():
     assert len(state.players[0].graveyard) == gy_before + 1
 
 
+def test_tragic_trajectory_base_mode_minus_2_2():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.turn import state_based_actions
+    import random
+
+    tragic = EOE_SPELLS["Tragic Trajectory"]
+    state = _arena(
+        p0_hand=[tragic],
+        p0_battlefield=[BASIC_LANDS["Swamp"]],
+        p1_battlefield=[SYNTHETIC_CREATURES["Forest Giant"]],  # 3/3
+    )
+    giant = next(o for o in state.battlefield if o.printing.name == "Forest Giant")
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    state_based_actions(state)
+    # Giant is 3/3 - 2/-2 = 1/1 (still alive, just diminished)
+    assert giant in state.battlefield
+    assert giant.temp_power_bonus == -2
+    assert giant.temp_toughness_bonus == -2
+
+
+def test_tragic_trajectory_void_mode_minus_10_10_kills():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.turn import state_based_actions
+    import random
+
+    tragic = EOE_SPELLS["Tragic Trajectory"]
+    state = _arena(
+        p0_hand=[tragic],
+        p0_battlefield=[BASIC_LANDS["Swamp"]],
+        p1_battlefield=[SYNTHETIC_CREATURES["Forest Giant"]],
+    )
+    state.permanent_left_battlefield_this_turn = True  # Void active
+    giant = next(o for o in state.battlefield if o.printing.name == "Forest Giant")
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    state_based_actions(state)
+    # Effective toughness = 3 - 10 = -7 → dies
+    assert giant not in state.battlefield
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

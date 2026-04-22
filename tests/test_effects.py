@@ -792,14 +792,16 @@ def test_conditional_if_void_no_else_is_void_gated():
     assert state.players[0].life == 19
 
 
-def test_conditional_if_void_rejects_both_branches_requiring_targets():
-    import pytest
+def test_conditional_if_void_allows_both_branches_targeting_same_space():
+    """Tragic Trajectory pattern: both branches PumpTargetCreatureUntilEOT
+    with different magnitudes. Valid because they share target semantics."""
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
 
-    with pytest.raises(ValueError, match="at most one branch"):
-        ConditionalIfVoid(
-            then_effect=DestroyTargetCreature(),
-            else_effect=DestroyTargetCreature(),
-        )
+    cond = ConditionalIfVoid(
+        then_effect=PumpTargetCreatureUntilEOT(power_bonus=-10, toughness_bonus=-10),
+        else_effect=PumpTargetCreatureUntilEOT(power_bonus=-2, toughness_bonus=-2),
+    )
+    assert cond.requires_target() is True
 
 
 def test_conditional_if_void_describe_includes_void_or_both_branches():

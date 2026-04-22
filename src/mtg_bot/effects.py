@@ -414,15 +414,12 @@ class ConditionalIfVoid(Effect):
         return []
 
     def __post_init__(self) -> None:
-        then_req = self.then_effect.requires_target()
-        else_req = (
-            self.else_effect.requires_target() if self.else_effect is not None
-            else False
-        )
-        if then_req and else_req:
-            raise ValueError(
-                "ConditionalIfVoid supports targeting in at most one branch"
-            )
+        # Both branches can require a target if they'd accept the same
+        # target space — the caller picks once at cast time and resolve
+        # forwards that single target tuple to whichever branch fires.
+        # No eager check here; incompatible targets would be caught at
+        # resolve time as a silent no-op.
+        return
 
     def resolve(
         self, state: "GameState", controller_id: int,
