@@ -1,0 +1,64 @@
+from mtg_bot.cards import (
+    BASIC_LANDS,
+    ManaCost,
+    SYNTHETIC_CREATURES,
+    build_mono_color_deck,
+    parse_mana_cost,
+)
+
+
+def test_parse_empty_cost():
+    assert parse_mana_cost("") == ManaCost()
+
+
+def test_parse_generic_only():
+    c = parse_mana_cost("{3}")
+    assert c.generic == 3
+    assert c.colored == ()
+    assert c.total == 3
+
+
+def test_parse_mixed_cost():
+    c = parse_mana_cost("{2}{G}{G}")
+    assert c.generic == 2
+    assert c.colored == (("G", 2),)
+    assert c.total == 4
+    assert c.colors == {"G"}
+
+
+def test_parse_multicolor():
+    c = parse_mana_cost("{W}{U}{B}{R}{G}")
+    assert c.generic == 0
+    assert c.total == 5
+    assert c.colors == {"W", "U", "B", "R", "G"}
+
+
+def test_basic_land_produces_one_color():
+    forest = BASIC_LANDS["Forest"]
+    assert forest.is_land
+    assert forest.is_basic_land
+    assert forest.produces == frozenset({"G"})
+
+
+def test_creature_has_power_toughness():
+    bear = SYNTHETIC_CREATURES["Wild Bear"]
+    assert bear.is_creature
+    assert bear.power == 2
+    assert bear.toughness == 2
+
+
+def test_build_deck_is_60_cards():
+    deck = build_mono_color_deck("G", seed=1)
+    assert len(deck) == 60
+    assert deck.count("Forest") == 24
+    # Every non-Forest card must be a green creature
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    for name in deck:
+        if name == "Forest":
+            continue
+        assert name in SYNTHETIC_CREATURES
+        assert "G" in SYNTHETIC_CREATURES[name].mana_cost.colors
+
+
+def test_build_deck_is_deterministic_with_seed():
+    assert build_mono_color_deck("R", seed=7) == build_mono_color_deck("R", seed=7)
