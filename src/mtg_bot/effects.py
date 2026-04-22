@@ -61,6 +61,33 @@ class DrawCards(Effect):
 
 
 @dataclass(frozen=True)
+class EachPlayerDraws(Effect):
+    amount: int
+
+    def resolve(self, state: "GameState", controller_id: int) -> None:
+        from mtg_bot.turn import draw_card
+
+        # Starting with active player, each player draws. Skip anyone who has
+        # already lost (no one to hand cards to).
+        for i in range(len(state.players)):
+            idx = (state.active_player_idx + i) % len(state.players)
+            p = state.players[idx]
+            if p.has_lost:
+                continue
+            for _ in range(self.amount):
+                draw_card(state, p.id)
+        state.log.append(
+            f"each player draws {self.amount} card(s) "
+            f"(from {state.players[controller_id].id}'s trigger)"
+        )
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return "each player draws a card"
+        return f"each player draws {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class TriggeredAbility:
     """An ability that fires on a specific event.
 

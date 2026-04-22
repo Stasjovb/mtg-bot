@@ -18,7 +18,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, make_creature
-from mtg_bot.effects import DrawCards, GainLife, TriggeredAbility
+from mtg_bot.effects import DrawCards, EachPlayerDraws, GainLife, TriggeredAbility
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import (
     Step,
@@ -518,6 +518,36 @@ def test_etb_draw_card_gives_controller_a_card():
     resolve_top_of_stack(state)  # ability → draw 1
     # One more card now in hand than we had after the cast
     assert len(state.players[0].hand) == hand_size_before + 1
+
+
+def test_etb_each_player_draws_gives_both_players_a_card():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    archivist = make_creature(
+        "Library", "{3}{U}", 2, 3,
+        triggered_abilities=(
+            TriggeredAbility(trigger="etb", effect=EachPlayerDraws(amount=1)),
+        ),
+    )
+    state = _arena(
+        p0_hand=[archivist],
+        p0_battlefield=[BASIC_LANDS["Island"]] * 4,
+    )
+    # Seed both libraries so there's something to draw.
+    for pid in range(2):
+        for _ in range(3):
+            obj = state.new_object(BASIC_LANDS["Plains"], owner_id=pid, zone=Zone.LIBRARY)
+            state.players[pid].library.append(obj)
+    p0_hand_before = len(state.players[0].hand) - 1  # after cast
+    p1_hand_before = len(state.players[1].hand)
+
+    obj = state.players[0].hand[0]
+    apply(state, CastCreature(obj.id))
+    resolve_top_of_stack(state)  # spell
+    resolve_top_of_stack(state)  # ability
+
+    assert len(state.players[0].hand) == p0_hand_before + 1
+    assert len(state.players[1].hand) == p1_hand_before + 1
 
 
 def test_etb_triggers_fire_in_full_game_flow():

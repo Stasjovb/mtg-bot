@@ -3,7 +3,7 @@
 import pytest
 
 from mtg_bot.cards import BASIC_LANDS
-from mtg_bot.effects import DrawCards, Effect, GainLife, TriggeredAbility
+from mtg_bot.effects import DrawCards, EachPlayerDraws, Effect, GainLife, TriggeredAbility
 from mtg_bot.game import GameState, Player, Zone
 
 
@@ -64,3 +64,33 @@ def test_draw_cards_from_empty_library_causes_loss():
 def test_draw_cards_describe_singular_and_plural():
     assert DrawCards(amount=1).describe() == "you draw a card"
     assert DrawCards(amount=3).describe() == "you draw 3 cards"
+
+
+def _state_with_libraries(card_count_per_player: int, n_players: int = 2):
+    state = GameState()
+    for pid in range(n_players):
+        state.players.append(Player(id=pid))
+        for _ in range(card_count_per_player):
+            obj = state.new_object(BASIC_LANDS["Plains"], owner_id=pid, zone=Zone.LIBRARY)
+            state.players[pid].library.append(obj)
+    return state
+
+
+def test_each_player_draws_hits_every_player():
+    state = _state_with_libraries(5)
+    EachPlayerDraws(amount=1).resolve(state, controller_id=0)
+    assert len(state.players[0].hand) == 1
+    assert len(state.players[1].hand) == 1
+
+
+def test_each_player_draws_skips_already_lost_players():
+    state = _state_with_libraries(5)
+    state.players[1].has_lost = True
+    EachPlayerDraws(amount=2).resolve(state, controller_id=0)
+    assert len(state.players[0].hand) == 2
+    assert len(state.players[1].hand) == 0
+
+
+def test_each_player_draws_describe_singular_and_plural():
+    assert EachPlayerDraws(amount=1).describe() == "each player draws a card"
+    assert EachPlayerDraws(amount=2).describe() == "each player draws 2 cards"
