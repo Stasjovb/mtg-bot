@@ -158,6 +158,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Grave Brute", "{1}{B}", 2, 2),
         make_creature("Infernal Horror", "{2}{B}{B}", 4, 4),
         make_creature("Ebon Bat", "{1}{B}", 2, 1, keywords={"flying"}),
+        make_creature("Venomous Serpent", "{1}{B}", 1, 1, keywords={"deathtouch"}),
         # Red
         make_creature("Raging Goblin", "{R}", 2, 1),
         make_creature("Blood Warrior", "{1}{R}", 2, 2),

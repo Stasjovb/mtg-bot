@@ -668,6 +668,84 @@ def test_non_trample_excess_damage_stays_on_last_blocker():
 
 
 # --------------------------------------------------------------------------
+# Rule: DEATHTOUCH — any nonzero damage destroys a creature
+# --------------------------------------------------------------------------
+
+
+def _deathtoucher(name="Test Deathtoucher", power=1, toughness=1):
+    return make_creature(name, "{1}{B}", power, toughness, keywords={"deathtouch"})
+
+
+def test_deathtouch_kills_large_blocker_with_one_damage():
+    state = _arena(
+        p0_battlefield=[_deathtoucher("Serpent", 1, 1)],
+        p1_battlefield=[_ground("Giant", 5, 5)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    # Giant took 1 damage; without deathtouch it survives. With deathtouch, dies.
+    assert blocker not in state.battlefield
+    # Attacker took 5, dies too
+    assert attacker not in state.battlefield
+
+
+def test_deathtouch_splits_damage_across_multiple_blockers():
+    # 2-power deathtoucher with 2 blockers: 1 damage each is lethal.
+    state = _arena(
+        p0_battlefield=[_deathtoucher("Hydra", 2, 2)],
+        p1_battlefield=[_ground("B1", 3, 3), _ground("B2", 3, 3)],
+    )
+    attacker, b1, b2 = state.battlefield
+    _simulate_combat_step(
+        state, [attacker.id], [(b1.id, attacker.id), (b2.id, attacker.id)]
+    )
+    # Both blockers take 1 → marked lethal; attacker takes 6, dies
+    assert b1 not in state.battlefield
+    assert b2 not in state.battlefield
+    assert attacker not in state.battlefield
+
+
+def test_non_deathtouch_does_not_mark_lethal():
+    # Control case: 1 damage to a 5/5 from a non-deathtouch source survives.
+    state = _arena(
+        p0_battlefield=[_ground("Tiny", 1, 1)],
+        p1_battlefield=[_ground("Giant", 5, 5)],
+    )
+    attacker, blocker = state.battlefield
+    _simulate_combat_step(state, [attacker.id], [(blocker.id, attacker.id)])
+    assert blocker in state.battlefield
+    assert blocker.damage == 1
+    assert blocker.marked_lethal is False
+
+
+def test_deathtouch_plus_trample_spills_correctly():
+    # 3-power deathtouch+trample attacker vs 2 blockers (2 toughness each):
+    # 1 damage per blocker (lethal via deathtouch) → 1 damage trample-through.
+    dt_trample = make_creature(
+        "Wurm", "{3}{G}", 3, 3, keywords={"deathtouch", "trample"}
+    )
+    state = _arena(
+        p0_battlefield=[dt_trample],
+        p1_battlefield=[_ground("B1", 2, 2), _ground("B2", 2, 2)],
+    )
+    attacker, b1, b2 = state.battlefield
+    _simulate_combat_step(
+        state, [attacker.id], [(b1.id, attacker.id), (b2.id, attacker.id)]
+    )
+    assert b1 not in state.battlefield
+    assert b2 not in state.battlefield
+    assert state.players[1].life == 20 - 1
+
+
+def test_marked_lethal_resets_on_cleanup():
+    state = _arena(p0_battlefield=[_ground("Survivor", 3, 3)])
+    obj = state.battlefield[0]
+    obj.marked_lethal = True
+    run_cleanup_step(state)
+    assert obj.marked_lethal is False
+
+
+# --------------------------------------------------------------------------
 # Rule: HASTE — ignores summoning sickness
 # --------------------------------------------------------------------------
 

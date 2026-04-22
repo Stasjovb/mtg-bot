@@ -72,6 +72,7 @@ def run_cleanup_step(state: GameState) -> None:
         ap.graveyard.append(card)
     for obj in state.battlefield:
         obj.damage = 0
+        obj.marked_lethal = False
 
 
 def state_based_actions(state: GameState) -> bool:
@@ -89,13 +90,14 @@ def state_based_actions(state: GameState) -> bool:
         if not obj.printing.is_creature:
             continue
         tough = obj.printing.toughness or 0
-        if tough <= 0 or obj.damage >= tough:
+        if tough <= 0 or obj.damage >= tough or obj.marked_lethal:
             destroyed.append(obj)
 
     for obj in destroyed:
         state.battlefield.remove(obj)
         obj.zone = Zone.GRAVEYARD
         obj.damage = 0
+        obj.marked_lethal = False
         obj.tapped = False
         obj.attacking = False
         obj.blocking = None

@@ -67,41 +67,53 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
     # trample, leftover damage past all blockers is lost.
     damage_events: list[tuple[str, int, int]] = []  # (kind, target_id, amount)
 
+    # Each damage event carries the source's keywords so downstream handling
+    # (deathtouch marking) knows about them.
+    damage_events_typed: list[tuple[str, int, int, frozenset[str]]] = []
+
     for attacker in state.battlefield:
         if not attacker.attacking:
             continue
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_power = attacker.printing.power or 0
-        has_trample = "trample" in attacker.printing.keywords
+        attacker_kws = attacker.printing.keywords
+        has_trample = "trample" in attacker_kws
+        has_deathtouch = "deathtouch" in attacker_kws
         if not blockers:
-            damage_events.append(("player", defending_player_id, attacker_power))
+            damage_events_typed.append(
+                ("player", defending_player_id, attacker_power, attacker_kws)
+            )
         else:
             remaining = attacker_power
             for i, blocker in enumerate(blockers):
                 if remaining <= 0:
                     break
-                need = max(0, (blocker.printing.toughness or 0) - blocker.damage)
+                # Deathtouch: any 1 damage is lethal.
+                need = 1 if has_deathtouch else max(
+                    0, (blocker.printing.toughness or 0) - blocker.damage
+                )
                 is_last = i == len(blockers) - 1
                 if is_last and not has_trample:
-                    # Without trample, leftover dumps onto the last blocker.
                     assigned = remaining
                 else:
-                    # With trample (or earlier blocker): assign lethal only.
                     assigned = min(remaining, need)
-                damage_events.append(("creature", blocker.id, assigned))
+                damage_events_typed.append(
+                    ("creature", blocker.id, assigned, attacker_kws)
+                )
                 remaining -= assigned
-            # Trample: any remaining damage after assigning lethal to every
-            # blocker in order spills over to the defending player.
             if has_trample and remaining > 0:
-                damage_events.append(
-                    ("player", defending_player_id, remaining)
+                damage_events_typed.append(
+                    ("player", defending_player_id, remaining, attacker_kws)
                 )
             for blocker in blockers:
                 blocker_power = blocker.printing.power or 0
                 if blocker_power > 0:
-                    damage_events.append(("creature", attacker.id, blocker_power))
+                    damage_events_typed.append(
+                        ("creature", attacker.id, blocker_power,
+                         blocker.printing.keywords)
+                    )
 
-    for kind, target_id, amount in damage_events:
+    for kind, target_id, amount, source_kws in damage_events_typed:
         if amount <= 0:
             continue
         if kind == "player":
@@ -112,6 +124,8 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
             obj = next((o for o in state.battlefield if o.id == target_id), None)
             if obj is not None:
                 obj.damage += amount
+                if "deathtouch" in source_kws:
+                    obj.marked_lethal = True
 
 
 def clear_combat_state(state: GameState) -> None:

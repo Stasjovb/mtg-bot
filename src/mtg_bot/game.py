@@ -37,6 +37,9 @@ class GameObject:
     attacking: bool = False
     blocking: Optional[int] = None
     blocked_by: list[int] = field(default_factory=list)
+    # Marked lethal by a deathtouch source this turn — destroyed by SBAs
+    # regardless of damage vs toughness. Cleared when damage is cleared.
+    marked_lethal: bool = False
 
 
 @dataclass
