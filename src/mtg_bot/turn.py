@@ -110,6 +110,30 @@ def move_off_battlefield(
         _fire_dies_triggers(state, obj)
 
 
+def tap_permanent(state: GameState, obj: "GameObject") -> None:
+    """Tap ``obj`` and fire any of its "becomes_tapped" triggered abilities.
+
+    If the object is already tapped, this is a no-op (no re-trigger).
+    Current EoE cards using this trigger are untargeted — if a future card
+    requires a target we'd add the same target-selection branch used in
+    run_beginning_of_combat_triggers.
+    """
+    if obj.tapped:
+        return
+    obj.tapped = True
+    for ability in obj.printing.triggered_abilities:
+        if ability.trigger != "becomes_tapped":
+            continue
+        state.log.append(
+            f"{obj.printing.name}'s becomes-tapped ability triggers"
+        )
+        state.resolving_source = obj
+        try:
+            ability.effect.resolve(state, obj.controller_id, ())
+        finally:
+            state.resolving_source = None
+
+
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
     """Fire "Landfall — whenever a land you control enters" triggers on
     permanents the new land's controller controls.

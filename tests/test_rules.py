@@ -2881,6 +2881,55 @@ def test_dual_sun_technique_grants_double_strike_ueot():
     assert "double strike" in effective_keywords(state, bear)
 
 
+def test_starfighter_pilot_surveils_when_tapped_by_attacking():
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    pilot = EOE_CREATURES["Starfighter Pilot"]
+    state = _arena(p0_battlefield=[pilot])
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    # Seed library so surveil has something to look at
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    obj = state.battlefield[0]
+    obj.summoning_sick = False
+
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({obj.id})))
+    # Pilot tapped via attack → becomes_tapped triggers → surveil 1 resolved
+    assert obj.tapped
+    assert any("surveils" in e for e in state.log)
+
+
+def test_mechan_navigator_triggers_on_station_crew():
+    """Using Mechan Navigator as station crew taps it and fires its
+    becomes-tapped ability (draw, discard)."""
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    nav = EOE_CREATURES["Mechan Navigator"]
+    ship = EOE_CREATURES["Galvanizing Sawship"]
+    state = _arena(p0_battlefield=[nav, ship])
+    # Seed library for the draw
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Island"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    nav_obj = next(o for o in state.battlefield if o.printing.name == "Mechan Navigator")
+    ship_obj = next(o for o in state.battlefield if o.printing.name == "Galvanizing Sawship")
+
+    apply(state, ActivateStation(spacecraft_id=ship_obj.id, crew_id=nav_obj.id))
+    # Nav tapped for station → triggers: draw 1, discard 1
+    assert nav_obj.tapped
+    assert any("Mechan Navigator's becomes-tapped" in e for e in state.log)
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

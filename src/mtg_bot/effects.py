@@ -1265,6 +1265,7 @@ class TriggeredAbility:
             "beginning_of_combat": "At the beginning of combat on your turn",
             "dies": "When ~ dies",
             "landfall": "Landfall — Whenever a land you control enters",
+            "becomes_tapped": "Whenever ~ becomes tapped",
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:

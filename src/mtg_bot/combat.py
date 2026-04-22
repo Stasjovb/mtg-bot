@@ -49,12 +49,14 @@ def can_block(
 
 
 def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
+    from mtg_bot.turn import tap_permanent
+
     for oid in attacker_ids:
         obj = next(o for o in state.battlefield if o.id == oid)
         obj.attacking = True
         # Vigilance: attacking doesn't tap
         if "vigilance" not in effective_keywords(state, obj):
-            obj.tapped = True
+            tap_permanent(state, obj)
         state.log.append(f"{obj.printing.name} attacks")
 
 

@@ -238,7 +238,8 @@ def _activate_ability(
 
     # Tap-self (if cost requires it).
     if ability.cost.tap_self:
-        source.tapped = True
+        from mtg_bot.turn import tap_permanent
+        tap_permanent(state, source)
 
     # Target selection for the effect (if it targets).
     targets: tuple[tuple[str, int], ...] = ()
@@ -303,8 +304,10 @@ def _activate_station(
         # summoning-sick creatures, even for Station.
         return
 
+    from mtg_bot.turn import tap_permanent
+
     added = effective_power(state, crew)
-    crew.tapped = True
+    tap_permanent(state, crew)
     spacecraft.charge_counters += added
     state.log.append(
         f"{crew.printing.name} stations {spacecraft.printing.name} "

@@ -484,6 +484,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Starfighter Pilot: surveil 1 whenever this becomes tapped.
+        make_creature(
+            "Starfighter Pilot", "{1}{W}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=Surveil(amount=1),
+                ),
+            ),
+        ),
         # Honored Knight-Captain also has a {4}{W}{W}, Sacrifice: search
         # your library for an Equipment activated ability — not yet
         # implemented (no activated-ability or sacrifice framework).
@@ -695,6 +705,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ActivatedAbility(
                     cost=cost(mana="{2}", sacrifice_self=True),
                     effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
+        # Mechan Navigator: becomes-tapped → draw, discard.
+        make_creature(
+            "Mechan Navigator", "{1}{U}", 2, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=Sequence(effects=(
+                        DrawCards(amount=1),
+                        DiscardSelf(amount=1),
+                    )),
                 ),
             ),
         ),
