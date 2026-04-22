@@ -110,6 +110,29 @@ def move_off_battlefield(
         _fire_dies_triggers(state, obj)
 
 
+def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
+    """Fire "Landfall — whenever a land you control enters" triggers on
+    permanents the new land's controller controls.
+
+    Called from every code path that puts a land onto the battlefield
+    (PlayLand, SearchLibraryForBasicLandTapped, etc.).
+    """
+    controller = new_land.controller_id
+    # Snapshot to avoid mid-iteration surprises if a trigger ETBs something.
+    for obj in list(state.battlefield):
+        if obj.controller_id != controller:
+            continue
+        for ability in obj.printing.triggered_abilities:
+            if ability.trigger != "landfall":
+                continue
+            state.log.append(f"{obj.printing.name}'s landfall triggers")
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, obj.controller_id, ())
+            finally:
+                state.resolving_source = None
+
+
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
     """Run "dies" triggered abilities on ``dead``. Fires directly (no stack)
     for consistency with other trigger events in this engine. Source is

@@ -571,6 +571,28 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Glacier Godmaw: Trample; ETB create a Lander; Landfall pumps +1/+1
+        # and grants vigilance+haste until end of turn.
+        make_creature(
+            "Glacier Godmaw", "{5}{G}{G}", 6, 6,
+            keywords={"trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=PumpCreaturesYouControlUntilEOT(
+                        power_bonus=1, toughness_bonus=1,
+                        granted_keywords=frozenset({"vigilance", "haste"}),
+                    ),
+                ),
+            ),
+        ),
         # Blue
         make_creature(
             "Quantum Riddler", "{3}{U}{U}", 4, 6,

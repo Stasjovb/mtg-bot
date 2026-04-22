@@ -2227,6 +2227,76 @@ def test_create_token_each_player_skips_lost_players():
     assert controllers == [0]
 
 
+def test_landfall_fires_when_you_play_a_land():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords, effective_power
+
+    godmaw = EOE_CREATURES["Glacier Godmaw"]
+    state = _arena(
+        p0_hand=[BASIC_LANDS["Forest"]],
+        p0_battlefield=[godmaw, SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    god = next(o for o in state.battlefield if o.printing.name == "Glacier Godmaw")
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    forest = state.players[0].hand[0]
+
+    apply(state, PlayLand(forest.id), player_id=0)
+    # Landfall triggered: +1/+1 + vigilance + haste UEOT to P0's creatures.
+    assert effective_power(state, bear) == 3
+    assert "haste" in effective_keywords(state, bear)
+    assert "vigilance" in effective_keywords(state, bear)
+    assert effective_power(state, god) == 7
+
+
+def test_landfall_does_not_fire_for_opponents_land():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    godmaw = EOE_CREATURES["Glacier Godmaw"]
+    state = _arena(
+        p0_battlefield=[godmaw],
+        p1_hand=[BASIC_LANDS["Forest"]],
+    )
+    god = state.battlefield[0]
+    forest = state.players[1].hand[0]
+    apply(state, PlayLand(forest.id), player_id=1)
+    # No pump — the land entered under P1, not P0.
+    assert effective_power(state, god) == 6
+
+
+def test_landfall_also_fires_from_lander_library_search():
+    """Using a Lander to ramp a basic land should also trigger Landfall."""
+    from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.game import effective_power
+    import random
+
+    godmaw = EOE_CREATURES["Glacier Godmaw"]
+    state = _arena(p0_battlefield=[godmaw])
+    # Populate mana for the {2} activation
+    for _ in range(2):
+        state.battlefield.append(
+            state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD)
+        )
+    # Put a Forest in library for the search to find
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    # Spawn a Lander token
+    lander = state.new_object(TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD)
+    lander.summoning_sick = False
+    state.battlefield.append(lander)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    god = next(o for o in state.battlefield if o.printing.name == "Glacier Godmaw")
+    apply(state, ActivateAbility(source_id=lander.id, ability_index=0), player_id=0)
+    resolve_top_of_stack(state)
+    # Landfall should have pumped Godmaw +1/+1 when the Forest entered
+    assert effective_power(state, god) == 7
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is

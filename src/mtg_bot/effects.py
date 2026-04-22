@@ -277,6 +277,7 @@ class SearchLibraryForBasicLandTapped(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_landfall_triggers
 
         p = state.player_by_id(controller_id)
         land = next((c for c in p.library if c.printing.is_basic_land), None)
@@ -288,11 +289,13 @@ class SearchLibraryForBasicLandTapped(Effect):
         p.library.remove(land)
         land.zone = Zone.BATTLEFIELD
         land.tapped = True
+        land.controller_id = controller_id
         state.battlefield.append(land)
         state.log.append(
             f"P{controller_id} puts {land.printing.name} onto the "
             f"battlefield tapped"
         )
+        fire_landfall_triggers(state, land)
 
     def describe(self) -> str:
         return (
@@ -1033,6 +1036,7 @@ class TriggeredAbility:
             "etb": "When ~ enters the battlefield",
             "beginning_of_end_step": "At the beginning of your end step",
             "dies": "When ~ dies",
+            "landfall": "Landfall — Whenever a land you control enters",
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:

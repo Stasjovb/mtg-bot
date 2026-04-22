@@ -146,6 +146,8 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
 
 
 def _play_land(state: GameState, player_id: int, card_id: int) -> None:
+    from mtg_bot.turn import fire_landfall_triggers
+
     p = state.player_by_id(player_id)
     card = next(c for c in p.hand if c.id == card_id)
     p.hand.remove(card)
@@ -155,6 +157,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
+    fire_landfall_triggers(state, card)
 
 
 def _cast_spell(
