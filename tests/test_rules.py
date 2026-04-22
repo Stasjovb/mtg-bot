@@ -3199,6 +3199,75 @@ def test_depressurize_noop_paths():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_shattered_wings_legal_targets_filter():
+    """Legal targets: artifacts, creatures with flying. Not ground creatures."""
+    from mtg_bot.effects import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = _arena()
+    flyer = state.new_object(
+        SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(flyer)
+    ground = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ground)
+    artifact = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(artifact)
+
+    e = DestroyTargetArtifactEnchantmentOrFlyingCreature()
+    assert e.requires_target() is True
+    assert "artifact" in e.describe()
+    legal = {tid for _, tid in e.legal_targets(state, controller_id=0)}
+    assert flyer.id in legal
+    assert artifact.id in legal
+    assert ground.id not in legal
+
+
+def test_shattered_wings_destroys_flyer():
+    from mtg_bot.effects import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+
+    state = _arena()
+    flyer = state.new_object(
+        SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(flyer)
+
+    e = DestroyTargetArtifactEnchantmentOrFlyingCreature()
+    e.resolve(state, controller_id=0, targets=(("permanent", flyer.id),))
+    assert flyer not in state.battlefield
+
+
+def test_shattered_wings_noop_paths_and_lost_legality():
+    from mtg_bot.effects import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+
+    state = _arena()
+    e = DestroyTargetArtifactEnchantmentOrFlyingCreature()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+    # Target (a Wild Bear with temporarily-granted flying) loses flying
+    # between cast and resolve → fizzles.
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    victim.temp_keywords = frozenset({"flying"})
+    state.battlefield.append(victim)
+    victim.temp_keywords = frozenset()  # lost flying
+    e.resolve(state, controller_id=0, targets=(("permanent", victim.id),))
+    assert victim in state.battlefield
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,

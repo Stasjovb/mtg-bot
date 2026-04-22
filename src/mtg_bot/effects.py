@@ -888,6 +888,65 @@ class DepressurizeEffect(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
+    """Destroy target artifact, enchantment, or creature with flying.
+
+    Matches Shattered Wings' destroy clause. Uses the "permanent" target
+    kind. Flying check uses effective_keywords so anthem-granted flying
+    (if ever implemented) and temp_keywords both count.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def _is_legal(self, state: "GameState", obj: "GameObject") -> bool:
+        from mtg_bot.game import effective_keywords
+
+        if obj.printing.is_artifact:
+            return True
+        if "Enchantment" in obj.printing.card_types:
+            return True
+        if obj.printing.is_creature and "flying" in effective_keywords(state, obj):
+            return True
+        return False
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if self._is_legal(state, o)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not self._is_legal(state, obj):
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return (
+            "destroy target artifact, enchantment, or creature with flying"
+        )
+
+
+@dataclass(frozen=True)
 class ExileTargetCreature(Effect):
     """Exile any target creature on the battlefield.
 

@@ -42,6 +42,7 @@ from mtg_bot.effects import (
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
     DepressurizeEffect,
+    DestroyTargetArtifactEnchantmentOrFlyingCreature,
     SearchLibraryForBasicLandTapped,
     Sequence,
     StaticAbility,
@@ -1064,6 +1065,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Depressurize", "{1}{B}",
             effect=DepressurizeEffect(power_penalty=3),
+        ),
+        # Shattered Wings — destroy artifact/enchantment/creature-with-flying,
+        # then Surveil 1.
+        make_sorcery(
+            "Shattered Wings", "{2}{G}",
+            effect=Sequence(effects=(
+                DestroyTargetArtifactEnchantmentOrFlyingCreature(),
+                Surveil(amount=1),
+            )),
         ),
     ]
 }
