@@ -11,7 +11,7 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
         if o.controller_id == player_id
         and o.printing.is_creature
         and not o.tapped
-        and not o.summoning_sick
+        and (not o.summoning_sick or "haste" in o.printing.keywords)
     ]
 
 

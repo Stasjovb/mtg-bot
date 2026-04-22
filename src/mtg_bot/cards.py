@@ -162,6 +162,8 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature("Blood Warrior", "{1}{R}", 2, 2),
         make_creature("Stone Ogre", "{2}{R}", 3, 3),
         make_creature("Dragon Whelp", "{2}{R}", 2, 2, keywords={"flying"}),
+        make_creature("Goblin Runner", "{R}", 2, 1, keywords={"haste"}),
+        make_creature("Charging Warrior", "{2}{R}", 3, 2, keywords={"haste"}),
         # Green
         make_creature("Sapling", "{G}", 1, 2),
         make_creature("Wild Bear", "{1}{G}", 2, 2),

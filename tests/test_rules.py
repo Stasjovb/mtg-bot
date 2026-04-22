@@ -524,6 +524,41 @@ def test_vigilance_attacker_still_eligible_blocker_this_turn():
     assert guard in eligible_blockers(state, player_id=0)
 
 
+# --------------------------------------------------------------------------
+# Rule: HASTE — ignores summoning sickness
+# --------------------------------------------------------------------------
+
+
+def _haster(name="Test Haster", power=2, toughness=1):
+    return make_creature(name, "{R}", power, toughness, keywords={"haste"})
+
+
+def test_haste_creature_can_attack_while_summoning_sick():
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[_haster()])
+    runner = state.battlefield[0]
+    runner.summoning_sick = True  # just entered this turn
+    assert runner in eligible_attackers(state, player_id=0)
+
+
+def test_haste_creature_actually_attacks_and_deals_damage():
+    state = _arena(p0_battlefield=[_haster()])
+    runner = state.battlefield[0]
+    runner.summoning_sick = True
+    _simulate_combat_step(state, [runner.id])
+    assert state.players[1].life == 20 - 2
+
+
+def test_non_haste_sick_creature_is_filtered_out_of_attackers():
+    state = _arena(p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]])
+    bear = state.battlefield[0]
+    bear.summoning_sick = True
+    state.step = Step.DECLARE_ATTACKERS
+    apply(state, DeclareAttackers(attacker_ids=frozenset({bear.id})))
+    assert bear.attacking is False
+
+
 def test_flier_blocked_by_multiple_eligible_blockers():
     # Flier attacker, two reach blockers — both can block.
     state = _arena(
