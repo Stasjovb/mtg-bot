@@ -24,7 +24,7 @@ class PlayLand(Action):
 
 
 @dataclass(frozen=True)
-class CastCreature(Action):
+class CastSpell(Action):
     card_id: int
 
 
@@ -96,8 +96,8 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
     if isinstance(action, PlayLand):
         _play_land(state, player_id, action.card_id)
         return
-    if isinstance(action, CastCreature):
-        _cast_creature(state, player_id, action.card_id)
+    if isinstance(action, CastSpell):
+        _cast_spell(state, player_id, action.card_id)
         return
     if isinstance(action, DeclareAttackers):
         _declare_attackers(state, player_id, action.attacker_ids)
@@ -120,7 +120,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     state.log.append(f"P{player_id} plays {card.printing.name}")
 
 
-def _cast_creature(state: GameState, player_id: int, card_id: int) -> None:
+def _cast_spell(state: GameState, player_id: int, card_id: int) -> None:
     p = state.player_by_id(player_id)
     card = next(c for c in p.hand if c.id == card_id)
     p.hand.remove(card)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mtg_bot.actions import Action, CastCreature, PassPriority, PlayLand, can_pay_cost
+from mtg_bot.actions import Action, CastSpell, PassPriority, PlayLand, can_pay_cost
 from mtg_bot.game import GameState
 from mtg_bot.turn import MAIN_STEPS
 
@@ -34,6 +34,6 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if card.printing.is_creature and can_pay_cost(
             state, player_id, card.printing.mana_cost
         ):
-            actions.append(CastCreature(card.id))
+            actions.append(CastSpell(card.id))
 
     return actions

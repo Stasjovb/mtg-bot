@@ -3,7 +3,7 @@
 import pytest
 
 from mtg_bot.actions import (
-    CastCreature,
+    CastSpell,
     PassPriority,
     PlayLand,
     apply_action,

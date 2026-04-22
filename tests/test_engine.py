@@ -2,7 +2,7 @@
 
 from mtg_bot import apply, legal_moves
 from mtg_bot.actions import (
-    CastCreature,
+    CastSpell,
     DeclareAttackers,
     DeclareBlockers,
     PassPriority,
@@ -66,7 +66,7 @@ def test_apply_cast_creature_puts_on_stack():
         battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
     )
     bear = state.players[0].hand[0]
-    apply(state, CastCreature(bear.id))
+    apply(state, CastSpell(bear.id))
     assert state.stack
     assert state.stack[0].source is bear
 

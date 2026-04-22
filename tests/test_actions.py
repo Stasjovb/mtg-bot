@@ -1,5 +1,5 @@
 from mtg_bot.actions import (
-    CastCreature,
+    CastSpell,
     PlayLand,
     apply_action,
     auto_tap_for_cost,
@@ -55,7 +55,7 @@ def test_cast_creature_lands_go_tapped_and_card_on_stack():
         player_battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
     )
     bear = state.players[0].hand[0]
-    apply_action(state, 0, CastCreature(bear.id))
+    apply_action(state, 0, CastSpell(bear.id))
     assert bear.zone == Zone.STACK
     assert len(state.stack) == 1
     assert bear not in state.players[0].hand
@@ -68,7 +68,7 @@ def test_resolve_creature_puts_it_on_battlefield():
         player_battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
     )
     bear = state.players[0].hand[0]
-    apply_action(state, 0, CastCreature(bear.id))
+    apply_action(state, 0, CastSpell(bear.id))
     resolve_top_of_stack(state)
     assert bear.zone == Zone.BATTLEFIELD
     assert bear in state.battlefield

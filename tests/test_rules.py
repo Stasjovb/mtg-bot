@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from mtg_bot import apply, legal_moves
 from mtg_bot.actions import (
-    CastCreature,
+    CastSpell,
     DeclareAttackers,
     DeclareBlockers,
     PassPriority,
@@ -92,7 +92,7 @@ def _find_playland_for(state, name):
 
 def _find_cast_for(state, name):
     for m in legal_moves(state):
-        if isinstance(m, CastCreature):
+        if isinstance(m, CastSpell):
             card = next(c for c in state.players[0].hand if c.id == m.card_id)
             if card.printing.name == name:
                 return m
@@ -377,7 +377,7 @@ def test_cast_puts_creature_on_stack_before_resolving():
         p0_battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
     )
     bear = state.players[0].hand[0]
-    apply(state, CastCreature(bear.id))
+    apply(state, CastSpell(bear.id))
     assert bear.zone == Zone.STACK
     assert len(state.stack) == 1
     assert isinstance(state.stack[0], StackItem)
@@ -395,7 +395,7 @@ def test_cast_creature_enters_with_summoning_sickness():
         p0_battlefield=[BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
     )
     bear = state.players[0].hand[0]
-    apply(state, CastCreature(bear.id))
+    apply(state, CastSpell(bear.id))
     from mtg_bot.actions import resolve_top_of_stack
     resolve_top_of_stack(state)
     assert bear.zone == Zone.BATTLEFIELD
@@ -437,7 +437,7 @@ def test_casting_etb_creature_enters_and_triggers_ability_on_stack():
         p0_life=20,
     )
     wisp = state.players[0].hand[0]
-    apply(state, CastCreature(wisp.id))
+    apply(state, CastSpell(wisp.id))
     # Spell on stack
     assert len(state.stack) == 1
     # Resolve the spell → creature enters AND the ETB trigger stacks
@@ -459,7 +459,7 @@ def test_etb_lifegain_resolves_and_adjusts_controller_life():
         p0_life=15,
     )
     wisp = state.players[0].hand[0]
-    apply(state, CastCreature(wisp.id))
+    apply(state, CastSpell(wisp.id))
     resolve_top_of_stack(state)  # spell → creature on bf + trigger stacked
     resolve_top_of_stack(state)  # ability → life gain
     assert state.players[0].life == 15 + 3
@@ -490,7 +490,7 @@ def test_multiple_etb_triggers_stack_in_printing_order():
         p0_hand=[card], p0_battlefield=[BASIC_LANDS["Plains"]], p0_life=10,
     )
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell resolves → 2 abilities on stack
     assert len(state.stack) == 2
     # Stack resolves LIFO: last-pushed (gain 3) resolves first
@@ -520,7 +520,7 @@ def test_etb_draw_card_gives_controller_a_card():
 
     scholar = state.players[0].hand[0]
     hand_size_before = len(state.players[0].hand) - 1  # after cast
-    apply(state, CastCreature(scholar.id))
+    apply(state, CastSpell(scholar.id))
     resolve_top_of_stack(state)  # spell → creature on bf + trigger stacked
     resolve_top_of_stack(state)  # ability → draw 1
     # One more card now in hand than we had after the cast
@@ -549,7 +549,7 @@ def test_etb_each_player_draws_gives_both_players_a_card():
     p1_hand_before = len(state.players[1].hand)
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     resolve_top_of_stack(state)  # ability
 
@@ -599,7 +599,7 @@ def test_virus_beetle_enters_and_stacks_discard_trigger_with_target():
     card = state.new_object(BASIC_LANDS["Plains"], owner_id=1, zone=Zone.HAND)
     state.players[1].hand.append(card)
 
-    apply(state, CastCreature(beetle.id))
+    apply(state, CastSpell(beetle.id))
     resolve_top_of_stack(state)  # spell → creature + trigger stacked
     assert len(state.stack) == 1
     assert state.stack[0].ability is not None
@@ -623,7 +623,7 @@ def test_virus_beetle_fizzles_when_opponent_has_already_lost():
         state.battlefield.append(
             state.new_object(BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD)
         )
-    apply(state, CastCreature(beetle.id))
+    apply(state, CastSpell(beetle.id))
     resolve_top_of_stack(state)  # spell resolves; no legal target → no trigger stacked
     assert not state.stack
     assert any("fizzles" in entry for entry in state.log)
@@ -640,7 +640,7 @@ def test_virus_beetle_trigger_does_nothing_if_target_has_empty_hand():
     )
     # Opponent hand is empty
 
-    apply(state, CastCreature(beetle.id))
+    apply(state, CastSpell(beetle.id))
     resolve_top_of_stack(state)  # spell
     resolve_top_of_stack(state)  # ability resolves but hand is empty
     assert len(state.players[1].graveyard) == 0
@@ -681,7 +681,7 @@ def test_germinating_wurm_etb_gains_two_life():
         p0_life=15,
     )
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     resolve_top_of_stack(state)  # ability
     assert state.players[0].life == 15 + 2
@@ -701,7 +701,7 @@ def test_quantum_riddler_etb_draws_a_card():
         obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
         state.players[0].library.append(obj)
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     assert len(state.players[0].hand) == 0
     resolve_top_of_stack(state)  # draw trigger
@@ -729,7 +729,7 @@ def test_real_virus_beetle_makes_every_opponent_discard():
     state.players[1].hand.append(p1_card)
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     # The real Virus Beetle is untargeted, so no target was chosen
     assert state.stack[0].targets == ()
@@ -758,7 +758,7 @@ def test_nebula_dragon_etb_deals_3_damage_to_chosen_target():
     initial_p1_life = state.players[1].life
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell → dragon enters + trigger stacked
     # Target is recorded on the stack item
     assert len(state.stack) == 1
@@ -796,7 +796,7 @@ def test_nebula_dragon_fizzles_if_no_legal_targets():
         p.agent = RandomAgent(rng=random.Random(1))
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     # Legal targets = P0 (self) + dragon (itself) — ability should stack
     assert len(state.stack) == 1
@@ -823,7 +823,7 @@ def test_nova_hellkite_etb_pings_an_enemy_creature():
     state.battlefield.append(goblin)
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     assert len(state.stack) == 1
     # Only legal target was the opposing 2/1
@@ -850,7 +850,7 @@ def test_nova_hellkite_fizzles_with_no_enemy_creatures():
         p.agent = RandomAgent(rng=random.Random(0))
     # No opposing creatures
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell; ability tries to trigger but fizzles
     assert not state.stack
     assert any("fizzles" in entry for entry in state.log)
@@ -873,7 +873,7 @@ def test_rayblade_trooper_etb_can_counter_itself():
         p.agent = RandomAgent(rng=random.Random(0))
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell → on bf; trigger stacks
     # Target must be Rayblade itself (the only creature P0 controls)
     assert state.stack[0].targets == (("creature", obj.id),)
@@ -903,7 +903,7 @@ def test_rayblade_trooper_etb_boosts_existing_creature():
         p.agent = RandomAgent(rng=random.Random(0))
 
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     # Chosen target must be an own creature
     kind, target_id = state.stack[0].targets[0]
@@ -928,7 +928,7 @@ def test_honored_knight_captain_etb_creates_a_soldier_token():
         p0_battlefield=[BASIC_LANDS["Plains"]] * 2,
     )
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # captain enters
     resolve_top_of_stack(state)  # token creation resolves
     tokens = [o for o in state.battlefield if o.printing.is_token]
@@ -950,7 +950,7 @@ def test_knight_luminary_etb_creates_a_soldier_token():
         p0_battlefield=[BASIC_LANDS["Plains"]] * 4,
     )
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)
     resolve_top_of_stack(state)
     tokens = [o for o in state.battlefield if o.printing.is_token]
@@ -970,7 +970,7 @@ def test_soldier_token_dies_in_combat_and_vanishes():
         p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],  # 2/2
     )
     obj = state.players[0].hand[0]
-    apply(state, CastCreature(obj.id))
+    apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # captain enters
     resolve_top_of_stack(state)  # token created
 
