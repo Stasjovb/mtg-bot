@@ -21,6 +21,7 @@ from mtg_bot.effects import (
     EachOpponentDiscards,
     EachPlayerDraws,
     Effect,
+    ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
     TargetOpponentDiscards,
@@ -416,6 +417,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # plays at its full printed cost only.
         make_sorcery(
             "Vote Out", "{3}{B}", effect=DestroyTargetCreature(),
+        ),
+        # Real Gravkill reads "exile target creature or Spacecraft" — since
+        # Spacecraft aren't implemented yet, ours only targets creatures.
+        make_instant(
+            "Gravkill", "{3}{B}", effect=ExileTargetCreature(),
         ),
     ]
 }

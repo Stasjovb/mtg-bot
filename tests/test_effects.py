@@ -12,6 +12,7 @@ from mtg_bot.effects import (
     EachOpponentDiscards,
     EachPlayerDraws,
     Effect,
+    ExileTargetCreature,
     GainLife,
     PutPlusOneCounterOnCreatureYouControl,
     Sequence,
@@ -583,6 +584,51 @@ def test_destroy_target_creature_empty_or_wrong_kind_is_noop():
 
 def test_destroy_target_creature_describe():
     assert DestroyTargetCreature().describe() == "destroy target creature"
+
+
+def test_exile_target_creature_moves_to_exile_zone():
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(bear)
+
+    ExileTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear not in state.battlefield
+    assert bear in state.players[1].exile  # owner's exile, not controller's
+    assert bear.zone == Zone.EXILE
+
+
+def test_exile_target_creature_on_token_ceases_to_exist():
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    token = state.new_object(
+        TOKEN_PRINTINGS["Human Soldier"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(token)
+    ExileTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", token.id),)
+    )
+    assert token not in state.battlefield
+    assert token not in state.players[0].exile
+
+
+def test_exile_target_creature_empty_or_wrong_kind_is_noop():
+    state = GameState()
+    state.players.append(Player(id=0))
+    ExileTargetCreature().resolve(state, 0, targets=())
+    ExileTargetCreature().resolve(state, 0, targets=(("player", 0),))
+    ExileTargetCreature().resolve(state, 0, targets=(("creature", 99999),))
+
+
+def test_exile_target_creature_describe():
+    assert ExileTargetCreature().describe() == "exile target creature"
 
 
 def test_sequence_describe_joins_sub_effects():

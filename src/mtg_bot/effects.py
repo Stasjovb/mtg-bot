@@ -269,6 +269,50 @@ class DestroyTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class ExileTargetCreature(Effect):
+    """Exile any target creature on the battlefield.
+
+    Matches oracle text like "exile target creature" (Gravkill, minus its
+    "or Spacecraft" option since Spacecraft aren't implemented yet). Tokens
+    exiled cease to exist per rule 704.5d.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        state.log.append(f"{obj.printing.name} is exiled")
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return "exile target creature"
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnCreatureYouControl(Effect):
     """Put N +1/+1 counter(s) on target creature you control.
 

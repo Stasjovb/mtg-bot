@@ -1168,6 +1168,31 @@ def test_vote_out_destroys_a_creature():
     assert spell in state.players[0].graveyard
 
 
+def test_gravkill_exiles_a_creature():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    import random
+
+    gravkill = EOE_SPELLS["Gravkill"]
+    state = _arena(
+        p0_hand=[gravkill],
+        p0_battlefield=[BASIC_LANDS["Swamp"]] * 4,
+        p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
+    )
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    assert bear not in state.battlefield
+    # In P1's exile, NOT graveyard
+    assert bear in state.players[1].exile
+    assert bear not in state.players[1].graveyard
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
