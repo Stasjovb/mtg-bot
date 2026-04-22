@@ -3,8 +3,8 @@
 Run locally on this machine only:
     python -m mtg_bot.ui
 Expose on Tailscale / LAN (see scripts/serve.ps1 for the Windows helper):
-    python -m mtg_bot.ui --host 0.0.0.0 --port 5000
-Then visit http://<tailscale-hostname-or-ip>:5000/ from any tailnet peer.
+    python -m mtg_bot.ui --host 0.0.0.0 --port 5002
+Then visit http://<tailscale-hostname-or-ip>:5002/ from any tailnet peer.
 """
 
 from __future__ import annotations
@@ -223,8 +223,8 @@ def parse_args(argv: Optional[list[str]] = None) -> CliArgs:
     parser.add_argument(
         "--port",
         type=int,
-        default=5000,
-        help="Port to listen on (default: 5000).",
+        default=5002,
+        help="Port to listen on (default: 5002).",
     )
     ns = parser.parse_args(argv)
     return CliArgs(host=ns.host, port=ns.port)

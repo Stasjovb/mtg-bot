@@ -107,7 +107,7 @@ def test_play_each_color_pair(client, c1, c2):
 
 def test_parse_args_defaults():
     args = parse_args([])
-    assert args == CliArgs(host="127.0.0.1", port=5000)
+    assert args == CliArgs(host="127.0.0.1", port=5002)
 
 
 def test_parse_args_overrides():

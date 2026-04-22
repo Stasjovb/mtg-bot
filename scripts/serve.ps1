@@ -11,7 +11,7 @@
 # allowed through Windows Defender Firewall. Re-run as admin once to fix.
 
 param(
-    [int]$Port = 5000
+    [int]$Port = 5002
 )
 
 $ErrorActionPreference = "Stop"
