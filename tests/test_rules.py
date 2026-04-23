@@ -4949,6 +4949,38 @@ def test_melded_moxite_etb_loot_and_sac_for_robot():
     assert robots[0].tapped is True
 
 
+def test_dubious_delicacy_etb_and_activated():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    dd = state.new_object(
+        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(dd)
+    assert "flash" in dd.printing.keywords
+
+    # Fire ETB (-3/-3 UEOT on victim).
+    etb = next(
+        ab for ab in dd.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = dd
+    etb.effect.resolve(state, 0, (("creature", victim.id),))
+    # Bear was 2/2, now -1/-1 — SBA kills it.
+    from mtg_bot.turn import state_based_actions
+    state_based_actions(state)
+    assert victim not in state.battlefield
+
+    # Activated: gain 3 life.
+    gain_act = dd.printing.activated_abilities[0]
+    life_before = state.players[0].life
+    gain_act.effect.resolve(state, 0)
+    assert state.players[0].life == life_before + 3
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

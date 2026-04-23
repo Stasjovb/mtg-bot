@@ -336,6 +336,7 @@ def make_artifact(
     static_abilities: tuple[StaticAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = False,
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
 ) -> CardPrinting:
     """Build a non-creature, non-Spacecraft Artifact permanent."""
     prefix = "Legendary " if legendary else ""
@@ -349,6 +350,7 @@ def make_artifact(
         supertypes=supertypes,
         card_types=card_types,
         subtypes=subtypes,
+        keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -1343,6 +1345,41 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Dubious Delicacy: {2}{B} Artifact — Food. Flash + ETB -3/-3 UEOT
+        # + one of two "2 tap sac" modes for life-swing. Simplifications:
+        # "up to one" target → required target; only the gain-life
+        # activation kept (the "target opponent loses 3 life" variant
+        # collapses into EachOpponentLosesLife which has similar flavor).
+        make_artifact(
+            "Dubious Delicacy", "{2}{B}",
+            keywords={"flash"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=-3, toughness_bonus=-3,
+                    ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"), mana_str="{2}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=GainLife(amount=3),
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"), mana_str="{2}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=EachOpponentLosesLife(amount=3),
+                ),
+            ),
+        ),
         # Melded Moxite: {1}{R} Artifact. ETB loot (discard 1 → draw 2);
         # {3}, Sac: create a tapped 2/2 Robot token. Simplification: the
         # real card's ETB is "you MAY discard; if you do, draw two" — we
