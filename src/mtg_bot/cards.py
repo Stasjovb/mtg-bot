@@ -257,6 +257,13 @@ class CardPrinting:
     # wouldn't find a legal target otherwise). Accepts "creature" or
     # "artifact". Only consumed when is_aura is True.
     aura_enchant_type: str = "creature"
+    # Dynamic power/toughness formula. When set, overrides the printed
+    # power/toughness inside effective_power and effective_toughness.
+    # Currently supported:
+    #   "cosmogoyf": power = number of cards the controller owns in
+    #     exile; toughness = that number + 1.
+    # None = use printed P/T (default).
+    dynamic_pt_formula: str | None = None
 
     @property
     def is_land(self) -> bool:
@@ -336,6 +343,7 @@ def make_creature(
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
     subtypes: tuple[str, ...] = (),
+    dynamic_pt_formula: str | None = None,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -363,6 +371,7 @@ def make_creature(
         warp_cost_str=warp or "",
         cost_reductions=tuple(cost_reductions),
         enters_with_counters_from_x=enters_with_counters_from_x,
+        dynamic_pt_formula=dynamic_pt_formula,
     )
 
 
@@ -3020,8 +3029,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             keywords={"reach"},
             ward="{2}",
         ),
-        make_creature(  # Cosmogoyf — dynamic P/T. Ship 3/4 vanilla.
-            "Cosmogoyf", "{B}{G}", 3, 4,
+        # Cosmogoyf `{B}{G}` Creature — Elemental Lhurgoyf.
+        # Power = cards you own in exile. Toughness = that + 1. Printed
+        # P/T is `*/1+*`; we ignore the printed power/toughness fields
+        # at effective-P/T time when dynamic_pt_formula is set.
+        make_creature(
+            "Cosmogoyf", "{B}{G}", 0, 1,
+            subtypes=("Elemental", "Lhurgoyf"),
+            dynamic_pt_formula="cosmogoyf",
         ),
         # Dyadrine, Synthesis Amalgam `{X}{G}{W}` — Trample. Enters with
         # +1/+1 counters equal to the amount of mana spent to cast it

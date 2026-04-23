@@ -146,9 +146,31 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     return kws | granted | obj.temp_keywords
 
 
+def _dynamic_base_pt(
+    state: GameState, obj: GameObject
+) -> tuple[int, int] | None:
+    """Return (base_power, base_toughness) for dynamic-P/T creatures,
+    or None if this creature has no dynamic formula and should use
+    its printed P/T.
+    """
+    formula = obj.printing.dynamic_pt_formula
+    if formula is None:
+        return None
+    if formula == "cosmogoyf":
+        # Cards owned in exile (by the creature's controller).
+        controller = state.player_by_id(obj.controller_id)
+        n = len(controller.exile)
+        return n, n + 1
+    return None  # pragma: no cover - defensive fallback
+
+
 def effective_power(state: GameState, obj: GameObject) -> int:
-    """Power including +1/+1 counters, static bonuses, and UEOT pumps."""
-    base = obj.printing.power or 0
+    """Power including +1/+1 counters, static bonuses, and UEOT pumps.
+    Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
+    instead of reading ``printing.power``.
+    """
+    dynamic = _dynamic_base_pt(state, obj)
+    base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
     power_bonus, _, _ = _static_bonuses(state, obj)
     return (
         base + obj.plus_one_counters + power_bonus + obj.temp_power_bonus
@@ -156,8 +178,12 @@ def effective_power(state: GameState, obj: GameObject) -> int:
 
 
 def effective_toughness(state: GameState, obj: GameObject) -> int:
-    """Toughness including +1/+1 counters, static bonuses, and UEOT pumps."""
-    base = obj.printing.toughness or 0
+    """Toughness including +1/+1 counters, static bonuses, and UEOT pumps.
+    Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
+    instead of reading ``printing.toughness``.
+    """
+    dynamic = _dynamic_base_pt(state, obj)
+    base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
     _, toughness_bonus, _ = _static_bonuses(state, obj)
     return (
         base + obj.plus_one_counters + toughness_bonus + obj.temp_toughness_bonus
