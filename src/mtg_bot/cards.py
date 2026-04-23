@@ -925,6 +925,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
+        # your end step, if [void active], you draw a card and lose 1 life."
+        # We model artifact-ness as a plain creature (same shortcut as Edge
+        # Rover) because nothing currently implemented cares.
+        make_creature(
+            "Voidforged Titan", "{4}{B}", 5, 4,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    requires_void=True,
+                    effect=Sequence(effects=(
+                        DrawCards(amount=1),
+                        LoseLife(amount=1),
+                    )),
+                ),
+            ),
+        ),
         # Green
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,

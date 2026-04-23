@@ -3550,6 +3550,33 @@ def test_invasive_maneuvers_noop_paths():
     e.resolve(state, controller_id=0, targets=(("player", 0),))
 
 
+def test_voidforged_titan_fires_only_when_void_active():
+    """End-step Void trigger draws + loses 1 when void is active."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    # Stock P0's library so the draw has something to pull.
+    _stock_library(state, 0, count=5)
+    titan = state.new_object(
+        EOE_CREATURES["Voidforged Titan"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(titan)
+
+    # Void NOT active → no draw/life change.
+    hand_before = len(state.players[0].hand)
+    life_before = state.players[0].life
+    run_beginning_of_end_step_triggers(state)
+    assert len(state.players[0].hand) == hand_before
+    assert state.players[0].life == life_before
+
+    # Flip void active (a nonland permanent left the battlefield this turn).
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert len(state.players[0].hand) == hand_before + 1
+    assert state.players[0].life == life_before - 1
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,
