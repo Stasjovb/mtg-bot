@@ -4346,6 +4346,61 @@ def test_put_charge_counters_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+def test_dockworker_drone_etb_counter_and_dies_transfer():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    drone = state.new_object(
+        EOE_CREATURES["Dockworker Drone"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(drone)
+    # Fire ETB to put the counter.
+    etb = next(
+        ab for ab in drone.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = drone
+    etb.effect.resolve(state, 0)
+    assert drone.plus_one_counters == 1
+
+    # Add a target creature.
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+
+    # Fire dies trigger — counter moves to ally.
+    dies = next(
+        ab for ab in drone.printing.triggered_abilities if ab.trigger == "dies"
+    )
+    state.resolving_source = drone
+    dies.effect.resolve(state, 0, (("creature", ally.id),))
+    assert drone.plus_one_counters == 0
+    assert ally.plus_one_counters == 1
+
+
+def test_move_self_counters_noop_paths():
+    from mtg_bot.effects import MoveSelfCountersToTargetCreatureYouControl
+
+    state = _arena()
+    e = MoveSelfCountersToTargetCreatureYouControl()
+    assert e.requires_target() is True
+    assert "+1/+1" in e.describe()
+    # No source on resolving_source.
+    state.resolving_source = None
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Source has no counters.
+    drone = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.resolving_source = drone
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Empty target / wrong kind / missing id.
+    drone.plus_one_counters = 2
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

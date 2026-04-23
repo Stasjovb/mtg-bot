@@ -1143,6 +1143,63 @@ class DestroyTargetArtifact(Effect):
 
 
 @dataclass(frozen=True)
+class MoveSelfCountersToTargetCreatureYouControl(Effect):
+    """Move all +1/+1 counters from the source to target creature you
+    control.
+
+    Matches Dockworker Drone's dies trigger ("put its counters on target
+    creature you control"). Reads state.resolving_source for the count;
+    no-op if the source has zero counters or wasn't set.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        count = source.plus_one_counters
+        if count <= 0:
+            return
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.plus_one_counters += count
+        # Clear source counters — they've been transferred.
+        source.plus_one_counters = 0
+        state.log.append(
+            f"{count} +1/+1 counter(s) moved from {source.printing.name} "
+            f"to {obj.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "move this creature's +1/+1 counters to target creature you "
+            "control"
+        )
+
+
+@dataclass(frozen=True)
 class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
     """Put ``amount`` charge counters on a Spacecraft you control.
 

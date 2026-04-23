@@ -24,6 +24,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreature,
     DestroyTargetArtifact,
     DestroyTargetCreature,
+    MoveSelfCountersToTargetCreatureYouControl,
     PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
     DrawCards,
@@ -1071,6 +1072,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     power_bonus=1,
                     granted_keywords=frozenset({"deathtouch"}),
                     requires_artifact_you_control=True,
+                ),
+            ),
+        ),
+        # Dockworker Drone: {1}{W} 1/1. Enters with a +1/+1 counter
+        # (modeled via ETB trigger, since the engine doesn't have native
+        # "enters with counters" replacement effects). When it dies, its
+        # counters move to target creature you control.
+        make_creature(
+            "Dockworker Drone", "{1}{W}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger="dies",
+                    effect=MoveSelfCountersToTargetCreatureYouControl(),
                 ),
             ),
         ),
