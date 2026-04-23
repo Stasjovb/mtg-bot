@@ -221,9 +221,11 @@ def make_creature(
     warp: str | None = None,
     legendary: bool = False,
     ward: str | None = None,
+    artifact: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
-    type_line = f"{prefix}Creature"
+    artifact_word = "Artifact " if artifact else ""
+    type_line = f"{prefix}{artifact_word}Creature"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -1287,12 +1289,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Dockworker Drone: {1}{W} 1/1. Enters with a +1/+1 counter
-        # (modeled via ETB trigger, since the engine doesn't have native
-        # "enters with counters" replacement effects). When it dies, its
-        # counters move to target creature you control.
+        # Dockworker Drone: {1}{W} 1/1 Artifact Creature — Robot. Enters
+        # with a +1/+1 counter (modeled via ETB trigger, since the engine
+        # doesn't have native "enters with counters" replacement
+        # effects). When it dies, its counters move to target creature
+        # you control.
         make_creature(
             "Dockworker Drone", "{1}{W}", 1, 1,
+            artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
@@ -1467,12 +1471,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Oreplate Pangolin: {1}{R} 2/2. "Whenever another artifact you
-        # control enters, you may pay {1}. If you do, put a +1/+1 counter
-        # on this creature." Simplified: drop the optional {1} payment —
-        # we always put the counter (strictly stronger than printed).
+        # Oreplate Pangolin: {1}{R} 2/2 Artifact Creature. "Whenever
+        # another artifact you control enters, you may pay {1}. If you do,
+        # put a +1/+1 counter on this creature." Simplified: drop the
+        # optional {1} payment.
         make_creature(
             "Oreplate Pangolin", "{1}{R}", 2, 2,
+            artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="artifact_enters_you_control",
@@ -1494,10 +1499,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Kavaron Turbodrone: {2}{R} 2/3. {T}: target creature you control
-        # gets +1/+1 and haste UEOT. Sorcery-speed activation.
+        # Kavaron Turbodrone: {2}{R} 2/3 Artifact Creature — Robot. {T}:
+        # target creature you control gets +1/+1 and haste UEOT.
+        # Sorcery-speed activation.
         make_creature(
             "Kavaron Turbodrone", "{2}{R}", 2, 3,
+            artifact=True,
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(tap_self=True),
