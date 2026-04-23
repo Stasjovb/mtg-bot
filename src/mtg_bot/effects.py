@@ -938,6 +938,78 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class OptionalSacAnotherForPumpSelfUEOT(Effect):
+    """"You may sacrifice another creature or artifact. If you do, this
+    creature gets +P/+T until end of turn."
+
+    Agent decides via choose_sacrifice-style hook — we reuse the
+    sacrifice agent method and treat a "no legal option" situation as
+    decline. For the RandomAgent the heuristic is "pay if an option
+    exists", matching the card's near-always-beneficial pump.
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.id != source.id
+            and (o.printing.is_creature or o.printing.is_artifact)
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is None:
+            # Defensive default: pay the cost when the agent is absent.
+            chosen = options[0]
+        else:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} "
+            f"to pump {source.printing.name}"
+        )
+        _sacrifice(state, chosen)
+        source.temp_power_bonus += self.power_bonus
+        source.temp_toughness_bonus += self.toughness_bonus
+        if self.granted_keywords:
+            source.temp_keywords = (
+                source.temp_keywords | self.granted_keywords
+            )
+
+    def describe(self) -> str:
+        parts = []
+        if self.power_bonus or self.toughness_bonus:
+            parts.append(
+                f"+{self.power_bonus}/+{self.toughness_bonus}"
+            )
+        if self.granted_keywords:
+            parts.append(
+                "gains " + ", ".join(sorted(self.granted_keywords))
+            )
+        body = " and ".join(parts) if parts else "pump"
+        return (
+            f"you may sacrifice another creature or artifact; if you "
+            f"do, this creature gets {body} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class PumpSelfUntilEOT(Effect):
     """The ability's source gets +power/+toughness (and optional keywords)
     until end of turn. Reads state.resolving_source."""

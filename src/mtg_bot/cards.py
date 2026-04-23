@@ -74,6 +74,7 @@ from mtg_bot.effects import (
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
     FocusFireEffect,
+    OptionalSacAnotherForPumpSelfUEOT,
     SelfMill,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
@@ -1698,6 +1699,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=DestroyTargetCreature(),
+                ),
+            ),
+        ),
+        # Comet Crawler: {2}{B} 2/3 Lifelink. Attacks → may sacrifice
+        # another creature or artifact for +2/+0 UEOT.
+        make_creature(
+            "Comet Crawler", "{2}{B}", 2, 3,
+            keywords={"lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=OptionalSacAnotherForPumpSelfUEOT(
+                        power_bonus=2, toughness_bonus=0,
+                    ),
                 ),
             ),
         ),

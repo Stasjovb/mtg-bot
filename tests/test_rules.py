@@ -7062,6 +7062,81 @@ def test_activation_cost_describe_includes_sac_another():
     assert "another" in cost.describe().lower()
 
 
+def test_comet_crawler_attacks_may_sac_pumps():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    crawler = state.new_object(
+        EOE_CREATURES["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    crawler.summoning_sick = False
+    state.battlefield.append(crawler)
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    declare_attackers(state, [crawler.id])
+    # Fodder sacrificed; crawler pumped.
+    assert fodder not in state.battlefield
+    assert effective_power(state, crawler) == 4  # 2 + 2
+
+
+def test_comet_crawler_attacks_no_sac_no_pump():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    crawler = state.new_object(
+        EOE_CREATURES["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    crawler.summoning_sick = False
+    state.battlefield.append(crawler)
+    # No other creatures or artifacts — trigger no-ops silently.
+    declare_attackers(state, [crawler.id])
+    assert effective_power(state, crawler) == 2
+
+
+def test_optional_sac_for_pump_no_agent():
+    """Defensive path: when the controller has no agent, pick the first
+    option."""
+    from mtg_bot.effects import OptionalSacAnotherForPumpSelfUEOT
+
+    state = _arena()
+    state.players[0].agent = None
+    source = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(source)
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    state.resolving_source = source
+    e = OptionalSacAnotherForPumpSelfUEOT(power_bonus=2)
+    e.resolve(state, 0)
+    assert fodder not in state.battlefield
+    assert source.temp_power_bonus == 2
+
+
+def test_optional_sac_missing_source_is_noop():
+    from mtg_bot.effects import OptionalSacAnotherForPumpSelfUEOT
+
+    state = _arena()
+    state.resolving_source = None
+    e = OptionalSacAnotherForPumpSelfUEOT(power_bonus=2)
+    e.resolve(state, 0)  # no crash
+    assert "sacrifice" in e.describe()
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
