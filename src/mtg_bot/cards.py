@@ -1512,6 +1512,15 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Mechan Shieldmate: {1}{U} 3/2 Artifact Creature — Robot Soldier
+        # with Defender. Simplified: drops the conditional "can attack
+        # as though it didn't have defender if an artifact entered this
+        # turn" clause (conditional defender-override not modeled).
+        make_creature(
+            "Mechan Shieldmate", "{1}{U}", 3, 2,
+            artifact=True,
+            keywords={"defender"},
+        ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
         # drops the "creatures your opponents control get -3/-0 until your
         # next turn" ETB since "until your next turn" pump durations
