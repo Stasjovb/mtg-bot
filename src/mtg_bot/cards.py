@@ -1905,6 +1905,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Slagdrill Scrapper: {R} 1/2 Artifact Creature — Robot Scout.
+        # Activated: {2}, {T}, Sacrifice another artifact or land: Draw a card.
+        make_creature(
+            "Slagdrill Scrapper", "{R}", 1, 2,
+            artifact=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"), mana_str="{2}",
+                        tap_self=True,
+                        sacrifice_another_artifact_or_land=True,
+                    ),
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
         # Oreplate Pangolin: {1}{R} 2/2 Artifact Creature. "Whenever
         # another artifact you control enters, you may pay {1}. If you do,
         # put a +1/+1 counter on this creature." Simplified: drop the

@@ -6943,6 +6943,97 @@ def test_umbral_collar_no_agent_uses_first_sac():
     assert fodder not in state.battlefield
 
 
+def test_slagdrill_no_agent_picks_first_sac():
+    from mtg_bot.actions import _activate_ability
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = None
+    _stock_library(state, 0, count=5)
+    for _ in range(2):
+        m = state.new_object(
+            BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(m)
+    scrap = state.new_object(
+        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    scrap.summoning_sick = False
+    state.battlefield.append(scrap)
+    land_count_before = sum(
+        1 for o in state.battlefield if o.printing.is_land
+    )
+    _activate_ability(state, 0, scrap.id, 0)
+    # One land (or some non-scrap artifact) should have been sacrificed.
+    land_count_after = sum(
+        1 for o in state.battlefield if o.printing.is_land
+    )
+    assert land_count_after == land_count_before - 1
+
+
+def test_slagdrill_scrapper_sac_land_or_artifact_draws():
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    # Pay {2}, tap Slagdrill, sac a land → draw.
+    for _ in range(2):
+        m = state.new_object(
+            BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(m)
+    scrap = state.new_object(
+        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    scrap.summoning_sick = False
+    state.battlefield.append(scrap)
+    hand_before = len(state.players[0].hand)
+    _activate_ability(state, 0, scrap.id, 0)
+    resolve_top_of_stack(state)
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_slagdrill_scrapper_not_legal_without_sac_target():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.actions import ActivateAbility
+
+    state = _arena()
+    # Caster has {2} but nothing else to sac.
+    for _ in range(2):
+        m = state.new_object(
+            BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(m)
+    scrap = state.new_object(
+        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    scrap.summoning_sick = False
+    state.battlefield.append(scrap)
+    # Sacrificing lands is legal if the lands are still there after
+    # tap-for-mana, but the activation cost only checks untapped
+    # creature targets. Let me tap both lands before the check.
+    for l in state.battlefield:
+        if l.printing.is_land:
+            l.tapped = True
+    # Still — there ARE lands; sacrificing tapped lands is legal. So
+    # activation IS legal in this variant. Instead, remove the non-Slag
+    # lands entirely by keeping only the Slagdrill on battlefield.
+    state.battlefield = [o for o in state.battlefield if o.id == scrap.id]
+    actions = legal_moves(state)
+    activate_actions = [
+        a for a in actions
+        if isinstance(a, ActivateAbility) and a.source_id == scrap.id
+    ]
+    assert activate_actions == []
+
+
 def test_cost_reduction_attacked_with_spacecraft_active():
     """Exercise the attacked_with_spacecraft_this_turn branch in
     apply_cost_reductions — dead without at least one test."""

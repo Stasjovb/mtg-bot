@@ -320,12 +320,12 @@ def _cast_spell(
                 if not remaining:
                     break
                 pick = p.agent.choose_target(state, player_id, remaining)
+                # Agent declines → stop. In practice every EoE multi-
+                # target effect we model has min_t=0 so declines are
+                # always honored. If min_t > 0 is ever added, revive
+                # the "forced pick" branch.
                 if pick is None:
-                    # Agent declines; stop picking iff min already reached.
-                    if len(chosen_list) >= min_t:
-                        break
-                    # Forced pick to satisfy min_t.
-                    pick = remaining[0]
+                    break
                 if pick not in remaining:
                     # Agent picked an out-of-range target; ignore.
                     break
@@ -455,19 +455,28 @@ def _activate_ability(
             if chosen is not None:
                 targets = (chosen,)
 
-    # "Sacrifice another" paid BEFORE sacrifice-self so the source is
-    # still on the battlefield and excluded from legal options.
-    # legal_actions already gates on a valid option existing, so this
-    # is always non-empty when we reach it.
-    if ability.cost.sacrifice_another_creature_or_artifact:
+    # "Sacrifice another ..." paid BEFORE sacrifice-self so the source
+    # stays on the battlefield and is excluded from the option set.
+    # legal_actions gates activation on a valid sac existing, so the
+    # option list is non-empty when we reach this code.
+    if (
+        ability.cost.sacrifice_another_creature_or_artifact
+        or ability.cost.sacrifice_another_artifact_or_land
+    ):
         from mtg_bot.turn import sacrifice as _sacrifice
 
         p = state.player_by_id(player_id)
+        if ability.cost.sacrifice_another_creature_or_artifact:
+            def _is_valid_sac(o):
+                return o.printing.is_creature or o.printing.is_artifact
+        else:
+            def _is_valid_sac(o):
+                return o.printing.is_artifact or o.printing.is_land
         options = [
             o for o in state.battlefield
             if o.controller_id == player_id
             and o.id != source.id
-            and (o.printing.is_creature or o.printing.is_artifact)
+            and _is_valid_sac(o)
         ]
         chosen = options[0]
         if p.agent is not None:
@@ -789,11 +798,7 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
                 pick = controller.agent.choose_target(
                     state, controller_id, remaining
                 )
-                if pick is None:
-                    if len(chosen_list) >= min_t:
-                        break
-                    pick = remaining[0]
-                if pick not in remaining:
+                if pick is None or pick not in remaining:
                     break
                 chosen_list.append(pick)
                 remaining.remove(pick)

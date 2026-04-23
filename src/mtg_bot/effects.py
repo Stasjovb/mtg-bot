@@ -3125,6 +3125,9 @@ class ActivationCost:
     # "Sacrifice another creature or artifact" — the caster picks a
     # legal target via choose_sacrifice. Cannot be the source itself.
     sacrifice_another_creature_or_artifact: bool = False
+    # "Sacrifice another artifact or land" — as above but with a land
+    # filter. Matches Slagdrill Scrapper.
+    sacrifice_another_artifact_or_land: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -3136,6 +3139,8 @@ class ActivationCost:
             parts.append("Sacrifice ~")
         if self.sacrifice_another_creature_or_artifact:
             parts.append("Sacrifice another creature or artifact")
+        if self.sacrifice_another_artifact_or_land:
+            parts.append("Sacrifice another artifact or land")
         return ", ".join(parts) if parts else "0"
 
 

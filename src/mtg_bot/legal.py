@@ -178,6 +178,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_another:
                     continue
+            if ability.cost.sacrifice_another_artifact_or_land:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and (o2.printing.is_artifact or o2.printing.is_land)
+                )
+                if not has_another:
+                    continue
             # If the effect requires a target, at least one must be legal.
             if ability.effect.requires_target() and not ability.effect.legal_targets(
                 state, player_id
