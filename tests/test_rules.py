@@ -3636,6 +3636,62 @@ def test_blooming_stinger_grants_deathtouch():
     assert "deathtouch" in effective_keywords(state, ally)
 
 
+def test_seedship_agrarian_tap_creates_lander():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    agr = state.new_object(
+        EOE_CREATURES["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(agr)
+    tap_permanent(state, agr)
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert len(landers) == 1
+
+
+def test_seedship_agrarian_landfall_counter():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import fire_landfall_triggers
+
+    state = _arena()
+    agr = state.new_object(
+        EOE_CREATURES["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(agr)
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    fire_landfall_triggers(state, land)
+    assert agr.plus_one_counters == 1
+
+
+def test_biomechan_engineer_etb_and_activation():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    eng = state.new_object(
+        EOE_CREATURES["Biomechan Engineer"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(eng)
+    # Fire ETB manually.
+    etb = next(
+        ab for ab in eng.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = eng
+    etb.effect.resolve(state, 0)
+    assert any(o.printing.name == "Lander" for o in state.battlefield)
+
+    # Fire activated effect manually.
+    _stock_library(state, 0, count=5)
+    hand_before = len(state.players[0].hand)
+    act = eng.printing.activated_abilities[0]
+    act.effect.resolve(state, 0)
+    assert len(state.players[0].hand) == hand_before + 2
+    assert any(o.printing.name == "Robot" for o in state.battlefield)
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

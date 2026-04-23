@@ -1015,6 +1015,53 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Seedship Agrarian: 3/3 Green. Whenever this creature becomes
+        # tapped, create a Lander token; Landfall — put a +1/+1 counter
+        # on this creature.
+        make_creature(
+            "Seedship Agrarian", "{3}{G}", 3, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
+        # Biomechan Engineer: {G}{U} 2/2 ETB create Lander + activated
+        # {8}: Draw two + create Robot token.
+        make_creature(
+            "Biomechan Engineer", "{G}{U}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{8}"), mana_str="{8}"
+                    ),
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Robot"],
+                            count=1,
+                        ),
+                    )),
+                ),
+            ),
+        ),
         # Green
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,
