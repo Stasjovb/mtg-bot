@@ -2134,8 +2134,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Sami, Ship's Engineer", "{2}{R}{W}", 2, 4,
             legendary=True,
         ),
-        make_creature(  # Station Monitor — dropped second-spell Drone token.
+        # Station Monitor `{W}{U}` 2/2 Creature. Real oracle:
+        # "Whenever you cast your second spell each turn, create a
+        # 1/1 colorless Drone artifact creature token with flying
+        # and 'This token can block only creatures with flying.'"
+        # Simplification: block-restriction on the Drone is dropped.
+        make_creature(
             "Station Monitor", "{W}{U}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="second_spell_each_turn",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Drone"], count=1,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Syr Vondam, Sunstar Exemplar — dropped die/exile → counter, death rider.
             "Syr Vondam, Sunstar Exemplar", "{W}{B}", 2, 2,
