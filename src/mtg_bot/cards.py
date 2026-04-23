@@ -15,6 +15,7 @@ from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
     ConditionalIfVoid,
+    ConditionalOnTappedCreatures,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
@@ -960,6 +961,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Flight-Deck Coordinator: 3/3. "At the beginning of your end step,
+        # if you control two or more tapped creatures, you gain 2 life."
+        make_creature(
+            "Flight-Deck Coordinator", "{2}{W}", 3, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=GainLife(amount=2),
+                        min_count=2,
                     ),
                 ),
             ),

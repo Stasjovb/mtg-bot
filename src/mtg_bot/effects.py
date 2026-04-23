@@ -690,6 +690,53 @@ class SearchLibraryForBasicLandTapped(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalOnTappedCreatures(Effect):
+    """Run ``effect`` only if the controller has at least ``min_count``
+    tapped creatures on the battlefield at resolution.
+
+    Matches the "if you control two or more tapped creatures" intervening-if
+    clause on EoE cards like Flight-Deck Coordinator and Sunstar Chaplain.
+    """
+
+    effect: Effect
+    min_count: int = 2
+
+    def requires_target(self) -> bool:
+        return self.effect.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.effect.legal_targets(state, controller_id)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_creature_now
+
+        tapped_count = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id
+            and is_creature_now(o)
+            and o.tapped
+        )
+        if tapped_count < self.min_count:
+            state.log.append(
+                f"conditional skipped (need {self.min_count} tapped creatures, "
+                f"have {tapped_count})"
+            )
+            return
+        self.effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"if you control {self.min_count} or more tapped creatures, "
+            f"{self.effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class Sequence(Effect):
     """Run multiple effects in order as a single composite effect.
 

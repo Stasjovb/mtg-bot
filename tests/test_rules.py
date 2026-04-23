@@ -3800,6 +3800,57 @@ def test_xu_ifit_activated_reanimate():
     assert ghost in state.battlefield
 
 
+def test_flight_deck_coordinator_gains_life_with_two_tapped():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    coord = state.new_object(
+        EOE_CREATURES["Flight-Deck Coordinator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(coord)
+    # Two tapped creatures (including coord itself).
+    coord.tapped = True
+    other = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    other.tapped = True
+    state.battlefield.append(other)
+
+    life_before = state.players[0].life
+    run_beginning_of_end_step_triggers(state)
+    assert state.players[0].life == life_before + 2
+
+
+def test_flight_deck_coordinator_noop_when_condition_unmet():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    coord = state.new_object(
+        EOE_CREATURES["Flight-Deck Coordinator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(coord)  # only one (untapped) creature
+    life_before = state.players[0].life
+    run_beginning_of_end_step_triggers(state)
+    assert state.players[0].life == life_before
+
+
+def test_conditional_on_tapped_creatures_forwards_targets():
+    """If the wrapped effect requires a target, the conditional exposes it."""
+    from mtg_bot.effects import ConditionalOnTappedCreatures, GainLife
+
+    state = _arena()
+    cond = ConditionalOnTappedCreatures(
+        effect=GainLife(amount=1), min_count=0
+    )
+    assert cond.requires_target() is False
+    assert cond.legal_targets(state, 0) == []
+    assert "tapped" in cond.describe()
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
