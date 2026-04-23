@@ -76,6 +76,7 @@ from mtg_bot.effects import (
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
+    ConsultTheStarChartsEffect,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
     ExileAllCreaturesAndSpacecraft,
@@ -205,6 +206,11 @@ class CardPrinting:
     # normal cost on a later turn.
     warp_cost: ManaCost | None = None
     warp_cost_str: str = ""
+    # "Kicker {cost}" — an optional additional mana cost the caster may
+    # pay while casting. If paid, the StackItem is marked kicked and
+    # the resolving effect can branch on state.resolving_kicked.
+    kicker_cost: ManaCost | None = None
+    kicker_cost_str: str = ""
     # EoE Spacecraft Station mechanic. For a Spacecraft card: once it has
     # station_threshold or more charge counters on it, it becomes an artifact
     # creature with its printed P/T and gains stationed_keywords. None on
@@ -437,6 +443,7 @@ def make_spacecraft(
 def make_instant(
     name: str, cost: str, effect: Effect,
     cost_reductions: tuple[CostReduction, ...] = (),
+    kicker: str | None = None,
 ) -> CardPrinting:
     type_line = "Instant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -450,6 +457,8 @@ def make_instant(
         subtypes=subtypes,
         spell_effect=effect,
         cost_reductions=tuple(cost_reductions),
+        kicker_cost=parse_mana_cost(kicker) if kicker else None,
+        kicker_cost_str=kicker or "",
     )
 
 
@@ -3294,9 +3303,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         ),
         # -- Batch of simplified spells. Each drops complex riders in
         # favor of a minimal usable effect. Simplifications noted.
-        make_instant(  # Consult the Star Charts — drops kicker + look-at-top-X; ships as plain draw.
+        # Consult the Star Charts `{1}{U}` with Kicker `{1}{U}`:
+        # Look at the top X cards of your library (X = lands you
+        # control). Put one of those cards into your hand (two if
+        # kicked). Put the rest on the bottom in a random order.
+        make_instant(
             "Consult the Star Charts", "{1}{U}",
-            effect=DrawCards(amount=1),
+            effect=ConsultTheStarChartsEffect(),
+            kicker="{1}{U}",
         ),
         make_instant(  # Divert Disaster — drops pay-{2}-or-lander rider; ships as plain counter.
             "Divert Disaster", "{1}{U}",

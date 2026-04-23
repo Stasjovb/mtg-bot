@@ -217,6 +217,9 @@ class StackItem:
     # Set by _cast_spell via agent.choose_x; exposed to the resolving
     # effect via state.resolving_x_value.
     x_value: int = 0
+    # True when the spell was cast with its kicker cost paid. Exposed
+    # to the resolving effect via state.resolving_kicked.
+    kicked: bool = False
 
 
 @dataclass
@@ -287,6 +290,10 @@ class GameState:
     # threading it through every resolve() signature. 0 when no X spell
     # is resolving.
     resolving_x_value: int = 0
+    # Mirrors StackItem.kicked during resolution so effects can branch
+    # on whether the spell was kicked without threading it through
+    # every resolve() signature. False outside resolution.
+    resolving_kicked: bool = False
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

@@ -30,6 +30,9 @@ class CastSpell(Action):
     # end-of-turn exile). If False (default), cast at the normal cost — from
     # hand OR from the "warped" exile zone if the card is sitting there.
     use_warp: bool = False
+    # If True, pay the card's kicker cost on top of its base cost.
+    # Only legal when the card has a kicker_cost.
+    kicked: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,7 +236,10 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
         _play_land(state, player_id, action.card_id)
         return
     if isinstance(action, CastSpell):
-        _cast_spell(state, player_id, action.card_id, use_warp=action.use_warp)
+        _cast_spell(
+            state, player_id, action.card_id,
+            use_warp=action.use_warp, kicked=action.kicked,
+        )
         return
     if isinstance(action, DeclareAttackers):
         _declare_attackers(state, player_id, action.attacker_ids)
@@ -289,7 +295,8 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
 
 
 def _cast_spell(
-    state: GameState, player_id: int, card_id: int, use_warp: bool = False
+    state: GameState, player_id: int, card_id: int,
+    use_warp: bool = False, kicked: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -329,6 +336,22 @@ def _cast_spell(
     # spell this turn"). Warp costs are reduced too — the rules don't
     # special-case this.
     cost = apply_cost_reductions(card.printing, state, player_id, cost)
+    # Kicker: add the optional kicker cost onto the generic+colored
+    # portion before X is resolved.
+    if kicked and card.printing.kicker_cost is not None:
+        kc = card.printing.kicker_cost
+        merged_colored: dict[str, int] = dict(cost.colored)
+        for color, n in kc.colored:
+            merged_colored[color] = merged_colored.get(color, 0) + n
+        cost = ManaCost(
+            generic=cost.generic + kc.generic,
+            colored=tuple(sorted(merged_colored.items())),
+            x_pips=cost.x_pips,
+        )
+        state.log.append(
+            f"P{player_id} kicks {card.printing.name} for "
+            f"{card.printing.kicker_cost_str}"
+        )
     # X-cost spells: ask the agent how much X to pay, fold X*x_pips into
     # generic, then zero x_pips so the payment step sees a concrete cost.
     x_value = 0
@@ -422,7 +445,7 @@ def _cast_spell(
     state.stack.append(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
-            countered=countered, x_value=x_value,
+            countered=countered, x_value=x_value, kicked=kicked,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -763,16 +786,19 @@ def resolve_top_of_stack(state: GameState) -> None:
         )
         state.resolving_source = item.source
         state.resolving_x_value = item.x_value
+        state.resolving_kicked = item.kicked
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
             state.resolving_source = None
             state.resolving_x_value = 0
+            state.resolving_kicked = False
         return
 
     # Spell resolution
     card = item.source
     state.resolving_x_value = item.x_value
+    state.resolving_kicked = item.kicked
     try:
         if card.printing.is_permanent and not (
             card.printing.is_instant or card.printing.is_sorcery
@@ -831,6 +857,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         raise ValueError(f"don't know how to resolve {card.printing.name}")
     finally:
         state.resolving_x_value = 0
+        state.resolving_kicked = False
 
 
 def put_into_battlefield(

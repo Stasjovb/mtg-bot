@@ -77,9 +77,24 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     p = state.player_by_id(player_id)
 
     from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import ManaCost
 
     def _effective_cost(card, base_cost):
         return apply_cost_reductions(card.printing, state, player_id, base_cost)
+
+    def _cost_plus_kicker(card, base_cost):
+        """Combined base + kicker cost (colored pips merged)."""
+        kc = card.printing.kicker_cost
+        if kc is None:
+            return base_cost
+        merged: dict[str, int] = dict(base_cost.colored)
+        for color, n in kc.colored:
+            merged[color] = merged.get(color, 0) + n
+        return ManaCost(
+            generic=base_cost.generic + kc.generic,
+            colored=tuple(sorted(merged.items())),
+            x_pips=base_cost.x_pips,
+        )
 
     # Instant-speed-castable: instants AND any permanent spell with flash.
     for card in p.hand:
@@ -92,6 +107,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             state, player_id, _effective_cost(card, card.printing.mana_cost)
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
+            # Kicked variant: can_pay the combined cost.
+            if card.printing.kicker_cost is not None and can_pay_cost(
+                state, player_id,
+                _cost_plus_kicker(
+                    card, _effective_cost(card, card.printing.mana_cost)
+                ),
+            ):
+                actions.append(CastSpell(card.id, kicked=True))
         if card.printing.warp_cost is not None and can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.warp_cost),
@@ -130,6 +153,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 _effective_cost(card, card.printing.mana_cost),
             ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
                 actions.append(CastSpell(card.id))
+                if card.printing.kicker_cost is not None and can_pay_cost(
+                    state, player_id,
+                    _cost_plus_kicker(
+                        card, _effective_cost(
+                            card, card.printing.mana_cost
+                        ),
+                    ),
+                ):
+                    actions.append(CastSpell(card.id, kicked=True))
             if card.printing.warp_cost is not None and can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),

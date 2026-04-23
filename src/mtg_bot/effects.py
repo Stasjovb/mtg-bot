@@ -794,6 +794,84 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class ConsultTheStarChartsEffect(Effect):
+    """Consult the Star Charts `{1}{U}` (kicker `{1}{U}`):
+    "Look at the top X cards of your library, where X is the number of
+    lands you control. Put one of those cards into your hand. If this
+    spell was kicked, put two of those cards into your hand instead.
+    Put the rest on the bottom of your library in a random order."
+
+    Reads state.resolving_kicked to choose between 1 and 2 cards to
+    keep. Agent picks the kept cards via ``choose_card_from_library``.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _random
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        x = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_land
+        )
+        if x == 0 or not p.library:
+            state.log.append(
+                f"Consult the Star Charts: X={x}, nothing to look at"
+            )
+            return
+        examined = p.library[:x]
+        keep = 2 if state.resolving_kicked else 1
+        kept_cards: list = []
+        remaining = list(examined)
+        for _ in range(keep):
+            if not remaining:
+                break
+            chosen_id = None
+            if p.agent is not None:
+                chosen_id = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in remaining]
+                )
+            if chosen_id is None:
+                chosen_id = remaining[0].id
+            card = next(
+                (c for c in remaining if c.id == chosen_id), remaining[0]
+            )
+            kept_cards.append(card)
+            remaining.remove(card)
+        for card in kept_cards:
+            p.library.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            state.log.append(
+                f"P{controller_id} puts {card.printing.name} into hand "
+                f"from Consult the Star Charts"
+            )
+        # Bottom the rest in random order.
+        for card in remaining:
+            p.library.remove(card)
+        rng = _random.Random(
+            hash(("consult", state.turn_number, controller_id,
+                  len(p.library)))
+        )
+        rng.shuffle(remaining)
+        p.library.extend(remaining)
+        state.log.append(
+            f"Consult the Star Charts: put {len(remaining)} cards on "
+            f"the bottom in random order"
+        )
+
+    def describe(self) -> str:
+        return (
+            "look at the top X cards of your library (X = lands you "
+            "control); put one into your hand (two if kicked); put "
+            "the rest on the bottom in a random order"
+        )
+
+
+@dataclass(frozen=True)
 class LookAtTopNRevealOrCounter(Effect):
     """Look at the top ``n`` cards of your library. The controller may
     reveal one card matching ``filter_name`` and put it into hand.
