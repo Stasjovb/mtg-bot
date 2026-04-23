@@ -5034,6 +5034,56 @@ def test_second_spell_counter_resets_across_turns():
     assert state.players[1].spells_cast_this_turn == 0
 
 
+def test_cosmogrand_zenith_token_mode():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    class PickTokens(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 0
+
+    state = _arena()
+    state.players[0].agent = PickTokens(rng=random.Random(0))
+    zenith = state.new_object(
+        EOE_CREATURES["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(zenith)
+    trig = zenith.printing.triggered_abilities[0]
+    state.resolving_source = zenith
+    trig.effect.resolve(state, 0)
+    soldiers = [
+        o for o in state.battlefield if o.printing.name == "Human Soldier"
+    ]
+    assert len(soldiers) == 2
+
+
+def test_cosmogrand_zenith_counter_mode():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    class PickCounters(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 1
+
+    state = _arena()
+    state.players[0].agent = PickCounters(rng=random.Random(0))
+    zenith = state.new_object(
+        EOE_CREATURES["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(zenith)
+    mate = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mate)
+    trig = zenith.printing.triggered_abilities[0]
+    state.resolving_source = zenith
+    trig.effect.resolve(state, 0)
+    assert zenith.plus_one_counters == 1
+    assert mate.plus_one_counters == 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

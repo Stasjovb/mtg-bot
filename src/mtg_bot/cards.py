@@ -1170,6 +1170,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blue
+        # Cosmogrand Zenith: {2}{W} 2/4. Modal second-spell trigger: two
+        # Human Soldier tokens OR +1/+1 counter on each creature you
+        # control.
+        make_creature(
+            "Cosmogrand Zenith", "{2}{W}", 2, 4,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="second_spell_each_turn",
+                    effect=ModalChooseOne(modes=(
+                        CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Human Soldier"],
+                            count=2,
+                        ),
+                        PutPlusOneCounterOnEachCreatureYouControl(amount=1),
+                    )),
+                ),
+            ),
+        ),
         # Illvoi Operative: {1}{U} 2/1. Whenever you cast your second
         # spell each turn, put a +1/+1 counter on this creature.
         make_creature(
