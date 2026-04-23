@@ -3574,6 +3574,68 @@ def test_elegy_acolyte_void_creates_robot():
     assert robots[0].controller_id == 0
 
 
+def test_remnant_elemental_landfall_pumps():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import fire_landfall_triggers
+
+    state = _arena()
+    elem = state.new_object(
+        EOE_CREATURES["Remnant Elemental"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(elem)
+    # Put a land onto the battlefield and fire landfall.
+    land = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    fire_landfall_triggers(state, land)
+    assert elem.temp_power_bonus == 2
+
+
+def test_icecave_crasher_trample_plus_landfall():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import fire_landfall_triggers
+
+    state = _arena()
+    crasher = state.new_object(
+        EOE_CREATURES["Icecave Crasher"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(crasher)
+    assert "trample" in crasher.printing.keywords
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    fire_landfall_triggers(state, land)
+    assert crasher.temp_power_bonus == 1
+
+
+def test_blooming_stinger_grants_deathtouch():
+    """Printed deathtouch + ETB grants deathtouch to another creature."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    stinger = state.new_object(
+        EOE_CREATURES["Blooming Stinger"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(stinger)
+    assert "deathtouch" in stinger.printing.keywords
+
+    # Manually apply the ETB targeting ally (test the grant path directly).
+    etb = next(
+        ab for ab in stinger.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = stinger
+    etb.effect.resolve(state, 0, (("creature", ally.id),))
+
+    from mtg_bot.game import effective_keywords
+    assert "deathtouch" in effective_keywords(state, ally)
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

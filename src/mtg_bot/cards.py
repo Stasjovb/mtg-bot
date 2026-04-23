@@ -974,6 +974,47 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Remnant Elemental: 0/4 Reach + Landfall +2/+0 UEOT self-pump.
+        make_creature(
+            "Remnant Elemental", "{1}{R}", 0, 4,
+            keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=PumpSelfUntilEOT(power_bonus=2),
+                ),
+            ),
+        ),
+        # Icecave Crasher: 4/4 Trample + Landfall +1/+0 UEOT self-pump.
+        make_creature(
+            "Icecave Crasher", "{3}{G}", 4, 4,
+            keywords={"trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=PumpSelfUntilEOT(power_bonus=1),
+                ),
+            ),
+        ),
+        # Blooming Stinger: 2/2 Deathtouch. ETB grants another creature
+        # you control deathtouch UEOT. "Another" means not itself — we
+        # model target selection by excluding self via resolving_source
+        # isn't wired yet, so for simplicity a self-target is legal here;
+        # this is a minor simplification noted for future cleanup.
+        make_creature(
+            "Blooming Stinger", "{1}{G}", 2, 2,
+            keywords={"deathtouch"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=0, toughness_bonus=0,
+                        granted_keywords=frozenset({"deathtouch"}),
+                        you_control_only=True,
+                    ),
+                ),
+            ),
+        ),
         # Green
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,
