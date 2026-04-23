@@ -105,6 +105,42 @@ class SetLifeToHalfStartingRoundedUp(Effect):
 
 
 @dataclass(frozen=True)
+class PutPoisonCountersOnTargetPlayer(Effect):
+    """Give ``amount`` poison counters to the (pre-selected) target
+    player. Reads ``targets[0]`` as ("player", id); silently no-ops on
+    mismatched shapes.
+
+    Matches Virulent Silencer's trigger effect: the observer trigger
+    wiring in combat._fire_combat_damage_to_player_triggers passes the
+    hit player's id as the target.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, pid = targets[0]
+        if kind != "player":
+            return
+        try:
+            p = state.player_by_id(pid)
+        except KeyError:
+            return
+        p.poison_counters += self.amount
+        state.log.append(
+            f"P{pid} gets {self.amount} poison counter(s) "
+            f"(now {p.poison_counters})"
+        )
+
+    def describe(self) -> str:
+        return f"that player gets {self.amount} poison counter(s)"
+
+
+@dataclass(frozen=True)
 class LoseLife(Effect):
     """Controller loses ``amount`` life."""
 

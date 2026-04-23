@@ -201,6 +201,9 @@ class Player:
     # (e.g. "your life total becomes half your starting life total").
     # Defaults to 20 (MTG standard); adjust for alternate formats.
     starting_life: int = 20
+    # Poison counters (MTG rule 704.5c). A player with 10+ poison
+    # counters loses the game — enforced via state-based actions.
+    poison_counters: int = 0
     library: list[GameObject] = field(default_factory=list)
     hand: list[GameObject] = field(default_factory=list)
     graveyard: list[GameObject] = field(default_factory=list)

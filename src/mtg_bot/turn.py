@@ -592,6 +592,10 @@ def state_based_actions(state: GameState) -> bool:
             p.has_lost = True
             p.lost_reason = "life total <= 0"
             changed = True
+        if not p.has_lost and p.poison_counters >= 10:
+            p.has_lost = True
+            p.lost_reason = "10+ poison counters"
+            changed = True
 
     destroyed = []
     for obj in state.battlefield:

@@ -55,6 +55,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    PutPoisonCountersOnTargetPlayer,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
@@ -3033,10 +3034,23 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             keywords={"trample"},
             enters_with_counters_from_x="mana_spent",
         ),
-        make_creature(  # Virulent Silencer — poison-counter mechanic. Ship 2/3 Flying vanilla.
+        # Virulent Silencer `{3}` 2/3 Artifact Creature — Robot Assassin.
+        # "Whenever a nontoken artifact creature you control deals combat
+        # damage to a player, that player gets two poison counters."
+        # (Players with 10+ poison counters lose the game.)
+        make_creature(
             "Virulent Silencer", "{3}", 2, 3,
             artifact=True,
-            keywords={"flying"},
+            subtypes=("Robot", "Assassin"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger=(
+                        "your_nontoken_artifact_creature_"
+                        "combat_damage_to_player"
+                    ),
+                    effect=PutPoisonCountersOnTargetPlayer(amount=2),
+                ),
+            ),
         ),
         make_spacecraft(  # Larval Scoutlander — drop sac-land ramp rider.
             "Larval Scoutlander", "{2}{G}", 3, 3,

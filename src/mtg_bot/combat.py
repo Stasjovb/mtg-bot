@@ -284,16 +284,24 @@ def _resolve_damage_step(
 def _fire_combat_damage_to_player_triggers(
     state: GameState, sources_hit_player: list[tuple[int, int]]
 ) -> None:
-    """For each (source_id, target_player_id) pair, fire the source's
-    'combat_damage_to_player' triggers directly (no stack)."""
+    """For each (source_id, target_player_id) pair, fire:
+    - the source's own ``combat_damage_to_player`` triggers, and
+    - observer triggers on other permanents whose controllers see one
+      of their own (nontoken artifact) creatures dealing combat damage
+      (Virulent Silencer).
+
+    Observer triggers receive the hit player via ``targets=(("player",
+    tid),)`` so the effect can act on that specific player.
+    """
     from mtg_bot.turn import should_fire_trigger
 
-    for source_id, _target_player in sources_hit_player:
+    for source_id, target_player in sources_hit_player:
         source = next(
             (o for o in state.battlefield if o.id == source_id), None
         )
         if source is None:
             continue  # source died from simultaneous damage
+        # Source's own triggers.
         for i, ability in enumerate(source.printing.triggered_abilities):
             if ability.trigger != "combat_damage_to_player":
                 continue
@@ -307,6 +315,37 @@ def _fire_combat_damage_to_player_triggers(
                 ability.effect.resolve(state, source.controller_id, ())
             finally:
                 state.resolving_source = None
+
+        # Observer triggers: "whenever a nontoken artifact creature you
+        # control deals combat damage to a player, ...".
+        if (
+            source.printing.is_artifact
+            and source.printing.is_creature
+            and not source.printing.is_token
+        ):
+            for obs in list(state.battlefield):
+                if obs.controller_id != source.controller_id:
+                    continue
+                for i, ability in enumerate(obs.printing.triggered_abilities):
+                    if ability.trigger != (
+                        "your_nontoken_artifact_creature_"
+                        "combat_damage_to_player"
+                    ):
+                        continue
+                    if not should_fire_trigger(state, obs.id, i, ability):
+                        continue
+                    state.log.append(
+                        f"{obs.printing.name}'s artifact-creature-damage "
+                        f"trigger fires (P{target_player} was hit)"
+                    )
+                    state.resolving_source = obs
+                    try:
+                        ability.effect.resolve(
+                            state, obs.controller_id,
+                            (("player", target_player),),
+                        )
+                    finally:
+                        state.resolving_source = None
 
 
 def clear_combat_state(state: GameState) -> None:
