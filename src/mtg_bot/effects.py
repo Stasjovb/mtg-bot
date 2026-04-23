@@ -794,6 +794,34 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class PutLoyaltyCounterOnSelf(Effect):
+    """Put ``amount`` loyalty counter(s) on the ability's source.
+
+    Used by planeswalker "whenever ..." triggers that grow their own
+    loyalty (Tezzeret's "whenever an artifact you control enters, put
+    a loyalty counter on Tezzeret"). Reads state.resolving_source.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        source.loyalty_counters += self.amount
+        state.log.append(
+            f"{source.printing.name} gains {self.amount} loyalty "
+            f"counter(s) (now {source.loyalty_counters})"
+        )
+
+    def describe(self) -> str:
+        return f"put {self.amount} loyalty counter(s) on ~"
+
+
+@dataclass(frozen=True)
 class CloseEncounterEffect(Effect):
     """Close Encounter `{1}{G}`:
     "As an additional cost to cast this spell, choose a creature you

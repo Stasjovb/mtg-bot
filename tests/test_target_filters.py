@@ -82,7 +82,7 @@ def test_return_target_artifact_from_graveyard_happy_path():
     p = state.players[0]
     # Put an artifact in the graveyard.
     artifact = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.GRAVEYARD,
+        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact)
     effect = ReturnTargetArtifactCardFromYourGraveyardToHand()
@@ -135,7 +135,7 @@ def test_search_library_for_artifact_matches_artifacts_only():
     state = _new_state()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.LIBRARY,
+        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     bear = state.new_object(
@@ -211,7 +211,7 @@ def test_scour_for_scrap_modal_resolves_search_mode():
     state.players[0].agent = AlwaysModeZero()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.LIBRARY,
+        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     scour = state.new_object(
@@ -235,7 +235,7 @@ def test_scour_for_scrap_modal_resolves_graveyard_mode():
     state.players[0].agent = AlwaysModeOne()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.GRAVEYARD,
+        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact)
     scour_printing = EOE_SPELLS["Scour for Scrap"]

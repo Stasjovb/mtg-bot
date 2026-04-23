@@ -151,7 +151,7 @@ def test_pulsar_ace_filter_artifact():
     state = _new_state(agent=_TakeFirstAgent())
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.LIBRARY,
+        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     for _ in range(4):

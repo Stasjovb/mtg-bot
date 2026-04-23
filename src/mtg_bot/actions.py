@@ -919,6 +919,11 @@ def put_into_battlefield(
             + mc.generic
             + sum(n for _, n in mc.colored)
         )
+    # Planeswalker: initialize loyalty counters to the printed starting
+    # loyalty. Only applied the first time the card enters the
+    # battlefield (loyalty_counters starts at 0).
+    if obj.printing.is_planeswalker and obj.printing.loyalty is not None:
+        obj.loyalty_counters = obj.printing.loyalty
     state.battlefield.append(obj)
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:

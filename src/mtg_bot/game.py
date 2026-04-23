@@ -77,6 +77,10 @@ class GameObject:
     # controller it came from. run_cleanup_step swaps ``controller_id``
     # back and clears this field. None = no temporary-control effect.
     temp_original_controller_id: Optional[int] = None
+    # Planeswalker loyalty counters. Initialized to printing.loyalty
+    # when a planeswalker enters the battlefield. State-based actions
+    # send planeswalkers with 0 loyalty to the graveyard.
+    loyalty_counters: int = 0
 
 
 def is_void_active(state: GameState) -> bool:

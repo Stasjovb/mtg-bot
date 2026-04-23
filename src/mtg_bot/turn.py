@@ -597,6 +597,20 @@ def state_based_actions(state: GameState) -> bool:
             p.lost_reason = "10+ poison counters"
             changed = True
 
+    # Planeswalker SBA (rule 704.5i): a planeswalker with 0 loyalty
+    # counters is put into its owner's graveyard.
+    planeswalkers_to_bury: list = []
+    for obj in state.battlefield:
+        if obj.printing.is_planeswalker and obj.loyalty_counters <= 0:
+            planeswalkers_to_bury.append(obj)
+    for pw in planeswalkers_to_bury:
+        state.log.append(
+            f"{pw.printing.name} has 0 loyalty and is put into "
+            f"graveyard"
+        )
+        move_off_battlefield(state, pw, destination="graveyard")
+        changed = True
+
     destroyed = []
     for obj in state.battlefield:
         if not is_creature_now(obj):

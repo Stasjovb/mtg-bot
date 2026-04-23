@@ -83,6 +83,7 @@ from mtg_bot.effects import (
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
     PumpTargetOtherArtifactYouControlUEOT,
+    PutLoyaltyCounterOnSelf,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     SetLifeToHalfStartingRoundedUp,
     SingularityRuptureEffect,
@@ -212,6 +213,10 @@ class CardPrinting:
     # the resolving effect can branch on state.resolving_kicked.
     kicker_cost: ManaCost | None = None
     kicker_cost_str: str = ""
+    # Planeswalker starting loyalty. None on non-planeswalkers. When
+    # the planeswalker enters the battlefield it starts with this many
+    # loyalty counters on it (GameObject.loyalty_counters).
+    loyalty: int | None = None
     # EoE Spacecraft Station mechanic. For a Spacecraft card: once it has
     # station_threshold or more charge counters on it, it becomes an artifact
     # creature with its printed P/T and gains stationed_keywords. None on
@@ -323,6 +328,10 @@ class CardPrinting:
             or "Enchantment" in self.card_types
             or "Planeswalker" in self.card_types
         )
+
+    @property
+    def is_planeswalker(self) -> bool:
+        return "Planeswalker" in self.card_types
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
@@ -598,6 +607,44 @@ def make_aura(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
         aura_enchant_type=aura_enchant_type,
+    )
+
+
+def make_planeswalker(
+    name: str,
+    cost: str,
+    loyalty: int,
+    subtype: str,
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
+    legendary: bool = True,
+) -> CardPrinting:
+    """Build a Legendary Planeswalker card. Loyalty is the printed
+    starting loyalty; it initializes ``GameObject.loyalty_counters``
+    when the planeswalker enters the battlefield. SBAs send it to
+    graveyard at 0 loyalty.
+
+    Simplifications: loyalty-activated abilities aren't modeled yet
+    (Tezzeret's 0/−3/−7 abilities are dropped); damage redirection
+    to planeswalkers isn't modeled; attacking a planeswalker isn't
+    modeled. Triggered abilities on the walker still fire normally.
+    """
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Planeswalker — {subtype}"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
+        activated_abilities=tuple(activated_abilities),
+        loyalty=loyalty,
     )
 
 
@@ -3010,15 +3057,26 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 GainLife(amount=3),
             )),
         ),
-        # Tezzeret, Cruel Captain — Legendary Planeswalker. Planeswalkers
-        # aren't modeled as a permanent type (no loyalty, no loyalty
-        # abilities, no planeswalker-as-target-of-damage). Shipped as a
-        # legendary artifact stub so the card is present in the pool.
-        # The artifact-enters loyalty trigger and the three loyalty
-        # abilities are dropped.
-        make_artifact(
+        # Tezzeret, Cruel Captain `{3}` Legendary Planeswalker — Tezzeret.
+        # Loyalty 4. Restored abilities:
+        #   - Whenever an artifact you control enters, put a loyalty
+        #     counter on Tezzeret.
+        # Remaining simplifications:
+        #   - The three loyalty abilities (0/−3/−7) aren't modeled
+        #     (loyalty-activated abilities need their own cost type).
+        #   - Planeswalkers can't be attacked or targeted; damage to
+        #     the controller isn't redirected.
+        #   - The emblem from the −7 ability is dropped.
+        make_planeswalker(
             "Tezzeret, Cruel Captain", "{3}",
-            legendary=True,
+            loyalty=4,
+            subtype="Tezzeret",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="artifact_enters_you_control",
+                    effect=PutLoyaltyCounterOnSelf(amount=1),
+                ),
+            ),
         ),
         # -- Final batch: remaining cards shipped as heavy simplifications
         # (empty bodies, vanilla bodies, or small placeholder effects).
