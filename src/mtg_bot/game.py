@@ -187,6 +187,10 @@ class Player:
     # Number of spells this player has cast in the current turn. Reset at
     # cleanup. Used by "whenever you cast your Nth spell each turn" triggers.
     spells_cast_this_turn: int = 0
+    # True if this player has declared at least one Spacecraft as an
+    # attacker this turn. Reset at cleanup. Drives the
+    # "attacked_with_spacecraft_this_turn" cost-reduction condition.
+    attacked_with_spacecraft_this_turn: bool = False
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None

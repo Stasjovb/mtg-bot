@@ -98,6 +98,34 @@ class ManaCost:
     def colors(self) -> frozenset[str]:
         return frozenset(c for c, _ in self.colored)
 
+    def reduced(self, amount: int) -> "ManaCost":
+        """Return a new ManaCost with ``amount`` generic mana removed
+        (minimum 0; colored costs unchanged — MTG rule 601.2f)."""
+        if amount <= 0:
+            return self
+        return ManaCost(
+            generic=max(0, self.generic - amount),
+            colored=self.colored,
+        )
+
+
+@dataclass(frozen=True)
+class CostReduction:
+    """A rule that reduces the generic-mana portion of a spell's cost.
+
+    ``condition`` names a known predicate checked against game state
+    at cast time. ``amount`` is the flat generic reduction; when
+    ``per_land_group`` is True the amount is multiplied by the number
+    of differently-named lands the caster controls (Fungal Colossus).
+
+    Adding a new condition requires a matching branch in
+    ``apply_cost_reductions`` (actions.py).
+    """
+
+    amount: int
+    condition: str
+    per_land_group: bool = False
+
 
 def parse_mana_cost(s: str) -> ManaCost:
     if not s:
@@ -157,6 +185,11 @@ class CardPrinting:
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
     equipment_bonuses: tuple[int, int, frozenset[str]] | None = None
+    # Cost reductions: rules that lower this spell's generic mana cost
+    # when specific conditions hold at cast time (e.g., "costs {3} less
+    # if you've cast another spell this turn"). Consumed by
+    # actions.apply_cost_reductions().
+    cost_reductions: tuple[CostReduction, ...] = ()
     # Continuous abilities that buff other permanents while this permanent
     # is on the battlefield (anthems, keyword grants).
     static_abilities: tuple[StaticAbility, ...] = ()
@@ -238,6 +271,7 @@ def make_creature(
     legendary: bool = False,
     ward: str | None = None,
     artifact: bool = False,
+    cost_reductions: tuple[CostReduction, ...] = (),
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -261,6 +295,7 @@ def make_creature(
         activated_abilities=tuple(activated_abilities),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
+        cost_reductions=tuple(cost_reductions),
     )
 
 
@@ -317,7 +352,10 @@ def make_spacecraft(
     )
 
 
-def make_instant(name: str, cost: str, effect: Effect) -> CardPrinting:
+def make_instant(
+    name: str, cost: str, effect: Effect,
+    cost_reductions: tuple[CostReduction, ...] = (),
+) -> CardPrinting:
     type_line = "Instant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
@@ -329,10 +367,14 @@ def make_instant(name: str, cost: str, effect: Effect) -> CardPrinting:
         card_types=card_types,
         subtypes=subtypes,
         spell_effect=effect,
+        cost_reductions=tuple(cost_reductions),
     )
 
 
-def make_sorcery(name: str, cost: str, effect: Effect) -> CardPrinting:
+def make_sorcery(
+    name: str, cost: str, effect: Effect,
+    cost_reductions: tuple[CostReduction, ...] = (),
+) -> CardPrinting:
     type_line = "Sorcery"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
@@ -344,6 +386,7 @@ def make_sorcery(name: str, cost: str, effect: Effect) -> CardPrinting:
         card_types=card_types,
         subtypes=subtypes,
         spell_effect=effect,
+        cost_reductions=tuple(cost_reductions),
     )
 
 
@@ -1381,18 +1424,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Uthros Psionicist: {2}{U} 2/4 vanilla Jellyfish Scientist.
-        # Simplified: the real card's "second spell you cast each turn
-        # costs {2} less" ability is cost-modification we don't model.
+        # Uthros Psionicist: {2}{U} 2/4. "The second spell you cast each
+        # turn costs {2} less to cast." This is a STATIC ability (it's
+        # not a cost reduction on the Psionicist itself) but our cost-
+        # reduction framework is card-local. Simplification retained:
+        # the static buff to other spells isn't modeled; Psionicist
+        # ships as a plain 2/4.
         make_creature(
             "Uthros Psionicist", "{2}{U}", 2, 4,
         ),
-        # Gigastorm Titan: {4}{U} 4/4 vanilla Elemental. Simplified: the
-        # real card has "this spell costs {3} less to cast if you've cast
-        # another spell this turn" — dropped (cost modification not
-        # modeled).
+        # Gigastorm Titan: {4}{U} 4/4. Costs {3} less to cast if you've
+        # already cast another spell this turn.
         make_creature(
             "Gigastorm Titan", "{4}{U}", 4, 4,
+            cost_reductions=(
+                CostReduction(
+                    amount=3,
+                    condition="another_spell_cast_this_turn",
+                ),
+            ),
         ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
         # drops the "creatures your opponents control get -3/-0 until your
@@ -1995,6 +2045,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Germinating Wurm", "{4}{G}", 5, 5,
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+            ),
+        ),
+        # Fungal Colossus: {6}{G} 5/5. Costs {X} less where X = number
+        # of differently-named lands you control.
+        make_creature(
+            "Fungal Colossus", "{6}{G}", 5, 5,
+            cost_reductions=(
+                CostReduction(
+                    amount=1,
+                    condition="per_differently_named_land",
+                    per_land_group=True,
+                ),
             ),
         ),
     ]

@@ -6150,6 +6150,92 @@ def test_aura_cast_with_no_legal_target_no_targets():
     assert cryo in state.players[0].graveyard
 
 
+def test_gigastorm_titan_cost_reduction_when_second_spell():
+    """Gigastorm Titan normally costs {4}{U}; with 1 spell already cast
+    this turn, costs {1}{U}."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    card = EOE_CREATURES["Gigastorm Titan"]
+    # No spells cast yet → no reduction.
+    reduced = apply_cost_reductions(card, state, 0, card.mana_cost)
+    assert reduced.generic == 4
+    # Bump spell count — now reduction applies.
+    state.players[0].spells_cast_this_turn = 1
+    reduced = apply_cost_reductions(card, state, 0, card.mana_cost)
+    assert reduced.generic == 1
+
+
+def test_fungal_colossus_cost_reduction_per_land_group():
+    """{6}{G} → reduced by number of differently-named lands."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    card = EOE_CREATURES["Fungal Colossus"]
+    # No lands → no reduction.
+    assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 6
+    # One Forest, one Mountain, one Plains → 3 different names → -3.
+    for name in ("Forest", "Mountain", "Plains"):
+        l = state.new_object(BASIC_LANDS[name], owner_id=0, zone=Zone.BATTLEFIELD)
+        state.battlefield.append(l)
+    # Plus a second Forest (same name — doesn't add another reduction).
+    extra = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(extra)
+    reduced = apply_cost_reductions(card, state, 0, card.mana_cost)
+    assert reduced.generic == 3
+
+
+def test_attacked_with_spacecraft_tracking_and_cleanup():
+    """declare_attackers sets the flag; cleanup clears it."""
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.turn import run_cleanup_step
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    ship = state.new_object(
+        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ship)
+    # Station it so it's a creature.
+    ship.charge_counters = 10
+    declare_attackers(state, [ship.id])
+    assert state.players[0].attacked_with_spacecraft_this_turn is True
+    run_cleanup_step(state)
+    assert state.players[0].attacked_with_spacecraft_this_turn is False
+
+
+def test_unknown_cost_reduction_condition_logged_and_ignored():
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import CostReduction, make_instant
+    from mtg_bot.effects import GainLife
+
+    # Fabricate a card with an unknown condition.
+    bogus = make_instant(
+        "Bogus", "{3}",
+        effect=GainLife(amount=1),
+        cost_reductions=(
+            CostReduction(amount=2, condition="never_gonna_give_you_up"),
+        ),
+    )
+    state = _arena()
+    reduced = apply_cost_reductions(bogus, state, 0, bogus.mana_cost)
+    assert reduced.generic == 3  # unchanged
+    assert any("unknown cost-reduction" in l for l in state.log)
+
+
+def test_mana_cost_reduced_never_below_zero():
+    from mtg_bot.cards import ManaCost
+
+    mc = ManaCost(generic=2, colored=(("U", 1),))
+    assert mc.reduced(0) is mc  # no-op
+    assert mc.reduced(5).generic == 0  # clamped
+    assert mc.reduced(5).colored == (("U", 1),)  # colored unchanged
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

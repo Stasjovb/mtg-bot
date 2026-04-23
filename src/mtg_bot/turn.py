@@ -445,6 +445,7 @@ def run_cleanup_step(state: GameState) -> None:
     # Reset per-player spell counters for "your Nth spell" triggers.
     for p in state.players:
         p.spells_cast_this_turn = 0
+        p.attacked_with_spacecraft_this_turn = False
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
 

@@ -58,6 +58,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     p = state.player_by_id(player_id)
 
+    from mtg_bot.actions import apply_cost_reductions
+
+    def _effective_cost(card, base_cost):
+        return apply_cost_reductions(card.printing, state, player_id, base_cost)
+
     # Instant-speed-castable: instants AND any permanent spell with flash.
     for card in p.hand:
         instant_speed = (
@@ -66,11 +71,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if not instant_speed:
             continue
         if can_pay_cost(
-            state, player_id, card.printing.mana_cost
+            state, player_id, _effective_cost(card, card.printing.mana_cost)
         ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id))
         if card.printing.warp_cost is not None and can_pay_cost(
-            state, player_id, card.printing.warp_cost
+            state, player_id,
+            _effective_cost(card, card.printing.warp_cost),
         ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id, use_warp=True))
 
@@ -102,11 +108,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             continue
         if _is_sorcery_speed_spell(card):
             if can_pay_cost(
-                state, player_id, card.printing.mana_cost
+                state, player_id,
+                _effective_cost(card, card.printing.mana_cost),
             ) and _targets_are_satisfiable(state, player_id, card):
                 actions.append(CastSpell(card.id))
             if card.printing.warp_cost is not None and can_pay_cost(
-                state, player_id, card.printing.warp_cost
+                state, player_id,
+                _effective_cost(card, card.printing.warp_cost),
             ) and _targets_are_satisfiable(state, player_id, card):
                 actions.append(CastSpell(card.id, use_warp=True))
 
@@ -119,7 +127,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if card.printing.is_instant:
             continue  # handled above at instant speed (none yet in the pool)
         if can_pay_cost(
-            state, player_id, card.printing.mana_cost
+            state, player_id,
+            _effective_cost(card, card.printing.mana_cost),
         ) and _targets_are_satisfiable(state, player_id, card):
             actions.append(CastSpell(card.id))
 

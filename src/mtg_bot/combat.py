@@ -58,6 +58,11 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
         if "vigilance" not in effective_keywords(state, obj):
             tap_permanent(state, obj)
         state.log.append(f"{obj.printing.name} attacks")
+        # Track "attacked with a Spacecraft this turn" for cost reductions.
+        if obj.printing.is_spacecraft:
+            state.player_by_id(
+                obj.controller_id
+            ).attacked_with_spacecraft_this_turn = True
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:

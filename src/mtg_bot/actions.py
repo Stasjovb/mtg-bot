@@ -99,6 +99,59 @@ def can_pay_cost(state: GameState, player_id: int, cost: ManaCost) -> bool:
     return len(remaining) >= cost.generic
 
 
+def apply_cost_reductions(
+    printing: "CardPrinting",
+    state: GameState,
+    caster_id: int,
+    base_cost: ManaCost,
+) -> ManaCost:
+    """Walk ``printing.cost_reductions`` and return a ManaCost with
+    generic mana reduced accordingly. Unknown conditions are treated as
+    False (no reduction), which is safe and warns via a log entry.
+
+    Known conditions:
+      - ``another_spell_cast_this_turn``: caster's spells_cast_this_turn
+        is already ≥ 1 (this spell will be their 2nd or later).
+      - ``attacked_with_spacecraft_this_turn``: caster attacked with any
+        Spacecraft earlier this turn.
+      - ``per_differently_named_land`` (with ``per_land_group=True``):
+        amount is multiplied by the number of distinct basic-land names
+        the caster controls.
+    """
+    cost = base_cost
+    for rule in printing.cost_reductions:
+        reduction = 0
+        if rule.condition == "another_spell_cast_this_turn":
+            if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
+                reduction = rule.amount
+        elif rule.condition == "attacked_with_spacecraft_this_turn":
+            if state.player_by_id(
+                caster_id
+            ).attacked_with_spacecraft_this_turn:
+                reduction = rule.amount
+        elif rule.condition == "per_differently_named_land":
+            if rule.per_land_group:
+                names: set[str] = set()
+                for o in state.battlefield:
+                    if (
+                        o.controller_id == caster_id
+                        and o.printing.is_land
+                    ):
+                        names.add(o.printing.name)
+                reduction = rule.amount * len(names)
+        else:
+            state.log.append(
+                f"unknown cost-reduction condition {rule.condition!r}; "
+                f"treating as no reduction"
+            )
+        if reduction > 0:
+            cost = cost.reduced(reduction)
+            state.log.append(
+                f"cost reduced by {reduction} ({rule.condition})"
+            )
+    return cost
+
+
 def auto_tap_for_cost(
     state: GameState, player_id: int, cost: ManaCost
 ) -> list[GameObject]:
@@ -197,6 +250,10 @@ def _cast_spell(
         # does NOT re-trigger the warp-exile cycle.
         card.cast_via_warp = False
 
+    # Apply cost reductions (e.g., "costs {3} less if you've cast another
+    # spell this turn"). Warp costs are reduced too — the rules don't
+    # special-case this.
+    cost = apply_cost_reductions(card.printing, state, player_id, cost)
     auto_tap_for_cost(state, player_id, cost)
     card.zone = Zone.STACK
     card.controller_id = player_id
