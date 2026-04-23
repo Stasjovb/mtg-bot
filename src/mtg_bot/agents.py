@@ -87,6 +87,16 @@ class Agent:
         chosen mode. Default: 0 (first mode)."""
         raise NotImplementedError
 
+    def choose_pay_shock_life(
+        self,
+        state: "GameState",
+        player_id: int,
+        life_cost: int,
+    ) -> bool:
+        """When playing a shock land, decide: True = pay ``life_cost``
+        life and enter untapped; False = enter tapped."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -135,3 +145,8 @@ class RandomAgent(Agent):
 
     def choose_mode(self, state, player_id, mode_descriptions):
         return self.rng.randrange(len(mode_descriptions))
+
+    def choose_pay_shock_life(self, state, player_id, life_cost):
+        # Simple heuristic: pay the life if we have healthy buffer,
+        # otherwise enter tapped.
+        return state.player_by_id(player_id).life > life_cost + 3

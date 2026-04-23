@@ -186,6 +186,11 @@ class CardPrinting:
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
     equipment_bonuses: tuple[int, int, frozenset[str]] | None = None
+    # Shock-land-style optional ETB life cost. When nonzero, _play_land
+    # asks the controller's agent whether to pay; yes pays the life and
+    # enters untapped, no enters tapped. 0 means "no choice — enters
+    # per its usual rules".
+    shock_land_life_cost: int = 0
     # Cost reductions: rules that lower this spell's generic mana cost
     # when specific conditions hold at cast time (e.g., "costs {3} less
     # if you've cast another spell this turn"). Consumed by
@@ -563,6 +568,29 @@ def make_token_creature(
     )
 
 
+def make_shock_land(
+    name: str, colors: tuple[str, str], subtypes_str: str,
+    life_cost: int = 2,
+) -> CardPrinting:
+    """Build a shock-land-style dual. ``subtypes_str`` is the type-line
+    suffix (e.g. "Forest Island"). The land produces both ``colors`` and
+    enters tapped unless the controller pays ``life_cost`` life on ETB.
+    """
+    type_line = f"Land — {subtypes_str}"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        produces=frozenset(colors),
+        shock_land_life_cost=life_cost,
+    )
+
+
 def make_basic_land(name: str, color: str) -> CardPrinting:
     type_line = f"Basic Land — {name}"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -584,6 +612,28 @@ BASIC_LANDS: dict[str, CardPrinting] = {
     "Swamp": make_basic_land("Swamp", "B"),
     "Mountain": make_basic_land("Mountain", "R"),
     "Forest": make_basic_land("Forest", "G"),
+}
+
+
+# Shock-land cycle from EoE. Each is Land — L1 L2 producing both colors,
+# "As this land enters, you may pay 2 life. If you don't, it enters
+# tapped."
+SHOCK_LANDS: dict[str, CardPrinting] = {
+    "Breeding Pool": make_shock_land(
+        "Breeding Pool", ("G", "U"), "Forest Island",
+    ),
+    "Godless Shrine": make_shock_land(
+        "Godless Shrine", ("W", "B"), "Plains Swamp",
+    ),
+    "Sacred Foundry": make_shock_land(
+        "Sacred Foundry", ("R", "W"), "Mountain Plains",
+    ),
+    "Stomping Ground": make_shock_land(
+        "Stomping Ground", ("R", "G"), "Mountain Forest",
+    ),
+    "Watery Grave": make_shock_land(
+        "Watery Grave", ("U", "B"), "Island Swamp",
+    ),
 }
 
 
@@ -2347,7 +2397,7 @@ CREATURE_POOL: dict[str, CardPrinting] = NONLAND_POOL
 
 
 def all_printings() -> dict[str, CardPrinting]:
-    return {**BASIC_LANDS, **NONLAND_POOL}
+    return {**BASIC_LANDS, **SHOCK_LANDS, **NONLAND_POOL}
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:

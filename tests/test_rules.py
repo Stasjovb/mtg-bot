@@ -6317,6 +6317,76 @@ def test_delayed_trigger_waits_for_correct_turn():
     assert len(state.delayed_triggers) == 1
 
 
+def test_shock_land_agent_pays_life_enters_untapped():
+    from mtg_bot.actions import _play_land
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import SHOCK_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    shock = state.new_object(
+        SHOCK_LANDS["Sacred Foundry"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(shock)
+    life_before = state.players[0].life  # default 20 → healthy
+    _play_land(state, 0, shock.id)
+    assert shock in state.battlefield
+    assert shock.tapped is False
+    assert state.players[0].life == life_before - 2
+
+
+def test_shock_land_agent_declines_low_life_enters_tapped():
+    from mtg_bot.actions import _play_land
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import SHOCK_LANDS
+
+    state = _arena(p0_life=3)
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    shock = state.new_object(
+        SHOCK_LANDS["Watery Grave"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(shock)
+    _play_land(state, 0, shock.id)
+    assert shock in state.battlefield
+    assert shock.tapped is True
+    assert state.players[0].life == 3
+
+
+def test_shock_land_produces_both_colors():
+    from mtg_bot.cards import SHOCK_LANDS
+
+    for name, expected_colors in {
+        "Breeding Pool": {"G", "U"},
+        "Godless Shrine": {"W", "B"},
+        "Sacred Foundry": {"R", "W"},
+        "Stomping Ground": {"R", "G"},
+        "Watery Grave": {"U", "B"},
+    }.items():
+        card = SHOCK_LANDS[name]
+        assert card.produces == expected_colors
+        assert card.shock_land_life_cost == 2
+
+
+def test_shock_land_without_agent_enters_normal():
+    """Edge case: if somehow there's no agent, skip the shock-life
+    decision and enter untapped (defensive)."""
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards import SHOCK_LANDS
+
+    state = _arena()
+    state.players[0].agent = None
+    shock = state.new_object(
+        SHOCK_LANDS["Breeding Pool"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(shock)
+    _play_land(state, 0, shock.id)
+    assert shock in state.battlefield
+    assert shock.tapped is False  # no agent → didn't take the branch
+    assert state.players[0].life == 20  # no life paid
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

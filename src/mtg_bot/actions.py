@@ -207,6 +207,23 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
     card.tapped = False
+    # Shock land: optional life payment on ETB. Agent decides; if they
+    # can't/won't pay, the land enters tapped.
+    life_cost = card.printing.shock_land_life_cost
+    if life_cost > 0 and p.agent is not None:
+        pay = p.agent.choose_pay_shock_life(state, player_id, life_cost)
+        if pay:
+            p.life -= life_cost
+            state.log.append(
+                f"P{player_id} pays {life_cost} life for "
+                f"{card.printing.name} (life: {p.life})"
+            )
+        else:
+            card.tapped = True
+            state.log.append(
+                f"P{player_id} declines shock life — "
+                f"{card.printing.name} enters tapped"
+            )
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
