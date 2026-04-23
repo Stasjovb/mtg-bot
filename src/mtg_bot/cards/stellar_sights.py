@@ -83,8 +83,14 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Cathedral of War": make_colorless_land(  # dropped Exalted.
+    # Cathedral of War: enters tapped, {T}: Add {C}. Exalted (whenever
+    # a creature you control attacks alone, it gets +1/+1 UEOT).
+    # Simplification: Exalted dropped — the engine has no "attacks alone"
+    # trigger machinery. Taps-for-C + enters-tapped still matter for
+    # mana sequencing, so restoring the timing half is still worthwhile.
+    "Cathedral of War": make_utility_land(
         "Cathedral of War",
+        enters_tapped=True,
     ),
     # Celestial Colonnade: enters tapped, {T}: W or U, {3}{W}{U}:
     # → 4/4 W/U Elemental flying vigilance UEOT.
@@ -181,8 +187,39 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Eldrazi Temple": make_colorless_land(  # dropped tap-for-2-when-casting-Eldrazi.
         "Eldrazi Temple",
     ),
-    "Endless Sands": make_colorless_land(  # dropped exile-creature-return activated.
+    # Endless Sands: {T}: Add {C}. {3},{T}: Exile target creature you
+    # control. {3},{T}, Sacrifice this land: Return each card exiled
+    # with this to the battlefield under its owner's control.
+    #
+    # Simplification: the engine's _release_exiled_until_leaves auto-
+    # returns exiled creatures when ANY source leaves the battlefield,
+    # including a non-sac destruction. Oracle would keep them exiled
+    # permanently if the land died to e.g. Strip Mine. Close enough
+    # for this scope — flavor preserved; rare edge case drops.
+    "Endless Sands": make_utility_land(
         "Endless Sands", subtypes_str="Desert",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                ),
+                effect=ExileTargetCreatureUntilSourceLeaves(yours_only=True),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                # The sac cost itself triggers
+                # _release_exiled_until_leaves via move_off_battlefield,
+                # so the effect body is empty.
+                effect=Sequence(effects=()),
+            ),
+        ),
     ),
     "Gemstone Caverns": make_colorless_land(  # dropped opening-hand luck-counter + any-color.
         "Gemstone Caverns", legendary=True,
@@ -254,8 +291,31 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Inventors' Fair": make_colorless_land(  # dropped gain-1-upkeep + tutor-artifact activated.
+    # Inventors' Fair: enters tapped, {T}: Add {C}. At the beginning of
+    # your upkeep, if you control three or more artifacts, you gain 1
+    # life. {1},{T}, Sacrifice this land: Search your library for an
+    # artifact card, put it into your hand, then shuffle.
+    #
+    # Simplification: the upkeep gain-1-life trigger is dropped — the
+    # engine currently has no beginning_of_upkeep trigger type (end-step
+    # is the closest analogue and would fire on the wrong step). The
+    # tutor activated ability is restored.
+    "Inventors' Fair": make_utility_land(
         "Inventors' Fair", legendary=True,
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=SearchLibraryForCard(
+                    filter_name="artifact", may_fail=False,
+                ),
+            ),
+        ),
     ),
     # Lavaclaw Reaches: enters tapped, {T}: B or R, {1}{B}{R}: → 2/2
     # B/R Elemental UEOT. Real oracle also grants "{X}: +X/+0 UEOT"

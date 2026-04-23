@@ -2560,10 +2560,15 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
     ``opponents_only`` restricts legal targets to creatures controlled
     by a player OTHER than the effect's controller (Hardlight
     Containment: "target creature an opponent controls"). Default False.
+
+    ``yours_only`` restricts legal targets to creatures the effect's
+    controller controls (Endless Sands: "target creature you control").
+    Mutually exclusive with ``opponents_only``.
     """
 
     excluded_subtypes: frozenset[str] = frozenset()
     opponents_only: bool = False
+    yours_only: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -2581,6 +2586,9 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
             )
             and not (
                 self.opponents_only and o.controller_id == controller_id
+            )
+            and not (
+                self.yours_only and o.controller_id != controller_id
             )
         ]
 
