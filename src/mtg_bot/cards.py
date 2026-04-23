@@ -73,7 +73,9 @@ from mtg_bot.effects import (
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
+    CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     ExileAllCreaturesAndSpacecraft,
+    ZeroPointBalladEffect,
     ModalChooseOne,
     FocusFireEffect,
     OptionalSacAnotherForEffect,
@@ -100,6 +102,11 @@ COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
 class ManaCost:
     generic: int = 0
     colored: tuple[tuple[str, int], ...] = ()
+    # Number of {X} symbols in the printed cost. The actual generic mana
+    # paid at cast time is ``generic + x_pips * X`` where X is the
+    # caster's chosen value. Stored separately so a card's "templated"
+    # cost stays distinct from its paid cost.
+    x_pips: int = 0
 
     @property
     def total(self) -> int:
@@ -143,6 +150,7 @@ def parse_mana_cost(s: str) -> ManaCost:
         return ManaCost()
     generic = 0
     colored: dict[str, int] = {}
+    x_pips = 0
     for sym in re.findall(r"\{([^}]+)\}", s):
         if sym.isdigit():
             generic += int(sym)
@@ -151,13 +159,14 @@ def parse_mana_cost(s: str) -> ManaCost:
         elif sym == "C":
             generic += 1
         elif sym == "X":
-            # Variable cost — we don't model X-cost choice yet, so X
-            # contributes 0 to the payable cost. Functional but wrong
-            # for cards whose effect scales with X.
-            pass
+            x_pips += 1
         else:
             raise ValueError(f"unsupported mana symbol: {{{sym}}}")
-    return ManaCost(generic=generic, colored=tuple(sorted(colored.items())))
+    return ManaCost(
+        generic=generic,
+        colored=tuple(sorted(colored.items())),
+        x_pips=x_pips,
+    )
 
 
 @dataclass(frozen=True)
@@ -224,6 +233,13 @@ class CardPrinting:
     static_abilities: tuple[StaticAbility, ...] = ()
     # Abilities the controller may activate by paying a cost.
     activated_abilities: tuple["ActivatedAbility", ...] = ()
+    # "Enters with +1/+1 counters" replacement effects tied to the cast-time
+    # choice of X. Consumed by actions.put_into_battlefield.
+    #   ``"x"`` — enters with state.resolving_x_value counters (Broodguard).
+    #   ``"mana_spent"`` — enters with counters equal to total mana paid,
+    #     i.e. X + base generic + colored pips (Dyadrine).
+    #   None — no such replacement.
+    enters_with_counters_from_x: str | None = None
 
     @property
     def is_land(self) -> bool:
@@ -301,6 +317,7 @@ def make_creature(
     ward: str | None = None,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
+    enters_with_counters_from_x: str | None = None,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -325,6 +342,7 @@ def make_creature(
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
         cost_reductions=tuple(cost_reductions),
+        enters_with_counters_from_x=enters_with_counters_from_x,
     )
 
 
@@ -2891,8 +2909,17 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # (empty bodies, vanilla bodies, or small placeholder effects).
         # Each card is noted per-item. These are pool-completeness ships;
         # they're playable but functionally much weaker than printed.
-        make_creature(  # Broodguard Elite — X-cost + sac-lands devour. Ship as 3/3 vanilla.
-            "Broodguard Elite", "{3}{G}{G}", 3, 3,
+        # Broodguard Elite — `{X}{G}{G}` enters with X +1/+1 counters.
+        # Full oracle also has Warp `{X}{G}` and a leaves-battlefield
+        # "put its counters on target creature you control" trigger.
+        # Warp side handled via warp_cost parsing (x_pips supported).
+        # The leaves-battlefield counter-transfer is the remaining
+        # simplification — will follow when the counter-moving leaves
+        # trigger gets a generic implementation.
+        make_creature(
+            "Broodguard Elite", "{X}{G}{G}", 0, 0,
+            warp="{X}{G}",
+            enters_with_counters_from_x="x",
         ),
         make_creature(  # Famished Worldsire — complex Devour + search. Ship as 6/6 vanilla.
             "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
@@ -2909,11 +2936,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_creature(  # Cosmogoyf — dynamic P/T. Ship 3/4 vanilla.
             "Cosmogoyf", "{B}{G}", 3, 4,
         ),
-        make_creature(  # Dyadrine — X + attack-trigger counters. Ship 4/4 Trample vanilla.
-            "Dyadrine, Synthesis Amalgam", "{X}{G}{W}", 4, 4,
+        # Dyadrine, Synthesis Amalgam `{X}{G}{W}` — Trample. Enters with
+        # +1/+1 counters equal to the amount of mana spent to cast it
+        # (X + 2, since the base cost has {G}{W}). Attack trigger
+        # (remove-counters → draw + Robot token) still simplified away.
+        make_creature(
+            "Dyadrine, Synthesis Amalgam", "{X}{G}{W}", 0, 1,
             artifact=True,
             legendary=True,
             keywords={"trample"},
+            enters_with_counters_from_x="mana_spent",
         ),
         make_creature(  # Virulent Silencer — poison-counter mechanic. Ship 2/3 Flying vanilla.
             "Virulent Silencer", "{3}", 2, 3,
@@ -3049,15 +3081,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=DrawCards(amount=1),
         ),
         # Sorceries — remaining ones shipped as minimal approximations.
-        make_sorcery(  # Zero Point Ballad — X-cost complex. Ship as plain wrath.
+        # Zero Point Ballad `{X}{B}` — full effect: destroy creatures
+        # with toughness ≤ X, caster loses X life, if X ≥ 6 return a
+        # creature card put into a graveyard this way.
+        make_sorcery(
             "Zero Point Ballad", "{X}{B}",
-            effect=DestroyAllCreatures(),
+            effect=ZeroPointBalladEffect(),
         ),
-        make_sorcery(  # Devastating Onslaught — X-tokens copy. Ship as plain Robot token create.
+        # Devastating Onslaught `{X}{X}{R}` — create X tokens that are
+        # copies of target artifact or creature you control; they gain
+        # haste until end of turn and are sacrificed at the next end step.
+        make_sorcery(
             "Devastating Onslaught", "{X}{X}{R}",
-            effect=CreateToken(
-                token_printing=TOKEN_PRINTINGS["Robot"], count=1
-            ),
+            effect=CreateXTokensOfTargetPermanentWithHasteEndStepSac(),
         ),
         make_sorcery(  # Systems Override — gain-control complex. Ship as plain haste pump.
             "Systems Override", "{2}{R}",

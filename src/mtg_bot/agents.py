@@ -120,6 +120,19 @@ class Agent:
         an id from ``option_ids`` to fetch that specific card."""
         raise NotImplementedError
 
+    def choose_x(
+        self,
+        state: "GameState",
+        player_id: int,
+        card_name: str,
+        upper_bound: int,
+    ) -> int:
+        """For spells or abilities with {X} in their cost, pick a value
+        for X at cast time. ``upper_bound`` is the maximum X that the
+        player can afford with currently-available mana. Must return
+        an int in ``[0, upper_bound]``."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -181,3 +194,9 @@ class RandomAgent(Agent):
         if not option_ids:
             return None
         return self.rng.choice(option_ids)
+
+    def choose_x(self, state, player_id, card_name, upper_bound):
+        # Commit all available mana to X. Maximises spell impact, which is
+        # almost always correct for a random-action baseline — saving mana
+        # rarely pays off when the agent picks moves uniformly at random.
+        return upper_bound

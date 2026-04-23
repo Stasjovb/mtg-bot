@@ -182,6 +182,10 @@ class StackItem:
     # to its owner's graveyard (for instants/sorceries) or vanishing
     # (for permanents) without firing any effects/ETBs.
     countered: bool = False
+    # The value chosen for {X} in this spell's cost (0 for non-X spells).
+    # Set by _cast_spell via agent.choose_x; exposed to the resolving
+    # effect via state.resolving_x_value.
+    x_value: int = 0
 
 
 @dataclass
@@ -240,6 +244,11 @@ class GameState:
     # "put a +1/+1 counter on this creature" can reach the source without
     # having to thread it through every resolve() signature.
     resolving_source: Optional[GameObject] = None
+    # Value of {X} for the currently-resolving spell or ability. Mirrors
+    # StackItem.x_value during resolution so effects can read X without
+    # threading it through every resolve() signature. 0 when no X spell
+    # is resolving.
+    resolving_x_value: int = 0
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

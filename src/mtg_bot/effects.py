@@ -2619,6 +2619,157 @@ class DestroyAllCreatures(Effect):
 
 
 @dataclass(frozen=True)
+class ZeroPointBalladEffect(Effect):
+    """Zero Point Ballad `{X}{B}`:
+    "Destroy all creatures with toughness X or less. You lose X life. If
+    X is 6 or more, return a creature card put into a graveyard this way
+    to the battlefield under your control."
+
+    Reads X from ``state.resolving_x_value``. For the X≥6 clause, a
+    creature card is "put into a graveyard this way" only if it was
+    destroyed by the first clause AND landed in the caster's graveyard
+    (i.e. the caster owned it). The agent picks one of those candidates
+    via ``choose_target`` (kind=``creature_card``); declining is legal —
+    the reanimation is optional.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import effective_toughness
+        from mtg_bot.turn import destroy
+
+        x = state.resolving_x_value
+        victims = [
+            o for o in state.battlefield
+            if o.printing.is_creature and effective_toughness(state, o) <= x
+        ]
+        caster_owned_victim_ids = {
+            o.id for o in victims if o.owner_id == controller_id
+        }
+        for obj in victims:
+            state.log.append(
+                f"{obj.printing.name} destroyed by Zero Point Ballad "
+                f"(X={x})"
+            )
+            destroy(state, obj)
+
+        p = state.player_by_id(controller_id)
+        p.life -= x
+        state.log.append(
+            f"P{controller_id} loses {x} life to Zero Point Ballad "
+            f"(life: {p.life})"
+        )
+
+        if x >= 6:
+            candidates = [
+                c for c in p.graveyard
+                if c.id in caster_owned_victim_ids
+                and c.printing.is_creature
+            ]
+            if candidates and p.agent is not None:
+                legal = [("creature_card", c.id) for c in candidates]
+                chosen = p.agent.choose_target(state, controller_id, legal)
+                if chosen is not None:
+                    card = next(
+                        (c for c in candidates if c.id == chosen[1]), None
+                    )
+                    if card is not None:
+                        p.graveyard.remove(card)
+                        put_into_battlefield(state, card, controller_id)
+                        state.log.append(
+                            f"Zero Point Ballad returns "
+                            f"{card.printing.name} to the battlefield"
+                        )
+
+    def describe(self) -> str:
+        return (
+            "destroy all creatures with toughness X or less; you lose X "
+            "life; if X is 6 or more, return a creature card put into a "
+            "graveyard this way to the battlefield under your control"
+        )
+
+
+@dataclass(frozen=True)
+class CreateXTokensOfTargetPermanentWithHasteEndStepSac(Effect):
+    """Devastating Onslaught `{X}{X}{R}`:
+    "Create X tokens that are copies of target artifact or creature you
+    control. Those tokens gain haste until end of turn. Sacrifice them
+    at the beginning of the next end step."
+
+    Reads X from ``state.resolving_x_value``. Each token copies the
+    target's printing directly (shared CardPrinting) and enters with a
+    ``haste`` temp keyword. A delayed "sacrifice at end of turn"
+    trigger is scheduled per token so they're cleaned up automatically.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.controller_id == controller_id
+            and (o.printing.is_artifact or o.printing.is_creature)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, tid = targets[0]
+        target = next((o for o in state.battlefield if o.id == tid), None)
+        if target is None:
+            return
+        x = state.resolving_x_value
+        if x <= 0:
+            return
+        for _ in range(x):
+            token = state.new_object(
+                target.printing,
+                owner_id=controller_id,
+                zone=Zone.BATTLEFIELD,
+            )
+            # Temporarily suppress the "enters with X counters" replacement
+            # when putting token copies into play — tokens copy printed
+            # characteristics but X is 0 for them (they weren't cast).
+            saved_x = state.resolving_x_value
+            state.resolving_x_value = 0
+            try:
+                put_into_battlefield(state, token, controller_id)
+            finally:
+                state.resolving_x_value = saved_x
+            token.temp_keywords = token.temp_keywords | frozenset({"haste"})
+            state.delayed_triggers.append({
+                "fire_at_turn": state.turn_number,
+                "controller_id": controller_id,
+                "action": "sacrifice",
+                "target_id": token.id,
+            })
+        state.log.append(
+            f"Devastating Onslaught creates {x} copies of "
+            f"{target.printing.name} with haste (sac at end step)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "create X tokens that are copies of target artifact or "
+            "creature you control; they gain haste until end of turn; "
+            "sacrifice them at the beginning of the next end step"
+        )
+
+
+@dataclass(frozen=True)
 class ExileAllCreaturesAndSpacecraft(Effect):
     """Exile every creature on the battlefield, as well as Spacecraft (whether
     or not the Spacecraft has been stationed into creature mode).

@@ -164,6 +164,48 @@ def apply_cost_reductions(
     return cost
 
 
+def _x_upper_bound(
+    state: GameState, player_id: int, base_cost: ManaCost
+) -> int:
+    """Max X the caster can afford for ``base_cost`` (which still has its
+    ``x_pips`` set). Iterates upward from 0 until a payment with the next
+    X would exceed available mana. Practical X values are small (0–6),
+    so linear probing is fine.
+    """
+    x = 0
+    while True:
+        trial = ManaCost(
+            generic=base_cost.generic + base_cost.x_pips * (x + 1),
+            colored=base_cost.colored,
+        )
+        if not can_pay_cost(state, player_id, trial):
+            return x
+        x += 1
+
+
+def _choose_and_apply_x(
+    state: GameState, player_id: int, card: GameObject, cost: ManaCost
+) -> int:
+    """Ask the caster's agent for an X value, bounded by what they can
+    actually pay. Returns the chosen X (clamped into ``[0, upper_bound]``)
+    and logs the choice.
+    """
+    p = state.player_by_id(player_id)
+    upper_bound = _x_upper_bound(state, player_id, cost)
+    if p.agent is None:  # pragma: no cover - games run with agents set
+        chosen = 0
+    else:
+        chosen = p.agent.choose_x(
+            state, player_id, card.printing.name, upper_bound
+        )
+    if chosen < 0:
+        chosen = 0
+    if chosen > upper_bound:
+        chosen = upper_bound
+    state.log.append(f"P{player_id} chooses X={chosen} for {card.printing.name}")
+    return chosen
+
+
 def auto_tap_for_cost(
     state: GameState, player_id: int, cost: ManaCost
 ) -> list[GameObject]:
@@ -284,6 +326,16 @@ def _cast_spell(
     # spell this turn"). Warp costs are reduced too — the rules don't
     # special-case this.
     cost = apply_cost_reductions(card.printing, state, player_id, cost)
+    # X-cost spells: ask the agent how much X to pay, fold X*x_pips into
+    # generic, then zero x_pips so the payment step sees a concrete cost.
+    x_value = 0
+    if cost.x_pips > 0:
+        x_value = _choose_and_apply_x(state, player_id, card, cost)
+        cost = ManaCost(
+            generic=cost.generic + cost.x_pips * x_value,
+            colored=cost.colored,
+            x_pips=0,
+        )
     auto_tap_for_cost(state, player_id, cost)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
@@ -358,7 +410,7 @@ def _cast_spell(
     state.stack.append(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
-            countered=countered,
+            countered=countered, x_value=x_value,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -633,58 +685,64 @@ def resolve_top_of_stack(state: GameState) -> None:
             f"{item.source.printing.name}'s triggered ability resolves"
         )
         state.resolving_source = item.source
+        state.resolving_x_value = item.x_value
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
             state.resolving_source = None
+            state.resolving_x_value = 0
         return
 
     # Spell resolution
     card = item.source
-    if card.printing.is_permanent and not (
-        card.printing.is_instant or card.printing.is_sorcery
-    ):
-        # Aura: check the cast-time target is still a legal creature. If
-        # not, the Aura fizzles to its owner's graveyard without entering.
-        if card.printing.is_aura:
-            target_obj = None
-            if item.targets:
-                kind, target_id = item.targets[0]
-                if kind == "creature":
-                    target_obj = next(
-                        (o for o in state.battlefield
-                         if o.id == target_id and o.printing.is_creature),
-                        None,
+    state.resolving_x_value = item.x_value
+    try:
+        if card.printing.is_permanent and not (
+            card.printing.is_instant or card.printing.is_sorcery
+        ):
+            # Aura: check the cast-time target is still a legal creature. If
+            # not, the Aura fizzles to its owner's graveyard without entering.
+            if card.printing.is_aura:
+                target_obj = None
+                if item.targets:
+                    kind, target_id = item.targets[0]
+                    if kind == "creature":
+                        target_obj = next(
+                            (o for o in state.battlefield
+                             if o.id == target_id and o.printing.is_creature),
+                            None,
+                        )
+                if target_obj is None:
+                    state.log.append(
+                        f"{card.printing.name} fizzles (no legal enchant target)"
                     )
-            if target_obj is None:
+                    card.zone = Zone.GRAVEYARD
+                    state.player_by_id(card.owner_id).graveyard.append(card)
+                    return
+                card.attached_to = target_obj.id
                 state.log.append(
-                    f"{card.printing.name} fizzles (no legal enchant target)"
+                    f"{card.printing.name} enters attached to "
+                    f"{target_obj.printing.name}"
                 )
-                card.zone = Zone.GRAVEYARD
-                state.player_by_id(card.owner_id).graveyard.append(card)
-                return
-            card.attached_to = target_obj.id
-            state.log.append(
-                f"{card.printing.name} enters attached to "
-                f"{target_obj.printing.name}"
-            )
-        else:
-            state.log.append(
-                f"{card.printing.name} resolves onto the battlefield"
-            )
-        put_into_battlefield(state, card, item.controller_id)
-        return
-    if card.printing.is_instant or card.printing.is_sorcery:
-        state.log.append(f"{card.printing.name} resolves")
-        if card.printing.spell_effect is not None:
-            card.printing.spell_effect.resolve(
-                state, item.controller_id, item.targets
-            )
-        # Non-permanent spells go to their owner's graveyard.
-        card.zone = Zone.GRAVEYARD
-        state.player_by_id(card.owner_id).graveyard.append(card)
-        return
-    raise ValueError(f"don't know how to resolve {card.printing.name}")
+            else:
+                state.log.append(
+                    f"{card.printing.name} resolves onto the battlefield"
+                )
+            put_into_battlefield(state, card, item.controller_id)
+            return
+        if card.printing.is_instant or card.printing.is_sorcery:
+            state.log.append(f"{card.printing.name} resolves")
+            if card.printing.spell_effect is not None:
+                card.printing.spell_effect.resolve(
+                    state, item.controller_id, item.targets
+                )
+            # Non-permanent spells go to their owner's graveyard.
+            card.zone = Zone.GRAVEYARD
+            state.player_by_id(card.owner_id).graveyard.append(card)
+            return
+        raise ValueError(f"don't know how to resolve {card.printing.name}")
+    finally:
+        state.resolving_x_value = 0
 
 
 def put_into_battlefield(
@@ -703,6 +761,19 @@ def put_into_battlefield(
     obj.controller_id = controller_id
     obj.tapped = False
     obj.summoning_sick = True
+    # "Enters with +1/+1 counters equal to X" replacement effects. Applied
+    # before triggered abilities so any ETB that reads the creature's
+    # state sees the counters already in place.
+    mode = obj.printing.enters_with_counters_from_x
+    if mode == "x":
+        obj.plus_one_counters += state.resolving_x_value
+    elif mode == "mana_spent":
+        mc = obj.printing.mana_cost
+        obj.plus_one_counters += (
+            state.resolving_x_value
+            + mc.generic
+            + sum(n for _, n in mc.colored)
+        )
     state.battlefield.append(obj)
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:
