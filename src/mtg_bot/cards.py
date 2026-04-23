@@ -92,7 +92,9 @@ from mtg_bot.effects import (
     Sequence,
     StaticAbility,
     StaticScope,
+    LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
+    MutinousMassacreEffect,
     Surveil,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
@@ -1841,8 +1843,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying", "lifelink"},
             warp="{1}{W}",
         ),
-        make_creature(  # Pulsar Squadron Ace — dropped library-dig ETB.
+        # Pulsar Squadron Ace: {1}{W} 1/2 Human Pilot. ETB — look at the
+        # top five cards of your library, may reveal a Spacecraft card
+        # and put it into your hand, rest to the bottom in a random
+        # order. If no card was put into your hand this way, put a
+        # +1/+1 counter on this creature.
+        make_creature(
             "Pulsar Squadron Ace", "{1}{W}", 1, 2,
+            subtypes=("Human", "Pilot"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=LookAtTopNRevealOrCounter(
+                        n=5, filter_name="spacecraft",
+                    ),
+                ),
+            ),
         ),
         # Starport Security `{W}` 1/1 Artifact Creature. Activated
         # ability `{3}{W}, {T}: Tap another target creature.`
@@ -3199,9 +3215,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Pull Through the Weft", "{3}{G}{G}",
             effect=ReturnCreatureFromYourGraveyardToHand(),
         ),
-        make_sorcery(  # Mutinous Massacre — odd/even wrath. Ship as plain wrath.
+        # Mutinous Massacre `{3}{B}{B}{R}{R}`:
+        # "Choose odd or even. Destroy each creature with mana value of
+        # the chosen quality. Then gain control of all creatures until
+        # end of turn. Untap them. They gain haste until end of turn."
+        make_sorcery(
             "Mutinous Massacre", "{3}{B}{B}{R}{R}",
-            effect=DestroyAllCreatures(),
+            effect=MutinousMassacreEffect(),
         ),
         # -- Batch of simplified spells. Each drops complex riders in
         # favor of a minimal usable effect. Simplifications noted.

@@ -730,6 +730,100 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class LookAtTopNRevealOrCounter(Effect):
+    """Look at the top ``n`` cards of your library. The controller may
+    reveal one card matching ``filter_name`` and put it into hand.
+    Put the rest on the bottom of the library in a random order. If no
+    card was revealed (either because none matched or the agent
+    declined), put a +1/+1 counter on the source.
+
+    Matches Pulsar Squadron Ace's ETB with ``n=5``, ``filter_name=
+    "spacecraft"``. Reads ``state.resolving_source`` for the counter
+    placement.
+
+    The "random order" shuffle is seeded deterministically on the turn
+    number + controller + library length so tests remain reproducible.
+    """
+
+    n: int = 5
+    filter_name: str = "spacecraft"
+
+    def _matches(self, printing) -> bool:
+        fn = self.filter_name
+        if fn == "spacecraft":
+            return printing.is_spacecraft
+        if fn == "creature":
+            return printing.is_creature
+        if fn == "artifact":
+            return printing.is_artifact
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _random
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        examined = p.library[: self.n]
+        options = [c for c in examined if self._matches(c.printing)]
+        chosen_id = None
+        if options and p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        revealed_card = None
+        if chosen_id is not None:
+            revealed_card = next(
+                (c for c in options if c.id == chosen_id), None
+            )
+        if revealed_card is not None:
+            p.library.remove(revealed_card)
+            revealed_card.zone = Zone.HAND
+            p.hand.append(revealed_card)
+            state.log.append(
+                f"P{controller_id} reveals {revealed_card.printing.name} "
+                f"and puts it into hand"
+            )
+        else:
+            state.log.append(
+                f"P{controller_id} reveals nothing from the top "
+                f"{len(examined)} cards"
+            )
+            source = state.resolving_source
+            if source is not None and source in state.battlefield:
+                source.plus_one_counters += 1
+                state.log.append(
+                    f"{source.printing.name} gets a +1/+1 counter "
+                    f"(now {source.plus_one_counters})"
+                )
+        # Bottom the remainder in a random order. Take up to n cards off
+        # the top (those we examined except the revealed one if any) and
+        # shuffle them onto the bottom.
+        remaining_examined = [
+            c for c in examined if c is not revealed_card
+        ]
+        for c in remaining_examined:
+            p.library.remove(c)
+        rng = _random.Random(
+            hash(("look_top_n", state.turn_number, controller_id,
+                  len(p.library)))
+        )
+        rng.shuffle(remaining_examined)
+        p.library.extend(remaining_examined)
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.n} cards of your library; you may "
+            f"reveal a {self.filter_name} card from among them and put "
+            f"it into your hand; put the rest on the bottom of your "
+            f"library in a random order; if you didn't put a card into "
+            f"your hand this way, put a +1/+1 counter on ~"
+        )
+
+
+@dataclass(frozen=True)
 class LookAtTopTwoSplitHandGraveyard(Effect):
     """Look at the top two cards of your library; put one into your
     hand, the other into your graveyard.
@@ -1364,6 +1458,8 @@ class SearchLibraryForCard(Effect):
             )
         if fn == "artifact":
             return printing.is_artifact
+        if fn == "spacecraft":
+            return printing.is_spacecraft
         return False
 
     def resolve(
@@ -2427,6 +2523,75 @@ class PutStunCounterOnTappedCreature(Effect):
 
     def describe(self) -> str:
         return "put a stun counter on up to one target tapped creature"
+
+
+@dataclass(frozen=True)
+class MutinousMassacreEffect(Effect):
+    """Mutinous Massacre `{3}{B}{B}{R}{R}`:
+    "Choose odd or even. Destroy each creature with mana value of the
+    chosen quality. Then gain control of all creatures until end of
+    turn. Untap them. They gain haste until end of turn. (Zero is even.)"
+
+    The "choose odd or even" pick goes through ``choose_mode`` with
+    descriptions ``["odd", "even"]``. Surviving creatures (those whose
+    mana value parity differed from the chosen one) are all stolen via
+    ``temp_original_controller_id``, untapped, and given haste UEOT.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import destroy
+
+        p = state.player_by_id(controller_id)
+        pick = 0  # 0 = odd, 1 = even
+        if p.agent is not None:
+            pick = p.agent.choose_mode(state, controller_id, ["odd", "even"])
+            pick = max(0, min(pick, 1))
+        chosen_label = "odd" if pick == 0 else "even"
+        state.log.append(
+            f"P{controller_id} chooses {chosen_label} for Mutinous Massacre"
+        )
+        # Destroy phase: each creature whose mana value matches the
+        # chosen parity.
+        victims = []
+        for o in list(state.battlefield):
+            if not o.printing.is_creature:
+                continue
+            mv = o.printing.mana_cost.total
+            if pick == 0 and mv % 2 == 1:
+                victims.append(o)
+            elif pick == 1 and mv % 2 == 0:
+                victims.append(o)
+        for v in victims:
+            state.log.append(
+                f"{v.printing.name} (MV {v.printing.mana_cost.total}) "
+                f"destroyed by Mutinous Massacre ({chosen_label})"
+            )
+            destroy(state, v)
+        # Gain control of all surviving creatures UEOT, untap, haste.
+        for o in state.battlefield:
+            if not o.printing.is_creature:
+                continue
+            if o.controller_id != controller_id:
+                if o.temp_original_controller_id is None:
+                    o.temp_original_controller_id = o.controller_id
+                o.controller_id = controller_id
+            o.tapped = False
+            o.temp_keywords = o.temp_keywords | frozenset({"haste"})
+            state.log.append(
+                f"P{controller_id} takes control of {o.printing.name} "
+                f"UEOT; untaps + gains haste"
+            )
+
+    def describe(self) -> str:
+        return (
+            "choose odd or even; destroy each creature with mana value "
+            "of the chosen quality; then gain control of all creatures "
+            "until end of turn, untap them, they gain haste until end "
+            "of turn"
+        )
 
 
 @dataclass(frozen=True)
