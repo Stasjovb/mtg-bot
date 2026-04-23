@@ -196,6 +196,10 @@ class CardPrinting:
         return "Spacecraft" in self.subtypes
 
     @property
+    def is_aura(self) -> bool:
+        return "Aura" in self.subtypes
+
+    @property
     def is_permanent(self) -> bool:
         """Resolves onto the battlefield when cast."""
         return (
@@ -403,6 +407,44 @@ def make_equipment(
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         activated_abilities=tuple(activated_abilities),
+        equipment_bonuses=(
+            power_bonus, toughness_bonus, frozenset(granted_keywords)
+        ),
+    )
+
+
+def make_aura(
+    name: str,
+    cost: str,
+    power_bonus: int = 0,
+    toughness_bonus: int = 0,
+    granted_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+) -> CardPrinting:
+    """Build an Enchantment — Aura card that attaches to a creature.
+
+    ``power_bonus``/``toughness_bonus``/``granted_keywords`` define the
+    continuous bonus granted to the enchanted creature; we reuse the
+    Equipment bonus machinery (equipment_bonuses) so effective_* helpers
+    pick them up automatically.
+
+    Simplified Aura behavior: cast-time target must be a creature; on
+    resolution the Aura enters attached to that target (or goes to the
+    graveyard if the target is no longer legal). When the enchanted
+    creature leaves the battlefield, the Aura is sent to the graveyard
+    (unlike Equipment, which falls off but stays).
+    """
+    type_line = "Enchantment — Aura"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered_abilities),
         equipment_bonuses=(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
@@ -1796,6 +1838,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PumpSelfUntilEOT(power_bonus=1),
                 ),
             ),
+        ),
+        # Cryoshatter: {U} Aura. Enchanted creature gets -5/-0.
+        # Simplified: drops the "when enchanted creature becomes tapped
+        # or is dealt damage, destroy it" compound trigger.
+        make_aura(
+            "Cryoshatter", "{U}",
+            power_bonus=-5, toughness_bonus=0,
+        ),
+        # Meltstrider's Resolve: {G} Aura. Enchanted creature gets +0/+2
+        # and has menace (modeling "can't be blocked by more than one
+        # creature"). Dropped: "when this Aura enters, enchanted creature
+        # fights up to one target creature an opponent controls" ETB.
+        make_aura(
+            "Meltstrider's Resolve", "{G}",
+            power_bonus=0, toughness_bonus=2,
+            granted_keywords=frozenset({"menace"}),
         ),
         # Bioengineered Future: {1}{G}{G} Enchantment. ETB create a
         # Lander token. Simplified: drops the "each creature you control

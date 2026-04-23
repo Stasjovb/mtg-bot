@@ -90,11 +90,22 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
-    # Any Equipment attached to this object falls off (stays on
-    # battlefield, attached_to cleared).
-    for equip in state.battlefield:
-        if equip.attached_to == obj.id:
-            equip.attached_to = None
+    # Any attachment on this object: Equipment falls off (stays on
+    # battlefield, attached_to cleared); Auras are sent to their
+    # owners' graveyards.
+    auras_to_bury: list = []
+    for att in state.battlefield:
+        if att.attached_to != obj.id:
+            continue
+        if att.printing.is_aura:
+            auras_to_bury.append(att)
+        else:
+            att.attached_to = None
+    for aura in auras_to_bury:
+        state.log.append(
+            f"{aura.printing.name} falls off and is buried"
+        )
+        move_off_battlefield(state, aura, destination="graveyard")
     state.battlefield.remove(obj)
     obj.damage = 0
     obj.marked_lethal = False

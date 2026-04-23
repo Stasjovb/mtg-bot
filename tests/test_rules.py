@@ -6021,6 +6021,135 @@ def test_full_bore_pumps_own_creature():
     assert effective_toughness(state, ally) == 4  # 2 + 2
 
 
+def test_cryoshatter_aura_attaches_and_debuffs():
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # Fund {U}.
+    mana = state.new_object(
+        BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mana)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )  # 4/4 — with -5/-0, SBAs should eventually kill it via damage
+    state.battlefield.append(victim)
+    cryo_in_hand = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(cryo_in_hand)
+    _cast_spell(state, 0, cryo_in_hand.id)
+    resolve_top_of_stack(state)
+    # Cryoshatter is on battlefield, attached to Leviathan.
+    assert cryo_in_hand in state.battlefield
+    assert cryo_in_hand.attached_to == victim.id
+    # Effective power of Leviathan: 4 - 5 = -1.
+    from mtg_bot.game import effective_power
+    assert effective_power(state, victim) == -1
+
+
+def test_aura_fizzles_if_target_gone_at_resolution():
+    """Cast Aura targeting creature, then creature dies before resolution."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import destroy
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    mana = state.new_object(
+        BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mana)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(cryo)
+    _cast_spell(state, 0, cryo.id)
+    # Kill the target before the Aura resolves.
+    destroy(state, victim)
+    resolve_top_of_stack(state)
+    # Cryoshatter fizzled to graveyard.
+    assert cryo in state.players[0].graveyard
+    assert cryo not in state.battlefield
+
+
+def test_aura_goes_to_graveyard_when_enchanted_creature_leaves():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import destroy
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    aura = state.new_object(
+        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = ally.id
+    state.battlefield.append(aura)
+    # Destroy the enchanted creature.
+    destroy(state, ally)
+    assert aura not in state.battlefield
+    assert aura in state.players[0].graveyard
+
+
+def test_meltstriders_resolve_grants_buff_and_menace():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_toughness, effective_keywords
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    aura = state.new_object(
+        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = ally.id
+    state.battlefield.append(aura)
+    assert effective_toughness(state, ally) == 4  # 2 + 2
+    assert "menace" in effective_keywords(state, ally)
+
+
+def test_aura_cast_with_no_legal_target_no_targets():
+    """Casting an Aura with no creatures in play: no target is recorded,
+    so on resolution the Aura fizzles."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    mana = state.new_object(
+        BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mana)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(cryo)
+    _cast_spell(state, 0, cryo.id)
+    resolve_top_of_stack(state)
+    # Cryoshatter should be in graveyard (fizzled).
+    assert cryo in state.players[0].graveyard
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

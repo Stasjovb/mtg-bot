@@ -227,6 +227,19 @@ def _cast_spell(
                 chosen_list.append(pick)
                 remaining.remove(pick)
             targets = tuple(chosen_list)
+    # Auras pick their enchanted-creature target at cast time. The target
+    # is recorded on the StackItem and consumed at resolution to set
+    # attached_to. "Enchant creature" is the only scope we model.
+    if card.printing.is_aura:
+        legal = [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+        if legal:
+            chosen = p.agent.choose_target(state, player_id, legal)
+            if chosen is not None:
+                targets = (chosen,)
 
     countered = _apply_ward_check(state, player_id, targets)
     state.stack.append(
@@ -481,7 +494,34 @@ def resolve_top_of_stack(state: GameState) -> None:
     if card.printing.is_permanent and not (
         card.printing.is_instant or card.printing.is_sorcery
     ):
-        state.log.append(f"{card.printing.name} resolves onto the battlefield")
+        # Aura: check the cast-time target is still a legal creature. If
+        # not, the Aura fizzles to its owner's graveyard without entering.
+        if card.printing.is_aura:
+            target_obj = None
+            if item.targets:
+                kind, target_id = item.targets[0]
+                if kind == "creature":
+                    target_obj = next(
+                        (o for o in state.battlefield
+                         if o.id == target_id and o.printing.is_creature),
+                        None,
+                    )
+            if target_obj is None:
+                state.log.append(
+                    f"{card.printing.name} fizzles (no legal enchant target)"
+                )
+                card.zone = Zone.GRAVEYARD
+                state.player_by_id(card.owner_id).graveyard.append(card)
+                return
+            card.attached_to = target_obj.id
+            state.log.append(
+                f"{card.printing.name} enters attached to "
+                f"{target_obj.printing.name}"
+            )
+        else:
+            state.log.append(
+                f"{card.printing.name} resolves onto the battlefield"
+            )
         put_into_battlefield(state, card, item.controller_id)
         return
     if card.printing.is_instant or card.printing.is_sorcery:
