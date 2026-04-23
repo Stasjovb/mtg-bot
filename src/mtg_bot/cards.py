@@ -79,6 +79,7 @@ from mtg_bot.effects import (
     ExileAllCreaturesAndSpacecraft,
     PumpTargetOtherArtifactYouControlUEOT,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    SystemsOverrideEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
     FocusFireEffect,
@@ -3172,12 +3173,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Devastating Onslaught", "{X}{X}{R}",
             effect=CreateXTokensOfTargetPermanentWithHasteEndStepSac(),
         ),
-        make_sorcery(  # Systems Override — gain-control complex. Ship as plain haste pump.
+        # Systems Override `{2}{R}` Sorcery: gain control of target
+        # artifact or creature UEOT, untap it, haste UEOT. If it's a
+        # Spacecraft, put ten charge counters on it, then remove ten
+        # at the beginning of the next end step.
+        make_sorcery(
             "Systems Override", "{2}{R}",
-            effect=PumpTargetCreatureUntilEOT(
-                power_bonus=0, toughness_bonus=0,
-                granted_keywords=frozenset({"haste"}),
-            ),
+            effect=SystemsOverrideEffect(),
         ),
         make_sorcery(  # Terminal Velocity — put-card-from-hand + haste. Ship as token creation.
             "Terminal Velocity", "{4}{R}{R}",

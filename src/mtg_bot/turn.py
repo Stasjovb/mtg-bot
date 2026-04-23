@@ -467,6 +467,19 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
                     f"{target.printing.name}"
                 )
                 sacrifice(state, target)
+            elif (
+                target is not None
+                and entry["action"] == "remove_charge_counters"
+            ):
+                amount = entry.get("amount", 1)
+                target.charge_counters = max(
+                    0, target.charge_counters - amount
+                )
+                state.log.append(
+                    f"delayed trigger: remove {amount} charge counters "
+                    f"from {target.printing.name} "
+                    f"(now {target.charge_counters})"
+                )
             # Even if target is gone, we're done with this entry.
         else:
             remaining.append(entry)
@@ -555,6 +568,10 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
         obj.temp_keywords = frozenset()
+        # Revert "gain control until end of turn" effects.
+        if obj.temp_original_controller_id is not None:
+            obj.controller_id = obj.temp_original_controller_id
+            obj.temp_original_controller_id = None
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False

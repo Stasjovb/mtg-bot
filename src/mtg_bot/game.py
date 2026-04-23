@@ -72,6 +72,11 @@ class GameObject:
     # move_off_battlefield returns all cards tagged with its id from
     # exile back to their owner's battlefield.
     exiled_by_source: Optional[int] = None
+    # "Gain control of ~ until end of turn" tracking: when this object
+    # is controlled UEOT, ``temp_original_controller_id`` stores the
+    # controller it came from. run_cleanup_step swaps ``controller_id``
+    # back and clears this field. None = no temporary-control effect.
+    temp_original_controller_id: Optional[int] = None
 
 
 def is_void_active(state: GameState) -> bool:

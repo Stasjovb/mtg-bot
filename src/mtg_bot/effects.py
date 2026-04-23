@@ -2430,6 +2430,79 @@ class PutStunCounterOnTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class SystemsOverrideEffect(Effect):
+    """Systems Override `{2}{R}` — gain control of target artifact or
+    creature until end of turn, untap it, give it haste UEOT. If it's
+    a Spacecraft, put ten charge counters on it; if so, remove ten
+    at the beginning of the next end step.
+
+    Control reverts on cleanup via ``temp_original_controller_id``. The
+    ten-counter remove is scheduled as a delayed end-step action
+    (``"remove_charge_counters"``) resolved in run_delayed_end_step_triggers.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact or o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # Gain control UEOT. If we already stole it this turn, keep the
+        # original controller (don't overwrite with the current — rare
+        # but preserves correct reversion).
+        if obj.temp_original_controller_id is None:
+            obj.temp_original_controller_id = obj.controller_id
+        obj.controller_id = controller_id
+        obj.tapped = False
+        obj.temp_keywords = obj.temp_keywords | frozenset({"haste"})
+        state.log.append(
+            f"P{controller_id} takes control of {obj.printing.name} "
+            f"UEOT; untaps + gains haste"
+        )
+        if obj.printing.is_spacecraft:
+            obj.charge_counters += 10
+            state.log.append(
+                f"{obj.printing.name} gets 10 charge counters "
+                f"(now {obj.charge_counters})"
+            )
+            state.delayed_triggers.append({
+                "fire_at_turn": state.turn_number,
+                "controller_id": controller_id,
+                "action": "remove_charge_counters",
+                "target_id": obj.id,
+                "amount": 10,
+            })
+
+    def describe(self) -> str:
+        return (
+            "gain control of target artifact or creature until end of "
+            "turn; untap it; it gains haste until end of turn; if it's "
+            "a Spacecraft, put ten charge counters on it, then remove "
+            "ten at the next end step"
+        )
+
+
+@dataclass(frozen=True)
 class TapAnotherTargetCreature(Effect):
     """Tap another target creature — target must not be the source.
 
