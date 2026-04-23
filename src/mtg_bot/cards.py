@@ -22,6 +22,7 @@ from mtg_bot.effects import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DefendingPlayerLosesHalfLifeRoundedUp,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
@@ -259,6 +260,10 @@ class CardPrinting:
     # choice, no pay-or-counter trigger on the stack.
     ward_cost: ManaCost | None = None
     ward_cost_str: str = ""
+    # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
+    # When True, the caster must randomly discard a card to pay the ward;
+    # if their hand is empty, the spell is countered.
+    ward_discard_random: bool = False
     # Equipment: continuous bonuses granted to the equipped creature.
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
@@ -404,6 +409,7 @@ def make_creature(
     warp: str | None = None,
     legendary: bool = False,
     ward: str | None = None,
+    ward_discard_random: bool = False,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
@@ -431,6 +437,7 @@ def make_creature(
         keywords=frozenset(keywords),
         ward_cost=parse_mana_cost(ward) if ward else None,
         ward_cost_str=ward or "",
+        ward_discard_random=ward_discard_random,
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -1908,10 +1915,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             legendary=True,
         ),
-        make_creature(  # Alpharael, Stonechosen — dropped Ward-discard + Void attack life-drain.
+        # Alpharael, Stonechosen `{3}{B}{B}` 3/3 Legendary Creature.
+        # Warp `{2}{B}`. Real oracle: "Ward—Discard a card at random.
+        # Void — Whenever Alpharael attacks, if a nonland permanent
+        # left the battlefield this turn or a spell was warped this
+        # turn, defending player loses half their life, rounded up."
+        make_creature(
             "Alpharael, Stonechosen", "{3}{B}{B}", 3, 3,
             legendary=True,
             warp="{2}{B}",
+            ward_discard_random=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=DefendingPlayerLosesHalfLifeRoundedUp(),
+                    requires_void=True,
+                ),
+            ),
         ),
         # Blade of the Swarm `{3}{B}` 3/1 Creature. Warp `{1}{B}`.
         # Real oracle ETB: "Choose one —

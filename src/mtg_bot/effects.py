@@ -1483,6 +1483,31 @@ class SelfcraftMechanETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class DefendingPlayerLosesHalfLifeRoundedUp(Effect):
+    """Defending player loses half their life, rounded up. Matches
+    Alpharael, Stonechosen's Void attack trigger. Simplified to "each
+    opponent" — correct in 2-player, approximation in multiplayer.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            loss = (p.life + 1) // 2  # ceil(life / 2)
+            p.life -= loss
+            state.log.append(
+                f"P{p.id} loses {loss} life (half, rounded up) — "
+                f"life: {p.life}"
+            )
+
+    def describe(self) -> str:
+        return "defending player loses half their life, rounded up"
+
+
+@dataclass(frozen=True)
 class DrawCardsEqualToResolvingCounterAmount(Effect):
     """Draw a number of cards equal to
     ``state.resolving_counter_amount``. Matches Terrasymbiosis's "draw

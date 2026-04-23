@@ -68,8 +68,12 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
 
 
 def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> None:
+    from mtg_bot.game import is_void_active
+
     for i, ability in enumerate(attacker.printing.triggered_abilities):
         if ability.trigger != "attacks":
+            continue
+        if ability.requires_void and not is_void_active(state):
             continue
         if not should_fire_trigger(state, attacker.id, i, ability):
             continue

@@ -585,6 +585,29 @@ def _apply_ward_check(
             continue
         if obj.controller_id == caster_id:
             continue  # ward doesn't fire on your own permanents
+        # Ward — Discard a card at random (Alpharael, Stonechosen).
+        if obj.printing.ward_discard_random:
+            p = state.player_by_id(caster_id)
+            if not p.hand:
+                state.log.append(
+                    f"Spell countered by {obj.printing.name}'s Ward "
+                    f"(hand empty, can't discard)"
+                )
+                return True
+            import random as _rng
+            rng = _rng.Random(
+                hash(("ward_discard", state.turn_number, caster_id,
+                      len(p.hand)))
+            )
+            card = rng.choice(p.hand)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{caster_id} discards {card.printing.name} at random "
+                f"to pay Ward for {obj.printing.name}"
+            )
+            continue
         ward = obj.printing.ward_cost
         if ward is None:
             continue
