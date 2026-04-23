@@ -466,6 +466,52 @@ class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
 
 
 @dataclass(frozen=True)
+class CreateLanderAndScheduleSacrifice(Effect):
+    """Create a Lander token for the controller, then schedule a delayed
+    trigger to sacrifice that specific Lander at the controller's next
+    end step.
+
+    Matches Kav Landseeker's ETB. "Next end step on your next turn" is
+    interpreted in a 2-player game as the controller's next end step
+    that isn't the current turn — turn_number+2 if it's currently the
+    controller's turn, else turn_number+1.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+
+        lander = state.new_object(
+            TOKEN_PRINTINGS["Lander"],
+            owner_id=controller_id,
+            zone=Zone.BATTLEFIELD,
+        )
+        put_into_battlefield(state, lander, controller_id)
+        offset = 2 if state.active_player().id == controller_id else 1
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number + offset,
+            "controller_id": controller_id,
+            "action": "sacrifice",
+            "target_id": lander.id,
+        })
+        state.log.append(
+            f"P{controller_id} creates a Lander token (scheduled to be "
+            f"sacrificed at end step of turn "
+            f"{state.turn_number + offset})"
+        )
+
+    def describe(self) -> str:
+        return (
+            "create a Lander token; at the beginning of the end step on "
+            "your next turn, sacrifice that token"
+        )
+
+
+@dataclass(frozen=True)
 class CreateTokenAndAttachSelf(Effect):
     """Create a token and attach the source (Equipment) to it.
 

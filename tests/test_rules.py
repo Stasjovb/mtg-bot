@@ -6236,6 +6236,87 @@ def test_mana_cost_reduced_never_below_zero():
     assert mc.reduced(5).colored == (("U", 1),)  # colored unchanged
 
 
+def test_kav_landseeker_schedules_sacrifice_and_fires():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_delayed_end_step_triggers
+
+    state = _arena()
+    state.turn_number = 1  # P0's turn
+    kav = state.new_object(
+        EOE_CREATURES["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(kav)
+    # Fire ETB: schedules delayed trigger.
+    etb = next(
+        ab for ab in kav.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = kav
+    etb.effect.resolve(state, 0)
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert len(landers) == 1
+    lander = landers[0]
+    assert len(state.delayed_triggers) == 1
+    # Scheduled for turn+2 since P0 is active.
+    assert state.delayed_triggers[0]["fire_at_turn"] == 3
+    assert state.delayed_triggers[0]["target_id"] == lander.id
+
+    # Simulate reaching P0's next end step (turn 3).
+    state.turn_number = 3
+    state.active_player_idx = 0
+    run_delayed_end_step_triggers(state)
+    assert lander not in state.battlefield  # sacrificed
+    assert state.delayed_triggers == []
+
+
+def test_delayed_trigger_survives_removal_if_target_gone():
+    """If the target leaves before the trigger fires, the entry is
+    consumed but nothing happens."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_delayed_end_step_triggers, destroy
+
+    state = _arena()
+    state.turn_number = 1
+    kav = state.new_object(
+        EOE_CREATURES["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(kav)
+    etb = next(
+        ab for ab in kav.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = kav
+    etb.effect.resolve(state, 0)
+    lander = [o for o in state.battlefield if o.printing.name == "Lander"][0]
+    destroy(state, lander)  # Lander gone before end step
+    state.turn_number = 3
+    run_delayed_end_step_triggers(state)
+    assert state.delayed_triggers == []
+
+
+def test_delayed_trigger_waits_for_correct_turn():
+    """Trigger scheduled for turn 3 doesn't fire at turn 2."""
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import run_delayed_end_step_triggers
+
+    state = _arena()
+    state.turn_number = 1
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    state.delayed_triggers.append({
+        "fire_at_turn": 3,
+        "controller_id": 0,
+        "action": "sacrifice",
+        "target_id": lander.id,
+    })
+    # Turn 2, wrong controller — don't fire.
+    state.turn_number = 2
+    state.active_player_idx = 1
+    run_delayed_end_step_triggers(state)
+    assert lander in state.battlefield
+    assert len(state.delayed_triggers) == 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

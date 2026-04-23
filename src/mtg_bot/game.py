@@ -221,6 +221,11 @@ class GameState:
     # have already fired this turn under the ``once_per_turn`` restriction.
     # Reset by run_cleanup_step.
     once_per_turn_fired: set[tuple[int, int]] = field(default_factory=set)
+    # Delayed triggered abilities scheduled for a future end step. Each
+    # entry is a dict: {"fire_at_turn": int, "controller_id": int,
+    # "action": str, "target_id": int}.
+    # Actions currently supported: "sacrifice".
+    delayed_triggers: list[dict] = field(default_factory=list)
     # Source GameObject of the currently-resolving ability, if any. Set by
     # resolve_top_of_stack during ability resolution so effects like
     # "put a +1/+1 counter on this creature" can reach the source without

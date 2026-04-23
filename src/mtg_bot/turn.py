@@ -357,6 +357,38 @@ def run_beginning_of_combat_triggers(state: GameState) -> None:
                 state.resolving_source = None
 
 
+def run_delayed_end_step_triggers(state: GameState) -> None:
+    """Fire any delayed triggers scheduled for this end step.
+
+    Scheduled by effects like CreateLanderAndScheduleSacrificeNextEndStep
+    (Kav Landseeker). Entries are data dicts so the state stays
+    pickle-friendly. Currently supported actions: "sacrifice" — sacrifice
+    the target object if it's still on the battlefield.
+    """
+    ap_id = state.active_player().id
+    remaining: list[dict] = []
+    for entry in state.delayed_triggers:
+        if (
+            entry["fire_at_turn"] == state.turn_number
+            and entry["controller_id"] == ap_id
+        ):
+            target = next(
+                (o for o in state.battlefield
+                 if o.id == entry["target_id"]),
+                None,
+            )
+            if target is not None and entry["action"] == "sacrifice":
+                state.log.append(
+                    f"delayed trigger: P{ap_id} sacrifices "
+                    f"{target.printing.name}"
+                )
+                sacrifice(state, target)
+            # Even if target is gone, we're done with this entry.
+        else:
+            remaining.append(entry)
+    state.delayed_triggers = remaining
+
+
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
     """Fire "At the beginning of your end step, ..." triggered abilities on
     permanents controlled by the active player. EoE "Void —" abilities carry

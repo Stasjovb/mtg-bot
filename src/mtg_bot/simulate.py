@@ -30,6 +30,7 @@ from mtg_bot.turn import (
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_cleanup_step,
+    run_delayed_end_step_triggers,
     run_draw_step,
     run_end_step_warp_exile,
     run_untap_step,
@@ -188,6 +189,10 @@ def run_step(state: GameState, step: Step) -> None:
     #   2. Warp-exile any permanents cast via their warp cost this turn.
     if step == Step.END:
         run_beginning_of_end_step_triggers(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
+        run_delayed_end_step_triggers(state)
         state_based_actions(state)
         if state.is_over():
             return

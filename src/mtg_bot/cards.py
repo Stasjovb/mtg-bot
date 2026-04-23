@@ -66,6 +66,7 @@ from mtg_bot.effects import (
     ExileAllArtifactsWithManaValueAtMost,
     AttachToTargetCreatureYouControl,
     BiosynthicBurstEffect,
+    CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
@@ -1286,21 +1287,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Kav Landseeker: {3}{R} 4/3 Menace. ETB create a Lander token.
-        # Simplified: drop the "at the beginning of the end step on your
-        # next turn, sacrifice that token" delayed trigger (token-tracking
-        # delayed triggers aren't modeled). The token persists until a
-        # player naturally sacrifices it for ramp.
+        # Kav Landseeker: {3}{R} 4/3 Menace. ETB create a Lander token
+        # with a delayed-trigger sacrifice at the controller's next end
+        # step.
         make_creature(
             "Kav Landseeker", "{3}{R}", 4, 3,
             keywords={"menace"},
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Lander"],
-                        count=1,
-                    ),
+                    effect=CreateLanderAndScheduleSacrifice(),
                 ),
             ),
         ),
