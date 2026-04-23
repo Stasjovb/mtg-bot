@@ -199,6 +199,10 @@ def add_plus_one_counters(
     Spacecraft (the Planet type isn't modeled yet) — matches the real
     Loading Zone scope.
 
+    Fires "whenever you put one or more +1/+1 counters on a creature
+    you control" observer triggers (Terrasymbiosis) for counters added
+    to creatures.
+
     Returns the effective count actually added (after doubling). Safe
     when amount <= 0 (no-op).
     """
@@ -213,6 +217,11 @@ def add_plus_one_counters(
         )
         effective = amount * (2 ** doublers)
     obj.plus_one_counters += effective
+    if obj.printing.is_creature and effective > 0:
+        from mtg_bot.turn import fire_counters_added_to_your_creature_triggers
+        fire_counters_added_to_your_creature_triggers(
+            state, obj.controller_id, effective,
+        )
     return effective
 
 
@@ -360,6 +369,10 @@ class GameState:
     # resolution. Used by effects like Starwinder's "may draw that
     # many cards" that need to know the damage amount.
     resolving_combat_damage_amount: int = 0
+    # Number of +1/+1 counters being added during a resolving
+    # counters-added observer trigger (Terrasymbiosis: "draw that many
+    # cards"). 0 outside such resolution.
+    resolving_counter_amount: int = 0
     # Per-turn counter of how many times a tagged ability has resolved.
     # Keys are effect-specific labels (typically ("tag", source_id)).
     # Reset by run_cleanup_step. Used by Tannuk, Memorial Ensign's

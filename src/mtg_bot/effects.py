@@ -598,7 +598,8 @@ class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
                 f"P{controller_id} with a +1/+1 counter"
             )
             put_into_battlefield(state, card, controller_id)
-            card.plus_one_counters += 1
+            from mtg_bot.game import add_plus_one_counters
+            add_plus_one_counters(state, card, 1)
 
     def describe(self) -> str:
         return (
@@ -1378,6 +1379,8 @@ class PutPlusOneCounterOnEachOfUpToNTargetCreatures(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import add_plus_one_counters
+
         for kind, target_id in targets:
             if kind != "creature":
                 continue
@@ -1386,7 +1389,7 @@ class PutPlusOneCounterOnEachOfUpToNTargetCreatures(Effect):
             )
             if tgt is None:
                 continue
-            tgt.plus_one_counters += 1
+            add_plus_one_counters(state, tgt, 1)
             state.log.append(
                 f"+1/+1 counter on {tgt.printing.name} "
                 f"(now {tgt.plus_one_counters})"
@@ -1462,7 +1465,8 @@ class SelfcraftMechanETBEffect(Effect):
                     (o for o in state.battlefield if o.id == tid), None
                 )
                 if tgt is not None:
-                    tgt.plus_one_counters += 1
+                    from mtg_bot.game import add_plus_one_counters
+                    add_plus_one_counters(state, tgt, 1)
                     state.log.append(
                         f"+1/+1 counter on {tgt.printing.name} "
                         f"(now {tgt.plus_one_counters})"
@@ -1476,6 +1480,32 @@ class SelfcraftMechanETBEffect(Effect):
             "you may sacrifice an artifact; if you do, put a +1/+1 "
             "counter on target creature and draw a card"
         )
+
+
+@dataclass(frozen=True)
+class DrawCardsEqualToResolvingCounterAmount(Effect):
+    """Draw a number of cards equal to
+    ``state.resolving_counter_amount``. Matches Terrasymbiosis's "draw
+    that many cards" observer. No-op if amount is 0.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        amount = state.resolving_counter_amount
+        if amount <= 0:
+            return
+        for _ in range(amount):
+            draw_card(state, controller_id)
+        state.log.append(
+            f"P{controller_id} draws {amount} (counter-added trigger)"
+        )
+
+    def describe(self) -> str:
+        return "you may draw that many cards"
 
 
 @dataclass(frozen=True)
@@ -1564,7 +1594,8 @@ class TerrapactIntimidatorETBEffect(Effect):
             )
         else:
             if source is not None:
-                source.plus_one_counters += 2
+                from mtg_bot.game import add_plus_one_counters
+                add_plus_one_counters(state, source, 2)
                 state.log.append(
                     f"P{opponent.id} declined — {source.printing.name} "
                     f"gets two +1/+1 counters (now "
@@ -2028,7 +2059,8 @@ class LookAtTopNRevealOrCounter(Effect):
             )
             source = state.resolving_source
             if source is not None and source in state.battlefield:
-                source.plus_one_counters += 1
+                from mtg_bot.game import add_plus_one_counters
+                add_plus_one_counters(state, source, 1)
                 state.log.append(
                     f"{source.printing.name} gets a +1/+1 counter "
                     f"(now {source.plus_one_counters})"
@@ -3823,7 +3855,8 @@ class MoveSelfCountersToTargetCreatureYouControl(Effect):
         )
         if obj is None:
             return
-        obj.plus_one_counters += count
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, count)
         # Clear source counters — they've been transferred.
         source.plus_one_counters = 0
         state.log.append(
@@ -3866,7 +3899,8 @@ class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
                 count += 1
         if count <= 0:
             return
-        source.plus_one_counters += count
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, source, count)
         state.log.append(
             f"{source.printing.name} enters with {count} +1/+1 counters"
         )
@@ -4381,7 +4415,8 @@ class BiosynthicBurstEffect(Effect):
         )
         if obj is None or obj.controller_id != controller_id:
             return
-        obj.plus_one_counters += 1
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, 1)
         obj.temp_keywords = obj.temp_keywords | frozenset(
             {"reach", "trample", "indestructible"}
         )
@@ -6019,6 +6054,10 @@ class TriggeredAbility:
             "another_creature_you_control_dies_or_exiled": (
                 "Whenever another creature you control dies or is put "
                 "into exile"
+            ),
+            "counters_added_to_your_creature": (
+                "Whenever you put one or more +1/+1 counters on a "
+                "creature you control"
             ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."

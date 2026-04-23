@@ -943,13 +943,16 @@ def put_into_battlefield(
     # state sees the counters already in place.
     mode = obj.printing.enters_with_counters_from_x
     if mode == "x":
-        obj.plus_one_counters += state.resolving_x_value
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, state.resolving_x_value)
     elif mode == "mana_spent":
+        from mtg_bot.game import add_plus_one_counters
         mc = obj.printing.mana_cost
-        obj.plus_one_counters += (
+        add_plus_one_counters(
+            state, obj,
             state.resolving_x_value
             + mc.generic
-            + sum(n for _, n in mc.colored)
+            + sum(n for _, n in mc.colored),
         )
     # Planeswalker: initialize loyalty counters to the printed starting
     # loyalty. Only applied the first time the card enters the
@@ -1000,8 +1003,9 @@ def _apply_devour(
         _sacrifice(state, victim)
         sacrificed += 1
     if sacrificed > 0:
+        from mtg_bot.game import add_plus_one_counters
         counters = obj.printing.devour_land_multiplier * sacrificed
-        obj.plus_one_counters += counters
+        add_plus_one_counters(state, obj, counters)
         state.log.append(
             f"{obj.printing.name} devours {sacrificed} land(s) and "
             f"enters with {counters} +1/+1 counters"

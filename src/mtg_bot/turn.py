@@ -226,6 +226,39 @@ def _fire_your_creature_or_artifact_dies_triggers(
                 state.resolving_source = None
 
 
+def fire_counters_added_to_your_creature_triggers(
+    state: GameState, controller_id: int, amount: int
+) -> None:
+    """Fire "whenever you put one or more +1/+1 counters on a creature
+    you control, ..." observer triggers. ``amount`` is the effective
+    count added (post-doubling). Effect receives the amount via
+    state.resolving_counter_amount for "you may draw that many" riders.
+    """
+    state.resolving_counter_amount = amount
+    try:
+        for obs in list(state.battlefield):
+            if obs.controller_id != controller_id:
+                continue
+            for i, ability in enumerate(obs.printing.triggered_abilities):
+                if ability.trigger != (
+                    "counters_added_to_your_creature"
+                ):
+                    continue
+                if not should_fire_trigger(state, obs.id, i, ability):
+                    continue
+                state.log.append(
+                    f"{obs.printing.name}'s counters-added observer "
+                    f"fires (amount {amount})"
+                )
+                state.resolving_source = obs
+                try:
+                    ability.effect.resolve(state, controller_id, ())
+                finally:
+                    state.resolving_source = None
+    finally:
+        state.resolving_counter_amount = 0
+
+
 def _fire_another_creature_dies_or_exiled_triggers(
     state: GameState, dead: "GameObject"
 ) -> None:

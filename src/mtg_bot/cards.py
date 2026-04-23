@@ -41,6 +41,7 @@ from mtg_bot.effects import (
     DiscardSelf,
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
+    DrawCardsEqualToResolvingCounterAmount,
     EachOpponentDiscards,
     EachOpponentSacrificesCreature,
     EachOpponentLosesLife,
@@ -3854,8 +3855,18 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             warp="{G}",
             is_counter_doubler=True,
         ),
-        make_enchantment(  # Terrasymbiosis — dropped counter-on-creature → draw trigger.
+        # Terrasymbiosis `{2}{G}` Enchantment. Real oracle: "Whenever
+        # you put one or more +1/+1 counters on a creature you control,
+        # you may draw that many cards. Do this only once each turn."
+        make_enchantment(
             "Terrasymbiosis", "{2}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="counters_added_to_your_creature",
+                    effect=DrawCardsEqualToResolvingCounterAmount(),
+                    once_per_turn=True,
+                ),
+            ),
         ),
         # Instants — remaining ones shipped as minimal approximations.
         make_instant(  # Archenemy's Charm — simplified to just exile-target-creature mode.
