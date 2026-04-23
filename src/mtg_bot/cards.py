@@ -48,6 +48,7 @@ from mtg_bot.effects import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
+    ReturnTargetPermanentYouControlToOwnersHand,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
     TapTargetArtifactOrCreature,
@@ -1118,6 +1119,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(),
+                ),
+            ),
+        ),
+        # Exosuit Savior: {2}{W} 2/2 Flying. ETB bounce a permanent you
+        # control to its owner's hand. Simplification: "up to one other"
+        # → required target; self-targeting allowed (no "other"
+        # exclusion). Small flexibility loss, major code simplicity win.
+        make_creature(
+            "Exosuit Savior", "{2}{W}", 2, 2,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ReturnTargetPermanentYouControlToOwnersHand(),
                 ),
             ),
         ),

@@ -4452,6 +4452,57 @@ def test_kav_landseeker_has_menace():
     assert "menace" in EOE_CREATURES["Kav Landseeker"].keywords
 
 
+def test_exosuit_savior_bounces_own_permanent():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(plains)
+    savior = state.new_object(
+        EOE_CREATURES["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(savior)
+    assert "flying" in savior.printing.keywords
+
+    etb = next(
+        ab for ab in savior.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = savior
+    etb.effect.resolve(state, 0, (("permanent", plains.id),))
+    assert plains not in state.battlefield
+    assert plains in state.players[0].hand
+
+
+def test_return_target_permanent_you_control_rejects_opponent():
+    from mtg_bot.effects import ReturnTargetPermanentYouControlToOwnersHand
+
+    state = _arena()
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+    e = ReturnTargetPermanentYouControlToOwnersHand()
+    assert e.requires_target() is True
+    assert "you control" in e.describe()
+    legal = e.legal_targets(state, controller_id=0)
+    assert ("permanent", enemy.id) not in legal
+    # Even if passed as target, resolution filters out.
+    e.resolve(state, controller_id=0, targets=(("permanent", enemy.id),))
+    assert enemy in state.battlefield
+
+
+def test_return_target_permanent_noop_paths():
+    from mtg_bot.effects import ReturnTargetPermanentYouControlToOwnersHand
+
+    state = _arena()
+    e = ReturnTargetPermanentYouControlToOwnersHand()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
