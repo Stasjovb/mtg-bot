@@ -6441,6 +6441,58 @@ def test_creature_or_artifact_trigger_skips_self_entry():
     assert state.players[1].life == 20
 
 
+def test_entropic_battlecruiser_loads():
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Entropic Battlecruiser"]
+    assert c.is_spacecraft
+    assert c.station_threshold == 8
+    assert "flying" in c.stationed_keywords
+    assert "deathtouch" in c.stationed_keywords
+
+
+def test_drix_fatemaker_grants_trample_to_counter_creatures():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords
+
+    state = _arena()
+    drix = state.new_object(
+        EOE_CREATURES["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(drix)
+    without_counter = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(without_counter)
+    with_counter = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    with_counter.plus_one_counters = 1
+    state.battlefield.append(with_counter)
+    assert "trample" not in effective_keywords(state, without_counter)
+    assert "trample" in effective_keywords(state, with_counter)
+
+
+def test_drix_fatemaker_etb_adds_counter_to_target():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    drix = state.new_object(
+        EOE_CREATURES["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(drix)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    etb = next(
+        ab for ab in drix.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = drix
+    etb.effect.resolve(state, 0, (("creature", ally.id),))
+    assert ally.plus_one_counters == 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

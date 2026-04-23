@@ -1268,6 +1268,15 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Entropic Battlecruiser: {3}{B} 3/10 Spacecraft. Station 8+
+        # Flying + Deathtouch. Simplified: drops the 1+ "opponent
+        # discards → lose 3 life" and 8+ "attacks → opponent discards"
+        # triggers (those trigger types aren't implemented).
+        make_spacecraft(
+            "Entropic Battlecruiser", "{3}{B}", 3, 10,
+            station_threshold=8,
+            stationed_keywords={"flying", "deathtouch"},
+        ),
         # Synthesizer Labship: {U} 4/4 Spacecraft. Station 9+ flying.
         # Simplified: drops the "2+ tier" ability (tiered triggered
         # abilities aren't modeled — tiers currently only gate statics).
@@ -2120,6 +2129,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Germinating Wurm", "{4}{G}", 5, 5,
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+            ),
+        ),
+        # Drix Fatemaker: {3}{G} 3/2. ETB +1/+1 counter on target
+        # creature; creatures you control with a +1/+1 counter have
+        # trample. Ships with Warp {1}{G} to match the printed card.
+        make_creature(
+            "Drix Fatemaker", "{3}{G}", 3, 2,
+            warp="{1}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnTargetCreature(amount=1),
+                ),
+            ),
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
+                    granted_keywords=frozenset({"trample"}),
+                ),
             ),
         ),
         # Fungal Colossus: {6}{G} 5/5. Costs {X} less where X = number

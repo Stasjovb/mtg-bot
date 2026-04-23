@@ -2910,6 +2910,7 @@ class StaticScope:
 
     OTHER_CREATURES_YOU_CONTROL = "other_creatures_you_control"
     CREATURES_YOU_CONTROL = "creatures_you_control"
+    CREATURES_YOU_CONTROL_WITH_COUNTER = "creatures_you_control_with_counter"
     SELF = "self"  # only the source itself
 
 
@@ -2993,6 +2994,8 @@ class StaticAbility:
             return target.id != source.id
         if self.scope == StaticScope.CREATURES_YOU_CONTROL:
             return True
+        if self.scope == StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER:
+            return target.plus_one_counters > 0
         return False
 
     def describe(self) -> str:
