@@ -115,6 +115,7 @@ from mtg_bot.effects import (
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
+    SelfcraftMechanETBEffect,
     Sequence,
     StaticAbility,
     StaticScope,
@@ -2325,9 +2326,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Selfcraft Mechan — dropped may-sac ETB → counter+draw.
+        # Selfcraft Mechan `{3}{U}` 3/4 Artifact Creature. Real oracle:
+        # "When this creature enters, you may sacrifice an artifact.
+        # When you do, put a +1/+1 counter on target creature and draw
+        # a card." Simplification: "may" is always yes when an artifact
+        # exists; otherwise the rider fizzles.
+        make_creature(
             "Selfcraft Mechan", "{3}{U}", 3, 4,
             artifact=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=SelfcraftMechanETBEffect(),
+                ),
+            ),
         ),
         # Sinister Cryologist `{2}{U}` 2/3 Creature. Warp `{U}`.
         # Real oracle ETB: "When this creature enters, target creature

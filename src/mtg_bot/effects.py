@@ -1182,6 +1182,85 @@ class FamishedWorldsireETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class SelfcraftMechanETBEffect(Effect):
+    """Selfcraft Mechan's ETB: "You may sacrifice an artifact. When you
+    do, put a +1/+1 counter on target creature and draw a card."
+
+    Simplification: "may" is treated as yes whenever an artifact exists
+    to sacrifice (consistent with other OptionalSac effects). If the
+    controller has no artifact, the whole rider fizzles. Target creature
+    is selected via the agent's choose_target before resolve (via the
+    standard target-selection pipeline).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card, sacrifice as _sacrifice
+
+        p = state.player_by_id(controller_id)
+        artifacts = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        ]
+        if not artifacts:
+            state.log.append(
+                f"Selfcraft Mechan: no artifact to sacrifice — fizzles"
+            )
+            return
+        # Agent picks which artifact to sacrifice.
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in artifacts]
+            )
+            chosen = next(
+                (o for o in artifacts if o.id == pick_id), artifacts[0]
+            )
+        else:
+            chosen = artifacts[0]
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} "
+            f"(Selfcraft Mechan)"
+        )
+        _sacrifice(state, chosen)
+        # Apply counter to chosen target creature (if still on battlefield).
+        if targets:
+            kind, tid = targets[0]
+            if kind == "creature":
+                tgt = next(
+                    (o for o in state.battlefield if o.id == tid), None
+                )
+                if tgt is not None:
+                    tgt.plus_one_counters += 1
+                    state.log.append(
+                        f"+1/+1 counter on {tgt.printing.name} "
+                        f"(now {tgt.plus_one_counters})"
+                    )
+        # Draw a card either way — the sacrifice happened, so the
+        # reflexive trigger's effect resolves fully.
+        draw_card(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "you may sacrifice an artifact; if you do, put a +1/+1 "
+            "counter on target creature and draw a card"
+        )
+
+
+@dataclass(frozen=True)
 class DrawCardsEqualToResolvingCombatDamage(Effect):
     """Draw a number of cards equal to
     ``state.resolving_combat_damage_amount``. Matches Starwinder's
