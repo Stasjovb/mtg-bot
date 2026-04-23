@@ -822,6 +822,48 @@ class PutLoyaltyCounterOnSelf(Effect):
 
 
 @dataclass(frozen=True)
+class OptionalPutCreatureFromHandOntoBattlefield(Effect):
+    """"You may put a creature card from your hand onto the battlefield."
+
+    Matches Sledge-Class Seedship's attack trigger (and similar
+    "cheat creatures into play" effects). Agent picks via
+    ``choose_card_from_library`` (reusing the generic "pick one id
+    from a list" hook — the hook is zone-agnostic). Declining is
+    legal — the effect silently does nothing.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.hand if c.printing.is_creature]
+        if not options:
+            return
+        chosen_id = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        if chosen_id is None:
+            return
+        card = next((c for c in options if c.id == chosen_id), None)
+        if card is None:
+            return
+        p.hand.remove(card)
+        put_into_battlefield(state, card, controller_id)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} from hand "
+            f"onto the battlefield"
+        )
+
+    def describe(self) -> str:
+        return "you may put a creature card from your hand onto the battlefield"
+
+
+@dataclass(frozen=True)
 class CloseEncounterEffect(Effect):
     """Close Encounter `{1}{G}`:
     "As an additional cost to cast this spell, choose a creature you

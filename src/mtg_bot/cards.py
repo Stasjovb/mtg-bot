@@ -78,6 +78,7 @@ from mtg_bot.effects import (
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
     ExileAllCreaturesAndSpacecraft,
@@ -1632,12 +1633,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Sledge-Class Seedship: {2}{G} 4/5 Spacecraft. Station 7+ flying.
-        # Simplified: drops the "7+ | whenever it attacks, put a creature
-        # from hand onto the battlefield" tiered trigger.
+        # "Whenever this Spacecraft attacks, you may put a creature card
+        # from your hand onto the battlefield." (No explicit tier gate
+        # — the Spacecraft can only attack once stationed at 7+, which
+        # makes the attack the de-facto gate.)
         make_spacecraft(
             "Sledge-Class Seedship", "{2}{G}", 4, 5,
             station_threshold=7,
             stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=OptionalPutCreatureFromHandOntoBattlefield(),
+                ),
+            ),
         ),
         # Fell Gravship: {2}{B} 3/2 Spacecraft. ETB mill 3 then return a
         # creature card from your graveyard to your hand. Station 8+ gives
