@@ -3961,6 +3961,29 @@ def test_self_static_missing_state_returns_false():
     assert ab.applies_to(tech, tech, state=None) is False
 
 
+def test_wurmwall_sweeper_etb_surveil():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=10)
+    ws = state.new_object(
+        EOE_CREATURES["Wurmwall Sweeper"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ws)
+    # Trigger ETB surveil 2.
+    etb = next(
+        ab for ab in ws.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ws
+    etb.effect.resolve(state, 0)
+    # Either milled to graveyard or kept on top — we just check that surveil
+    # examined 2 cards via the log entry.
+    assert any("surveils 2" in entry for entry in state.log)
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
