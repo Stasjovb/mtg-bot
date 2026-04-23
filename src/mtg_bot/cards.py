@@ -78,9 +78,11 @@ from mtg_bot.effects import (
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    EachOpponentDiscardsOrLosesLife,
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
+    TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
     PumpTargetOtherArtifactYouControlUEOT,
@@ -1600,14 +1602,26 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Entropic Battlecruiser: {3}{B} 3/10 Spacecraft. Station 8+
-        # Flying + Deathtouch. Simplified: drops the 1+ "opponent
-        # discards → lose 3 life" and 8+ "attacks → opponent discards"
-        # triggers (those trigger types aren't implemented).
+        # Entropic Battlecruiser `{3}{B}` 3/10 Spacecraft.
+        # - Station 8+ Flying + Deathtouch.
+        # - 1+ | Whenever an opponent discards a card, they lose 3 life.
+        # - Whenever this Spacecraft attacks, each opponent discards a
+        #   card. Each opponent who can't loses 3 life.
         make_spacecraft(
             "Entropic Battlecruiser", "{3}{B}", 3, 10,
             station_threshold=8,
             stationed_keywords={"flying", "deathtouch"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="opponent_discards_a_card",
+                    effect=TargetPlayerLosesLife(amount=3),
+                    tier_threshold=1,
+                ),
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=EachOpponentDiscardsOrLosesLife(life_if_cant=3),
+                ),
+            ),
         ),
         # Synthesizer Labship: {U} 4/4 Spacecraft. Station 9+ flying.
         # 2+ | At the beginning of combat on your turn, up to one other

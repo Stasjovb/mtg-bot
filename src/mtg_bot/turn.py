@@ -211,6 +211,39 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
             put_into_battlefield(state, c, p.id)
 
 
+def fire_opponent_discards_triggers(
+    state: GameState, discarding_player_id: int
+) -> None:
+    """Fire observer triggers on permanents controlled by players OTHER
+    than ``discarding_player_id`` whose trigger type is
+    ``"opponent_discards_a_card"``. Called after any single-card
+    discard event.
+
+    Simplification: Fires directly (no stack). The discarding player's
+    id is exposed via a target ``("player", id)`` so effects like
+    Entropic Battlecruiser's 1+ trigger can damage them.
+    """
+    for obs in list(state.battlefield):
+        if obs.controller_id == discarding_player_id:
+            continue
+        for i, ability in enumerate(obs.printing.triggered_abilities):
+            if ability.trigger != "opponent_discards_a_card":
+                continue
+            if not should_fire_trigger(state, obs.id, i, ability):
+                continue
+            state.log.append(
+                f"{obs.printing.name}'s opponent-discards trigger fires"
+            )
+            state.resolving_source = obs
+            try:
+                ability.effect.resolve(
+                    state, obs.controller_id,
+                    (("player", discarding_player_id),),
+                )
+            finally:
+                state.resolving_source = None
+
+
 def should_fire_trigger(
     state: GameState, source_id: int, ability_index: int, ability
 ) -> bool:

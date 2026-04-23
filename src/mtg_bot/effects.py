@@ -105,6 +105,83 @@ class SetLifeToHalfStartingRoundedUp(Effect):
 
 
 @dataclass(frozen=True)
+class TargetPlayerLosesLife(Effect):
+    """Make the (pre-selected) target player lose ``amount`` life.
+
+    Reads ``targets[0]`` as ("player", id). Used for triggers that
+    identify a specific player via targeting (Entropic Battlecruiser's
+    1+ tier "that player loses 3 life").
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, pid = targets[0]
+        if kind != "player":
+            return
+        try:
+            p = state.player_by_id(pid)
+        except KeyError:
+            return
+        p.life -= self.amount
+        state.log.append(
+            f"P{pid} loses {self.amount} life (now {p.life})"
+        )
+
+    def describe(self) -> str:
+        return f"that player loses {self.amount} life"
+
+
+@dataclass(frozen=True)
+class EachOpponentDiscardsOrLosesLife(Effect):
+    """Each opponent discards a card. Each opponent who can't (because
+    their hand is empty) loses ``life_if_cant`` life instead.
+
+    Matches Entropic Battlecruiser's attacks trigger. Fires discard
+    triggers per-discard via fire_opponent_discards_triggers.
+    """
+
+    life_if_cant: int = 3
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_opponent_discards_triggers
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            if not p.hand:
+                p.life -= self.life_if_cant
+                state.log.append(
+                    f"P{p.id} can't discard — loses {self.life_if_cant} "
+                    f"life (now {p.life})"
+                )
+                continue
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(f"P{p.id} discards {card.printing.name}")
+            fire_opponent_discards_triggers(state, p.id)
+
+    def describe(self) -> str:
+        return (
+            f"each opponent discards a card; each opponent who can't "
+            f"loses {self.life_if_cant} life"
+        )
+
+
+@dataclass(frozen=True)
 class PutPoisonCountersOnTargetPlayer(Effect):
     """Give ``amount`` poison counters to the (pre-selected) target
     player. Reads ``targets[0]`` as ("player", id); silently no-ops on
@@ -194,6 +271,7 @@ class DiscardSelf(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_opponent_discards_triggers
 
         p = state.player_by_id(controller_id)
         for _ in range(self.amount):
@@ -206,6 +284,7 @@ class DiscardSelf(Effect):
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
+            fire_opponent_discards_triggers(state, p.id)
 
     def describe(self) -> str:
         if self.amount == 1:
@@ -4402,6 +4481,7 @@ class EachOpponentDiscards(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_opponent_discards_triggers
 
         for p in state.players:
             if p.id == controller_id or p.has_lost:
@@ -4418,6 +4498,7 @@ class EachOpponentDiscards(Effect):
                 state.log.append(
                     f"P{p.id} discards {card.printing.name}"
                 )
+                fire_opponent_discards_triggers(state, p.id)
 
     def describe(self) -> str:
         if self.count == 1:
