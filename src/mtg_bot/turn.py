@@ -47,6 +47,14 @@ def run_untap_step(state: GameState) -> None:
     ap.lands_played_this_turn = 0
     for obj in state.battlefield:
         if obj.controller_id == ap.id:
+            # Stun counters: instead of untapping, remove one counter.
+            if obj.stun_counters > 0:
+                obj.stun_counters -= 1
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (stun counter "
+                    f"removed; {obj.stun_counters} remaining)"
+                )
+                continue
             obj.tapped = False
             obj.summoning_sick = False
 
@@ -134,10 +142,35 @@ def move_off_battlefield(
     if destination == "graveyard" and was_creature:
         _fire_dies_triggers(state, obj)
 
+    # Generic "when this leaves the battlefield" triggers — fires for
+    # artifacts, enchantments, and anything else with a matching
+    # triggered ability. Used by Cryogen Relic ("enters or leaves →
+    # draw a card").
+    _fire_leaves_battlefield_triggers(state, obj)
+
     # Return any cards this object exiled with "until this leaves" to
     # their owner's battlefield. Applies whether the source is destroyed
     # or exiled itself.
     _release_exiled_until_leaves(state, obj.id)
+
+
+def _fire_leaves_battlefield_triggers(
+    state: GameState, obj: "GameObject"
+) -> None:
+    """Run "when this leaves the battlefield" triggers on ``obj`` after
+    it's already been moved. resolving_source exposes the dearly
+    departed for effects that need it."""
+    for ability in obj.printing.triggered_abilities:
+        if ability.trigger != "leaves_battlefield":
+            continue
+        state.log.append(
+            f"{obj.printing.name}'s leaves-battlefield ability triggers"
+        )
+        state.resolving_source = obj
+        try:
+            ability.effect.resolve(state, obj.controller_id, ())
+        finally:
+            state.resolving_source = None
 
 
 def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:

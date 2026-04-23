@@ -2239,6 +2239,48 @@ class DestroyTargetArtifactOrTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class PutStunCounterOnTappedCreature(Effect):
+    """Put a stun counter on up to one target tapped creature. Matches
+    Cryogen Relic's activated ability. "Up to one" → required target
+    in our simplified pipeline; silently fizzles if none legal."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.tapped
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not obj.tapped:
+            return
+        obj.stun_counters += 1
+        state.log.append(
+            f"{obj.printing.name} gets a stun counter "
+            f"(now {obj.stun_counters})"
+        )
+
+    def describe(self) -> str:
+        return "put a stun counter on up to one target tapped creature"
+
+
+@dataclass(frozen=True)
 class TapTargetArtifactOrCreature(Effect):
     """Tap target artifact or creature. Matches Mental Modulation's middle
     clause. No-op if the target is already tapped.
@@ -3649,6 +3691,7 @@ class TriggeredAbility:
                 "Whenever another creature or artifact you control enters"
             ),
             "attacks": "Whenever ~ attacks",
+            "leaves_battlefield": "When ~ leaves the battlefield",
             "creature_you_control_with_counter_dies": (
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"

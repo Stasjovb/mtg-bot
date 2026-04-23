@@ -29,6 +29,7 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    PutStunCounterOnTappedCreature,
     ExileTargetCreatureUntilSourceLeaves,
     SeedshipImpactEffect,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -2038,6 +2039,29 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         sacrifice_self=True,
                     ),
                     effect=DestroyTargetNonlandPermanent(),
+                ),
+            ),
+        ),
+        # Cryogen Relic: {1}{U} Artifact. Enters-OR-leaves draw 1.
+        # {1}{U}, Sacrifice: put a stun counter on up to one target
+        # tapped creature.
+        make_artifact(
+            "Cryogen Relic", "{1}{U}",
+            triggered_abilities=(
+                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+                TriggeredAbility(
+                    trigger="leaves_battlefield",
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}{U}"),
+                        mana_str="{1}{U}",
+                        sacrifice_self=True,
+                    ),
+                    effect=PutStunCounterOnTappedCreature(),
                 ),
             ),
         ),

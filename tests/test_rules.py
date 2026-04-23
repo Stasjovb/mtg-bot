@@ -7634,6 +7634,85 @@ def test_codecracker_no_agent_default_assignment():
     assert second in state.players[0].graveyard
 
 
+def test_stun_counter_keeps_creature_tapped_one_turn():
+    from mtg_bot.turn import run_untap_step
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    bear.tapped = True
+    bear.stun_counters = 1
+    state.battlefield.append(bear)
+    run_untap_step(state)
+    # Stun counter consumed; still tapped this turn.
+    assert bear.tapped is True
+    assert bear.stun_counters == 0
+    # Next untap step untaps it normally.
+    run_untap_step(state)
+    assert bear.tapped is False
+
+
+def test_cryogen_relic_etb_and_leaves_draw():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.turn import destroy
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    relic = state.new_object(
+        EOE_CREATURES["Cryogen Relic"], owner_id=0, zone=Zone.HAND
+    )
+    hand_before = len(state.players[0].hand)
+    put_into_battlefield(state, relic, 0)
+    # After ETB: hand changes by -1 (relic left hand) + 1 (drew a card).
+    assert len(state.players[0].hand) == hand_before
+    # Destroy it — leaves trigger draws another card.
+    hand_before_destroy = len(state.players[0].hand)
+    destroy(state, relic)
+    assert len(state.players[0].hand) == hand_before_destroy + 1
+
+
+def test_cryogen_relic_stun_activated():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    relic = state.new_object(
+        EOE_CREATURES["Cryogen Relic"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(relic)
+    tapped_target = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    tapped_target.tapped = True
+    state.battlefield.append(tapped_target)
+    act = [
+        a for a in relic.printing.activated_abilities
+        if isinstance(a.effect.__class__, type)
+    ][0]
+    act.effect.resolve(state, 0, (("creature", tapped_target.id),))
+    assert tapped_target.stun_counters == 1
+
+
+def test_put_stun_counter_noop_paths():
+    from mtg_bot.effects import PutStunCounterOnTappedCreature
+
+    state = _arena()
+    e = PutStunCounterOnTappedCreature()
+    assert e.requires_target() is True
+    assert "stun" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+    # Untapped creature → filtered at resolve.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    e.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    assert bear.stun_counters == 0
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

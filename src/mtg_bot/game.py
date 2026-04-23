@@ -53,6 +53,9 @@ class GameObject:
     # EoE Spacecraft charge counters. A Spacecraft at ``station_threshold`` or
     # more is a creature (see ``is_creature_now``).
     charge_counters: int = 0
+    # Stun counters: a permanent with stun counters doesn't untap during
+    # its controller's untap step — instead one stun counter is removed.
+    stun_counters: int = 0
     # Until-end-of-turn bonuses applied by pump effects (e.g. "+3/+0 until
     # end of turn"). Cleared on the cleanup step. Stacked additively when
     # multiple pumps hit the same object.
