@@ -2114,13 +2114,15 @@ class SearchLibraryForCard(Effect):
 
 @dataclass(frozen=True)
 class SearchLibraryForBasicLandTapped(Effect):
-    """Search the controller's library for a basic land card, put it onto
-    the battlefield tapped, then shuffle.
+    """Search the controller's library for up to ``count`` basic land
+    cards, put them onto the battlefield tapped, then shuffle.
 
-    Stage 3 simplification: picks the FIRST basic land in library order
-    (the library was shuffled at game start; no extra shuffle here). If no
-    basic land is present, the effect does nothing.
+    Stage 3 simplification: picks the FIRST ``count`` basic lands in
+    library order (no extra shuffle). If fewer basic lands exist,
+    puts what it finds.
     """
+
+    count: int = 1
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -2130,27 +2132,89 @@ class SearchLibraryForBasicLandTapped(Effect):
         from mtg_bot.turn import fire_landfall_triggers
 
         p = state.player_by_id(controller_id)
-        land = next((c for c in p.library if c.printing.is_basic_land), None)
-        if land is None:
-            state.log.append(
-                f"P{controller_id} searches but finds no basic land"
+        for _ in range(self.count):
+            land = next(
+                (c for c in p.library if c.printing.is_basic_land), None,
             )
-            return
-        p.library.remove(land)
-        land.zone = Zone.BATTLEFIELD
-        land.tapped = True
-        land.controller_id = controller_id
-        state.battlefield.append(land)
-        state.log.append(
-            f"P{controller_id} puts {land.printing.name} onto the "
-            f"battlefield tapped"
+            if land is None:
+                state.log.append(
+                    f"P{controller_id} searches but finds no more basic lands"
+                )
+                return
+            p.library.remove(land)
+            land.zone = Zone.BATTLEFIELD
+            land.tapped = True
+            land.controller_id = controller_id
+            state.battlefield.append(land)
+            state.log.append(
+                f"P{controller_id} puts {land.printing.name} onto the "
+                f"battlefield tapped"
+            )
+            fire_landfall_triggers(state, land)
+
+    def describe(self) -> str:
+        if self.count == 1:
+            return (
+                "search your library for a basic land card, put it onto "
+                "the battlefield tapped, then shuffle"
+            )
+        return (
+            f"search your library for up to {self.count} basic land "
+            f"cards, put them onto the battlefield tapped, then shuffle"
         )
-        fire_landfall_triggers(state, land)
+
+
+@dataclass(frozen=True)
+class OptionalSacLandOrLanderForBasicLandRamp(Effect):
+    """"You may sacrifice a land or Lander. If you do, search your
+    library for up to ``land_count`` basic land cards, put them onto
+    the battlefield tapped, then shuffle."
+
+    Matches Larval Scoutlander's ETB. A "land or Lander" is: a land
+    permanent, or a Lander token artifact. The agent picks via
+    choose_sacrifice; if no legal option, the effect is a no-op.
+    Following OptionalSac precedent, the "may" is always yes when
+    possible.
+    """
+
+    land_count: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and (o.printing.is_land or "Lander" in o.printing.subtypes)
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        chosen = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} "
+            f"(land/Lander ramp)"
+        )
+        _sacrifice(state, chosen)
+        SearchLibraryForBasicLandTapped(count=self.land_count).resolve(
+            state, controller_id,
+        )
 
     def describe(self) -> str:
         return (
-            "search your library for a basic land card, put it onto the "
-            "battlefield tapped, then shuffle"
+            f"you may sacrifice a land or Lander; if you do, search "
+            f"your library for up to {self.land_count} basic land cards, "
+            f"put them onto the battlefield tapped, then shuffle"
         )
 
 

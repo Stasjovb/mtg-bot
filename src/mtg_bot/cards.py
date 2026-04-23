@@ -82,6 +82,7 @@ from mtg_bot.effects import (
     DrawCardPerMulticoloredPermanent,
     DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
+    OptionalSacLandOrLanderForBasicLandRamp,
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
@@ -3237,10 +3238,24 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_spacecraft(  # Larval Scoutlander — drop sac-land ramp rider.
+        # Larval Scoutlander `{2}{G}` 3/3 Spacecraft. Real card:
+        # - ETB: "When this Spacecraft enters, you may sacrifice a
+        #   land or Lander. If you do, search your library for up to
+        #   two basic land cards, put them onto the battlefield
+        #   tapped, then shuffle."
+        # - Station 7+ Flying.
+        make_spacecraft(
             "Larval Scoutlander", "{2}{G}", 3, 3,
             station_threshold=7,
             stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=OptionalSacLandOrLanderForBasicLandRamp(
+                        land_count=2,
+                    ),
+                ),
+            ),
         ),
         # Infinite Guideline Station `{W}{U}{B}{R}{G}` 7/15 Legendary
         # Spacecraft. Real card:
