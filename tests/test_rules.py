@@ -5084,6 +5084,26 @@ def test_cosmogrand_zenith_counter_mode():
     assert mate.plus_one_counters == 1
 
 
+def test_brightspear_zealot_power_boost_requires_two_spells():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    z = state.new_object(
+        EOE_CREATURES["Brightspear Zealot"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(z)
+    # 0 spells → base 2 power.
+    assert effective_power(state, z) == 2
+    state.players[0].spells_cast_this_turn = 1
+    assert effective_power(state, z) == 2
+    state.players[0].spells_cast_this_turn = 2
+    assert effective_power(state, z) == 4
+    # Dropping back below threshold re-hides the bonus.
+    state.players[0].spells_cast_this_turn = 1
+    assert effective_power(state, z) == 2
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

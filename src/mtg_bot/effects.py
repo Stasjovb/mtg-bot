@@ -2483,6 +2483,10 @@ class StaticAbility:
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
     requires_artifact_you_control: bool = False
+    # Minimum spells_cast_this_turn the controller must have reached for
+    # the ability to apply. 0 means "always on". Matches EoE's
+    # "as long as you've cast two or more spells this turn" riders.
+    requires_spells_cast_this_turn: int = 0
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
@@ -2512,6 +2516,16 @@ class StaticAbility:
                 for o in state.battlefield
             )
             if not has_artifact:
+                return False
+        # "As long as you've cast N or more spells this turn" gate.
+        if self.requires_spells_cast_this_turn > 0:
+            if state is None:
+                return False
+            controller = state.player_by_id(source.controller_id)
+            if (
+                controller.spells_cast_this_turn
+                < self.requires_spells_cast_this_turn
+            ):
                 return False
         if self.scope == StaticScope.SELF:
             return target.id == source.id

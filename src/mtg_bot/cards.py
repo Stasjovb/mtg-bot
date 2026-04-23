@@ -1170,6 +1170,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blue
+        # Brightspear Zealot: {2}{W} 2/4 Vigilance. +2/+0 while you've
+        # cast 2+ spells this turn. Conditional self-buff static.
+        make_creature(
+            "Brightspear Zealot", "{2}{W}", 2, 4,
+            keywords={"vigilance"},
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.SELF,
+                    power_bonus=2,
+                    requires_spells_cast_this_turn=2,
+                ),
+            ),
+        ),
         # Cosmogrand Zenith: {2}{W} 2/4. Modal second-spell trigger: two
         # Human Soldier tokens OR +1/+1 counter on each creature you
         # control.
