@@ -326,6 +326,34 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     # pragmatically our bot avoids that line — gate
                     # strictly to require surviving the payment.
                     continue
+            if ability.cost.sacrifice_a_land:
+                has_land = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_land
+                    and o2.id != obj.id
+                )
+                if not has_land:
+                    continue
+            if ability.cost.sacrifice_a_desert:
+                has_desert = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Desert" in o2.printing.subtypes
+                )
+                if not has_desert:
+                    continue
+            if ability.cost.requires_own_creature_power_at_least:
+                from mtg_bot.game import effective_power
+                threshold = ability.cost.requires_own_creature_power_at_least
+                has_big = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_creature
+                    and effective_power(state, o2) >= threshold
+                )
+                if not has_big:
+                    continue
             if ability.cost.exile_granting_equipment:
                 # The granting equipment must still be attached to
                 # the source. Legal when there's any equipment with

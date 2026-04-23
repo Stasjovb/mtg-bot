@@ -5041,6 +5041,71 @@ class DestroyTargetNoncreaturePermanent(Effect):
 
 
 @dataclass(frozen=True)
+class UntapTargetLand(Effect):
+    """Deserted Temple: `{1}, {T}: Untap target land.`"""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_land and o.tapped
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not obj.printing.is_land:
+            return
+        if not obj.tapped:
+            return
+        obj.tapped = False
+        state.log.append(f"{obj.printing.name} is untapped")
+
+    def describe(self) -> str:
+        return "untap target land"
+
+
+@dataclass(frozen=True)
+class ExileAllGraveyards(Effect):
+    """Scavenger Grounds: `{2}, {T}, Sacrifice a Desert: Exile all
+    graveyards.` Every card in every player's graveyard is moved to
+    that player's exile.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        total = 0
+        for p in state.players:
+            for c in list(p.graveyard):
+                p.graveyard.remove(c)
+                c.zone = Zone.EXILE
+                p.exile.append(c)
+                total += 1
+        state.log.append(f"all graveyards exiled ({total} cards)")
+
+    def describe(self) -> str:
+        return "exile all graveyards"
+
+
+@dataclass(frozen=True)
 class DestroyTargetLand(Effect):
     """Destroy target land. Matches Strip Mine's activated ability.
 
@@ -7319,6 +7384,15 @@ class ActivationCost:
     # Pay N life. Mana Confluence's "{T}, Pay 1 life: Add one mana
     # of any color." Paid at activation; gated by current life total.
     pay_life: int = 0
+    # "Sacrifice a land" — Dust Bowl. Any land the controller controls
+    # (excluding the source) is a legal sac.
+    sacrifice_a_land: bool = False
+    # "Sacrifice a Desert" — Scavenger Grounds. Subtype-filtered sac;
+    # the source itself is eligible if it's a Desert.
+    sacrifice_a_desert: bool = False
+    # "Activate only if you control a creature with power 4 or
+    # greater." Bonders' Enclave. Legal-actions gate only.
+    requires_own_creature_power_at_least: int = 0
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -7342,6 +7416,10 @@ class ActivationCost:
             parts.append("(costs {X} less where X is this creature's power)")
         if self.pay_life:
             parts.append(f"Pay {self.pay_life} life")
+        if self.sacrifice_a_land:
+            parts.append("Sacrifice a land")
+        if self.sacrifice_a_desert:
+            parts.append("Sacrifice a Desert")
         return ", ".join(parts) if parts else "0"
 
 

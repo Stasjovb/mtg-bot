@@ -20,9 +20,11 @@ from mtg_bot.effects import (
     ControlTargetOpponentNextTurn,
     DealDamageToControllerAndAddMana,
     DestroyTargetLand,
+    ExileAllGraveyards,
     GrantLifeToEachOpponent,
     PutBasicLandFromHandOntoBattlefieldTapped,
     ReturnTargetLandFromGraveyardToHand,
+    UntapTargetLand,
     Sequence,
     AddManaToPool,
     ConditionalOnTappedCreatures,
@@ -1077,11 +1079,39 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Blinkmoth Nexus": make_colorless_land(  # dropped manland activation.
         "Blinkmoth Nexus",
     ),
-    "Bonders' Enclave": make_colorless_land(  # dropped draw-if-4+-power.
+    # Bonders' Enclave: `{T}: Add {C}. {3}, {T}: Draw a card.
+    # Activate only if you control a creature with power 4 or
+    # greater.`
+    "Bonders' Enclave": make_utility_land(
         "Bonders' Enclave",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                    requires_own_creature_power_at_least=4,
+                ),
+                effect=DrawCards(amount=1),
+            ),
+        ),
     ),
-    "Cascading Cataracts": make_colorless_land(  # dropped 5-color rainbow + all-five activated.
+    # Cascading Cataracts: Indestructible. {T}: Add {C}. {5}, {T}:
+    # Add five mana in any combination of colors.
+    "Cascading Cataracts": make_utility_land(
         "Cascading Cataracts",
+        keywords=frozenset({"indestructible"}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{5}"),
+                    mana_str="{5}",
+                    tap_self=True,
+                ),
+                effect=AddManaToPool(produces=(("any", 5),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Cathedral of War": make_colorless_land(  # dropped Exalted.
         "Cathedral of War",
@@ -1095,14 +1125,54 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Creeping Tar Pit": make_colorless_land(  # dropped manland activation + unblockable.
         "Creeping Tar Pit",
     ),
-    "Crystal Quarry": make_colorless_land(  # dropped pay-5-to-add-WUBRG activated.
+    # Crystal Quarry: {T}: Add {C}. {5}, {T}: Add {W}{U}{B}{R}{G}.
+    "Crystal Quarry": make_utility_land(
         "Crystal Quarry",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{5}"),
+                    mana_str="{5}",
+                    tap_self=True,
+                ),
+                effect=AddManaToPool(
+                    produces=(
+                        ("W", 1), ("U", 1), ("B", 1), ("R", 1), ("G", 1),
+                    ),
+                ),
+                is_mana_ability=True,
+            ),
+        ),
     ),
-    "Deserted Temple": make_colorless_land(  # dropped untap-target-land activated.
+    # Deserted Temple: {T}: Add {C}. {1}, {T}: Untap target land.
+    "Deserted Temple": make_utility_land(
         "Deserted Temple",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=UntapTargetLand(),
+            ),
+        ),
     ),
-    "Dust Bowl": make_colorless_land(  # dropped sac-land-for-destroy-nonbasic.
+    # Dust Bowl: {T}: Add {C}. {3}, {T}, Sacrifice a land: Destroy
+    # target nonbasic land.
+    "Dust Bowl": make_utility_land(
         "Dust Bowl",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                    sacrifice_a_land=True,
+                ),
+                effect=DestroyTargetLand(nonbasic_only=True),
+            ),
+        ),
     ),
     "Echoing Deeps": make_colorless_land(  # dropped ETB choose-to-become-copy.
         "Echoing Deeps", subtypes_str="Cave",
@@ -1132,8 +1202,21 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "High Market": make_colorless_land(  # dropped sac-creature-gain-1.
+    # High Market: {T}: Add {C}. {T}, Sacrifice a creature: You gain
+    # 1 life. Uses sacrifice_another_creature_or_artifact (wider than
+    # oracle's "a creature"; creatures are always eligible, artifacts
+    # incidentally too — acceptable widening).
+    "High Market": make_utility_land(
         "High Market",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True,
+                    sacrifice_another_creature_or_artifact=True,
+                ),
+                effect=GainLife(amount=1),
+            ),
+        ),
     ),
     "Hissing Quagmire": make_colorless_land(  # dropped manland deathtouch.
         "Hissing Quagmire",
@@ -1218,8 +1301,22 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Reflecting Pool": make_colorless_land(  # dropped tap-for-color-your-lands-produce.
         "Reflecting Pool",
     ),
-    "Scavenger Grounds": make_colorless_land(  # dropped sac-Desert-exile-graveyards activated.
-        "Scavenger Grounds", subtypes_str="Desert",
+    # Scavenger Grounds: {T}: Add {C}. {2}, {T}, Sacrifice a Desert:
+    # Exile all graveyards.
+    "Scavenger Grounds": make_utility_land(
+        "Scavenger Grounds",
+        subtypes_str="Desert",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"),
+                    mana_str="{2}",
+                    tap_self=True,
+                    sacrifice_a_desert=True,
+                ),
+                effect=ExileAllGraveyards(),
+            ),
+        ),
     ),
     "Shambling Vent": make_colorless_land(  # dropped manland lifelink (enters tapped too).
         "Shambling Vent",

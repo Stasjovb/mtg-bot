@@ -905,6 +905,57 @@ def _activate_ability(
             f"(cost for {source.printing.name}'s ability; life: {p.life})"
         )
 
+    # "Sacrifice a land" cost (Dust Bowl). Agent picks; excludes source.
+    if ability.cost.sacrifice_a_land:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and o.printing.is_land
+            and o.id != source.id
+        ]
+        if options:
+            chosen = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options]
+                )
+                chosen = next(
+                    (o for o in options if o.id == pick_id), options[0]
+                )
+            state.log.append(
+                f"P{player_id} sacrifices {chosen.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            _sacrifice(state, chosen)
+
+    # "Sacrifice a Desert" cost (Scavenger Grounds). Subtype-filtered.
+    if ability.cost.sacrifice_a_desert:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and "Desert" in o.printing.subtypes
+        ]
+        if options:
+            chosen = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options]
+                )
+                chosen = next(
+                    (o for o in options if o.id == pick_id), options[0]
+                )
+            state.log.append(
+                f"P{player_id} sacrifices {chosen.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            _sacrifice(state, chosen)
+
     # "Exile this equipment" cost (Dominion Bracelet). Walk the
     # source's attached equipment with a matching grant flag and exile
     # one. Legal_actions already gated on at least one existing.
