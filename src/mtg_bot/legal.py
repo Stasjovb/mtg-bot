@@ -131,8 +131,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     if not _is_sorcery_timing(state, player_id):
         return actions
 
-    # One land play per turn at sorcery speed.
-    if p.lands_played_this_turn < 1:
+    # Land plays per turn at sorcery speed. Base = 1, increased by
+    # permanents granting "you may play an additional land" (Icetill
+    # Explorer).
+    max_lands = 1 + sum(
+        o.printing.grants_additional_land_per_turn
+        for o in state.battlefield
+        if o.controller_id == player_id
+    )
+    if p.lands_played_this_turn < max_lands:
         for card in p.hand:
             if card.printing.is_land:
                 actions.append(PlayLand(card.id))

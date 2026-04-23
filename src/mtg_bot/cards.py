@@ -269,6 +269,10 @@ class CardPrinting:
     # choice, no pay-or-counter trigger on the stack.
     ward_cost: ManaCost | None = None
     ward_cost_str: str = ""
+    # "You may play an additional land on each of your turns." Non-zero
+    # value contributes to the land-per-turn cap via legal_actions.
+    # Icetill Explorer has this at 1.
+    grants_additional_land_per_turn: int = 0
     # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
@@ -419,6 +423,7 @@ def make_creature(
     legendary: bool = False,
     ward: str | None = None,
     ward_discard_random: bool = False,
+    grants_additional_land_per_turn: int = 0,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
@@ -447,6 +452,7 @@ def make_creature(
         ward_cost=parse_mana_cost(ward) if ward else None,
         ward_cost_str=ward or "",
         ward_discard_random=ward_discard_random,
+        grants_additional_land_per_turn=grants_additional_land_per_turn,
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -2090,8 +2096,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Icetill Explorer — dropped additional-land + graveyard-play + Landfall mill.
+        # Icetill Explorer `{2}{G}{G}` 2/4 Creature. Real oracle:
+        # "You may play an additional land on each of your turns. You
+        # may play lands from your graveyard. Landfall — Whenever a
+        # land you control enters, mill a card."
+        # Simplification: play-lands-from-graveyard is dropped (would
+        # require extending legal.py's land-source scan to graveyards).
+        make_creature(
             "Icetill Explorer", "{2}{G}{G}", 2, 4,
+            grants_additional_land_per_turn=1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=SelfMill(amount=1),
+                ),
+            ),
         ),
         # Mightform Harmonizer `{2}{G}{G}` 4/4 Creature. Warp `{2}{G}`.
         # Real oracle: "Landfall — Whenever a land you control enters,
