@@ -1432,6 +1432,68 @@ class FocusFireEffect(Effect):
 
 
 @dataclass(frozen=True)
+class CutPropulsionEffect(Effect):
+    """Target creature deals damage to itself equal to its power; doubled if
+    that creature has flying.
+
+    Matches Cut Propulsion. Self-damage uses _apply_damage, which applies
+    deathtouch-style marked_lethal only when a deathtouch source is involved
+    — self-damage carries no source keywords so SBA-based lethal checks
+    behave normally.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_keywords, effective_power
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        power = effective_power(state, obj)
+        if power <= 0:
+            state.log.append(
+                f"{obj.printing.name} deals 0 damage to itself "
+                f"(Cut Propulsion)"
+            )
+            return
+        if "flying" in effective_keywords(state, obj):
+            amount = power * 2
+        else:
+            amount = power
+        state.log.append(
+            f"{obj.printing.name} takes {amount} (Cut Propulsion self-damage)"
+        )
+        _apply_damage(state, targets[0], amount)
+
+    def describe(self) -> str:
+        return (
+            "target creature deals damage to itself equal to its power; "
+            "doubled if it has flying"
+        )
+
+
+@dataclass(frozen=True)
 class DealDamageToOpponentCreature(Effect):
     """Deal ``amount`` damage to target creature an opponent controls.
 

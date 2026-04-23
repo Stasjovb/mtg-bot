@@ -43,6 +43,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifactOrTappedCreature,
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    CutPropulsionEffect,
     ExileAllCreaturesAndSpacecraft,
     FocusFireEffect,
     MillTargetPlayer,
@@ -1093,6 +1094,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Focus Fire", "{W}",
             effect=FocusFireEffect(base=2),
+        ),
+        # Cut Propulsion — creature self-damage; flying 2x (anti-air blast).
+        make_instant(
+            "Cut Propulsion", "{2}{R}",
+            effect=CutPropulsionEffect(),
         ),
     ]
 }

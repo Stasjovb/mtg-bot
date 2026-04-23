@@ -3454,6 +3454,60 @@ def test_focus_fire_noop_paths():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_cut_propulsion_self_damage_non_flyer():
+    from mtg_bot.effects import CutPropulsionEffect
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 2/2
+    state.battlefield.append(bear)
+    e = CutPropulsionEffect()
+    assert e.requires_target() is True
+    assert "flying" in e.describe()
+    e.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    # Power 2 → 2 damage → 2/2 survives at 2 damage (equals toughness → SBA
+    # would kill on next check; here we just see damage marked).
+    assert bear.damage == 2
+
+
+def test_cut_propulsion_doubled_for_flyer():
+    from mtg_bot.effects import CutPropulsionEffect
+
+    state = _arena()
+    flyer = state.new_object(
+        SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 1/3 flying
+    state.battlefield.append(flyer)
+    e = CutPropulsionEffect()
+    e.resolve(state, controller_id=0, targets=(("creature", flyer.id),))
+    # Power 1, doubled → 2 damage.
+    assert flyer.damage == 2
+
+
+def test_cut_propulsion_zero_power_deals_none():
+    from mtg_bot.effects import CutPropulsionEffect
+
+    state = _arena()
+    wall = state.new_object(
+        SYNTHETIC_CREATURES["Wall of Stone"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 0/5 defender
+    state.battlefield.append(wall)
+    e = CutPropulsionEffect()
+    e.resolve(state, controller_id=0, targets=(("creature", wall.id),))
+    assert wall.damage == 0
+
+
+def test_cut_propulsion_noop_paths():
+    from mtg_bot.effects import CutPropulsionEffect
+
+    state = _arena()
+    e = CutPropulsionEffect()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,
