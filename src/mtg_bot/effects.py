@@ -1182,6 +1182,58 @@ class FamishedWorldsireETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCounterOnEachOfUpToNTargetCreatures(Effect):
+    """Put a +1/+1 counter on each of up to ``max_n`` target creatures.
+
+    Matches "put a +1/+1 counter on each of up to two target creatures"
+    templating (Weftblade Enhancer). Targets are selected by the agent
+    via repeated choose_target calls; effect resolves for each valid
+    target that's still a creature on the battlefield.
+    """
+
+    max_n: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for kind, target_id in targets:
+            if kind != "creature":
+                continue
+            tgt = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+            if tgt is None:
+                continue
+            tgt.plus_one_counters += 1
+            state.log.append(
+                f"+1/+1 counter on {tgt.printing.name} "
+                f"(now {tgt.plus_one_counters})"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"put a +1/+1 counter on each of up to {self.max_n} target "
+            f"creatures"
+        )
+
+
+@dataclass(frozen=True)
 class SelfcraftMechanETBEffect(Effect):
     """Selfcraft Mechan's ETB: "You may sacrifice an artifact. When you
     do, put a +1/+1 counter on target creature and draw a card."

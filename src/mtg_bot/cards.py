@@ -56,6 +56,7 @@ from mtg_bot.effects import (
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     PutPoisonCountersOnTargetPlayer,
@@ -2298,9 +2299,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Weftblade Enhancer — dropped multi-target counter ETB; Warp kept.
+        # Weftblade Enhancer `{5}{W}` 3/4 Creature. Warp `{2}{W}`.
+        # Real oracle: "When this creature enters, put a +1/+1 counter
+        # on each of up to two target creatures."
+        make_creature(
             "Weftblade Enhancer", "{5}{W}", 3, 4,
             warp="{2}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnEachOfUpToNTargetCreatures(
+                        max_n=2,
+                    ),
+                ),
+            ),
         ),
         # Emissary Escort `{1}{U}` 0/4 Artifact Creature — Robot Soldier.
         # "This creature gets +X/+0, where X is the greatest mana value
