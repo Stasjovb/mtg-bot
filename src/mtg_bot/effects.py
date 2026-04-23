@@ -2119,17 +2119,22 @@ class DestroyTargetArtifact(Effect):
 class ExileTargetCreatureUntilSourceLeaves(Effect):
     """Exile any target creature until the source leaves the battlefield.
 
-    Matches All-Fates Stalker's ETB. Uses the Oblivion-Ring-style
-    ``exiled_by_source`` bookkeeping so the exiled creature returns when
-    the source leaves play.
+    Matches All-Fates Stalker's ETB and Hardlight Containment's ETB.
+    Uses the Oblivion-Ring-style ``exiled_by_source`` bookkeeping so
+    the exiled creature returns when the source leaves play.
 
     ``excluded_subtypes`` filters out creatures whose printed subtypes
     overlap with any member (e.g., ``frozenset({"Assassin"})`` for
     All-Fates Stalker's "non-Assassin creature" clause). Empty = no
     subtype restriction.
+
+    ``opponents_only`` restricts legal targets to creatures controlled
+    by a player OTHER than the effect's controller (Hardlight
+    Containment: "target creature an opponent controls"). Default False.
     """
 
     excluded_subtypes: frozenset[str] = frozenset()
+    opponents_only: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -2144,6 +2149,9 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
             and not (
                 self.excluded_subtypes
                 and any(s in self.excluded_subtypes for s in o.printing.subtypes)
+            )
+            and not (
+                self.opponents_only and o.controller_id == controller_id
             )
         ]
 

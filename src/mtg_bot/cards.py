@@ -250,6 +250,11 @@ class CardPrinting:
     #     i.e. X + base generic + colored pips (Dyadrine).
     #   None — no such replacement.
     enters_with_counters_from_x: str | None = None
+    # Aura enchant restriction. Auras default to enchanting creatures;
+    # Hardlight Containment enchants artifacts (and our machinery
+    # wouldn't find a legal target otherwise). Accepts "creature" or
+    # "artifact". Only consumed when is_aura is True.
+    aura_enchant_type: str = "creature"
 
     @property
     def is_land(self) -> bool:
@@ -533,6 +538,7 @@ def make_aura(
     toughness_bonus: int = 0,
     granted_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    aura_enchant_type: str = "creature",
 ) -> CardPrinting:
     """Build an Enchantment — Aura card that attaches to a creature.
 
@@ -561,6 +567,7 @@ def make_aura(
         equipment_bonuses=(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
+        aura_enchant_type=aura_enchant_type,
     )
 
 
@@ -3075,10 +3082,25 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             legendary=True,
         ),
         # Auras — ship as simplified "enchant creature, small bonus" placeholders.
-        make_aura(  # Hardlight Containment — dropped enchant-artifact + exile ETB; +0/+0 placeholder.
+        # Hardlight Containment `{W}` Aura — Enchant artifact you
+        # control. ETB exile target creature an opponent controls until
+        # this Aura leaves the battlefield.
+        # Simplification: the printed "Enchanted permanent has ward {1}"
+        # static is dropped (equipment-granted wards aren't modeled);
+        # granted_keywords=() to avoid unintended side bonuses.
+        make_aura(
             "Hardlight Containment", "{W}",
+            aura_enchant_type="artifact",
             power_bonus=0, toughness_bonus=0,
-            granted_keywords=frozenset({"indestructible"}),
+            granted_keywords=frozenset(),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ExileTargetCreatureUntilSourceLeaves(
+                        opponents_only=True,
+                    ),
+                ),
+            ),
         ),
         make_aura(  # Moonlit Meditation — dropped tokens-are-copies replacement.
             "Moonlit Meditation", "{2}{U}",
