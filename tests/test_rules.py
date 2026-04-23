@@ -7034,6 +7034,32 @@ def test_slagdrill_scrapper_not_legal_without_sac_target():
     assert activate_actions == []
 
 
+def test_aura_fizzle_cleanup_covers_no_targets_branch():
+    """Cast an Aura without any legal creature target — attached_to
+    stays None when no targets were picked, so it fizzles at resolve."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    # Fund cost but no creature targets available.
+    mana = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mana)
+    aura = state.new_object(
+        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        zone=Zone.HAND,
+    )
+    state.players[0].hand.append(aura)
+    _cast_spell(state, 0, aura.id)
+    resolve_top_of_stack(state)
+    # Should be in the graveyard (fizzled — no legal target at resolve).
+    assert aura in state.players[0].graveyard
+
+
 def test_cost_reduction_attacked_with_spacecraft_active():
     """Exercise the attacked_with_spacecraft_this_turn branch in
     apply_cost_reductions — dead without at least one test."""
