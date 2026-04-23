@@ -5041,6 +5041,63 @@ class DestroyTargetNoncreaturePermanent(Effect):
 
 
 @dataclass(frozen=True)
+class BecomeLandCreatureUEOT(Effect):
+    """Animate a land into a creature until end of turn.
+
+    The shared manland primitive: sets temp_is_creature, overrides
+    the source's base P/T via temp_base_pt_override, and grants any
+    keywords via temp_keywords. Also optionally sets temp_unblockable
+    (Creeping Tar Pit: "It can't be blocked this turn").
+
+    Does NOT model per-manland granted triggered/activated abilities
+    that fire only while the land is a creature (Lavaclaw's X-pump,
+    Raging Ravine's attacks-counter, Wandering Fumarole's P/T swap).
+    Documented per-card as a simplification.
+    """
+
+    power: int = 0
+    toughness: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+    unblockable: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        source.temp_is_creature = True
+        source.temp_base_pt_override = (self.power, self.toughness)
+        if self.granted_keywords:
+            source.temp_keywords = (
+                source.temp_keywords | self.granted_keywords
+            )
+        if self.unblockable:
+            source.temp_unblockable = True
+        kw_note = (
+            f" with {', '.join(sorted(self.granted_keywords))}"
+            if self.granted_keywords else ""
+        )
+        state.log.append(
+            f"{source.printing.name} becomes a {self.power}/{self.toughness}"
+            f" creature UEOT{kw_note}"
+        )
+
+    def describe(self) -> str:
+        kws = (
+            " with " + ", ".join(sorted(self.granted_keywords))
+            if self.granted_keywords else ""
+        )
+        unb = " (unblockable)" if self.unblockable else ""
+        return (
+            f"until end of turn, this land becomes a "
+            f"{self.power}/{self.toughness} creature{kws}{unb}; "
+            f"it's still a land"
+        )
+
+
+@dataclass(frozen=True)
 class UntapTargetLand(Effect):
     """Deserted Temple: `{1}, {T}: Untap target land.`"""
 

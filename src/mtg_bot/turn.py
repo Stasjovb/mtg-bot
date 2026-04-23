@@ -821,6 +821,7 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_keywords = frozenset()
         obj.temp_unblockable = False
         obj.temp_base_pt_override = None
+        obj.temp_is_creature = False
         # Revert "gain control until end of turn" effects.
         if obj.temp_original_controller_id is not None:
             obj.controller_id = obj.temp_original_controller_id

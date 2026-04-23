@@ -19,6 +19,7 @@ from mtg_bot.effects import (
     ConditionalIfVoid,
     ControlTargetOpponentNextTurn,
     DealDamageToControllerAndAddMana,
+    BecomeLandCreatureUEOT,
     DestroyTargetLand,
     ExileAllGraveyards,
     GrantLifeToEachOpponent,
@@ -1076,8 +1077,22 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Blast Zone": make_colorless_land(  # dropped enters-with-counters + sac-mass-destroy.
         "Blast Zone",
     ),
-    "Blinkmoth Nexus": make_colorless_land(  # dropped manland activation.
+    # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact
+    # creature with flying UEOT. Also: {1}, {T}: +1/+1 UEOT to target
+    # Blinkmoth — dropped (simplification: other Blinkmoths rare).
+    "Blinkmoth Nexus": make_utility_land(
         "Blinkmoth Nexus",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=1, toughness=1,
+                    granted_keywords=frozenset({"flying"}),
+                ),
+            ),
+        ),
     ),
     # Bonders' Enclave: `{T}: Add {C}. {3}, {T}: Draw a card.
     # Activate only if you control a creature with power 4 or
@@ -1116,14 +1131,45 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Cathedral of War": make_colorless_land(  # dropped Exalted.
         "Cathedral of War",
     ),
-    "Celestial Colonnade": make_colorless_land(  # dropped manland activation (enters tapped too).
+    # Celestial Colonnade: enters tapped, {T}: W or U, {3}{W}{U}:
+    # → 4/4 W/U Elemental flying vigilance UEOT.
+    "Celestial Colonnade": make_utility_land(
         "Celestial Colonnade",
+        produces=frozenset({"W", "U"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}{W}{U}"),
+                    mana_str="{3}{W}{U}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=4, toughness=4,
+                    granted_keywords=frozenset({"flying", "vigilance"}),
+                ),
+            ),
+        ),
     ),
     "Contested War Zone": make_colorless_land(  # dropped attackers-get-+1/+0 + gain-control.
         "Contested War Zone",
     ),
-    "Creeping Tar Pit": make_colorless_land(  # dropped manland activation + unblockable.
+    # Creeping Tar Pit: enters tapped, {T}: U or B, {1}{U}{B}: → 3/2
+    # U/B Elemental UEOT. "It can't be blocked this turn."
+    "Creeping Tar Pit": make_utility_land(
         "Creeping Tar Pit",
+        produces=frozenset({"U", "B"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{U}{B}"),
+                    mana_str="{1}{U}{B}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=3, toughness=2, unblockable=True,
+                ),
+            ),
+        ),
     ),
     # Crystal Quarry: {T}: Add {C}. {5}, {T}: Add {W}{U}{B}{R}{G}.
     "Crystal Quarry": make_utility_land(
@@ -1218,23 +1264,83 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Hissing Quagmire": make_colorless_land(  # dropped manland deathtouch.
+    # Hissing Quagmire: enters tapped, {T}: B or G, {1}{B}{G}: → 2/2
+    # B/G Elemental deathtouch UEOT.
+    "Hissing Quagmire": make_utility_land(
         "Hissing Quagmire",
+        produces=frozenset({"B", "G"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{B}{G}"),
+                    mana_str="{1}{B}{G}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=2, toughness=2,
+                    granted_keywords=frozenset({"deathtouch"}),
+                ),
+            ),
+        ),
     ),
-    "Inkmoth Nexus": make_colorless_land(  # dropped manland flying + infect.
+    # Inkmoth Nexus: {T}: C. {1}: → 1/1 Phyrexian Blinkmoth artifact
+    # creature with flying and infect UEOT.
+    "Inkmoth Nexus": make_utility_land(
         "Inkmoth Nexus",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=1, toughness=1,
+                    granted_keywords=frozenset({"flying", "infect"}),
+                ),
+            ),
+        ),
     ),
     "Inventors' Fair": make_colorless_land(  # dropped gain-1-upkeep + tutor-artifact activated.
         "Inventors' Fair", legendary=True,
     ),
-    "Lavaclaw Reaches": make_colorless_land(  # dropped manland + X/1 pump.
+    # Lavaclaw Reaches: enters tapped, {T}: B or R, {1}{B}{R}: → 2/2
+    # B/R Elemental UEOT. Real oracle also grants "{X}: +X/+0 UEOT"
+    # while animated — not modeled (the granted-activated-while-
+    # animated-UEOT pattern isn't supported yet).
+    "Lavaclaw Reaches": make_utility_land(
         "Lavaclaw Reaches",
+        produces=frozenset({"B", "R"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{B}{R}"),
+                    mana_str="{1}{B}{R}",
+                ),
+                effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+            ),
+        ),
     ),
     "Lotus Field": make_colorless_land(  # dropped ETB-sac-two-lands + tap-for-3-any.
         "Lotus Field",
     ),
-    "Lumbering Falls": make_colorless_land(  # dropped manland hexproof.
+    # Lumbering Falls: enters tapped, {T}: G or U, {2}{G}{U}: → 3/3
+    # G/U Elemental hexproof UEOT.
+    "Lumbering Falls": make_utility_land(
         "Lumbering Falls",
+        produces=frozenset({"G", "U"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}{G}{U}"),
+                    mana_str="{2}{G}{U}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=3, toughness=3,
+                    granted_keywords=frozenset({"hexproof"}),
+                ),
+            ),
+        ),
     ),
     # Mana Confluence: `{T}, Pay 1 life: Add one mana of any color.`
     "Mana Confluence": make_utility_land(
@@ -1262,14 +1368,41 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Mirrorpool": make_colorless_land(  # dropped copy-spell / copy-creature activated.
         "Mirrorpool",
     ),
-    "Mutavault": make_colorless_land(  # dropped manland X/X-creature-type.
+    # Mutavault: {T}: C. {1}: → 2/2 creature with all creature types
+    # UEOT. "All creature types" isn't modeled; the 2/2 body lands
+    # cleanly.
+    "Mutavault": make_utility_land(
         "Mutavault",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                ),
+                effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+            ),
+        ),
     ),
     "Mystifying Maze": make_colorless_land(  # dropped exile-attacker-return-EoT activated.
         "Mystifying Maze",
     ),
-    "Needle Spires": make_colorless_land(  # dropped manland double strike (enters tapped too).
+    # Needle Spires: enters tapped, {T}: R or W, {2}{R}{W}: → 2/1
+    # R/W Elemental double strike UEOT.
+    "Needle Spires": make_utility_land(
         "Needle Spires",
+        produces=frozenset({"R", "W"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}{R}{W}"),
+                    mana_str="{2}{R}{W}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=2, toughness=1,
+                    granted_keywords=frozenset({"double strike"}),
+                ),
+            ),
+        ),
     ),
     "Nesting Grounds": make_colorless_land(  # dropped move-a-counter-from-X-to-Y activated.
         "Nesting Grounds",
@@ -1321,8 +1454,23 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Raging Ravine": make_colorless_land(  # dropped manland attacks-enters-counter.
+    # Raging Ravine: enters tapped, {T}: R or G, {2}{R}{G}: → 3/3
+    # R/G Elemental UEOT. Real oracle also grants "when this attacks,
+    # put a +1/+1 counter on it" while animated — not modeled (see
+    # Lavaclaw note).
+    "Raging Ravine": make_utility_land(
         "Raging Ravine",
+        produces=frozenset({"R", "G"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}{R}{G}"),
+                    mana_str="{2}{R}{G}",
+                ),
+                effect=BecomeLandCreatureUEOT(power=3, toughness=3),
+            ),
+        ),
     ),
     # Reflecting Pool: {T}: Add one mana of any type that a land you
     # control could produce. Simplified to "any" coin — the dynamic
@@ -1355,11 +1503,43 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Shambling Vent": make_colorless_land(  # dropped manland lifelink (enters tapped too).
+    # Shambling Vent: enters tapped, {T}: W or B, {1}{W}{B}: → 2/3
+    # W/B Elemental lifelink UEOT.
+    "Shambling Vent": make_utility_land(
         "Shambling Vent",
+        produces=frozenset({"W", "B"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{W}{B}"),
+                    mana_str="{1}{W}{B}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=2, toughness=3,
+                    granted_keywords=frozenset({"lifelink"}),
+                ),
+            ),
+        ),
     ),
-    "Stirring Wildwood": make_colorless_land(  # dropped manland reach (enters tapped too).
+    # Stirring Wildwood: enters tapped, {T}: G or W, {1}{G}{W}: → 3/4
+    # G/W Elemental reach UEOT.
+    "Stirring Wildwood": make_utility_land(
         "Stirring Wildwood",
+        produces=frozenset({"G", "W"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{G}{W}"),
+                    mana_str="{1}{G}{W}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=3, toughness=4,
+                    granted_keywords=frozenset({"reach"}),
+                ),
+            ),
+        ),
     ),
     # Strip Mine: `{T}: Add {C}. {T}, Sacrifice this land: Destroy
     # target land.`
@@ -1398,8 +1578,22 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Thespian's Stage": make_colorless_land(  # dropped {2},{T}: become-copy-of-target-land.
         "Thespian's Stage",
     ),
-    "Wandering Fumarole": make_colorless_land(  # dropped manland swap-P-and-T.
+    # Wandering Fumarole: enters tapped, {T}: U or R, {2}{U}{R}: → 1/4
+    # U/R Elemental UEOT. Real oracle also grants "{0}: Switch P/T
+    # UEOT" while animated — not modeled (see Lavaclaw note).
+    "Wandering Fumarole": make_utility_land(
         "Wandering Fumarole",
+        produces=frozenset({"U", "R"}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}{U}{R}"),
+                    mana_str="{2}{U}{R}",
+                ),
+                effect=BecomeLandCreatureUEOT(power=1, toughness=4),
+            ),
+        ),
     ),
 }
 

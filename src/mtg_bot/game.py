@@ -46,6 +46,11 @@ class GameObject:
     plus_one_counters: int = 0
     # "Can't be blocked this turn" marker (cleared at cleanup).
     temp_unblockable: bool = False
+    # "Until end of turn, this land becomes a creature." Manlands
+    # (Celestial Colonnade, Blinkmoth Nexus, etc.). When True, the
+    # object counts as a creature for combat/targeting purposes.
+    # Cleared at cleanup. Pair with temp_base_pt_override + temp_keywords.
+    temp_is_creature: bool = False
     # "You may play this card this turn" — set on cards exiled by
     # impulse-style effects (Territorial Bruntar landfall, Memorial
     # Vault activated). Cleared at cleanup. legal_actions honors it
@@ -112,10 +117,16 @@ def is_stationed(obj: GameObject) -> bool:
 def is_creature_now(obj: GameObject) -> bool:
     """Whether ``obj`` currently counts as a creature on the battlefield.
 
-    True for printed creatures AND for Spacecraft whose charge-counter
-    threshold has been crossed (they're artifact creatures while stationed).
+    True for printed creatures, for Spacecraft whose charge-counter
+    threshold has been crossed (they're artifact creatures while
+    stationed), and for lands animated by a manland activation
+    (``temp_is_creature`` set until cleanup).
     """
-    return obj.printing.is_creature or is_stationed(obj)
+    return (
+        obj.printing.is_creature
+        or is_stationed(obj)
+        or obj.temp_is_creature
+    )
 
 
 def _static_bonuses(

@@ -320,15 +320,42 @@ def _resolve_damage_step(
     ) in damage_events_typed:
         if amount <= 0:
             continue
+        has_infect = "infect" in source_kws
         if kind == "player":
             p = state.player_by_id(target_id)
-            p.life -= amount
-            state.log.append(f"P{target_id} takes {amount} (life: {p.life})")
+            if has_infect:
+                # Infect: damage to a player becomes that many poison
+                # counters instead of life loss.
+                p.poison_counters += amount
+                state.log.append(
+                    f"P{target_id} gets {amount} poison counter(s) "
+                    f"from infect (now {p.poison_counters})"
+                )
+            else:
+                p.life -= amount
+                state.log.append(
+                    f"P{target_id} takes {amount} (life: {p.life})"
+                )
             sources_hit_player.append((source_id, target_id, amount))
         else:
             obj = next((o for o in state.battlefield if o.id == target_id), None)
             if obj is not None:
-                obj.damage += amount
+                if has_infect:
+                    # Infect: damage to a creature becomes -1/-1
+                    # counters. The engine doesn't currently track
+                    # -1/-1 counters as a distinct field; we fold
+                    # them into temp_power/toughness bonuses (UEOT)
+                    # as a simplification — functionally lethal for
+                    # this-turn damage math, which is what infect
+                    # generally ends up doing in our sim.
+                    obj.temp_power_bonus -= amount
+                    obj.temp_toughness_bonus -= amount
+                    state.log.append(
+                        f"{obj.printing.name} takes {amount} -1/-1 "
+                        f"from infect"
+                    )
+                else:
+                    obj.damage += amount
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
                 # Fire "whenever enchanted creature is dealt damage"
