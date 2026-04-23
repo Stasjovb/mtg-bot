@@ -3984,6 +3984,36 @@ def test_wurmwall_sweeper_etb_surveil():
     assert any("surveils 2" in entry for entry in state.log)
 
 
+def test_fell_gravship_etb_mill_and_return():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    _stock_library(state, 0, count=10)
+    fg = state.new_object(
+        EOE_CREATURES["Fell Gravship"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fg)
+    # Pre-seed a creature in graveyard so return-to-hand has a target.
+    ghost = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD
+    )
+    state.players[0].graveyard.append(ghost)
+
+    etb = next(
+        ab for ab in fg.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    legal = etb.effect.legal_targets(state, 0)
+    # Legal targets from ReturnCreatureFromYourGraveyardToHand — at least
+    # our pre-seeded Wild Bear should show up (milled cards are basic
+    # lands, not creatures, so they don't appear).
+    assert ("graveyard_creature", ghost.id) in legal
+    state.resolving_source = fg
+    etb.effect.resolve(state, 0, (("graveyard_creature", ghost.id),))
+    assert ghost in state.players[0].hand
+    # 3 cards were milled.
+    assert len(state.players[0].library) == 10 - 3
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

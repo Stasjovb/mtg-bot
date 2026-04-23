@@ -941,6 +941,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Fell Gravship: {2}{B} 3/2 Spacecraft. ETB mill 3 then return a
+        # creature card from your graveyard to your hand. Station 8+ gives
+        # flying + lifelink. Real card says "creature or Spacecraft card"
+        # — we restrict to creature for now.
+        make_spacecraft(
+            "Fell Gravship", "{2}{B}", 3, 2,
+            station_threshold=8,
+            stationed_keywords={"flying", "lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        SelfMill(amount=3),
+                        ReturnCreatureFromYourGraveyardToHand(),
+                    )),
+                ),
+            ),
+        ),
         # Interceptor Mechan: {2}{B}{R} 3/3 Flying. ETB return creature card
         # from your graveyard to hand. Void — end step: +1/+1 counter.
         # Real card allows "artifact or creature" — we restrict to creature
