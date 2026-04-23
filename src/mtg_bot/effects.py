@@ -3770,7 +3770,8 @@ class PutPlusOneCounterOnTargetCreature(Effect):
         )
         if obj is None:
             return
-        obj.plus_one_counters += self.amount
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, self.amount)
         state.log.append(
             f"{obj.printing.name} gets a +1/+1 counter "
             f"(now {obj.plus_one_counters})"
@@ -3793,13 +3794,14 @@ class PutPlusOneCounterOnEachCreatureYouControl(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import add_plus_one_counters
         count = 0
         for obj in state.battlefield:
             if obj.controller_id != controller_id:
                 continue
             if not obj.printing.is_creature:
                 continue
-            obj.plus_one_counters += self.amount
+            add_plus_one_counters(state, obj, self.amount)
             count += 1
         state.log.append(
             f"P{controller_id}'s {count} creature(s) each get "
@@ -3828,10 +3830,11 @@ class PutPlusOneCounterOnSelf(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import add_plus_one_counters
         source = state.resolving_source
         if source is None:
             return
-        source.plus_one_counters += self.amount
+        add_plus_one_counters(state, source, self.amount)
         state.log.append(
             f"{source.printing.name} gets a +1/+1 counter "
             f"(now {source.plus_one_counters})"
@@ -3878,7 +3881,11 @@ class PutPlusOneCounterOnOpponentsCreature(Effect):
         )
         if obj is None or obj.controller_id == controller_id:
             return
-        obj.plus_one_counters += self.amount
+        # No doubling here: the counter goes onto an OPPONENT's
+        # creature; Loading Zone belongs to the caster, not the
+        # opponent. Doublers check the recipient's controller.
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, self.amount)
         state.log.append(
             f"{obj.printing.name} gets a +1/+1 counter "
             f"(now {obj.plus_one_counters})"
@@ -3925,7 +3932,8 @@ class PutPlusOneCounterOnCreatureYouControl(Effect):
         )
         if obj is None:
             return
-        obj.plus_one_counters += self.amount
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, self.amount)
         state.log.append(
             f"{obj.printing.name} gets a +1/+1 counter "
             f"(now {obj.plus_one_counters})"

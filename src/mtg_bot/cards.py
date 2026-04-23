@@ -290,6 +290,12 @@ class CardPrinting:
     # the battlefield under the token-creator's control, the number of
     # tokens created is doubled. Matches Exalted Sunborn.
     is_token_doubler: bool = False
+    # Replacement-effect flag: when any permanent with this flag is on
+    # the battlefield under the counter-recipient's control, +1/+1
+    # counters going onto creatures (and Spacecraft) they control are
+    # doubled. Matches Loading Zone. Multiple doublers stack
+    # multiplicatively via add_plus_one_counters().
+    is_counter_doubler: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -666,6 +672,9 @@ def make_enchantment(
     static_abilities: tuple[StaticAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = False,
+    is_counter_doubler: bool = False,
+    is_token_doubler: bool = False,
+    warp: str | None = None,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
     like any other permanent and sits there firing triggers or providing
@@ -685,6 +694,10 @@ def make_enchantment(
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
+        is_counter_doubler=is_counter_doubler,
+        is_token_doubler=is_token_doubler,
+        warp_cost=parse_mana_cost(warp) if warp else None,
+        warp_cost_str=warp or "",
     )
 
 
@@ -3318,8 +3331,17 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Sothera, the Supervoid", "{2}{B}{B}",
             legendary=True,
         ),
-        make_enchantment(  # Loading Zone — dropped "twice counters" replacement.
+        # Loading Zone `{3}{G}` Enchantment. Warp `{G}`.
+        # "If one or more counters would be put on a creature,
+        # Spacecraft, or Planet you control, twice that many of each
+        # of those kinds of counters are put on it instead."
+        # Simplification: only +1/+1 counters on creatures/Spacecraft
+        # you control get doubled. Other counter kinds (charge, stun,
+        # loyalty) aren't doubled; the "Planet" type isn't modeled.
+        make_enchantment(
             "Loading Zone", "{3}{G}",
+            warp="{G}",
+            is_counter_doubler=True,
         ),
         make_enchantment(  # Terrasymbiosis — dropped counter-on-creature → draw trigger.
             "Terrasymbiosis", "{2}{G}",

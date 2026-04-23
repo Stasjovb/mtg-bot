@@ -190,6 +190,32 @@ def _dynamic_base_pt(
     return None  # pragma: no cover - defensive fallback
 
 
+def add_plus_one_counters(
+    state: GameState, obj: GameObject, amount: int
+) -> int:
+    """Add ``amount`` +1/+1 counters to ``obj``, applying Loading Zone-
+    style doubling replacement effects for each active doubler
+    controlled by the recipient. Only applies to creatures and
+    Spacecraft (the Planet type isn't modeled yet) — matches the real
+    Loading Zone scope.
+
+    Returns the effective count actually added (after doubling). Safe
+    when amount <= 0 (no-op).
+    """
+    if amount <= 0:
+        return 0
+    effective = amount
+    if obj.printing.is_creature or obj.printing.is_spacecraft:
+        doublers = sum(
+            1 for o in state.battlefield
+            if o.controller_id == obj.controller_id
+            and o.printing.is_counter_doubler
+        )
+        effective = amount * (2 ** doublers)
+    obj.plus_one_counters += effective
+    return effective
+
+
 def effective_power(state: GameState, obj: GameObject) -> int:
     """Power including +1/+1 counters, static bonuses, and UEOT pumps.
     Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
