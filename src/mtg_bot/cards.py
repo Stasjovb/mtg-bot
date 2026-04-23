@@ -150,6 +150,11 @@ def parse_mana_cost(s: str) -> ManaCost:
             colored[sym] = colored.get(sym, 0) + 1
         elif sym == "C":
             generic += 1
+        elif sym == "X":
+            # Variable cost — we don't model X-cost choice yet, so X
+            # contributes 0 to the payable cost. Functional but wrong
+            # for cards whose effect scales with X.
+            pass
         else:
             raise ValueError(f"unsupported mana symbol: {{{sym}}}")
     return ManaCost(generic=generic, colored=tuple(sorted(colored.items())))
@@ -2871,6 +2876,199 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DestroyTargetArtifactOrTappedCreature(),
                 GainLife(amount=3),
             )),
+        ),
+        # -- Final batch: remaining cards shipped as heavy simplifications
+        # (empty bodies, vanilla bodies, or small placeholder effects).
+        # Each card is noted per-item. These are pool-completeness ships;
+        # they're playable but functionally much weaker than printed.
+        make_creature(  # Broodguard Elite — X-cost + sac-lands devour. Ship as 3/3 vanilla.
+            "Broodguard Elite", "{3}{G}{G}", 3, 3,
+        ),
+        make_creature(  # Famished Worldsire — complex Devour + search. Ship as 6/6 vanilla.
+            "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
+        ),
+        make_creature(  # Gene Pollinator — mana ability. Ship as vanilla Artifact Creature 1/2.
+            "Gene Pollinator", "{G}", 1, 2,
+            artifact=True,
+        ),
+        make_creature(  # Harmonious Grovestrider — Ward + dynamic P/T. Ship 3/3 Reach placeholder.
+            "Harmonious Grovestrider", "{3}{G}{G}", 3, 3,
+            keywords={"reach"},
+            ward="{2}",
+        ),
+        make_creature(  # Cosmogoyf — dynamic P/T. Ship 3/4 vanilla.
+            "Cosmogoyf", "{B}{G}", 3, 4,
+        ),
+        make_creature(  # Dyadrine — X + attack-trigger counters. Ship 4/4 Trample vanilla.
+            "Dyadrine, Synthesis Amalgam", "{X}{G}{W}", 4, 4,
+            artifact=True,
+            legendary=True,
+            keywords={"trample"},
+        ),
+        make_creature(  # Virulent Silencer — poison-counter mechanic. Ship 2/3 Flying vanilla.
+            "Virulent Silencer", "{3}", 2, 3,
+            artifact=True,
+            keywords={"flying"},
+        ),
+        make_spacecraft(  # Larval Scoutlander — drop sac-land ramp rider.
+            "Larval Scoutlander", "{2}{G}", 3, 3,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+        ),
+        make_spacecraft(  # Infinite Guideline Station — drop multicolor token rider.
+            "Infinite Guideline Station", "{W}{U}{B}{R}{G}", 7, 15,
+            station_threshold=10,
+            stationed_keywords={"flying"},
+            legendary=True,
+        ),
+        make_spacecraft(  # Dawnsire, Sunstar Dreadnought — drop 100-damage attack rider.
+            "Dawnsire, Sunstar Dreadnought", "{5}", 20, 20,
+            station_threshold=20,
+            stationed_keywords={"flying"},
+            legendary=True,
+        ),
+        make_spacecraft(  # Extinguisher Battleship — drop ETB destroy + 4-damage-each.
+            "Extinguisher Battleship", "{8}", 10, 10,
+            station_threshold=7,
+            stationed_keywords={"flying", "trample"},
+        ),
+        # The Eternity Elevator is a Spacecraft with no base P/T
+        # (special card) — ship as no-frills colorless land-like artifact.
+        make_artifact(
+            "The Eternity Elevator", "{5}",
+            legendary=True,
+        ),
+        # Auras — ship as simplified "enchant creature, small bonus" placeholders.
+        make_aura(  # Hardlight Containment — dropped enchant-artifact + exile ETB; +0/+0 placeholder.
+            "Hardlight Containment", "{W}",
+            power_bonus=0, toughness_bonus=0,
+            granted_keywords=frozenset({"indestructible"}),
+        ),
+        make_aura(  # Moonlit Meditation — dropped tokens-are-copies replacement.
+            "Moonlit Meditation", "{2}{U}",
+            power_bonus=1, toughness_bonus=1,
+        ),
+        make_aura(  # Tractor Beam — dropped gain-control + tap rider.
+            "Tractor Beam", "{2}{U}{U}",
+            power_bonus=2, toughness_bonus=2,
+        ),
+        make_aura(  # Chorale of the Void — dropped attacks-reanimate + Void sac rider.
+            "Chorale of the Void", "{3}{B}",
+            power_bonus=2, toughness_bonus=2,
+        ),
+        make_aura(  # Pain for All — dropped damage-equal-to-power ETB + damage-echo rider.
+            "Pain for All", "{2}{R}",
+            power_bonus=3, toughness_bonus=0,
+        ),
+        # Artifacts — ship as empty/inert bodies, dropping complex text.
+        make_artifact(  # Pinnacle Starcage — dropped mass-exile-until-leaves + tokens rider.
+            "Pinnacle Starcage", "{1}{W}{W}",
+        ),
+        make_artifact(  # Requiem Monolith — dropped activated ability.
+            "Requiem Monolith", "{2}{B}",
+        ),
+        make_artifact(  # Memorial Vault — dropped tap-for-impulse-draw activated.
+            "Memorial Vault", "{3}{R}",
+        ),
+        make_artifact(  # All-Fates Scroll — dropped mana ability + draw-X activated.
+            "All-Fates Scroll", "{3}",
+        ),
+        make_artifact(  # The Endstone — dropped land-or-spell draw + life-halving.
+            "The Endstone", "{7}",
+            legendary=True,
+        ),
+        make_artifact(  # Nutrient Block — dropped gain-3-life / sac-for-draw.
+            "Nutrient Block", "{1}",
+        ),
+        make_artifact(  # Thrumming Hivepool — dropped complex attack-triggers.
+            "Thrumming Hivepool", "{6}",
+        ),
+        make_equipment(  # The Dominion Bracelet — dropped control-target activated.
+            "The Dominion Bracelet", "{2}",
+            power_bonus=1, toughness_bonus=1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        make_equipment(  # Atomic Microsizer — dropped complex attack-unblockable trigger.
+            "Atomic Microsizer", "{U}",
+            power_bonus=1, toughness_bonus=0,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        # Enchantments — ship as empty or minimal.
+        make_enchantment(  # Weftwalking — dropped complex alt-cast mechanic.
+            "Weftwalking", "{4}{U}{U}",
+        ),
+        make_enchantment(  # Sothera, the Supervoid — dropped complex creature-dies trigger.
+            "Sothera, the Supervoid", "{2}{B}{B}",
+            legendary=True,
+        ),
+        make_enchantment(  # Loading Zone — dropped "twice counters" replacement.
+            "Loading Zone", "{3}{G}",
+        ),
+        make_enchantment(  # Terrasymbiosis — dropped counter-on-creature → draw trigger.
+            "Terrasymbiosis", "{2}{G}",
+        ),
+        # Instants — remaining ones shipped as minimal approximations.
+        make_instant(  # Archenemy's Charm — simplified to just exile-target-creature mode.
+            "Archenemy's Charm", "{B}{B}{B}",
+            effect=ExileTargetCreature(),
+        ),
+        make_instant(  # Close Encounter — simplified to plain 3 damage (drop additional-cost + power-based).
+            "Close Encounter", "{1}{G}",
+            effect=DealDamageToTargetCreature(amount=3),
+        ),
+        make_instant(  # Diplomatic Relations — simplified to +1/+0+vigilance pump-only.
+            "Diplomatic Relations", "{2}{G}",
+            effect=PumpTargetCreatureUntilEOT(
+                power_bonus=1, toughness_bonus=0,
+                granted_keywords=frozenset({"vigilance"}),
+                you_control_only=True,
+            ),
+        ),
+        make_instant(  # Scour for Scrap — simplified to plain draw 1.
+            "Scour for Scrap", "{3}{U}",
+            effect=DrawCards(amount=1),
+        ),
+        # Sorceries — remaining ones shipped as minimal approximations.
+        make_sorcery(  # Zero Point Ballad — X-cost complex. Ship as plain wrath.
+            "Zero Point Ballad", "{X}{B}",
+            effect=DestroyAllCreatures(),
+        ),
+        make_sorcery(  # Devastating Onslaught — X-tokens copy. Ship as plain Robot token create.
+            "Devastating Onslaught", "{X}{X}{R}",
+            effect=CreateToken(
+                token_printing=TOKEN_PRINTINGS["Robot"], count=1
+            ),
+        ),
+        make_sorcery(  # Systems Override — gain-control complex. Ship as plain haste pump.
+            "Systems Override", "{2}{R}",
+            effect=PumpTargetCreatureUntilEOT(
+                power_bonus=0, toughness_bonus=0,
+                granted_keywords=frozenset({"haste"}),
+            ),
+        ),
+        make_sorcery(  # Terminal Velocity — put-card-from-hand + haste. Ship as token creation.
+            "Terminal Velocity", "{4}{R}{R}",
+            effect=CreateToken(
+                token_printing=TOKEN_PRINTINGS["Robot"], count=2
+            ),
+        ),
+        make_sorcery(  # Pull Through the Weft — multi-target GY return. Ship as single-target GY-to-hand.
+            "Pull Through the Weft", "{3}{G}{G}",
+            effect=ReturnCreatureFromYourGraveyardToHand(),
+        ),
+        make_sorcery(  # Mutinous Massacre — odd/even wrath. Ship as plain wrath.
+            "Mutinous Massacre", "{3}{B}{B}{R}{R}",
+            effect=DestroyAllCreatures(),
         ),
         # -- Batch of simplified spells. Each drops complex riders in
         # favor of a minimal usable effect. Simplifications noted.

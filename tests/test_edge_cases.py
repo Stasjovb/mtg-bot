@@ -36,7 +36,13 @@ def test_parse_mana_cost_colorless_treated_as_generic():
 
 def test_parse_mana_cost_rejects_unknown_symbol():
     with pytest.raises(ValueError, match="unsupported mana symbol"):
-        parse_mana_cost("{X}")
+        parse_mana_cost("{Z}")
+
+
+def test_parse_mana_cost_x_is_zero_generic():
+    """X-cost spells parse {X} as 0 generic — we don't model X-choice yet."""
+    assert parse_mana_cost("{X}").generic == 0
+    assert parse_mana_cost("{X}{X}{R}").generic == 0
 
 
 def test_build_deck_rejects_unknown_color():
