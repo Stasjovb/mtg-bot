@@ -777,6 +777,24 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     # Lander — artifact token (not a creature) with a sacrifice-to-ramp
     # activated ability. Created by many EoE spells and triggers.
     "Lander": _make_lander_token(),
+    # Munitions: colorless artifact token created by Weapons Manufacturing.
+    # "When this token leaves the battlefield, it deals 2 damage to any
+    # target." Modeled via a leaves-battlefield trigger on the token.
+    "Munitions": CardPrinting(
+        name="Munitions",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Token Artifact — Munitions",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Munitions",),
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="leaves_battlefield",
+                effect=DealDamageAnyTarget(amount=2),
+            ),
+        ),
+    ),
 }
 
 _COLOR_TO_BASIC: dict[str, str] = {
@@ -2331,6 +2349,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     trigger="etb",
                     effect=ExileOpponentsNonlandPermanentUntilLeaves(
                         max_mv=2,
+                    ),
+                ),
+            ),
+        ),
+        # Weapons Manufacturing: {1}{R} Enchantment. Whenever a nontoken
+        # artifact you control enters, create a Munitions token; that
+        # token's leaves-battlefield trigger deals 2 damage to any
+        # target when the token leaves play.
+        make_enchantment(
+            "Weapons Manufacturing", "{1}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="nontoken_artifact_enters_you_control",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Munitions"],
+                        count=1,
                     ),
                 ),
             ),

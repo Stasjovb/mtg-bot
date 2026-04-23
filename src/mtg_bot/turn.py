@@ -159,7 +159,9 @@ def _fire_leaves_battlefield_triggers(
 ) -> None:
     """Run "when this leaves the battlefield" triggers on ``obj`` after
     it's already been moved. resolving_source exposes the dearly
-    departed for effects that need it."""
+    departed for effects that need it. Resolves target selection via
+    the controller's agent for targeted inner effects."""
+    controller = state.player_by_id(obj.controller_id)
     for ability in obj.printing.triggered_abilities:
         if ability.trigger != "leaves_battlefield":
             continue
@@ -167,8 +169,25 @@ def _fire_leaves_battlefield_triggers(
             f"{obj.printing.name}'s leaves-battlefield ability triggers"
         )
         state.resolving_source = obj
+        effect = ability.effect
+        targets: tuple[tuple[str, int], ...] = ()
+        if effect.requires_target():
+            legal = effect.legal_targets(state, obj.controller_id)
+            if not legal:
+                state.resolving_source = None
+                state.log.append(
+                    f"{obj.printing.name}'s leaves-battlefield trigger "
+                    f"fizzles (no legal targets)"
+                )
+                continue
+            if controller.agent is not None:
+                chosen = controller.agent.choose_target(
+                    state, obj.controller_id, legal
+                )
+                if chosen is not None:
+                    targets = (chosen,)
         try:
-            ability.effect.resolve(state, obj.controller_id, ())
+            effect.resolve(state, obj.controller_id, targets)
         finally:
             state.resolving_source = None
 

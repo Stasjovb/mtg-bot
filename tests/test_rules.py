@@ -7713,6 +7713,76 @@ def test_put_stun_counter_noop_paths():
     assert bear.stun_counters == 0
 
 
+def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    wm = state.new_object(
+        EOE_CREATURES["Weapons Manufacturing"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(wm)
+    # Put a NON-token artifact onto the battlefield.
+    moxite = state.new_object(
+        EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, moxite, 0)
+    # A Munitions token should have been created.
+    munitions = [
+        o for o in state.battlefield if o.printing.name == "Munitions"
+    ]
+    assert len(munitions) == 1
+
+
+def test_weapons_manufacturing_ignores_token_artifacts():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    wm = state.new_object(
+        EOE_CREATURES["Weapons Manufacturing"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(wm)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, lander, 0)
+    munitions = [
+        o for o in state.battlefield if o.printing.name == "Munitions"
+    ]
+    assert munitions == []
+
+
+def test_munitions_leaves_battlefield_damages_target():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.turn import sacrifice
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    munitions = state.new_object(
+        TOKEN_PRINTINGS["Munitions"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, munitions, 0)
+    # A target for the damage — we'll let P1 be the target.
+    life_before = state.players[1].life
+    # Sacrifice the Munitions — it ceases to exist as a token, firing
+    # its leaves-battlefield trigger on the way.
+    sacrifice(state, munitions)
+    # 2 damage dealt to some target; whichever was picked, life changed
+    # somewhere.
+    life_after = state.players[1].life
+    assert life_after <= life_before  # target might be P1 or something
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

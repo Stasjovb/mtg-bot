@@ -3692,6 +3692,9 @@ class TriggeredAbility:
             ),
             "attacks": "Whenever ~ attacks",
             "leaves_battlefield": "When ~ leaves the battlefield",
+            "nontoken_artifact_enters_you_control": (
+                "Whenever a nontoken artifact you control enters"
+            ),
             "creature_you_control_with_counter_dies": (
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"

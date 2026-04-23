@@ -749,10 +749,14 @@ def _fire_artifact_enters_triggers(
     permanents the new artifact's controller controls. Fires directly
     (no stack) — matches our other trigger events. Resolves optional
     target selection via the controller's agent.
+
+    Also fires "nontoken_artifact_enters_you_control" triggers when the
+    entering artifact is not a token.
     """
     from mtg_bot.turn import should_fire_trigger
 
     controller = new_artifact.controller_id
+    is_nontoken = not new_artifact.printing.is_token
     p = state.player_by_id(controller)
     for obj in list(state.battlefield):
         if obj.id == new_artifact.id:
@@ -760,7 +764,10 @@ def _fire_artifact_enters_triggers(
         if obj.controller_id != controller:
             continue
         for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "artifact_enters_you_control":
+            if ability.trigger == "nontoken_artifact_enters_you_control":
+                if not is_nontoken:
+                    continue
+            elif ability.trigger != "artifact_enters_you_control":
                 continue
             if not should_fire_trigger(state, obj.id, i, ability):
                 continue
