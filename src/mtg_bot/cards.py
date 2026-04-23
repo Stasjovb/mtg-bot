@@ -77,6 +77,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,
+    AstelliReclaimerETBEffect,
     AttachToTargetCreatureYouControl,
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
@@ -2285,10 +2286,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(  # Anticausal Vestige — dropped leaves-BF draw + permanent-ramp rider.
             "Anticausal Vestige", "{6}", 7, 5,
         ),
-        make_creature(  # Astelli Reclaimer — dropped ETB graveyard reanimate; Warp kept.
+        # Astelli Reclaimer `{3}{W}{W}` 5/4 Creature. Warp `{2}{W}`.
+        # Real oracle: "Flying. When this creature enters, return
+        # target noncreature, nonland permanent card with mana value X
+        # or less from your graveyard to the battlefield, where X is
+        # the mana spent to cast this creature."
+        make_creature(
             "Astelli Reclaimer", "{3}{W}{W}", 5, 4,
             keywords={"flying"},
             warp="{2}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AstelliReclaimerETBEffect(),
+                ),
+            ),
         ),
         # Exalted Sunborn `{3}{W}{W}` 4/5 Angel Wizard — Flying, lifelink.
         # "If one or more tokens would be created under your control,

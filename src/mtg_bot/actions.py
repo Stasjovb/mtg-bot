@@ -1113,7 +1113,15 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
         targets: tuple[tuple[str, int], ...] = ()
         min_t, max_t = effect.target_count_range()
         if max_t > 0:
-            legal = effect.legal_targets(state, controller_id)
+            # Set resolving_source during legality check so effects that
+            # inspect the source (e.g. Astelli Reclaimer reading its own
+            # paid cost) see it. Cleared after selection; re-set at
+            # resolve_top_of_stack.
+            state.resolving_source = creature
+            try:
+                legal = effect.legal_targets(state, controller_id)
+            finally:
+                state.resolving_source = None
             if not legal and min_t > 0:
                 state.log.append(
                     f"{creature.printing.name}'s ETB has no legal targets; "

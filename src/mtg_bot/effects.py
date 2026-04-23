@@ -748,6 +748,73 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
 
 
 @dataclass(frozen=True)
+class AstelliReclaimerETBEffect(Effect):
+    """Astelli Reclaimer's ETB: "Return target noncreature, nonland
+    permanent card with mana value X or less from your graveyard to
+    the battlefield, where X is the amount of mana spent to cast this
+    creature."
+
+    X is computed from the resolving source's paid cost: warp cost if
+    cast_via_warp is set (for warp = {2}{W} → X = 3), otherwise the
+    printed mana cost's total (for {3}{W}{W} → X = 5).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def _x_from_source(self, state: "GameState") -> int:
+        source = state.resolving_source
+        if source is None:
+            return 0
+        if source.cast_via_warp and source.printing.warp_cost is not None:
+            return source.printing.warp_cost.total
+        return source.printing.mana_cost.total
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        x = self._x_from_source(state)
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_permanent", c.id)
+            for c in p.graveyard
+            if c.printing.is_permanent
+            and not c.printing.is_creature
+            and not c.printing.is_land
+            and c.printing.mana_cost.total <= x
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_permanent":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to the battlefield (Astelli Reclaimer)"
+        )
+        put_into_battlefield(state, card, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "return target noncreature, nonland permanent card with "
+            "mana value X or less from your graveyard to the "
+            "battlefield, where X is the mana spent to cast this"
+        )
+
+
+@dataclass(frozen=True)
 class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
     """Target artifact card from your graveyard goes to your hand.
 
