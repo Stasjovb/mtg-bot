@@ -113,6 +113,7 @@ from mtg_bot.effects import (
     TerrapactIntimidatorETBEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
+    MonoistCircuitFeederETBEffect,
     FocusFireEffect,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
@@ -1953,10 +1954,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Monoist Circuit-Feeder — dropped ETB dynamic pump/debuff.
+        # Monoist Circuit-Feeder `{4}{B}{B}` 4/4 Artifact Creature.
+        # Real oracle: "Flying. When this creature enters, until end of
+        # turn, target creature you control gets +X/+0 and target
+        # creature an opponent controls gets -0/-X, where X is the
+        # number of artifacts you control."
+        make_creature(
             "Monoist Circuit-Feeder", "{4}{B}{B}", 4, 4,
             artifact=True,
             keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=MonoistCircuitFeederETBEffect(),
+                ),
+            ),
         ),
         # Perigee Beckoner `{4}{B}` 4/5 Creature. Warp `{1}{B}` (real
         # warp cost per oracle — note previous build had `{2}{B}`).

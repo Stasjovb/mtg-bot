@@ -1483,6 +1483,92 @@ class SelfcraftMechanETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class MonoistCircuitFeederETBEffect(Effect):
+    """Monoist Circuit-Feeder's ETB: "Until end of turn, target creature
+    you control gets +X/+0 and target creature an opponent controls
+    gets -0/-X, where X is the number of artifacts you control."
+
+    Uses two distinct target slots (own creature, opponent creature)
+    picked by the agent in sequence. X is computed at resolve time
+    from the caster's battlefield artifact count. If one slot has no
+    legal target, that half silently no-ops; the trigger still fires
+    if at least one creature exists across both sides.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Union of both slots — at least one legal target is required
+        # to queue the trigger (has_legal check).
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        x = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        )
+        # Pick own target and opponent target independently via the agent
+        # (ignoring any targets passed in — this effect manages its own
+        # two-slot selection).
+        own_options = [
+            o for o in state.battlefield
+            if o.printing.is_creature and o.controller_id == controller_id
+        ]
+        opp_options = [
+            o for o in state.battlefield
+            if o.printing.is_creature and o.controller_id != controller_id
+        ]
+        own_target = None
+        if own_options and p.agent is not None:
+            pick = p.agent.choose_target(
+                state, controller_id,
+                [("creature", o.id) for o in own_options],
+            )
+            if pick is not None:
+                own_target = next(
+                    (o for o in own_options if o.id == pick[1]), None
+                )
+        opp_target = None
+        if opp_options and p.agent is not None:
+            pick = p.agent.choose_target(
+                state, controller_id,
+                [("creature", o.id) for o in opp_options],
+            )
+            if pick is not None:
+                opp_target = next(
+                    (o for o in opp_options if o.id == pick[1]), None
+                )
+        if own_target is not None:
+            own_target.temp_power_bonus += x
+            state.log.append(
+                f"{own_target.printing.name} gets +{x}/+0 UEOT"
+            )
+        if opp_target is not None:
+            opp_target.temp_toughness_bonus -= x
+            state.log.append(
+                f"{opp_target.printing.name} gets -0/-{x} UEOT"
+            )
+
+    def describe(self) -> str:
+        return (
+            "until end of turn, target creature you control gets +X/+0 "
+            "and target creature an opponent controls gets -0/-X, where "
+            "X is the number of artifacts you control"
+        )
+
+
+@dataclass(frozen=True)
 class DefendingPlayerLosesHalfLifeRoundedUp(Effect):
     """Defending player loses half their life, rounded up. Matches
     Alpharael, Stonechosen's Void attack trigger. Simplified to "each
