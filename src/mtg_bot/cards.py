@@ -95,6 +95,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,
     AnticausalVestigeLeavesEffect,
+    AllFatesScrollDrawEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
     AttachToTargetCreatureYouControl,
@@ -3979,8 +3980,25 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_artifact(  # All-Fates Scroll — dropped mana ability + draw-X activated.
+        # All-Fates Scroll `{3}` Artifact. Real oracle: "{T}: Add one
+        # mana of any color. {7}, {T}, Sacrifice this artifact: Draw X
+        # cards, where X is the number of differently named lands you
+        # control." Simplification: the tap-for-mana ability is NOT
+        # modeled (requires mana-pool abstraction); only the
+        # {7},{T},Sac draw ability is implemented.
+        make_artifact(
             "All-Fates Scroll", "{3}",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{7}"),
+                        mana_str="{7}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=AllFatesScrollDrawEffect(),
+                ),
+            ),
         ),
         # The Endstone `{7}` Legendary Artifact:
         # - Whenever you play a land or cast a spell, draw a card.
