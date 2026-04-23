@@ -1031,6 +1031,40 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Biotech Specialist: {R}{G} 1/3. ETB create a Lander token.
+        # Simplified: drop the "whenever you sacrifice an artifact, deals
+        # 2 damage to an opponent" trigger (sac-your-own-artifact as a
+        # trigger type isn't modeled yet).
+        make_creature(
+            "Biotech Specialist", "{R}{G}", 1, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Kav Landseeker: {3}{R} 4/3 Menace. ETB create a Lander token.
+        # Simplified: drop the "at the beginning of the end step on your
+        # next turn, sacrifice that token" delayed trigger (token-tracking
+        # delayed triggers aren't modeled). The token persists until a
+        # player naturally sacrifices it for ramp.
+        make_creature(
+            "Kav Landseeker", "{3}{R}", 4, 3,
+            keywords={"menace"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
         # Elegy Acolyte: 4/4 Lifelink. Real card also has "whenever creatures
         # you control deal combat damage to a player, draw + lose 1" — we
         # skip that combat-damage-to-player trigger (not yet implemented)

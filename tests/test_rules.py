@@ -4427,6 +4427,31 @@ def test_fallers_faithful_etb_destroys_creature():
     assert victim not in state.battlefield
 
 
+def test_biotech_specialist_and_kav_landseeker_make_landers():
+    """Both creatures create exactly one Lander on ETB."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    for name in ("Biotech Specialist", "Kav Landseeker"):
+        state = _arena()
+        c = state.new_object(
+            EOE_CREATURES[name], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(c)
+        etb = next(
+            ab for ab in c.printing.triggered_abilities if ab.trigger == "etb"
+        )
+        state.resolving_source = c
+        etb.effect.resolve(state, 0)
+        landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+        assert len(landers) == 1, f"{name} should create 1 Lander"
+
+
+def test_kav_landseeker_has_menace():
+    from mtg_bot.cards import EOE_CREATURES
+
+    assert "menace" in EOE_CREATURES["Kav Landseeker"].keywords
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
