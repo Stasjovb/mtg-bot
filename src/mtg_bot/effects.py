@@ -342,9 +342,23 @@ class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original
     order. Decision delegated to the controller's agent (choose_surveil).
+
+    If ``use_artifact_count`` is True the amount is recomputed at
+    resolution as the controller's current artifact count — matches
+    Cerebral Download's "Surveil X, where X is the number of artifacts
+    you control".
     """
 
     amount: int = 1
+    use_artifact_count: bool = False
+
+    def _amount(self, state: "GameState", controller_id: int) -> int:
+        if not self.use_artifact_count:
+            return self.amount
+        return sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        )
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -353,10 +367,11 @@ class Surveil(Effect):
         from mtg_bot.game import Zone
 
         p = state.player_by_id(controller_id)
+        n = self._amount(state, controller_id)
         milled = 0
         # Examine the top N cards in order. Mill ones the agent chooses;
         # keep the rest on top in their original order.
-        examined = p.library[: self.amount]
+        examined = p.library[: n]
         keep: list = []
         for card in examined:
             if p.agent is not None and p.agent.choose_surveil(state, p.id, card.id):
@@ -367,10 +382,12 @@ class Surveil(Effect):
             else:
                 keep.append(card)
         state.log.append(
-            f"P{controller_id} surveils {self.amount} ({milled} milled)"
+            f"P{controller_id} surveils {n} ({milled} milled)"
         )
 
     def describe(self) -> str:
+        if self.use_artifact_count:
+            return "surveil X, where X is the number of artifacts you control"
         return f"surveil {self.amount}"
 
 

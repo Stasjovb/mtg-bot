@@ -4131,6 +4131,30 @@ def test_each_opponent_sac_with_only_tokens_is_noop():
     assert robot in state.battlefield
 
 
+def test_cerebral_download_surveil_x_then_draw_three():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(1))
+    _stock_library(state, 0, count=20)
+    # Give P0 two artifacts (two Lander tokens).
+    for _ in range(2):
+        a = state.new_object(
+            TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(a)
+
+    hand_before = len(state.players[0].hand)
+    cd = EOE_SPELLS["Cerebral Download"]
+    cd.spell_effect.resolve(state, 0)
+    # Drew 3 cards.
+    assert len(state.players[0].hand) == hand_before + 3
+    # Surveil amount was 2 → log should mention surveils 2.
+    assert any("surveils 2" in l for l in state.log)
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

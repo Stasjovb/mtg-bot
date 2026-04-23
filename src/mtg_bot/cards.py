@@ -1422,6 +1422,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Depressurize", "{1}{B}",
             effect=DepressurizeEffect(power_penalty=3),
         ),
+        # Cerebral Download — Surveil X + draw 3. X = your artifact count.
+        make_instant(
+            "Cerebral Download", "{4}{U}",
+            effect=Sequence(effects=(
+                Surveil(use_artifact_count=True),
+                DrawCards(amount=3),
+            )),
+        ),
         # Shattered Wings — destroy artifact/enchantment/creature-with-flying,
         # then Surveil 1.
         make_sorcery(
