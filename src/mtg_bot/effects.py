@@ -681,6 +681,72 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class LookAtTopTwoSplitHandGraveyard(Effect):
+    """Look at the top two cards of your library; put one into your
+    hand, the other into your graveyard.
+
+    Matches Codecracker Hound's ETB. The agent's choice via
+    choose_surveil decides which pile each card goes to (surveil=True
+    means graveyard, False means hand — mirrors the surveil semantics).
+    Asymmetric: exactly one card ends up in hand, exactly one in
+    graveyard (or fewer if the library has < 2 cards).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        if not p.library:
+            return
+        # Take the top 2 (or 1 if only one left).
+        examined = p.library[:2]
+        # Asks the agent per card; first "True" (graveyard) pick goes
+        # there, then the remainder to hand. Fallback heuristic: top
+        # card → hand, second → graveyard.
+        if len(examined) == 1:
+            card = examined[0]
+            p.library.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            state.log.append(
+                f"P{controller_id} draws {card.printing.name}"
+            )
+            return
+        # Two cards; pick the one to send to hand. The other goes to
+        # graveyard. Default: top card → hand.
+        if p.agent is None:
+            hand_card = examined[0]
+            gy_card = examined[1]
+        else:
+            hand_card = examined[0]
+            if p.agent.choose_surveil(state, p.id, hand_card.id):
+                # Agent says "mill this one" → swap: other → hand.
+                hand_card = examined[1]
+                gy_card = examined[0]
+            else:
+                gy_card = examined[1]
+        p.library.remove(hand_card)
+        hand_card.zone = Zone.HAND
+        p.hand.append(hand_card)
+        p.library.remove(gy_card)
+        gy_card.zone = Zone.GRAVEYARD
+        p.graveyard.append(gy_card)
+        state.log.append(
+            f"P{controller_id} puts {hand_card.printing.name} into "
+            f"hand and {gy_card.printing.name} into graveyard"
+        )
+
+    def describe(self) -> str:
+        return (
+            "look at the top two cards of your library; put one into "
+            "your hand and the other into your graveyard"
+        )
+
+
+@dataclass(frozen=True)
 class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original

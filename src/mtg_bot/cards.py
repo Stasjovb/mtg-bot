@@ -84,6 +84,7 @@ from mtg_bot.effects import (
     Sequence,
     StaticAbility,
     StaticScope,
+    LookAtTopTwoSplitHandGraveyard,
     Surveil,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
@@ -1680,6 +1681,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Mouth of the Storm", "{6}{U}", 6, 6,
             keywords={"flying"},
             ward="{2}",
+        ),
+        # Codecracker Hound: {2}{U} 2/1. ETB look at top 2; one to
+        # hand, one to graveyard. Ships with Warp {2}{U}.
+        make_creature(
+            "Codecracker Hound", "{2}{U}", 2, 1,
+            warp="{2}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=LookAtTopTwoSplitHandGraveyard(),
+                ),
+            ),
         ),
         # Cloudsculpt Technician: {2}{U} 1/4 Flying. +1/+0 as long as you
         # control an artifact.

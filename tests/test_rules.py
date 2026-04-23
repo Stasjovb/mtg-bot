@@ -7576,6 +7576,64 @@ def test_exile_target_creature_until_source_leaves_noop_paths():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_codecracker_hound_splits_top_two():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    hound = state.new_object(
+        EOE_CREATURES["Codecracker Hound"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(hound)
+    lib_before = len(state.players[0].library)
+    hand_before = len(state.players[0].hand)
+    gy_before = len(state.players[0].graveyard)
+    etb = next(
+        ab for ab in hound.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = hound
+    etb.effect.resolve(state, 0)
+    assert len(state.players[0].library) == lib_before - 2
+    assert len(state.players[0].hand) == hand_before + 1
+    assert len(state.players[0].graveyard) == gy_before + 1
+
+
+def test_codecracker_empty_library_noop():
+    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+
+    state = _arena()
+    e = LookAtTopTwoSplitHandGraveyard()
+    assert "top two" in e.describe()
+    e.resolve(state, 0)  # no crash
+
+
+def test_codecracker_single_card_library_goes_to_hand():
+    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+
+    state = _arena()
+    _stock_library(state, 0, count=1)
+    last_card = state.players[0].library[0]
+    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    assert last_card in state.players[0].hand
+
+
+def test_codecracker_no_agent_default_assignment():
+    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+
+    state = _arena()
+    state.players[0].agent = None
+    _stock_library(state, 0, count=2)
+    top = state.players[0].library[0]
+    second = state.players[0].library[1]
+    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    assert top in state.players[0].hand
+    assert second in state.players[0].graveyard
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
