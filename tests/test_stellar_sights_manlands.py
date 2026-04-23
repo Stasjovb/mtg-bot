@@ -290,7 +290,9 @@ def test_infect_damage_to_player_via_damage_pipeline():
 
 def test_thirteen_manlands_restored_no_longer_stand_ins():
     import pathlib
-    src = pathlib.Path("src/mtg_bot/cards.py").read_text(encoding="utf-8")
+    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
+        encoding="utf-8"
+    )
     manlands = [name for name, *_ in MANLAND_TABLE]
     assert len(manlands) == 13
     for name in manlands:

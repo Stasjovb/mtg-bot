@@ -288,7 +288,9 @@ def test_six_cards_restored_no_longer_stand_ins():
     built via make_colorless_land — they have real abilities now."""
     import pathlib
 
-    src = pathlib.Path("src/mtg_bot/cards.py").read_text(encoding="utf-8")
+    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
+        encoding="utf-8"
+    )
     restored = [
         "Ancient Tomb", "Mana Confluence", "Grove of the Burnwillows",
         "Petrified Field", "Strip Mine", "Terrain Generator",

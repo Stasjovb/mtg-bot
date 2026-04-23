@@ -54,8 +54,9 @@ def test_build_deck_rejects_color_with_no_creatures(monkeypatch):
     # Fake-out the non-land pool so a color has no cards, exercising the
     # "no creatures in color" branch.
     from mtg_bot import cards
+    from mtg_bot.cards import registry
 
-    monkeypatch.setattr(cards, "NONLAND_POOL", {})
+    monkeypatch.setattr(registry, "NONLAND_POOL", {})
     with pytest.raises(ValueError, match="no creatures in color"):
         cards.build_mono_color_deck("G")
 

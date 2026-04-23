@@ -309,7 +309,9 @@ def test_bonders_enclave_draws_with_4plus_power_creature():
 def test_seven_more_cards_restored_no_longer_stand_ins():
     import pathlib
 
-    src = pathlib.Path("src/mtg_bot/cards.py").read_text(encoding="utf-8")
+    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
+        encoding="utf-8"
+    )
     restored = [
         "Deserted Temple", "Dust Bowl", "High Market", "Scavenger Grounds",
         "Crystal Quarry", "Cascading Cataracts", "Bonders' Enclave",

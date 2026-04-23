@@ -56,6 +56,8 @@ def test_power_depot_is_artifact_land_and_enters_tapped():
 
 def test_three_more_restored_no_longer_stand_ins():
     import pathlib
-    src = pathlib.Path("src/mtg_bot/cards.py").read_text(encoding="utf-8")
+    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
+        encoding="utf-8"
+    )
     for name in ("Reflecting Pool", "Meteor Crater"):
         assert f'"{name}": make_colorless_land(' not in src
