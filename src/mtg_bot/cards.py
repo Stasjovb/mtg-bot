@@ -886,12 +886,17 @@ def make_planet_land(
     )
 
 
-def make_colorless_land(name: str, subtypes_str: str = "") -> CardPrinting:
+def make_colorless_land(
+    name: str, subtypes_str: str = "", legendary: bool = False,
+) -> CardPrinting:
     """A non-basic land that taps for {C} only. Useful for utility
     lands whose activated abilities aren't modeled — taps-for-generic
     still works via auto_tap_for_cost's generic-mana fallback.
     """
-    type_line = f"Land — {subtypes_str}" if subtypes_str else "Land"
+    prefix = "Legendary " if legendary else ""
+    type_line = (
+        f"{prefix}Land — {subtypes_str}" if subtypes_str else f"{prefix}Land"
+    )
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -1003,6 +1008,161 @@ SHOCK_LANDS: dict[str, CardPrinting] = {
     ),
     "Watery Grave": make_shock_land(
         "Watery Grave", ("U", "B"), "Island Swamp",
+    ),
+}
+
+
+# Edge of Eternities: Stellar Sights (Scryfall set `eos`). Bonus-sheet
+# reprints of 45 famous Magic lands included in EoE boosters. Each
+# entry below starts as a colorless-only stand-in (`# dropped X` per
+# the same pattern used to track EOE_CREATURES restoration progress);
+# incremental branches restore the real oracle ability.
+STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
+    "Ancient Tomb": make_colorless_land(  # dropped {T}: Add {C}{C}. Deals 2 to you.
+        "Ancient Tomb",
+    ),
+    "Blast Zone": make_colorless_land(  # dropped enters-with-counters + sac-mass-destroy.
+        "Blast Zone",
+    ),
+    "Blinkmoth Nexus": make_colorless_land(  # dropped manland activation.
+        "Blinkmoth Nexus",
+    ),
+    "Bonders' Enclave": make_colorless_land(  # dropped draw-if-4+-power.
+        "Bonders' Enclave",
+    ),
+    "Cascading Cataracts": make_colorless_land(  # dropped 5-color rainbow + all-five activated.
+        "Cascading Cataracts",
+    ),
+    "Cathedral of War": make_colorless_land(  # dropped Exalted.
+        "Cathedral of War",
+    ),
+    "Celestial Colonnade": make_colorless_land(  # dropped manland activation (enters tapped too).
+        "Celestial Colonnade",
+    ),
+    "Contested War Zone": make_colorless_land(  # dropped attackers-get-+1/+0 + gain-control.
+        "Contested War Zone",
+    ),
+    "Creeping Tar Pit": make_colorless_land(  # dropped manland activation + unblockable.
+        "Creeping Tar Pit",
+    ),
+    "Crystal Quarry": make_colorless_land(  # dropped pay-5-to-add-WUBRG activated.
+        "Crystal Quarry",
+    ),
+    "Deserted Temple": make_colorless_land(  # dropped untap-target-land activated.
+        "Deserted Temple",
+    ),
+    "Dust Bowl": make_colorless_land(  # dropped sac-land-for-destroy-nonbasic.
+        "Dust Bowl",
+    ),
+    "Echoing Deeps": make_colorless_land(  # dropped ETB choose-to-become-copy.
+        "Echoing Deeps", subtypes_str="Cave",
+    ),
+    "Eldrazi Temple": make_colorless_land(  # dropped tap-for-2-when-casting-Eldrazi.
+        "Eldrazi Temple",
+    ),
+    "Endless Sands": make_colorless_land(  # dropped exile-creature-return activated.
+        "Endless Sands", subtypes_str="Desert",
+    ),
+    "Gemstone Caverns": make_colorless_land(  # dropped opening-hand luck-counter + any-color.
+        "Gemstone Caverns", legendary=True,
+    ),
+    "Grove of the Burnwillows": make_colorless_land(  # dropped {T}: Add {R} or {G}; each opp gains 1.
+        "Grove of the Burnwillows",
+    ),
+    "High Market": make_colorless_land(  # dropped sac-creature-gain-1.
+        "High Market",
+    ),
+    "Hissing Quagmire": make_colorless_land(  # dropped manland deathtouch.
+        "Hissing Quagmire",
+    ),
+    "Inkmoth Nexus": make_colorless_land(  # dropped manland flying + infect.
+        "Inkmoth Nexus",
+    ),
+    "Inventors' Fair": make_colorless_land(  # dropped gain-1-upkeep + tutor-artifact activated.
+        "Inventors' Fair", legendary=True,
+    ),
+    "Lavaclaw Reaches": make_colorless_land(  # dropped manland + X/1 pump.
+        "Lavaclaw Reaches",
+    ),
+    "Lotus Field": make_colorless_land(  # dropped ETB-sac-two-lands + tap-for-3-any.
+        "Lotus Field",
+    ),
+    "Lumbering Falls": make_colorless_land(  # dropped manland hexproof.
+        "Lumbering Falls",
+    ),
+    "Mana Confluence": make_colorless_land(  # dropped pay-1-for-any-color.
+        "Mana Confluence",
+    ),
+    "Meteor Crater": make_colorless_land(  # dropped tap-for-color-of-creature-you-control.
+        "Meteor Crater",
+    ),
+    "Mirrorpool": make_colorless_land(  # dropped copy-spell / copy-creature activated.
+        "Mirrorpool",
+    ),
+    "Mutavault": make_colorless_land(  # dropped manland X/X-creature-type.
+        "Mutavault",
+    ),
+    "Mystifying Maze": make_colorless_land(  # dropped exile-attacker-return-EoT activated.
+        "Mystifying Maze",
+    ),
+    "Needle Spires": make_colorless_land(  # dropped manland double strike (enters tapped too).
+        "Needle Spires",
+    ),
+    "Nesting Grounds": make_colorless_land(  # dropped move-a-counter-from-X-to-Y activated.
+        "Nesting Grounds",
+    ),
+    "Petrified Field": make_colorless_land(  # dropped return-land-from-graveyard activated.
+        "Petrified Field",
+    ),
+    "Plaza of Heroes": make_colorless_land(  # dropped legendary-tribal + pay-2-any.
+        "Plaza of Heroes",
+    ),
+    # Power Depot is an Artifact Land — both card types. Built inline
+    # so the card_types tuple is ("Artifact", "Land") instead of the
+    # make_colorless_land default ("Land",).
+    "Power Depot": CardPrinting(
+        # dropped 2-mode tap (W/U/B/R/G or {C}{C}) + artifact tribal.
+        name="Power Depot",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Artifact Land",
+        supertypes=(),
+        card_types=("Artifact", "Land"),
+        subtypes=(),
+        produces=frozenset(),
+    ),
+    "Raging Ravine": make_colorless_land(  # dropped manland attacks-enters-counter.
+        "Raging Ravine",
+    ),
+    "Reflecting Pool": make_colorless_land(  # dropped tap-for-color-your-lands-produce.
+        "Reflecting Pool",
+    ),
+    "Scavenger Grounds": make_colorless_land(  # dropped sac-Desert-exile-graveyards activated.
+        "Scavenger Grounds", subtypes_str="Desert",
+    ),
+    "Shambling Vent": make_colorless_land(  # dropped manland lifelink (enters tapped too).
+        "Shambling Vent",
+    ),
+    "Stirring Wildwood": make_colorless_land(  # dropped manland reach (enters tapped too).
+        "Stirring Wildwood",
+    ),
+    "Strip Mine": make_colorless_land(  # dropped sac-to-destroy-target-land.
+        "Strip Mine",
+    ),
+    "Sunken Citadel": make_colorless_land(  # dropped cave-discount-tap-for-2.
+        "Sunken Citadel", subtypes_str="Cave",
+    ),
+    "Swarmyard": make_colorless_land(  # dropped regenerate-Rats/Spiders/etc.
+        "Swarmyard",
+    ),
+    "Terrain Generator": make_colorless_land(  # dropped pay-2-tap-put-basic-tapped.
+        "Terrain Generator",
+    ),
+    "Thespian's Stage": make_colorless_land(  # dropped {2},{T}: become-copy-of-target-land.
+        "Thespian's Stage",
+    ),
+    "Wandering Fumarole": make_colorless_land(  # dropped manland swap-P-and-T.
+        "Wandering Fumarole",
     ),
 }
 
@@ -4684,6 +4844,7 @@ def all_printings() -> dict[str, CardPrinting]:
         **SHOCK_LANDS,
         **UTILITY_LANDS,
         **PLANET_LANDS,
+        **STELLAR_SIGHTS_LANDS,
         **NONLAND_POOL,
     }
 
