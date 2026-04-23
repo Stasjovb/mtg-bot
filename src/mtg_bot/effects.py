@@ -1808,6 +1808,65 @@ class PainForAllDamageEchoEffect(Effect):
 
 
 @dataclass(frozen=True)
+class RequiemMonolithActivatedEffect(Effect):
+    """Requiem Monolith's activated ability (simplified): immediately
+    deals 1 damage to target creature; that creature's controller
+    draws 1 card and loses 1 life.
+
+    Simplification: the real card grants a UEOT triggered ability
+    ("whenever this creature is dealt damage, draw that many cards
+    and lose that much life") then pings for 1. The engine doesn't
+    support granting triggered abilities UEOT yet, so we execute the
+    first iteration directly (ping 1 → 1 card drawn and 1 life lost).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        tgt = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if tgt is None:
+            return
+        tgt.damage += 1
+        owner = state.player_by_id(tgt.controller_id)
+        draw_card(state, owner.id)
+        owner.life -= 1
+        state.log.append(
+            f"Requiem Monolith: {tgt.printing.name} takes 1; "
+            f"P{owner.id} draws 1 and loses 1 life"
+        )
+
+    def describe(self) -> str:
+        return (
+            "until end of turn, target creature gains 'whenever this "
+            "creature is dealt damage, you draw that many cards and "
+            "lose that much life'; deal 1 damage to it (simplified "
+            "to a one-shot ping + draw/loss)"
+        )
+
+
+@dataclass(frozen=True)
 class AtomicMicrosizerAttackEffect(Effect):
     """Atomic Microsizer's equipped-attacks trigger: "Choose up to one
     target creature. That creature can't be blocked this turn and has

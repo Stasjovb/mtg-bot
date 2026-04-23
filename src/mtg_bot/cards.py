@@ -42,6 +42,7 @@ from mtg_bot.effects import (
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
     PinnacleStarcageSacEffect,
+    RequiemMonolithActivatedEffect,
     PutStunCounterOnTappedCreature,
     TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
@@ -3909,8 +3910,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_artifact(  # Requiem Monolith — dropped activated ability.
+        # Requiem Monolith `{2}{B}` Artifact. Real oracle:
+        # "{T}: Until end of turn, target creature gains 'Whenever this
+        # creature is dealt damage, you draw that many cards and lose
+        # that much life.' That creature's controller may have this
+        # artifact deal 1 damage to it. Activate only as a sorcery."
+        # Simplified to a one-shot: ping 1, draw 1, lose 1 (the UEOT
+        # grant is not modeled — see effect docstring).
+        make_artifact(
             "Requiem Monolith", "{2}{B}",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=RequiemMonolithActivatedEffect(),
+                    sorcery_speed=True,
+                ),
+            ),
         ),
         # Memorial Vault `{3}{R}` Artifact. Real oracle: "{T},
         # Sacrifice another artifact: Exile the top X cards of your
