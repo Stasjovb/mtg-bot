@@ -43,6 +43,12 @@ class Effect:
         """Enumerate legal targets. Empty list means no targets are needed."""
         return []
 
+    def target_count_range(self) -> tuple[int, int]:
+        """Return (min, max) number of targets. Default:
+        (1, 1) if requires_target(), else (0, 0).
+        Override for "up to N target" effects (min=0, max=N)."""
+        return (1, 1) if self.requires_target() else (0, 0)
+
     def resolve(
         self, state: "GameState", controller_id: int, targets: tuple[Target, ...] = ()
     ) -> None:
@@ -324,6 +330,80 @@ class AttachToTargetCreatureYouControl(Effect):
 
     def describe(self) -> str:
         return "attach this Equipment to target creature you control"
+
+
+@dataclass(frozen=True)
+class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
+    """Return up to ``max_n`` target creatures to their owners' hands.
+
+    Matches Specimen Freighter's "return up to two target non-Spacecraft
+    creatures to their owners' hands". We drop the "non-Spacecraft"
+    filter for simplicity — any creature is targetable.
+    """
+
+    max_n: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        for kind, target_id in targets:
+            if kind != "creature":
+                continue
+            obj = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+            if obj is None:
+                continue
+            state.battlefield.remove(obj)
+            obj.damage = 0
+            obj.marked_lethal = False
+            obj.tapped = False
+            obj.attacking = False
+            obj.blocking = None
+            obj.blocked_by = []
+            obj.cast_via_warp = False
+            obj.plus_one_counters = 0
+            obj.charge_counters = 0
+            obj.temp_power_bonus = 0
+            obj.temp_toughness_bonus = 0
+            obj.temp_keywords = frozenset()
+            obj.attached_to = None
+            if not obj.printing.is_land:
+                state.permanent_left_battlefield_this_turn = True
+            if obj.printing.is_token:
+                state.log.append(
+                    f"{obj.printing.name} token ceases to exist (bounced)"
+                )
+                continue
+            obj.zone = Zone.HAND
+            state.player_by_id(obj.owner_id).hand.append(obj)
+            state.log.append(
+                f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creatures to their "
+            f"owners' hands"
+        )
 
 
 @dataclass(frozen=True)

@@ -201,15 +201,32 @@ def _cast_spell(
     card.zone = Zone.STACK
     card.controller_id = player_id
 
-    # If this spell has a targeted spell_effect, select a target now.
+    # If this spell has a targeted spell_effect, select target(s) now.
+    # Supports multi-target via Effect.target_count_range() → (min, max).
     targets: tuple[tuple[str, int], ...] = ()
     spell_effect = card.printing.spell_effect
-    if spell_effect is not None and spell_effect.requires_target():
-        legal = spell_effect.legal_targets(state, player_id)
-        if legal:
-            chosen = p.agent.choose_target(state, player_id, legal)
-            if chosen is not None:
-                targets = (chosen,)
+    if spell_effect is not None:
+        min_t, max_t = spell_effect.target_count_range()
+        if max_t > 0:
+            legal = spell_effect.legal_targets(state, player_id)
+            chosen_list: list[tuple[str, int]] = []
+            remaining = list(legal)
+            for _ in range(max_t):
+                if not remaining:
+                    break
+                pick = p.agent.choose_target(state, player_id, remaining)
+                if pick is None:
+                    # Agent declines; stop picking iff min already reached.
+                    if len(chosen_list) >= min_t:
+                        break
+                    # Forced pick to satisfy min_t.
+                    pick = remaining[0]
+                if pick not in remaining:
+                    # Agent picked an out-of-range target; ignore.
+                    break
+                chosen_list.append(pick)
+                remaining.remove(pick)
+            targets = tuple(chosen_list)
 
     countered = _apply_ward_check(state, player_id, targets)
     state.stack.append(
@@ -548,23 +565,39 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
         controller_id = creature.controller_id
         effect = ability.effect
         targets: tuple[tuple[str, int], ...] = ()
-        if effect.requires_target():
+        min_t, max_t = effect.target_count_range()
+        if max_t > 0:
             legal = effect.legal_targets(state, controller_id)
-            if not legal:
+            if not legal and min_t > 0:
                 state.log.append(
                     f"{creature.printing.name}'s ETB has no legal targets; "
                     f"trigger fizzles"
                 )
                 continue
             controller = state.player_by_id(controller_id)
-            chosen = controller.agent.choose_target(state, controller_id, legal)
-            if chosen is None:
+            chosen_list: list[tuple[str, int]] = []
+            remaining = list(legal)
+            for _ in range(max_t):
+                if not remaining:
+                    break
+                pick = controller.agent.choose_target(
+                    state, controller_id, remaining
+                )
+                if pick is None:
+                    if len(chosen_list) >= min_t:
+                        break
+                    pick = remaining[0]
+                if pick not in remaining:
+                    break
+                chosen_list.append(pick)
+                remaining.remove(pick)
+            if len(chosen_list) < min_t:
                 state.log.append(
                     f"{creature.printing.name}'s ETB had no target chosen; "
                     f"trigger fizzles"
                 )
                 continue
-            targets = (chosen,)
+            targets = tuple(chosen_list)
         state.stack.append(
             StackItem(
                 source=creature,

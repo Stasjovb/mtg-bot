@@ -5679,6 +5679,91 @@ def test_end_step_trigger_fizzles_without_legal_targets():
     assert any("fizzles" in l for l in state.log)
 
 
+def test_specimen_freighter_bounces_up_to_two():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(1))
+    # Two opposing creatures.
+    bears: list = []
+    for _ in range(2):
+        b = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(b)
+        bears.append(b)
+
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(freighter)
+    # Fire the ETB with multi-target: pick both bears.
+    etb = next(
+        ab for ab in freighter.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = freighter
+    etb.effect.resolve(
+        state, 0,
+        tuple(("creature", b.id) for b in bears),
+    )
+    assert all(b not in state.battlefield for b in bears)
+    assert all(b in state.players[1].hand for b in bears)
+
+
+def test_return_up_to_n_empty_targets_is_noop():
+    from mtg_bot.effects import ReturnUpToNTargetCreaturesToOwnersHands
+
+    state = _arena()
+    e = ReturnUpToNTargetCreaturesToOwnersHands(max_n=3)
+    assert e.target_count_range() == (0, 3)
+    assert e.requires_target() is True
+    assert "3" in e.describe()
+    e.resolve(state, controller_id=0, targets=())  # no-op
+    e.resolve(state, controller_id=0, targets=(("player", 0),))  # wrong kind
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
+def test_multi_target_cast_path_through_cast_spell():
+    """Casting Specimen Freighter via _cast_spell walks the multi-target
+    pipeline: picks up to two bears from opponent's board."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # Fund {5}{U} cost.
+    for _ in range(5):
+        p = state.new_object(
+            BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(p)
+    # Two enemy bears.
+    bears: list = []
+    for _ in range(2):
+        b = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(b)
+        bears.append(b)
+    # Freighter in hand.
+    freighter_in_hand = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(freighter_in_hand)
+    _cast_spell(state, 0, freighter_in_hand.id)
+    # Resolve onto battlefield → ETB trigger pushed onto stack.
+    resolve_top_of_stack(state)
+    # Resolve the ETB.
+    resolve_top_of_stack(state)
+    # Both bears bounced.
+    assert all(b in state.players[1].hand for b in bears)
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

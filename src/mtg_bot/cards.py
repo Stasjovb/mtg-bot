@@ -54,6 +54,7 @@ from mtg_bot.effects import (
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
+    ReturnUpToNTargetCreaturesToOwnersHands,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
     TapTargetArtifactOrCreature,
@@ -1040,6 +1041,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         DrawCards(amount=2),
                         DiscardSelf(amount=1),
                     )),
+                ),
+            ),
+        ),
+        # Specimen Freighter: {5}{U} 4/7 Spacecraft. ETB return up to
+        # two target creatures to their owners' hands. Station 9+ flying.
+        # Simplified: dropped the "non-Spacecraft" target restriction
+        # (target filter complexity), and dropped the "9+ | whenever this
+        # attacks, create a copy of target permanent" tiered trigger.
+        make_spacecraft(
+            "Specimen Freighter", "{5}{U}", 4, 7,
+            station_threshold=9,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ReturnUpToNTargetCreaturesToOwnersHands(max_n=2),
                 ),
             ),
         ),
