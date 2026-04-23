@@ -1483,6 +1483,121 @@ class SelfcraftMechanETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class SotheraExileOpponentCreatureEffect(Effect):
+    """Sothera's dies-observer: "Each opponent chooses a creature they
+    control and exiles it." Uses the source's id for exiled_by_source
+    bookkeeping so Sothera's end-step reanimate can find them.
+
+    Simplification: engine uses the generic your_creature_or_artifact
+    _dies observer, which also fires for artifact deaths — slightly
+    wider than oracle's "creature you control".
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        for opp in state.players:
+            if opp.id == controller_id or opp.has_lost:
+                continue
+            candidates = [
+                o for o in state.battlefield
+                if o.controller_id == opp.id and o.printing.is_creature
+            ]
+            if not candidates or opp.agent is None:
+                continue
+            pick_id = opp.agent.choose_sacrifice(
+                state, opp.id, [o.id for o in candidates]
+            )
+            chosen = next(
+                (o for o in candidates if o.id == pick_id), candidates[0]
+            )
+            chosen.exiled_by_source = source.id
+            state.log.append(
+                f"P{opp.id} exiles {chosen.printing.name} "
+                f"(Sothera, the Supervoid)"
+            )
+            move_off_battlefield(state, chosen, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            "each opponent chooses a creature they control and exiles it"
+        )
+
+
+@dataclass(frozen=True)
+class SotheraEndStepReanimateEffect(Effect):
+    """Sothera's end-step: "If a player controls no creatures, sacrifice
+    Sothera, then put a creature card exiled with it onto the
+    battlefield under your control with two additional +1/+1 counters
+    on it."
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone, add_plus_one_counters
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None:
+            return
+        # Gate: does any player control zero creatures?
+        any_empty = any(
+            not [
+                o for o in state.battlefield
+                if o.controller_id == p.id and o.printing.is_creature
+            ]
+            for p in state.players
+            if not p.has_lost
+        )
+        if not any_empty:
+            return
+        # Find a creature card exiled by this Sothera, and pull it out
+        # of exile BEFORE sacrificing Sothera — the release-on-leave
+        # hook would otherwise auto-return it to the owner's bf.
+        exiled_creature = None
+        owner = None
+        for p in state.players:
+            for c in p.exile:
+                if (
+                    c.exiled_by_source == source.id
+                    and c.printing.is_creature
+                ):
+                    exiled_creature = c
+                    owner = p
+                    break
+            if exiled_creature is not None:
+                break
+        if exiled_creature is not None and owner is not None:
+            owner.exile.remove(exiled_creature)
+            exiled_creature.exiled_by_source = None
+        _sacrifice(state, source)
+        if exiled_creature is None:
+            return
+        state.log.append(
+            f"Sothera puts {exiled_creature.printing.name} onto the "
+            f"battlefield under P{controller_id}'s control"
+        )
+        put_into_battlefield(state, exiled_creature, controller_id)
+        add_plus_one_counters(state, exiled_creature, 2)
+
+    def describe(self) -> str:
+        return (
+            "if a player controls no creatures, sacrifice Sothera, "
+            "then put a creature card exiled with it onto the "
+            "battlefield under your control with two +1/+1 counters"
+        )
+
+
+@dataclass(frozen=True)
 class KavaronHarrierAttackEffect(Effect):
     """Kavaron Harrier's attacks trigger: "You may pay {2}. If you do,
     create a 2/2 colorless Robot artifact creature token that's tapped

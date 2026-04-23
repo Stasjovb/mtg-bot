@@ -33,6 +33,8 @@ from mtg_bot.effects import (
     ExileOpponentsNonlandPermanentUntilLeaves,
     KavaronHarrierAttackEffect,
     PinnacleStarcageETBEffect,
+    SotheraEndStepReanimateEffect,
+    SotheraExileOpponentCreatureEffect,
     PinnacleStarcageSacEffect,
     PutStunCounterOnTappedCreature,
     TapTargetOpponentPermanentAndStunIt,
@@ -3919,9 +3921,26 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_enchantment(  # Weftwalking — dropped complex alt-cast mechanic.
             "Weftwalking", "{4}{U}{U}",
         ),
-        make_enchantment(  # Sothera, the Supervoid — dropped complex creature-dies trigger.
+        # Sothera, the Supervoid `{2}{B}{B}` Legendary Enchantment.
+        # Real oracle: "Whenever a creature you control dies, each
+        # opponent chooses a creature they control and exiles it. At
+        # the beginning of your end step, if a player controls no
+        # creatures, sacrifice Sothera, then put a creature card
+        # exiled with it onto the battlefield under your control with
+        # two additional +1/+1 counters on it."
+        make_enchantment(
             "Sothera, the Supervoid", "{2}{B}{B}",
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="your_creature_or_artifact_dies",
+                    effect=SotheraExileOpponentCreatureEffect(),
+                ),
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=SotheraEndStepReanimateEffect(),
+                ),
+            ),
         ),
         # Loading Zone `{3}{G}` Enchantment. Warp `{G}`.
         # "If one or more counters would be put on a creature,
