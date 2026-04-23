@@ -1566,6 +1566,29 @@ class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyAllCreatures(Effect):
+    """Destroy every creature on the battlefield. Wrath-style effect.
+
+    Indestructible creatures survive (routes each kill through
+    turn.destroy()). Tokens cease to exist normally.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import destroy
+
+        victims = [o for o in state.battlefield if o.printing.is_creature]
+        for obj in victims:
+            state.log.append(f"{obj.printing.name} is destroyed (wrath)")
+            destroy(state, obj)
+
+    def describe(self) -> str:
+        return "destroy all creatures"
+
+
+@dataclass(frozen=True)
 class ExileAllCreaturesAndSpacecraft(Effect):
     """Exile every creature on the battlefield, as well as Spacecraft (whether
     or not the Spacecraft has been stationed into creature mode).

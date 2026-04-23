@@ -4735,6 +4735,49 @@ def test_reroute_systems_indestructible_mode():
     assert "indestructible" in effective_keywords(state, bear)
 
 
+def test_singularity_rupture_destroys_all_creatures():
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    # Mix of creatures + a non-creature (Lander artifact stays).
+    for owner in (0, 1):
+        bear = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=owner,
+            zone=Zone.BATTLEFIELD,
+        )
+        state.battlefield.append(bear)
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+
+    EOE_SPELLS["Singularity Rupture"].spell_effect.resolve(state, 0)
+    creatures_remaining = [o for o in state.battlefield if o.printing.is_creature]
+    assert creatures_remaining == []
+    assert lander in state.battlefield
+
+
+def test_destroy_all_creatures_respects_indestructible():
+    from mtg_bot.effects import DestroyAllCreatures, PumpTargetCreatureUntilEOT
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    PumpTargetCreatureUntilEOT(
+        granted_keywords=frozenset({"indestructible"})
+    ).resolve(state, 0, (("creature", bear.id),))
+    DestroyAllCreatures().resolve(state, 0)
+    assert bear in state.battlefield  # indestructible survives
+    assert victim not in state.battlefield
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
