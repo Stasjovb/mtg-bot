@@ -2688,6 +2688,54 @@ class SeedshipImpactEffect(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetNoncreaturePermanent(Effect):
+    """Destroy target noncreature permanent. Includes lands, non-
+    creature artifacts, enchantments, and planeswalkers — anything
+    on the battlefield that isn't a creature. Indestructible
+    permanents are unaffected.
+
+    Matches Extinguisher Battleship's ETB first clause.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if not is_creature_now(o)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_creature_now
+        from mtg_bot.turn import destroy
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or is_creature_now(obj):
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        destroy(state, obj)
+
+    def describe(self) -> str:
+        return "destroy target noncreature permanent"
+
+
+@dataclass(frozen=True)
 class DestroyTargetNonlandPermanent(Effect):
     """Destroy target nonland permanent. Indestructible permanents are
     unaffected. Tokens cease to exist normally.

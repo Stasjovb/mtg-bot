@@ -82,6 +82,7 @@ from mtg_bot.effects import (
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
+    DestroyTargetNoncreaturePermanent,
     TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
@@ -3256,10 +3257,25 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_spacecraft(  # Extinguisher Battleship — drop ETB destroy + 4-damage-each.
+        # Extinguisher Battleship `{8}` Spacecraft. Real card:
+        # "When this Spacecraft enters, destroy target noncreature
+        # permanent. Then this Spacecraft deals 4 damage to each
+        # creature."
+        # Station 5+ Flying + Trample. Note: our previous ship had
+        # station_threshold=7; the real card is 5+.
+        make_spacecraft(
             "Extinguisher Battleship", "{8}", 10, 10,
-            station_threshold=7,
+            station_threshold=5,
             stationed_keywords={"flying", "trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        DestroyTargetNoncreaturePermanent(),
+                        DealNDamageToEachCreature(amount=4),
+                    )),
+                ),
+            ),
         ),
         # The Eternity Elevator is a Spacecraft with no base P/T
         # (special card) — ship as no-frills colorless land-like artifact.
@@ -3335,8 +3351,30 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_artifact(  # Nutrient Block — dropped gain-3-life / sac-for-draw.
+        # Nutrient Block `{1}` Artifact — Food.
+        # - Indestructible.
+        # - {2}, {T}, Sacrifice this artifact: You gain 3 life.
+        # - When this artifact is put into a graveyard from the
+        #   battlefield, draw a card. Modeled via leaves_battlefield
+        #   (slightly looser — also fires if exiled, but that's a rare
+        #   edge case).
+        make_artifact(
             "Nutrient Block", "{1}",
+            keywords={"indestructible"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="leaves_battlefield",
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(
+                        mana="{2}", tap_self=True, sacrifice_self=True,
+                    ),
+                    effect=GainLife(amount=3),
+                ),
+            ),
         ),
         make_artifact(  # Thrumming Hivepool — dropped complex attack-triggers.
             "Thrumming Hivepool", "{6}",
