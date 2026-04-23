@@ -316,10 +316,17 @@ def _cast_spell(
         if use_warp:
             state.spell_warped_this_turn = True
     else:
-        # Cast from exile: only legal for cards previously exiled by warp
-        # (warped=True), and only at their normal cost.
+        # Cast from exile: legal for (a) cards previously exiled by warp
+        # (warped=True), or (b) cards marked impulse-playable this turn
+        # (playable_from_exile_this_turn=True). Both pay normal cost.
         card = next(
-            (c for c in p.exile if c.id == card_id and c.warped), None
+            (
+                c for c in p.exile
+                if c.id == card_id and (
+                    c.warped or c.playable_from_exile_this_turn
+                )
+            ),
+            None,
         )
         if card is None:  # pragma: no cover - defensive (legal_actions gates)
             raise ValueError(
@@ -328,8 +335,8 @@ def _cast_spell(
         cost = card.printing.mana_cost
         p.exile.remove(card)
         card.warped = False
-        # A warp-exile recast pays its normal cost and is a plain cast — it
-        # does NOT re-trigger the warp-exile cycle.
+        card.playable_from_exile_this_turn = False
+        # Neither re-triggers the warp-exile cycle.
         card.cast_via_warp = False
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another

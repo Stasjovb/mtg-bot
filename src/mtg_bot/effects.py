@@ -1598,6 +1598,103 @@ class SotheraEndStepReanimateEffect(Effect):
 
 
 @dataclass(frozen=True)
+class TerritorialBruntarLandfallEffect(Effect):
+    """Territorial Bruntar's landfall: "Exile cards from the top of
+    your library until you exile a nonland card. You may cast that
+    card this turn."
+
+    Any lands revealed during the process stay exiled — the oracle
+    doesn't specify returning them, just exiles until non-land. We
+    mark the non-land with playable_from_exile_this_turn so
+    legal_actions will surface a CastSpell for it.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        while p.library:
+            top = p.library.pop(0)
+            top.zone = Zone.EXILE
+            p.exile.append(top)
+            state.log.append(
+                f"P{controller_id} exiles {top.printing.name} (Bruntar)"
+            )
+            if not top.printing.is_land:
+                top.playable_from_exile_this_turn = True
+                state.log.append(
+                    f"{top.printing.name} may be cast this turn"
+                )
+                return
+
+    def describe(self) -> str:
+        return (
+            "exile cards from the top of your library until you exile "
+            "a nonland card; you may cast that card this turn"
+        )
+
+
+@dataclass(frozen=True)
+class MemorialVaultActivatedEffect(Effect):
+    """Memorial Vault's activated effect: "Exile the top X cards of
+    your library, where X is one plus the mana value of the sacrificed
+    artifact. You may play those cards this turn."
+
+    The ``sacrifice_another_creature_or_artifact`` ActivationCost
+    handles the artifact sac (caveat: it also accepts creatures since
+    that's the only existing 'sacrifice another' cost in the engine —
+    slight widening of the oracle). The sacrificed object's CMC is
+    captured from state.log order before we fire — the ActivationCost
+    fires BEFORE the effect, so we read the most-recently-sacrificed
+    artifact's mana value via resolving_additional_cost_choice_id if
+    we extended it. Simpler: compute X from a fresh scan of the
+    graveyard for the most-recently-added artifact this resolution.
+
+    Simplification: X defaults to 2 (representative average) when we
+    can't determine the exact sacrifice. Accurate X-tracking would
+    require threading sac info through ActivationCost payment.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        # Heuristic for X: scan controller's graveyard for the most
+        # recently added artifact — that's the one we just sacrificed.
+        p = state.player_by_id(controller_id)
+        x = 2
+        for c in reversed(p.graveyard):
+            if c.printing.is_artifact:
+                x = 1 + c.printing.mana_cost.total
+                break
+        exiled_names = []
+        for _ in range(x):
+            if not p.library:
+                break
+            top = p.library.pop(0)
+            top.zone = Zone.EXILE
+            top.playable_from_exile_this_turn = True
+            p.exile.append(top)
+            exiled_names.append(top.printing.name)
+        state.log.append(
+            f"Memorial Vault exiles {len(exiled_names)} cards "
+            f"(may play this turn)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "exile the top X cards of your library, where X is one "
+            "plus the mana value of the sacrificed artifact; you may "
+            "play those cards this turn"
+        )
+
+
+@dataclass(frozen=True)
 class AtomicMicrosizerAttackEffect(Effect):
     """Atomic Microsizer's equipped-attacks trigger: "Choose up to one
     target creature. That creature can't be blocked this turn and has

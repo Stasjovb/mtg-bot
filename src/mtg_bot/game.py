@@ -46,6 +46,11 @@ class GameObject:
     plus_one_counters: int = 0
     # "Can't be blocked this turn" marker (cleared at cleanup).
     temp_unblockable: bool = False
+    # "You may play this card this turn" — set on cards exiled by
+    # impulse-style effects (Territorial Bruntar landfall, Memorial
+    # Vault activated). Cleared at cleanup. legal_actions honors it
+    # for cast-from-exile at normal cost.
+    playable_from_exile_this_turn: bool = False
     # Base P/T override ("has base power and toughness 1/1 until end of
     # turn") — Atomic Microsizer. None = use printed P/T. Cleared at
     # cleanup.

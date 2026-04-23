@@ -196,6 +196,42 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
+    # Impulse-cast: cards in exile marked playable_from_exile_this_turn
+    # (Territorial Bruntar landfall, Memorial Vault activated). These
+    # pay normal mana cost and respect sorcery-speed rules. Lands use
+    # PlayLand; non-land permanents / sorceries use CastSpell.
+    for card in p.exile:
+        if not card.playable_from_exile_this_turn:
+            continue
+        if card.warped:
+            continue  # already handled above
+        if card.printing.is_land:
+            if p.lands_played_this_turn < (
+                1 + sum(
+                    o.printing.grants_additional_land_per_turn
+                    for o in state.battlefield
+                    if o.controller_id == player_id
+                )
+            ):
+                actions.append(PlayLand(card.id))
+            continue
+        if card.printing.is_instant:
+            # Instant speed — always castable if cost payable.
+            if can_pay_cost(
+                state, player_id,
+                _effective_cost(card, card.printing.mana_cost),
+            ) and _targets_are_satisfiable(state, player_id, card):
+                actions.append(CastSpell(card.id))
+            continue
+        # Sorcery-speed cards: main phase, empty stack only.
+        if not _is_sorcery_timing(state, player_id):
+            continue
+        if can_pay_cost(
+            state, player_id,
+            _effective_cost(card, card.printing.mana_cost),
+        ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
+            actions.append(CastSpell(card.id))
+
     # Activated abilities on permanents this player controls.
     for obj in state.battlefield:
         if obj.controller_id != player_id:

@@ -33,6 +33,8 @@ from mtg_bot.effects import (
     ExileOpponentsNonlandPermanentUntilLeaves,
     ChoraleReanimateDefenderGraveCreatureEffect,
     KavaronHarrierAttackEffect,
+    MemorialVaultActivatedEffect,
+    TerritorialBruntarLandfallEffect,
     SacrificeSelfUnlessVoidActive,
     PinnacleStarcageETBEffect,
     SotheraEndStepReanimateEffect,
@@ -2057,9 +2059,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Territorial Bruntar — dropped Landfall exile-impulse-cast.
+        # Territorial Bruntar `{4}{R}{R}` 6/6 Creature. Real oracle:
+        # "Reach. Landfall — Whenever a land you control enters, exile
+        # cards from the top of your library until you exile a nonland
+        # card. You may cast that card this turn."
+        make_creature(
             "Territorial Bruntar", "{4}{R}{R}", 6, 6,
             keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=TerritorialBruntarLandfallEffect(),
+                ),
+            ),
         ),
         # Vaultguard Trooper `{4}{R}` 5/5 Creature. Real oracle:
         # "At the beginning of your end step, if you control two or
@@ -3883,8 +3895,23 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_artifact(  # Requiem Monolith — dropped activated ability.
             "Requiem Monolith", "{2}{B}",
         ),
-        make_artifact(  # Memorial Vault — dropped tap-for-impulse-draw activated.
+        # Memorial Vault `{3}{R}` Artifact. Real oracle: "{T},
+        # Sacrifice another artifact: Exile the top X cards of your
+        # library, where X is one plus the mana value of the
+        # sacrificed artifact. You may play those cards this turn."
+        # Simplification: uses sacrifice_another_creature_or_artifact
+        # (slightly wider than oracle's "another artifact").
+        make_artifact(
             "Memorial Vault", "{3}{R}",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        tap_self=True,
+                        sacrifice_another_creature_or_artifact=True,
+                    ),
+                    effect=MemorialVaultActivatedEffect(),
+                ),
+            ),
         ),
         make_artifact(  # All-Fates Scroll — dropped mana ability + draw-X activated.
             "All-Fates Scroll", "{3}",

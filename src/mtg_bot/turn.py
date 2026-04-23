@@ -777,6 +777,11 @@ def run_cleanup_step(state: GameState) -> None:
         if obj.temp_original_controller_id is not None:
             obj.controller_id = obj.temp_original_controller_id
             obj.temp_original_controller_id = None
+    # Expire impulse-cast flags on exiled cards — "may play this
+    # turn" lasts only until the end of the turn.
+    for p in state.players:
+        for c in p.exile:
+            c.playable_from_exile_this_turn = False
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
