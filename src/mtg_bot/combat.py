@@ -323,6 +323,11 @@ def _resolve_damage_step(
                 obj.damage += amount
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
+                # Fire "whenever enchanted creature is dealt damage"
+                # observer triggers on auras attached to obj.
+                _fire_enchanted_dealt_damage_triggers(
+                    state, obj, amount,
+                )
         # Lifelink: the source's controller gains life equal to the damage
         # dealt, regardless of target kind.
         if "lifelink" in source_kws:
@@ -335,6 +340,38 @@ def _resolve_damage_step(
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.
     _fire_combat_damage_to_player_triggers(state, sources_hit_player)
+
+
+def _fire_enchanted_dealt_damage_triggers(
+    state: GameState, obj: "GameObject", amount: int,
+) -> None:
+    """Fire "whenever enchanted creature is dealt damage" triggers on
+    auras attached to ``obj``. Amount exposed via
+    state.resolving_combat_damage_amount for effects that want to
+    read it (e.g., Pain for All's echo-damage-to-each-opponent).
+    """
+    from mtg_bot.turn import should_fire_trigger
+
+    for aura in list(state.battlefield):
+        if aura.attached_to != obj.id:
+            continue
+        if not aura.printing.is_aura:
+            continue
+        for i, ability in enumerate(aura.printing.triggered_abilities):
+            if ability.trigger != "enchanted_creature_dealt_damage":
+                continue
+            if not should_fire_trigger(state, aura.id, i, ability):
+                continue
+            state.log.append(
+                f"{aura.printing.name}'s dealt-damage trigger fires"
+            )
+            state.resolving_source = aura
+            state.resolving_combat_damage_amount = amount
+            try:
+                ability.effect.resolve(state, aura.controller_id, ())
+            finally:
+                state.resolving_source = None
+                state.resolving_combat_damage_amount = 0
 
 
 def _fire_combat_damage_to_player_triggers(

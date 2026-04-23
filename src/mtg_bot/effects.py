@@ -1695,6 +1695,119 @@ class MemorialVaultActivatedEffect(Effect):
 
 
 @dataclass(frozen=True)
+class PainForAllETBEffect(Effect):
+    """Pain for All's ETB (as an aura): "Enchanted creature deals
+    damage equal to its power to any other target."
+
+    "Any other target" (creature or player, excluding the source).
+    Reads state.resolving_source for the aura; `aura.attached_to` is
+    the enchanted creature; damage amount = enchanted creature's
+    effective power at resolution.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        aura = state.resolving_source
+        enchanted_id = aura.attached_to if aura is not None else None
+        out: list[Target] = []
+        for p in state.players:
+            if p.has_lost:
+                continue
+            out.append(("player", p.id))
+        for o in state.battlefield:
+            if not o.printing.is_creature:
+                continue
+            if o.id == enchanted_id:
+                continue
+            out.append(("creature", o.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        aura = state.resolving_source
+        if aura is None or aura.attached_to is None:
+            return
+        enchanted = next(
+            (o for o in state.battlefield if o.id == aura.attached_to),
+            None,
+        )
+        if enchanted is None:
+            return
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        amount = effective_power(state, enchanted)
+        if amount <= 0:
+            return
+        if kind == "player":
+            victim = state.player_by_id(target_id)
+            victim.life -= amount
+            state.log.append(
+                f"{enchanted.printing.name} deals {amount} to "
+                f"P{target_id} (life: {victim.life})"
+            )
+        elif kind == "creature":
+            creature = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+            if creature is None:
+                return
+            creature.damage += amount
+            state.log.append(
+                f"{enchanted.printing.name} deals {amount} to "
+                f"{creature.printing.name}"
+            )
+
+    def describe(self) -> str:
+        return (
+            "enchanted creature deals damage equal to its power to any "
+            "other target"
+        )
+
+
+@dataclass(frozen=True)
+class PainForAllDamageEchoEffect(Effect):
+    """Pain for All's damage-echo: "Whenever enchanted creature is
+    dealt damage, it deals that much damage to each opponent."
+
+    Reads state.resolving_combat_damage_amount for the incoming amount.
+    Simplified: each opponent loses ``amount`` life (modeling "deals
+    damage" as life loss for simplicity in the non-creature-target
+    case).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        amount = state.resolving_combat_damage_amount
+        if amount <= 0:
+            return
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= amount
+            state.log.append(
+                f"Pain for All echoes {amount} to P{p.id} "
+                f"(life: {p.life})"
+            )
+
+    def describe(self) -> str:
+        return (
+            "enchanted creature deals that much damage to each "
+            "opponent"
+        )
+
+
+@dataclass(frozen=True)
 class AtomicMicrosizerAttackEffect(Effect):
     """Atomic Microsizer's equipped-attacks trigger: "Choose up to one
     target creature. That creature can't be blocked this turn and has

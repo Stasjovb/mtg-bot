@@ -33,6 +33,8 @@ from mtg_bot.effects import (
     ExileOpponentsNonlandPermanentUntilLeaves,
     ChoraleReanimateDefenderGraveCreatureEffect,
     KavaronHarrierAttackEffect,
+    PainForAllDamageEchoEffect,
+    PainForAllETBEffect,
     MemorialVaultActivatedEffect,
     TerritorialBruntarLandfallEffect,
     SacrificeSelfUnlessVoidActive,
@@ -3862,9 +3864,24 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_aura(  # Pain for All — dropped damage-equal-to-power ETB + damage-echo rider.
+        # Pain for All `{2}{R}` Enchantment — Aura. Real oracle:
+        # "Enchant creature you control. When this Aura enters,
+        # enchanted creature deals damage equal to its power to any
+        # other target. Whenever enchanted creature is dealt damage,
+        # it deals that much damage to each opponent."
+        # No printed P/T bonus (stand-in placeholder +3/+0 dropped).
+        make_aura(
             "Pain for All", "{2}{R}",
-            power_bonus=3, toughness_bonus=0,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PainForAllETBEffect(),
+                ),
+                TriggeredAbility(
+                    trigger="enchanted_creature_dealt_damage",
+                    effect=PainForAllDamageEchoEffect(),
+                ),
+            ),
         ),
         # Artifacts — ship as empty/inert bodies, dropping complex text.
         # Pinnacle Starcage `{1}{W}{W}` Artifact. Real oracle:
