@@ -5870,6 +5870,109 @@ def test_biosynthic_burst_noop_paths():
     assert enemy.plus_one_counters == 0
 
 
+def test_multi_target_agent_declines_after_min():
+    """Agent returns None after min targets reached → stop picking."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+
+    class PickOneThenStop(RandomAgent):
+        def __init__(self):
+            super().__init__(rng=random.Random(0))
+            self.picks = 0
+
+        def choose_target(self, state, player_id, legal):
+            self.picks += 1
+            if self.picks > 1:
+                return None  # decline further
+            return legal[0]
+
+    state.players[0].agent = PickOneThenStop()
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    for _ in range(5):
+        l = state.new_object(
+            BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(l)
+    bears: list = []
+    for _ in range(2):
+        b = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(b)
+        bears.append(b)
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(freighter)
+    _cast_spell(state, 0, freighter.id)
+    # Resolve permanent
+    resolve_top_of_stack(state)
+    # Resolve ETB (one target only was picked).
+    resolve_top_of_stack(state)
+    # One of the bears was bounced; the other stayed.
+    bounced = sum(1 for b in bears if b in state.players[1].hand)
+    assert bounced == 1
+
+
+def test_multi_target_agent_picks_out_of_set():
+    """Agent returns a target not in the remaining set → stop picking early."""
+    from mtg_bot.effects import ReturnUpToNTargetCreaturesToOwnersHands
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+
+    class RogueAgent(RandomAgent):
+        def __init__(self):
+            super().__init__(rng=random.Random(0))
+
+        def choose_target(self, state, player_id, legal):
+            # Return a target that isn't in the legal list at all.
+            return ("creature", 999999)
+
+    state.players[0].agent = RogueAgent()
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    for _ in range(6):
+        l = state.new_object(
+            BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(l)
+    for _ in range(2):
+        b = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(b)
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(freighter)
+    _cast_spell(state, 0, freighter.id)
+    # The cast-path loop should abort with 0 targets chosen (rogue agent).
+    assert state.stack[-1].targets == ()
+
+
+def test_full_bore_pumps_own_creature():
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_power, effective_toughness
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+        state, 0, (("creature", ally.id),)
+    )
+    assert effective_power(state, ally) == 5  # 2 + 3
+    assert effective_toughness(state, ally) == 4  # 2 + 2
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
