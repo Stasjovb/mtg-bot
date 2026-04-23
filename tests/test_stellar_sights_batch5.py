@@ -199,10 +199,12 @@ def test_inventors_fair_tutors_an_artifact():
     assert bear_card in state.players[0].library
 
 
-def test_inventors_fair_has_no_upkeep_trigger():
-    """The dropped upkeep trigger (gain 1 if 3+ artifacts) stays dropped."""
+def test_inventors_fair_has_upkeep_trigger():
+    """The upkeep gain-1-life trigger is now wired (with the 3+
+    artifacts condition)."""
     p = STELLAR_SIGHTS_LANDS["Inventors' Fair"]
-    assert p.triggered_abilities == ()
+    assert len(p.triggered_abilities) == 1
+    assert p.triggered_abilities[0].trigger == "beginning_of_upkeep"
 
 
 # -----------------------

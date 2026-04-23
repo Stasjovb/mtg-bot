@@ -373,6 +373,7 @@ class TriggeredAbility:
             "etb": "When ~ enters the battlefield",
             "beginning_of_end_step": "At the beginning of your end step",
             "beginning_of_combat": "At the beginning of combat on your turn",
+            "beginning_of_upkeep": "At the beginning of your upkeep",
             "dies": "When ~ dies",
             "landfall": "Landfall — Whenever a land you control enters",
             "becomes_tapped": "Whenever ~ becomes tapped",

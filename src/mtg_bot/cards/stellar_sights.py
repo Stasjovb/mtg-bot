@@ -295,14 +295,19 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     # your upkeep, if you control three or more artifacts, you gain 1
     # life. {1},{T}, Sacrifice this land: Search your library for an
     # artifact card, put it into your hand, then shuffle.
-    #
-    # Simplification: the upkeep gain-1-life trigger is dropped — the
-    # engine currently has no beginning_of_upkeep trigger type (end-step
-    # is the closest analogue and would fire on the wrong step). The
-    # tutor activated ability is restored.
     "Inventors' Fair": make_utility_land(
         "Inventors' Fair", legendary=True,
         enters_tapped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="beginning_of_upkeep",
+                effect=ConditionalIfYouControlAtLeast(
+                    threshold=3,
+                    predicate="artifact",
+                    inner=GainLife(amount=1),
+                ),
+            ),
+        ),
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(

@@ -584,10 +584,9 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # Slivers. Slivers you control have double strike and haste.
         # At the beginning of your upkeep, create two 1/1 colorless
         # Sliver creature tokens."
-        # Simplifications: Affinity (cost reduction) is dropped; the
-        # upkeep trigger is wired to beginning_of_end_step (the engine
-        # has no beginning_of_upkeep trigger yet). The Sliver anthem
-        # grants double strike + haste via a SLIVERS_YOU_CONTROL static.
+        # Simplification: Affinity (cost reduction) is dropped. The
+        # Sliver anthem grants double strike + haste via a
+        # SLIVERS_YOU_CONTROL static.
         make_artifact(
             "Thrumming Hivepool", "{6}",
             static_abilities=(
@@ -598,7 +597,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    trigger="beginning_of_upkeep",
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Sliver"],
                         count=2,

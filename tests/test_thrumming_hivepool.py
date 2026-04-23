@@ -1,11 +1,11 @@
-"""Tests for Thrumming Hivepool — Sliver anthem + end-step Sliver tokens.
-(Real card uses beginning-of-upkeep trigger + Affinity; simplified to
-beginning_of_end_step, Affinity dropped.)"""
+"""Tests for Thrumming Hivepool — Sliver anthem + upkeep Sliver tokens.
+(Real card also has Affinity for Slivers — that cost reduction is
+still dropped.)"""
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
-from mtg_bot.turn import run_beginning_of_end_step_triggers
+from mtg_bot.turn import run_beginning_of_upkeep_triggers
 
 
 def _new_state():
@@ -29,10 +29,10 @@ def test_sliver_token_printing():
     assert "Sliver" in s.subtypes
 
 
-def test_hivepool_creates_two_slivers_on_end_step():
+def test_hivepool_creates_two_slivers_on_upkeep():
     state = _new_state()
     _put(state, EOE_SPELLS["Thrumming Hivepool"])
-    run_beginning_of_end_step_triggers(state)
+    run_beginning_of_upkeep_triggers(state)
     slivers = [o for o in state.battlefield if o.printing.name == "Sliver"]
     assert len(slivers) == 2
 
@@ -61,4 +61,4 @@ def test_hivepool_printing_metadata():
     assert h.is_artifact
     assert len(h.static_abilities) == 1
     triggers = {ab.trigger for ab in h.triggered_abilities}
-    assert "beginning_of_end_step" in triggers
+    assert "beginning_of_upkeep" in triggers

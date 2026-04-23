@@ -29,6 +29,7 @@ from mtg_bot.turn import (
     draw_card,
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
+    run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
     run_draw_step,
@@ -129,6 +130,12 @@ def run_step(state: GameState, step: Step) -> None:
     if step == Step.UNTAP:
         run_untap_step(state)
         return
+
+    if step == Step.UPKEEP:
+        run_beginning_of_upkeep_triggers(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
 
     if step == Step.DRAW:
         # Starting player skips their very first draw step.

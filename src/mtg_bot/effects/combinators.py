@@ -370,6 +370,77 @@ class ConditionalIfOpponentHasMoreLands(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalIfYouControlAtLeast(Effect):
+    """Run ``inner`` only if the effect's controller controls at least
+    ``threshold`` permanents matching ``predicate`` at resolution.
+
+    Predicates:
+      - ``"artifact"`` — any permanent with the Artifact type.
+      - ``"creature"`` — any permanent that counts as a creature now
+        (printed creature + stationed Spacecraft + animated manland).
+      - ``"land"`` — any permanent with the Land type.
+
+    Matches "At the beginning of your upkeep, if you control three or
+    more artifacts, ..." (Inventors' Fair) and kin.
+    """
+
+    threshold: int
+    predicate: str
+    inner: Effect
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def target_count_range(self) -> tuple[int, int]:
+        return self.inner.target_count_range()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner.legal_targets(state, controller_id)
+
+    def _count(self, state: "GameState", controller_id: int) -> int:
+        from mtg_bot.game import is_creature_now
+
+        if self.predicate == "artifact":
+            return sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id
+                and o.printing.is_artifact
+            )
+        if self.predicate == "creature":
+            return sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id and is_creature_now(o)
+            )
+        if self.predicate == "land":
+            return sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_land
+            )
+        return 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self._count(state, controller_id) < self.threshold:
+            state.log.append(
+                f"conditional skipped (you control fewer than "
+                f"{self.threshold} {self.predicate}s)"
+            )
+            return
+        self.inner.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"if you control {self.threshold} or more {self.predicate}s, "
+            f"{self.inner.describe()}"
+        )
+
+
+
+@dataclass(frozen=True)
 class ConditionalOnTappedCreatures(Effect):
     """Run ``effect`` only if the controller has at least ``min_count``
     tapped creatures on the battlefield at resolution.

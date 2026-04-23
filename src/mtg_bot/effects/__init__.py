@@ -131,6 +131,7 @@ from mtg_bot.effects.combinators import (
     ConditionalIfOpponentHasMoreLands,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
+    ConditionalIfYouControlAtLeast,
     ConditionalOnTappedCreatures,
     ModalChooseOne,
     OptionalPutCreatureFromHandOntoBattlefield,

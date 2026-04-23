@@ -634,6 +634,48 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
                     state.resolving_source = None
 
 
+def run_beginning_of_upkeep_triggers(state: GameState) -> None:
+    """Fire "At the beginning of your upkeep" triggered abilities.
+
+    Fires for permanents the active player controls — the oracle
+    wording is "your upkeep", so only that player's triggers go on the
+    (implicit, resolve-immediately) stack. No-stack resolution matches
+    the engine's other beginning-of-X trigger handlers.
+    """
+    ap_id = state.active_player().id
+    for obj in list(state.battlefield):
+        if obj.controller_id != ap_id:
+            continue
+        for i, ability in enumerate(obj.printing.triggered_abilities):
+            if ability.trigger != "beginning_of_upkeep":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
+                continue
+            targets: tuple[tuple[str, int], ...] = ()
+            effect = ability.effect
+            if effect.requires_target():
+                legal = effect.legal_targets(state, ap_id)
+                if not legal:
+                    state.log.append(
+                        f"{obj.printing.name}'s beginning-of-upkeep "
+                        f"trigger fizzles (no legal targets)"
+                    )
+                    continue
+                controller = state.player_by_id(ap_id)
+                chosen = controller.agent.choose_target(state, ap_id, legal)
+                if chosen is None:
+                    continue
+                targets = (chosen,)
+            state.log.append(
+                f"{obj.printing.name}'s beginning-of-upkeep ability triggers"
+            )
+            state.resolving_source = obj
+            try:
+                effect.resolve(state, ap_id, targets)
+            finally:
+                state.resolving_source = None
+
+
 def run_beginning_of_combat_triggers(state: GameState) -> None:
     """Fire "At the beginning of combat on your turn" triggered abilities.
 
