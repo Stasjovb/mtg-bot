@@ -30,6 +30,7 @@ from mtg_bot.effects import (
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
     PutStunCounterOnTappedCreature,
+    TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
     SeedshipImpactEffect,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -2234,9 +2235,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Robot", "Soldier"),
             dynamic_pt_formula="emissary_escort",
         ),
-        make_creature(  # Mechanozoa — dropped ETB tap + stun.
+        # Mechanozoa `{4}{U}{U}` 5/5 Artifact Creature. Warp `{2}{U}`.
+        # Real oracle ETB: "When this creature enters, tap target
+        # artifact or creature an opponent controls and put a stun
+        # counter on it."
+        make_creature(
             "Mechanozoa", "{4}{U}{U}", 5, 5,
             artifact=True,
+            warp="{2}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=TapTargetOpponentPermanentAndStunIt(),
+                ),
+            ),
         ),
         make_creature(  # Selfcraft Mechan — dropped may-sac ETB → counter+draw.
             "Selfcraft Mechan", "{3}{U}", 3, 4,

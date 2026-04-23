@@ -3525,6 +3525,57 @@ class DestroyTargetArtifactOrTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapTargetOpponentPermanentAndStunIt(Effect):
+    """Tap target artifact or creature an opponent controls, then put
+    a stun counter on it. Matches Mechanozoa's ETB. Both effects apply
+    to the same chosen target.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if (o.printing.is_artifact or o.printing.is_creature)
+            and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not obj.tapped:
+            tap_permanent(state, obj)
+        obj.stun_counters += 1
+        state.log.append(
+            f"{obj.printing.name} tapped and gains a stun counter "
+            f"(now {obj.stun_counters})"
+        )
+
+    def describe(self) -> str:
+        return (
+            "tap target artifact or creature an opponent controls and "
+            "put a stun counter on it"
+        )
+
+
+@dataclass(frozen=True)
 class PutStunCounterOnTappedCreature(Effect):
     """Put a stun counter on up to one target tapped creature. Matches
     Cryogen Relic's activated ability. "Up to one" → required target
