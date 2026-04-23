@@ -945,6 +945,15 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Robot": make_token_creature(
         "Robot", 2, 2, subtypes=("Robot",), artifact=True
     ),
+    # 1/1 colorless Drone artifact creature with flying. Created by
+    # Pinnacle Emissary and other EoE artifact triggers. The printed
+    # "can block only creatures with flying" restriction isn't
+    # modeled here (block-restriction machinery would need a new
+    # hook); kept as a plain flying 1/1.
+    "Drone": make_token_creature(
+        "Drone", 1, 1, subtypes=("Drone",), artifact=True,
+        keywords=frozenset({"flying"}),
+    ),
     # Lander — artifact token (not a creature) with a sacrifice-to-ramp
     # activated ability. Created by many EoE spells and triggers.
     "Lander": _make_lander_token(),
@@ -1894,9 +1903,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             warp="{2}{B}",
         ),
-        make_creature(  # Blade of the Swarm — dropped "modal ETB: counters OR warp-exile interaction".
+        # Blade of the Swarm `{3}{B}` 3/1 Creature. Warp `{1}{B}`.
+        # Real oracle ETB: "Choose one —
+        #   • Put two +1/+1 counters on this creature.
+        #   • Put target exiled card with warp on the bottom of its
+        #     owner's library."
+        # Simplification: the second mode (bottom a warped exile card)
+        # isn't implemented — we'd need a zone-aware target filter
+        # for warped-exile cards. We expose only the first mode via
+        # PutPlusOneCounterOnSelf; the modal machinery stays intact
+        # for future extension.
+        make_creature(
             "Blade of the Swarm", "{3}{B}", 3, 1,
             warp="{1}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnSelf(amount=2),
+                ),
+            ),
         ),
         make_creature(  # Monoist Circuit-Feeder — dropped ETB dynamic pump/debuff.
             "Monoist Circuit-Feeder", "{4}{B}{B}", 4, 4,
@@ -2081,10 +2106,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Pinnacle Emissary — dropped Void rider and ETB surveil.
+        # Pinnacle Emissary `{1}{U}{R}` 3/3 Artifact Creature.
+        # Real oracle: "Whenever you cast an artifact spell, create a
+        # 1/1 colorless Drone artifact creature token with flying and
+        # 'This token can block only creatures with flying.'"
+        # Warp `{U/R}` — modeled as `{U}{R}` since hybrid mana isn't
+        # a separate cost structure in our engine.
+        # Simplification: the Drone's block-restriction is dropped.
+        make_creature(
             "Pinnacle Emissary", "{1}{U}{R}", 3, 3,
             artifact=True,
             warp="{U}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="cast_artifact_spell",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Drone"], count=1,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Ragost, Deft Gastronaut — dropped Food + gain-life trigger.
             "Ragost, Deft Gastronaut", "{R}{W}", 2, 2,

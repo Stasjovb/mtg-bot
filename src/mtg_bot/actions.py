@@ -482,6 +482,10 @@ def _cast_spell(
     # Fire "whenever you play a land or cast a spell" triggers — both
     # events share a trigger type since The Endstone wants them both.
     _fire_cast_or_play_triggers(state, player_id)
+    # Fire "whenever you cast an artifact spell" triggers when the
+    # spell being cast is an artifact.
+    if card.printing.is_artifact:
+        _fire_cast_artifact_spell_triggers(state, player_id)
 
 
 def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
@@ -501,6 +505,34 @@ def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
             state.resolving_source = obj
             try:
                 ability.effect.resolve(state, caster_id, ())
+            finally:
+                state.resolving_source = None
+
+
+def _fire_cast_artifact_spell_triggers(
+    state: GameState, player_id: int
+) -> None:
+    """Fire "whenever you cast an artifact spell" triggers on permanents
+    the casting player controls. Called from _cast_spell after the
+    StackItem is pushed when the spell being cast is an artifact.
+    Matches Pinnacle Emissary and similar EoE artifact-matters cards.
+    """
+    from mtg_bot.turn import should_fire_trigger
+
+    for obj in list(state.battlefield):
+        if obj.controller_id != player_id:
+            continue
+        for i, ability in enumerate(obj.printing.triggered_abilities):
+            if ability.trigger != "cast_artifact_spell":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s cast-artifact-spell trigger fires"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, player_id, ())
             finally:
                 state.resolving_source = None
 
