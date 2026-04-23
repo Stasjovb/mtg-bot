@@ -27,6 +27,7 @@ from mtg_bot.effects import (
     DestroyAllCreatures,
     DestroyTargetArtifact,
     DestroyTargetCreature,
+    DestroyTargetNonlandPermanent,
     MoveSelfCountersToTargetCreatureYouControl,
     UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
@@ -1484,6 +1485,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Thaumaton Torpedo: {1} Artifact. {6}, {T}, Sacrifice: Destroy
+        # target nonland permanent. Simplified: drops the "{3} less if
+        # you attacked with a Spacecraft this turn" cost-reduction
+        # rider (cost modification not yet modeled).
+        make_artifact(
+            "Thaumaton Torpedo", "{1}",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{6}"), mana_str="{6}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=DestroyTargetNonlandPermanent(),
+                ),
+            ),
+        ),
         # Dubious Delicacy: {2}{B} Artifact — Food. Flash + ETB -3/-3 UEOT
         # + one of two "2 tap sac" modes for life-swing. Simplifications:
         # "up to one" target → required target; only the gain-life

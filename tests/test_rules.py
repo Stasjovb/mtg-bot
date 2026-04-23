@@ -5455,6 +5455,48 @@ def test_combat_damage_to_player_trigger_skips_when_blocked():
     assert len(state.players[0].hand) == hand_before  # no trigger
 
 
+def test_thaumaton_torpedo_destroys_nonland_permanent():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    torpedo = state.new_object(
+        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(torpedo)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    act = torpedo.printing.activated_abilities[0]
+    act.effect.resolve(state, 0, (("permanent", victim.id),))
+    assert victim not in state.battlefield
+
+
+def test_destroy_target_nonland_permanent_noop_paths():
+    from mtg_bot.effects import DestroyTargetNonlandPermanent
+    from mtg_bot.cards import BASIC_LANDS
+
+    state = _arena()
+    e = DestroyTargetNonlandPermanent()
+    assert e.requires_target() is True
+    assert "nonland" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+    # Land can't be targeted.
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    legal = e.legal_targets(state, controller_id=0)
+    assert ("permanent", land.id) not in legal
+    # Explicit resolve against a land is filtered.
+    e.resolve(state, controller_id=0, targets=(("permanent", land.id),))
+    assert land in state.battlefield
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

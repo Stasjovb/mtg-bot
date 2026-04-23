@@ -1251,6 +1251,47 @@ class DestroyTargetArtifact(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetNonlandPermanent(Effect):
+    """Destroy target nonland permanent. Indestructible permanents are
+    unaffected. Tokens cease to exist normally.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if not o.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import destroy
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or obj.printing.is_land:
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        destroy(state, obj)
+
+    def describe(self) -> str:
+        return "destroy target nonland permanent"
+
+
+@dataclass(frozen=True)
 class MoveSelfCountersToTargetCreatureYouControl(Effect):
     """Move all +1/+1 counters from the source to target creature you
     control.
