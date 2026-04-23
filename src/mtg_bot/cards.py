@@ -36,8 +36,10 @@ from mtg_bot.effects import (
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
     MemorialVaultActivatedEffect,
+    PossibilityTechnicianETBEffect,
     TerritorialBruntarLandfallEffect,
     SacrificeSelfUnlessVoidActive,
+    WeftwalkingETBEffect,
     PinnacleStarcageETBEffect,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
@@ -2045,9 +2047,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Possibility Technician — dropped ETB "discard a card, draw a card" rider.
+        # Possibility Technician `{2}{R}` 3/3 Creature. Warp `{R}`.
+        # Real oracle: "Whenever this creature or another Kavu you
+        # control enters, exile the top card of your library. For as
+        # long as that card remains exiled, you may play it if you
+        # control a Kavu." Stand-in comment was stale (non-oracle).
+        # Simplifications: (a) Kavu-scoped observer trigger narrowed
+        # to self-ETB only; (b) "for as long as" persistence narrowed
+        # to this-turn-only via the impulse-cast flag.
+        make_creature(
             "Possibility Technician", "{2}{R}", 3, 3,
             warp="{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PossibilityTechnicianETBEffect(),
+                ),
+            ),
         ),
         make_creature(  # Roving Actuator — dropped Void copy-instant rider.
             "Roving Actuator", "{3}{R}", 3, 4,
@@ -4052,8 +4068,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Enchantments — ship as empty or minimal.
-        make_enchantment(  # Weftwalking — dropped complex alt-cast mechanic.
+        # Weftwalking `{4}{U}{U}` Enchantment. Real oracle: "When this
+        # enchantment enters, if you cast it, shuffle your hand and
+        # graveyard into your library, then draw seven cards. The
+        # first spell each player casts during each of their turns may
+        # be cast without paying its mana cost." Simplification: the
+        # second (static, alt-cast) ability is NOT modeled.
+        make_enchantment(
             "Weftwalking", "{4}{U}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=WeftwalkingETBEffect(),
+                ),
+            ),
         ),
         # Sothera, the Supervoid `{2}{B}{B}` Legendary Enchantment.
         # Real oracle: "Whenever a creature you control dies, each

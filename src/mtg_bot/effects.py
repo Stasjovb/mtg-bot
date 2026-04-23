@@ -1808,6 +1808,95 @@ class PainForAllDamageEchoEffect(Effect):
 
 
 @dataclass(frozen=True)
+class WeftwalkingETBEffect(Effect):
+    """Weftwalking's ETB (simplified): "Shuffle your hand and graveyard
+    into your library, then draw seven cards."
+
+    The real oracle gates the shuffle-and-draw on "if you cast it"
+    (vs. put into play by some other means). Our engine only puts
+    enchantments onto the battlefield via casting, so the gate is a
+    no-op. The card's static "first spell each turn may be cast
+    without paying mana cost" is NOT implemented.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _rng
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import draw_card
+
+        p = state.player_by_id(controller_id)
+        # Move hand and graveyard back into the library.
+        moved = 0
+        for c in list(p.hand):
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+            moved += 1
+        p.hand.clear()
+        for c in list(p.graveyard):
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+            moved += 1
+        p.graveyard.clear()
+        # Shuffle.
+        seed = hash(("weftwalking", state.turn_number, controller_id, moved))
+        rng = _rng.Random(seed)
+        rng.shuffle(p.library)
+        state.log.append(
+            f"Weftwalking: P{controller_id} shuffles {moved} cards into "
+            f"library and draws 7"
+        )
+        for _ in range(7):
+            draw_card(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "shuffle your hand and graveyard into your library, then "
+            "draw seven cards"
+        )
+
+
+@dataclass(frozen=True)
+class PossibilityTechnicianETBEffect(Effect):
+    """Possibility Technician's ETB (simplified): "Exile the top card
+    of your library. You may play it this turn."
+
+    Real oracle has a wider trigger ("this creature or another Kavu
+    you control enters") and a persistence clause ("for as long as
+    that card remains exiled, you may play it if you control a Kavu"
+    — effectively permanent while the exiled pile is respected).
+    Our engine has impulse-cast as a this-turn-only flag, so we use
+    that — after this turn, the exiled card stays exiled and unplayable.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        if not p.library:
+            return
+        top = p.library.pop(0)
+        top.zone = Zone.EXILE
+        top.playable_from_exile_this_turn = True
+        p.exile.append(top)
+        state.log.append(
+            f"Possibility Technician: P{controller_id} exiles "
+            f"{top.printing.name} (playable this turn)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "exile the top card of your library; you may play it this "
+            "turn"
+        )
+
+
+@dataclass(frozen=True)
 class RequiemMonolithActivatedEffect(Effect):
     """Requiem Monolith's activated ability (simplified): immediately
     deals 1 damage to target creature; that creature's controller
