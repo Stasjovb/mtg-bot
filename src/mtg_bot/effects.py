@@ -1104,6 +1104,95 @@ class DestroyTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetArtifact(Effect):
+    """Destroy target artifact. Tokens cease to exist."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not obj.printing.is_artifact:
+            return
+        state.log.append(f"{obj.printing.name} is destroyed (artifact)")
+        move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return "destroy target artifact"
+
+
+@dataclass(frozen=True)
+class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
+    """Put ``amount`` charge counters on a Spacecraft you control.
+
+    Matches Drill Too Deep's first mode. Simplification: we don't include
+    Planets (a separate land subtype we don't model).
+    """
+
+    amount: int = 5
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_spacecraft
+            and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not obj.printing.is_spacecraft:
+            return
+        obj.charge_counters += self.amount
+        state.log.append(
+            f"{obj.printing.name} gets {self.amount} charge counters "
+            f"(now {obj.charge_counters})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put {self.amount} charge counters on target Spacecraft you "
+            f"control"
+        )
+
+
+@dataclass(frozen=True)
 class DestroyTargetArtifactOrTappedCreature(Effect):
     """Destroy target artifact, or tapped creature.
 

@@ -4275,6 +4275,77 @@ def test_modal_fizzles_when_targeted_mode_has_no_legal_target():
     assert state.players[0].life == 20  # unchanged
 
 
+def test_drill_too_deep_destroy_artifact_mode():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+
+    state = _arena()
+
+    class PickDestroy(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 1
+    state.players[0].agent = PickDestroy(rng=random.Random(0))
+
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+
+    dtd = EOE_SPELLS["Drill Too Deep"]
+    dtd.spell_effect.resolve(
+        state, 0, (("permanent", lander.id),)
+    )
+    assert lander not in state.battlefield
+
+
+def test_drill_too_deep_charge_counter_mode():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, EOE_CREATURES
+
+    state = _arena()
+
+    class PickCharge(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 0
+    state.players[0].agent = PickCharge(rng=random.Random(0))
+
+    skiff = state.new_object(
+        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(skiff)
+    assert skiff.charge_counters == 0
+
+    dtd = EOE_SPELLS["Drill Too Deep"]
+    dtd.spell_effect.resolve(
+        state, 0, (("permanent", skiff.id),)
+    )
+    assert skiff.charge_counters == 5
+
+
+def test_destroy_target_artifact_noop_paths():
+    from mtg_bot.effects import DestroyTargetArtifact
+
+    state = _arena()
+    e = DestroyTargetArtifact()
+    assert "artifact" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
+def test_put_charge_counters_noop_paths():
+    from mtg_bot.effects import PutChargeCountersOnTargetSpacecraftYouControl
+
+    state = _arena()
+    e = PutChargeCountersOnTargetSpacecraftYouControl(amount=3)
+    assert "charge" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

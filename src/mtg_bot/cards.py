@@ -22,7 +22,9 @@ from mtg_bot.effects import (
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
+    DestroyTargetArtifact,
     DestroyTargetCreature,
+    PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
     DrawCards,
     EachOpponentDiscards,
@@ -1441,6 +1443,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=ModalChooseOne(modes=(
                 DealDamageEachOpponent(amount=3),
                 ExileAllArtifactsWithManaValueAtMost(max_mv=3),
+            )),
+        ),
+        # Drill Too Deep — modal: charge counters on a Spacecraft you
+        # control OR destroy target artifact. "Planet" mode simplified out.
+        make_instant(
+            "Drill Too Deep", "{1}{R}",
+            effect=ModalChooseOne(modes=(
+                PutChargeCountersOnTargetSpacecraftYouControl(amount=5),
+                DestroyTargetArtifact(),
             )),
         ),
         # Mental Modulation — tap target artifact or creature, then draw a
