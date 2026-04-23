@@ -103,6 +103,46 @@ def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> N
             effect.resolve(state, attacker.controller_id, targets)
         finally:
             state.resolving_source = None
+    # Auras attached to the attacker: fire their "whenever enchanted
+    # creature attacks" triggers. Matches Chorale of the Void. Each
+    # aura's controller owns the trigger and is the caster for target
+    # selection.
+    for aura in list(state.battlefield):
+        if aura.attached_to != attacker.id:
+            continue
+        if not aura.printing.is_aura:
+            continue
+        for i, ability in enumerate(aura.printing.triggered_abilities):
+            if ability.trigger != "enchanted_creature_attacks":
+                continue
+            if not should_fire_trigger(state, aura.id, i, ability):
+                continue
+            state.log.append(
+                f"{aura.printing.name}'s enchanted-attacks trigger fires"
+            )
+            state.resolving_source = aura
+            ac_id = aura.controller_id
+            controller = state.player_by_id(ac_id)
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            try:
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, ac_id)
+                    if not legal:
+                        state.log.append(
+                            f"{aura.printing.name}'s trigger fizzles "
+                            f"(no legal targets)"
+                        )
+                        continue
+                    if controller.agent is not None:
+                        chosen = controller.agent.choose_target(
+                            state, ac_id, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                effect.resolve(state, ac_id, targets)
+            finally:
+                state.resolving_source = None
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:

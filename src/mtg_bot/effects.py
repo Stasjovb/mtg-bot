@@ -1598,6 +1598,96 @@ class SotheraEndStepReanimateEffect(Effect):
 
 
 @dataclass(frozen=True)
+class ChoraleReanimateDefenderGraveCreatureEffect(Effect):
+    """Chorale of the Void's attacks trigger: "Put target creature
+    card from defending player's graveyard onto the battlefield under
+    your control tapped and attacking."
+
+    Simplification: legal targets = any creature card in any opponent's
+    graveyard (2-player case matches oracle exactly; multiplayer is an
+    approximation). The reanimated creature enters tapped and attacking.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("graveyard_creature", c.id)
+            for p in state.players
+            if p.id != controller_id
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_creature":
+            return
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            state.log.append(
+                f"{card.printing.name} returns from P{p.id}'s graveyard "
+                f"under P{controller_id} tapped and attacking"
+            )
+            put_into_battlefield(state, card, controller_id)
+            card.tapped = True
+            card.attacking = True
+            card.summoning_sick = False
+            return
+
+    def describe(self) -> str:
+        return (
+            "put target creature card from defending player's "
+            "graveyard onto the battlefield under your control tapped "
+            "and attacking"
+        )
+
+
+@dataclass(frozen=True)
+class SacrificeSelfUnlessVoidActive(Effect):
+    """End-step effect: "Sacrifice this unless Void is active." Reads
+    state.resolving_source to find the sacrificing permanent. Matches
+    Chorale of the Void's upkeep sustain.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_void_active
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None:
+            return
+        if is_void_active(state):
+            state.log.append(
+                f"{source.printing.name}: Void active, no sacrifice"
+            )
+            return
+        state.log.append(
+            f"{source.printing.name} sacrificed (Void not active)"
+        )
+        _sacrifice(state, source)
+
+    def describe(self) -> str:
+        return "sacrifice this unless Void is active"
+
+
+@dataclass(frozen=True)
 class KavaronHarrierAttackEffect(Effect):
     """Kavaron Harrier's attacks trigger: "You may pay {2}. If you do,
     create a 2/2 colorless Robot artifact creature token that's tapped

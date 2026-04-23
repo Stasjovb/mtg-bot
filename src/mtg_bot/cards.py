@@ -31,7 +31,9 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    ChoraleReanimateDefenderGraveCreatureEffect,
     KavaronHarrierAttackEffect,
+    SacrificeSelfUnlessVoidActive,
     PinnacleStarcageETBEffect,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
@@ -3808,9 +3810,25 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Tractor Beam", "{2}{U}{U}",
             power_bonus=2, toughness_bonus=2,
         ),
-        make_aura(  # Chorale of the Void — dropped attacks-reanimate + Void sac rider.
+        # Chorale of the Void `{3}{B}` Enchantment — Aura. Real oracle:
+        # "Enchant creature you control. Whenever enchanted creature
+        # attacks, put target creature card from defending player's
+        # graveyard onto the battlefield under your control tapped and
+        # attacking. Void — At the beginning of your end step,
+        # sacrifice this Aura unless [Void active]."
+        # No printed P/T bonus (stand-in had placeholder +2/+2).
+        make_aura(
             "Chorale of the Void", "{3}{B}",
-            power_bonus=2, toughness_bonus=2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="enchanted_creature_attacks",
+                    effect=ChoraleReanimateDefenderGraveCreatureEffect(),
+                ),
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=SacrificeSelfUnlessVoidActive(),
+                ),
+            ),
         ),
         make_aura(  # Pain for All — dropped damage-equal-to-power ETB + damage-echo rider.
             "Pain for All", "{2}{R}",
