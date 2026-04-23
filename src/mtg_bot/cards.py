@@ -78,6 +78,8 @@ from mtg_bot.effects import (
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    CreateTokenPerMulticoloredPermanent,
+    DrawCardPerMulticoloredPermanent,
     DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
     OptionalPutCreatureFromHandOntoBattlefield,
@@ -3240,11 +3242,32 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             station_threshold=7,
             stationed_keywords={"flying"},
         ),
-        make_spacecraft(  # Infinite Guideline Station — drop multicolor token rider.
+        # Infinite Guideline Station `{W}{U}{B}{R}{G}` 7/15 Legendary
+        # Spacecraft. Real card:
+        # - ETB: create a tapped 2/2 colorless Robot token for each
+        #   multicolored permanent you control.
+        # - Station 12+ Flying.
+        # - Whenever it attacks, draw a card for each multicolored
+        #   permanent you control.
+        # Note: previously shipped station_threshold=10 — corrected to 12.
+        make_spacecraft(
             "Infinite Guideline Station", "{W}{U}{B}{R}{G}", 7, 15,
-            station_threshold=10,
+            station_threshold=12,
             stationed_keywords={"flying"},
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateTokenPerMulticoloredPermanent(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        tapped=True,
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=DrawCardPerMulticoloredPermanent(),
+                ),
+            ),
         ),
         # Dawnsire, Sunstar Dreadnought: {5} 20/20 Legendary Spacecraft.
         # Station 20+ flying. 10+ | Whenever you attack, Dawnsire deals

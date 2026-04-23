@@ -872,6 +872,99 @@ class ExileEachOpponentsGraveyard(Effect):
         return "exile each opponent's graveyard"
 
 
+def _multicolored_permanents_count(
+    state: "GameState", controller_id: int
+) -> int:
+    """Count permanents the controller controls whose mana cost has
+    two or more colors. Matches the "multicolored permanent" filter
+    used by Infinite Guideline Station.
+    """
+    count = 0
+    for o in state.battlefield:
+        if o.controller_id != controller_id:
+            continue
+        colors = o.printing.mana_cost.colors
+        if len(colors) >= 2:
+            count += 1
+    return count
+
+
+@dataclass(frozen=True)
+class CreateTokenPerMulticoloredPermanent(Effect):
+    """Create a ``token_printing`` token (optionally tapped) for each
+    multicolored permanent the controller controls.
+
+    Matches Infinite Guideline Station's ETB.
+    """
+
+    token_printing: "CardPrinting"
+    tapped: bool = True
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        n = _multicolored_permanents_count(state, controller_id)
+        if n <= 0:
+            state.log.append(
+                f"P{controller_id} controls 0 multicolored permanents "
+                f"— no tokens created"
+            )
+            return
+        for _ in range(n):
+            obj = state.new_object(
+                self.token_printing, owner_id=controller_id,
+                zone=Zone.BATTLEFIELD,
+            )
+            put_into_battlefield(state, obj, controller_id)
+            if self.tapped:
+                obj.tapped = True
+        state.log.append(
+            f"P{controller_id} creates {n} "
+            f"{self.token_printing.name} tokens "
+            f"(multicolored-permanent count)"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"create a tapped {self.token_printing.name} token for each "
+            f"multicolored permanent you control"
+        )
+
+
+@dataclass(frozen=True)
+class DrawCardPerMulticoloredPermanent(Effect):
+    """Draw one card for each multicolored permanent you control.
+    Matches Infinite Guideline Station's attack trigger."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        n = _multicolored_permanents_count(state, controller_id)
+        p = state.player_by_id(controller_id)
+        drew = 0
+        for _ in range(n):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            drew += 1
+        state.log.append(
+            f"P{controller_id} draws {drew} cards "
+            f"(multicolored-permanent count)"
+        )
+
+    def describe(self) -> str:
+        return "draw a card for each multicolored permanent you control"
+
+
 @dataclass(frozen=True)
 class DyadrineAttackEffect(Effect):
     """Dyadrine, Synthesis Amalgam's attack trigger:
