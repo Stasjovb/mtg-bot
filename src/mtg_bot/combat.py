@@ -388,6 +388,21 @@ def _fire_combat_damage_to_player_triggers(
 
 
 def clear_combat_state(state: GameState) -> None:
+    # Process "sacrifice at end of combat" schedules (Kavaron Harrier
+    # attack token). Done before attacking flags clear so the sacrifice
+    # still resolves with combat state intact if any observer cares.
+    if state.pending_end_of_combat_sacrifices:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        scheduled = list(state.pending_end_of_combat_sacrifices)
+        state.pending_end_of_combat_sacrifices = []
+        for tid in scheduled:
+            obj = next((o for o in state.battlefield if o.id == tid), None)
+            if obj is not None:
+                state.log.append(
+                    f"end of combat: sacrifice {obj.printing.name}"
+                )
+                _sacrifice(state, obj)
     for obj in state.battlefield:
         obj.attacking = False
         obj.blocking = None

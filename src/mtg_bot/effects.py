@@ -1483,6 +1483,53 @@ class SelfcraftMechanETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class KavaronHarrierAttackEffect(Effect):
+    """Kavaron Harrier's attacks trigger: "You may pay {2}. If you do,
+    create a 2/2 colorless Robot artifact creature token that's tapped
+    and attacking. Sacrifice that token at end of combat."
+
+    "May" is treated as yes whenever the caster can afford {2}. Token
+    is created tapped+attacking; its id is scheduled for end-of-combat
+    sacrifice via state.pending_end_of_combat_sacrifices.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import auto_tap_for_cost, can_pay_cost
+        from mtg_bot.cards import TOKEN_PRINTINGS, parse_mana_cost
+        from mtg_bot.game import Zone
+
+        cost = parse_mana_cost("{2}")
+        if not can_pay_cost(state, controller_id, cost):
+            state.log.append(
+                f"Kavaron Harrier: P{controller_id} can't pay {{2}}; "
+                f"trigger does nothing"
+            )
+            return
+        auto_tap_for_cost(state, controller_id, cost)
+        robot = TOKEN_PRINTINGS["Robot"]
+        token = state.new_object(robot, controller_id, Zone.BATTLEFIELD)
+        token.tapped = True
+        token.attacking = True
+        token.summoning_sick = False
+        state.battlefield.append(token)
+        state.pending_end_of_combat_sacrifices.append(token.id)
+        state.log.append(
+            f"Kavaron Harrier creates tapped+attacking Robot token "
+            f"(will be sacrificed at end of combat)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you may pay {2}; if you do, create a 2/2 Robot token "
+            "that's tapped and attacking; sacrifice that token at "
+            "end of combat"
+        )
+
+
+@dataclass(frozen=True)
 class MonoistCircuitFeederETBEffect(Effect):
     """Monoist Circuit-Feeder's ETB: "Until end of turn, target creature
     you control gets +X/+0 and target creature an opponent controls

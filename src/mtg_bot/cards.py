@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    KavaronHarrierAttackEffect,
     PinnacleStarcageETBEffect,
     PinnacleStarcageSacEffect,
     PutStunCounterOnTappedCreature,
@@ -2009,9 +2010,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Kavaron Harrier — dropped attacks may-pay for Robot token.
+        # Kavaron Harrier `{R}` 2/1 Artifact Creature. Real oracle:
+        # "Whenever this creature attacks, you may pay {2}. If you do,
+        # create a 2/2 colorless Robot artifact creature token that's
+        # tapped and attacking. Sacrifice that token at end of combat."
+        make_creature(
             "Kavaron Harrier", "{R}", 2, 1,
             artifact=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=KavaronHarrierAttackEffect(),
+                ),
+            ),
         ),
         make_creature(  # Possibility Technician — dropped ETB "discard a card, draw a card" rider.
             "Possibility Technician", "{2}{R}", 3, 3,

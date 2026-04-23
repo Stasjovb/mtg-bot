@@ -373,6 +373,10 @@ class GameState:
     # counters-added observer trigger (Terrasymbiosis: "draw that many
     # cards"). 0 outside such resolution.
     resolving_counter_amount: int = 0
+    # IDs of permanents scheduled to be sacrificed at end of combat.
+    # Cleared during clear_combat_state after processing.
+    # Used by Kavaron Harrier's attack token.
+    pending_end_of_combat_sacrifices: list[int] = field(default_factory=list)
     # Per-turn counter of how many times a tagged ability has resolved.
     # Keys are effect-specific labels (typically ("tag", source_id)).
     # Reset by run_cleanup_step. Used by Tannuk, Memorial Ensign's
