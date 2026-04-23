@@ -3692,6 +3692,43 @@ def test_biomechan_engineer_etb_and_activation():
     assert any(o.printing.name == "Robot" for o in state.battlefield)
 
 
+def test_interceptor_mechan_etb_grabs_from_graveyard():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    # Seed a creature card in P0's graveyard.
+    ghost = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD
+    )
+    state.players[0].graveyard.append(ghost)
+
+    mechan = state.new_object(
+        EOE_CREATURES["Interceptor Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mechan)
+    etb = next(
+        ab for ab in mechan.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = mechan
+    etb.effect.resolve(state, 0, (("graveyard_creature", ghost.id),))
+    assert ghost in state.players[0].hand
+    assert ghost not in state.players[0].graveyard
+
+
+def test_return_creature_to_hand_noop_paths():
+    from mtg_bot.effects import ReturnCreatureFromYourGraveyardToHand
+
+    state = _arena()
+    e = ReturnCreatureFromYourGraveyardToHand()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(
+        state, controller_id=0, targets=(("graveyard_creature", 99999),)
+    )
+    assert e.requires_target() is True
+    assert "hand" in e.describe()
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

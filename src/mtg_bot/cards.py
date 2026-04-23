@@ -38,6 +38,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
@@ -922,6 +923,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+                ),
+            ),
+        ),
+        # Interceptor Mechan: {2}{B}{R} 3/3 Flying. ETB return creature card
+        # from your graveyard to hand. Void — end step: +1/+1 counter.
+        # Real card allows "artifact or creature" — we restrict to creature
+        # for now.
+        make_creature(
+            "Interceptor Mechan", "{2}{B}{R}", 3, 3,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ReturnCreatureFromYourGraveyardToHand(),
+                ),
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    requires_void=True,
+                    effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
             ),
         ),

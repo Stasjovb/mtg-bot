@@ -262,6 +262,54 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnCreatureFromYourGraveyardToHand(Effect):
+    """Target creature card from your graveyard goes to your hand.
+
+    Matches Interceptor Mechan's ETB (creature-only simplification of its
+    "artifact or creature" oracle text).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_creature":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand"
+        )
+
+    def describe(self) -> str:
+        return "return target creature card from your graveyard to your hand"
+
+
+@dataclass(frozen=True)
 class ExileEachOpponentsGraveyard(Effect):
     """Move every card in each opponent's graveyard to that player's exile."""
 
