@@ -5830,6 +5830,46 @@ def test_scout_for_survivors_noop_paths():
     e.resolve(state, controller_id=0, targets=(("graveyard_creature", 99999),))
 
 
+def test_biosynthic_burst_counter_keywords_untap():
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_keywords
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    ally.tapped = True
+    state.battlefield.append(ally)
+    EOE_SPELLS["Biosynthic Burst"].spell_effect.resolve(
+        state, 0, (("creature", ally.id),)
+    )
+    assert ally.plus_one_counters == 1
+    assert ally.tapped is False
+    kws = effective_keywords(state, ally)
+    assert "reach" in kws
+    assert "trample" in kws
+    assert "indestructible" in kws
+
+
+def test_biosynthic_burst_noop_paths():
+    from mtg_bot.effects import BiosynthicBurstEffect
+
+    state = _arena()
+    e = BiosynthicBurstEffect()
+    assert e.requires_target() is True
+    assert "reach" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 1),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+    # Opponent's creature → filtered at resolve time.
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+    e.resolve(state, controller_id=0, targets=(("creature", enemy.id),))
+    assert enemy.plus_one_counters == 0
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

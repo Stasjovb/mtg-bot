@@ -1809,6 +1809,60 @@ class UntapTargetOtherPermanent(Effect):
 
 
 @dataclass(frozen=True)
+class BiosynthicBurstEffect(Effect):
+    """Put a +1/+1 counter on target creature you control. It gains reach,
+    trample, and indestructible UEOT. Untap it.
+
+    One dedicated effect because all three pieces operate on the same
+    target, which doesn't compose cleanly via Sequence in our single-
+    target-per-Sequence model.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or obj.controller_id != controller_id:
+            return
+        obj.plus_one_counters += 1
+        obj.temp_keywords = obj.temp_keywords | frozenset(
+            {"reach", "trample", "indestructible"}
+        )
+        obj.tapped = False
+        state.log.append(
+            f"{obj.printing.name} gets a +1/+1 counter, gains reach, "
+            f"trample, indestructible UEOT, and untaps"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put a +1/+1 counter on target creature you control; it "
+            "gains reach, trample, and indestructible until end of "
+            "turn; untap it"
+        )
+
+
+@dataclass(frozen=True)
 class DepressurizeEffect(Effect):
     """Target creature gets -3/-0 UEOT; then if its power is 0 or less,
     destroy it.

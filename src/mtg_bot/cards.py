@@ -65,6 +65,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureSpacecraftBoosted,
     ExileAllArtifactsWithManaValueAtMost,
     AttachToTargetCreatureYouControl,
+    BiosynthicBurstEffect,
     CreateTokenAndAttachSelf,
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
@@ -2088,6 +2089,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DealDamageEachOpponent(amount=3),
                 ExileAllArtifactsWithManaValueAtMost(max_mv=3),
             )),
+        ),
+        # Biosynthic Burst — +1/+1 counter + reach/trample/indestructible
+        # UEOT + untap.
+        make_instant(
+            "Biosynthic Burst", "{1}{G}",
+            effect=BiosynthicBurstEffect(),
         ),
         # Scout for Survivors — reanimate up to 3 small creatures with
         # +1/+1 counter on each. Simplified: real card says "total mana
