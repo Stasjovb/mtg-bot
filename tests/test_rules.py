@@ -7635,6 +7635,54 @@ def test_effect_describe_coverage():
     assert "untap" in UntapTargetOtherPermanent().describe()
 
 
+def test_effect_describe_coverage_2():
+    """More describe() hits on effects that aren't covered by specific
+    card tests."""
+    from mtg_bot.effects import (
+        DealDamageToOpponentCreature,
+        ExileEachOpponentsGraveyard,
+        ExileTargetCreature,
+        PutPlusOneCounterOnTargetCreature,
+        TargetOpponentDiscards,
+    )
+
+    assert "damage" in DealDamageToOpponentCreature(amount=2).describe()
+    assert "exile" in ExileTargetCreature().describe()
+    assert "exile" in ExileEachOpponentsGraveyard().describe()
+    assert "counter" in PutPlusOneCounterOnTargetCreature(amount=1).describe()
+    assert "discard" in TargetOpponentDiscards(count=1).describe()
+
+
+def test_cost_reduction_per_land_not_scaled_noops():
+    """A CostReduction with per_land_group=False and the
+    per_differently_named_land condition is a no-op (no fixed amount
+    path for that condition). Exercises the else-branch."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import CostReduction, make_instant
+    from mtg_bot.effects import GainLife
+
+    c = make_instant(
+        "NonScaledLand", "{3}",
+        effect=GainLife(amount=1),
+        cost_reductions=(
+            CostReduction(
+                amount=1, condition="per_differently_named_land",
+                per_land_group=False,
+            ),
+        ),
+    )
+    state = _arena()
+    # Even with differently-named lands, per_land_group=False means no
+    # reduction applies.
+    from mtg_bot.cards import BASIC_LANDS
+    for name in ("Plains", "Forest"):
+        l = state.new_object(
+            BASIC_LANDS[name], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(l)
+    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
+
+
 def test_codecracker_agent_chooses_to_mill_top():
     """When the agent says 'mill' on the top card, the top goes to GY
     and the second to hand."""

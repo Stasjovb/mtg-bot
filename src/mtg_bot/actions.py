@@ -269,7 +269,7 @@ def _cast_spell(
         card = next(
             (c for c in p.exile if c.id == card_id and c.warped), None
         )
-        if card is None:
+        if card is None:  # pragma: no cover - defensive (legal_actions gates)
             raise ValueError(
                 f"card {card_id} not castable by P{player_id}"
             )
@@ -836,7 +836,7 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
                     break
                 chosen_list.append(pick)
                 remaining.remove(pick)
-            if len(chosen_list) < min_t:
+            if len(chosen_list) < min_t:  # pragma: no cover - min_t>0 unused
                 state.log.append(
                     f"{creature.printing.name}'s ETB had no target chosen; "
                     f"trigger fizzles"

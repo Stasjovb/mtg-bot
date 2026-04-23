@@ -1663,6 +1663,114 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # -- Batch #3 of vanilla-simplified creatures. Each drops its
+        # complex text to ship as keyword-only (or pure vanilla / vanilla
+        # + Warp). Simplification noted per card.
+        make_creature(  # Mm'menon, the Right Hand — dropped "cast from top + mana-ability grant".
+            "Mm'menon, the Right Hand", "{3}{U}{U}", 3, 4,
+            keywords={"flying"},
+            legendary=True,
+        ),
+        make_creature(  # Alpharael, Stonechosen — dropped Ward-discard + Void attack life-drain.
+            "Alpharael, Stonechosen", "{3}{B}{B}", 3, 3,
+            legendary=True,
+            warp="{2}{B}",
+        ),
+        make_creature(  # Blade of the Swarm — dropped "modal ETB: counters OR warp-exile interaction".
+            "Blade of the Swarm", "{3}{B}", 3, 1,
+            warp="{1}{B}",
+        ),
+        make_creature(  # Monoist Circuit-Feeder — dropped ETB dynamic pump/debuff.
+            "Monoist Circuit-Feeder", "{4}{B}{B}", 4, 4,
+            artifact=True,
+            keywords={"flying"},
+        ),
+        make_creature(  # Perigee Beckoner — dropped ETB "reveal creature from hand" rider.
+            "Perigee Beckoner", "{4}{B}", 4, 5,
+            warp="{2}{B}",
+        ),
+        make_creature(  # Susurian Voidborn — dropped Void attack triggers.
+            "Susurian Voidborn", "{2}{B}", 2, 2,
+            warp="{B}",
+        ),
+        make_creature(  # Kavaron Harrier — dropped attacks may-pay for Robot token.
+            "Kavaron Harrier", "{R}", 2, 1,
+            artifact=True,
+        ),
+        make_creature(  # Possibility Technician — dropped ETB "discard a card, draw a card" rider.
+            "Possibility Technician", "{2}{R}", 3, 3,
+            warp="{R}",
+        ),
+        make_creature(  # Roving Actuator — dropped Void copy-instant rider.
+            "Roving Actuator", "{3}{R}", 3, 4,
+            artifact=True,
+            warp="{1}{R}",
+        ),
+        make_creature(  # Terrapact Intimidator — dropped ETB opponent-choice rider.
+            "Terrapact Intimidator", "{1}{R}", 2, 1,
+        ),
+        make_creature(  # Territorial Bruntar — dropped Landfall exile-impulse-cast.
+            "Territorial Bruntar", "{4}{R}{R}", 6, 6,
+            keywords={"reach"},
+        ),
+        make_creature(  # Vaultguard Trooper — dropped "dies, return" self-revive.
+            "Vaultguard Trooper", "{4}{R}", 5, 5,
+        ),
+        make_creature(  # Hemosymbic Mite — dropped Deathtouch + dies Lander trigger (only kept body).
+            "Hemosymbic Mite", "{G}", 1, 1,
+        ),
+        make_creature(  # Icetill Explorer — dropped additional-land + graveyard-play + Landfall mill.
+            "Icetill Explorer", "{2}{G}{G}", 2, 4,
+        ),
+        make_creature(  # Mightform Harmonizer — dropped "attacks → counter + search" trigger.
+            "Mightform Harmonizer", "{2}{G}{G}", 4, 4,
+            warp="{1}{G}",
+        ),
+        make_creature(  # Ouroboroid — dropped ETB "mill/put-in-hand" ramp.
+            "Ouroboroid", "{2}{G}{G}", 1, 3,
+        ),
+        make_creature(  # Alpharael, Dreaming Acolyte — dropped "if you cast 2+ → draw" trigger.
+            "Alpharael, Dreaming Acolyte", "{1}{U}{B}", 2, 3,
+            legendary=True,
+        ),
+        make_creature(  # Haliya, Ascendant Cadet — dropped "attacks → token + life" trigger.
+            "Haliya, Ascendant Cadet", "{2}{G}{W}{W}", 3, 3,
+            legendary=True,
+        ),
+        make_creature(  # Pinnacle Emissary — dropped Void rider and ETB surveil.
+            "Pinnacle Emissary", "{1}{U}{R}", 3, 3,
+            artifact=True,
+            warp="{U}{R}",
+        ),
+        make_creature(  # Ragost, Deft Gastronaut — dropped Food + gain-life trigger.
+            "Ragost, Deft Gastronaut", "{R}{W}", 2, 2,
+            legendary=True,
+        ),
+        make_creature(  # Sami, Ship's Engineer — dropped Void token creation.
+            "Sami, Ship's Engineer", "{2}{R}{W}", 2, 4,
+            legendary=True,
+        ),
+        make_creature(  # Station Monitor — dropped second-spell Drone token.
+            "Station Monitor", "{W}{U}", 2, 2,
+        ),
+        make_creature(  # Syr Vondam, Sunstar Exemplar — dropped die/exile → counter, death rider.
+            "Syr Vondam, Sunstar Exemplar", "{W}{B}", 2, 2,
+            legendary=True,
+            keywords={"vigilance", "menace"},
+        ),
+        make_creature(  # Syr Vondam, the Lucent — dropped the complex "when creature dies, exile" trigger.
+            "Syr Vondam, the Lucent", "{2}{W}{B}{B}", 4, 4,
+            legendary=True,
+            keywords={"deathtouch", "lifelink"},
+        ),
+        make_creature(  # Tannuk, Memorial Ensign — dropped attacks-discard + graveyard-play.
+            "Tannuk, Memorial Ensign", "{1}{R}{G}", 2, 4,
+            legendary=True,
+        ),
+        make_creature(  # Chrome Companion — dropped "cast: turn into creature" animation.
+            "Chrome Companion", "{2}", 2, 1,
+            artifact=True,
+        ),
         # -- Batch #2 of vanilla-simplified creatures. Dropped complex
         # text for each; shipped as keyword-only (or literal vanilla)
         # bodies.
