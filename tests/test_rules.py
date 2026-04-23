@@ -4622,6 +4622,21 @@ def test_enchantment_is_permanent_but_not_creature():
     assert c.is_instant is False
 
 
+def test_simplified_spacecraft_loads_and_stations():
+    """Synthesizer Labship and Sledge-Class Seedship ship as vanilla
+    Spacecraft — simplified to station threshold + stationed_keywords."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    for name, threshold, stationed_kw in (
+        ("Synthesizer Labship", 9, "flying"),
+        ("Sledge-Class Seedship", 7, "flying"),
+    ):
+        c = EOE_CREATURES[name]
+        assert c.is_spacecraft
+        assert c.station_threshold == threshold
+        assert stationed_kw in c.stationed_keywords
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

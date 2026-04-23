@@ -1034,6 +1034,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Synthesizer Labship: {U} 4/4 Spacecraft. Station 9+ flying.
+        # Simplified: drops the "2+ tier" ability (tiered triggered
+        # abilities aren't modeled — tiers currently only gate statics).
+        make_spacecraft(
+            "Synthesizer Labship", "{U}", 4, 4,
+            station_threshold=9,
+            stationed_keywords={"flying"},
+        ),
+        # Sledge-Class Seedship: {2}{G} 4/5 Spacecraft. Station 7+ flying.
+        # Simplified: drops the "7+ | whenever it attacks, put a creature
+        # from hand onto the battlefield" tiered trigger.
+        make_spacecraft(
+            "Sledge-Class Seedship", "{2}{G}", 4, 5,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+        ),
         # Fell Gravship: {2}{B} 3/2 Spacecraft. ETB mill 3 then return a
         # creature card from your graveyard to your hand. Station 8+ gives
         # flying + lifelink. Real card says "creature or Spacecraft card"
