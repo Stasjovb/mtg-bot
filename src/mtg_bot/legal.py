@@ -187,11 +187,29 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_another:
                     continue
+            if ability.cost.remove_plus_one_counter_from_your_creature:
+                has_counter_creature = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_creature
+                    and o2.plus_one_counters > 0
+                )
+                if not has_counter_creature:
+                    continue
             # If the effect requires a target, at least one must be legal.
-            if ability.effect.requires_target() and not ability.effect.legal_targets(
-                state, player_id
-            ):
-                continue
+            # Set resolving_source so effects with self-exclusion filters
+            # (e.g. "another target creature") compute the correct legal
+            # pool during legality-check. Cleared immediately afterward.
+            if ability.effect.requires_target():
+                state.resolving_source = obj
+                try:
+                    has_legal = bool(
+                        ability.effect.legal_targets(state, player_id)
+                    )
+                finally:
+                    state.resolving_source = None
+                if not has_legal:
+                    continue
             actions.append(
                 ActivateAbility(source_id=obj.id, ability_index=idx)
             )

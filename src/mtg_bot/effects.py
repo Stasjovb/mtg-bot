@@ -2430,6 +2430,50 @@ class PutStunCounterOnTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapAnotherTargetCreature(Effect):
+    """Tap another target creature — target must not be the source.
+
+    Matches Starport Security's activated "Tap another target creature"
+    ability. Reads ``state.resolving_source`` to exclude self.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        source = state.resolving_source
+        source_id = source.id if source is not None else -1
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.id != source_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        tap_permanent(state, obj)
+
+    def describe(self) -> str:
+        return "tap another target creature"
+
+
+@dataclass(frozen=True)
 class TapTargetArtifactOrCreature(Effect):
     """Tap target artifact or creature. Matches Mental Modulation's middle
     clause. No-op if the target is already tapped.
@@ -3872,6 +3916,9 @@ class ActivationCost:
     # "Sacrifice another artifact or land" — as above but with a land
     # filter. Matches Slagdrill Scrapper.
     sacrifice_another_artifact_or_land: bool = False
+    # "Remove a +1/+1 counter from a creature you control" — Sunstar
+    # Chaplain's activated ability. Fails if no such creature exists.
+    remove_plus_one_counter_from_your_creature: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -3885,6 +3932,8 @@ class ActivationCost:
             parts.append("Sacrifice another creature or artifact")
         if self.sacrifice_another_artifact_or_land:
             parts.append("Sacrifice another artifact or land")
+        if self.remove_plus_one_counter_from_your_creature:
+            parts.append("Remove a +1/+1 counter from a creature you control")
         return ", ".join(parts) if parts else "0"
 
 

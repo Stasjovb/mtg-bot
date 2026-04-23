@@ -505,10 +505,17 @@ def _activate_ability(
         from mtg_bot.turn import tap_permanent
         tap_permanent(state, source)
 
-    # Target selection for the effect (if it targets).
+    # Target selection for the effect (if it targets). Source is exposed
+    # via state.resolving_source during selection so effects with
+    # self-exclusion filters (e.g. "another target creature") can read
+    # it. Cleared after selection; re-set at resolve_top_of_stack.
     targets: tuple[tuple[str, int], ...] = ()
     if ability.effect.requires_target():
-        legal = ability.effect.legal_targets(state, player_id)
+        state.resolving_source = source
+        try:
+            legal = ability.effect.legal_targets(state, player_id)
+        finally:
+            state.resolving_source = None
         if legal:
             p = state.player_by_id(player_id)
             chosen = p.agent.choose_target(state, player_id, legal)
@@ -551,6 +558,34 @@ def _activate_ability(
             f"(cost for {source.printing.name}'s ability)"
         )
         _sacrifice(state, chosen)
+
+    # "Remove a +1/+1 counter from a creature you control" cost. The
+    # agent picks which creature via choose_sacrifice (reusing the
+    # existing sacrifice-picker agent hook since the shape is the
+    # same: pick an id from a list of battlefield ids). Decrements by
+    # one; legal_actions gates on at least one such creature existing.
+    if ability.cost.remove_plus_one_counter_from_your_creature:
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and o.printing.is_creature
+            and o.plus_one_counters > 0
+        ]
+        chosen = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, player_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        chosen.plus_one_counters -= 1
+        state.log.append(
+            f"P{player_id} removes a +1/+1 counter from "
+            f"{chosen.printing.name} (now {chosen.plus_one_counters}) "
+            f"(cost for {source.printing.name}'s ability)"
+        )
 
     # Sacrifice-self is paid LAST so the source is still on the battlefield
     # for target selection — the Lander case where the ability's effect

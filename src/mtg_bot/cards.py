@@ -63,6 +63,7 @@ from mtg_bot.effects import (
     ReturnUpToNTargetCreaturesToOwnersHands,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
+    TapAnotherTargetCreature,
     TapTargetArtifactOrCreature,
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
@@ -353,10 +354,16 @@ def make_creature(
 
 
 def cost(
-    mana: str = "", tap_self: bool = False, sacrifice_self: bool = False
+    mana: str = "",
+    tap_self: bool = False,
+    sacrifice_self: bool = False,
+    remove_plus_one_counter_from_your_creature: bool = False,
 ) -> ActivationCost:
     """Small constructor for ``ActivationCost`` that handles mana parsing."""
     return ActivationCost(
+        remove_plus_one_counter_from_your_creature=(
+            remove_plus_one_counter_from_your_creature
+        ),
         mana=parse_mana_cost(mana) if mana else None,
         mana_str=mana,
         tap_self=tap_self,
@@ -1836,9 +1843,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(  # Pulsar Squadron Ace — dropped library-dig ETB.
             "Pulsar Squadron Ace", "{1}{W}", 1, 2,
         ),
-        make_creature(  # Starport Security — dropped tap-another activation.
+        # Starport Security `{W}` 1/1 Artifact Creature. Activated
+        # ability `{3}{W}, {T}: Tap another target creature.`
+        # Simplification: drops the conditional "-{2} if you control a
+        # creature with a +1/+1 counter" reduction (activated-ability
+        # cost reductions aren't modeled yet).
+        make_creature(
             "Starport Security", "{W}", 1, 1,
             artifact=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{3}{W}", tap_self=True),
+                    effect=TapAnotherTargetCreature(),
+                ),
+            ),
         ),
         make_creature(  # Weftblade Enhancer — dropped multi-target counter ETB; Warp kept.
             "Weftblade Enhancer", "{5}{W}", 3, 4,
@@ -2062,8 +2080,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Sunstar Chaplain: 3/2. Conditional EoT +1/+1 on target creature
-        # you control. Skips its activated "remove-counter → tap" because
-        # remove-counter costs aren't modeled yet.
+        # you control + activated `{2}, Remove a +1/+1 counter from a
+        # creature you control: Tap target artifact or creature.`
         make_creature(
             "Sunstar Chaplain", "{1}{W}", 3, 2,
             triggered_abilities=(
@@ -2073,6 +2091,15 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                         min_count=2,
                     ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(
+                        mana="{2}",
+                        remove_plus_one_counter_from_your_creature=True,
+                    ),
+                    effect=TapTargetArtifactOrCreature(),
                 ),
             ),
         ),
