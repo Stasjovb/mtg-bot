@@ -277,6 +277,32 @@ def _cast_spell(
     # special-case this.
     cost = apply_cost_reductions(card.printing, state, player_id, cost)
     auto_tap_for_cost(state, player_id, cost)
+    # Additional cost: sacrifice a creature or artifact. Legal_actions
+    # already gated casting on a valid sac target existing; here we
+    # just pay by calling sacrifice() on the agent's pick.
+    if card.printing.additional_cost_sacrifice_creature_or_artifact:
+        sac_options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and (o.printing.is_creature or o.printing.is_artifact)
+        ]
+        if sac_options:
+            from mtg_bot.turn import sacrifice as _sacrifice
+
+            chosen = sac_options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in sac_options]
+                )
+                chosen = next(
+                    (o for o in sac_options if o.id == pick_id),
+                    sac_options[0],
+                )
+            state.log.append(
+                f"additional cost: P{player_id} sacrifices "
+                f"{chosen.printing.name}"
+            )
+            _sacrifice(state, chosen)
     card.zone = Zone.STACK
     card.controller_id = player_id
 

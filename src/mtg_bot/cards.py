@@ -195,6 +195,11 @@ class CardPrinting:
     # enters untapped, no enters tapped. 0 means "no choice — enters
     # per its usual rules".
     shock_land_life_cost: int = 0
+    # Additional cost to cast: sacrifice a creature or artifact the
+    # caster controls (other than any source-of-the-spell). Matches
+    # Embrace Oblivion's "As an additional cost to cast this spell,
+    # sacrifice an artifact or creature."
+    additional_cost_sacrifice_creature_or_artifact: bool = False
     # Cost reductions: rules that lower this spell's generic mana cost
     # when specific conditions hold at cast time (e.g., "costs {3} less
     # if you've cast another spell this turn"). Consumed by
@@ -384,6 +389,7 @@ def make_instant(
 def make_sorcery(
     name: str, cost: str, effect: Effect,
     cost_reductions: tuple[CostReduction, ...] = (),
+    additional_cost_sacrifice_creature_or_artifact: bool = False,
 ) -> CardPrinting:
     type_line = "Sorcery"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -397,6 +403,9 @@ def make_sorcery(
         subtypes=subtypes,
         spell_effect=effect,
         cost_reductions=tuple(cost_reductions),
+        additional_cost_sacrifice_creature_or_artifact=(
+            additional_cost_sacrifice_creature_or_artifact
+        ),
     )
 
 
@@ -2359,6 +2368,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 Surveil(use_artifact_count=True),
                 DrawCards(amount=3),
             )),
+        ),
+        # Embrace Oblivion — {B} Sorcery with an additional-cost sac.
+        # Destroy target creature or Spacecraft. Our DestroyTargetCreature
+        # handles creatures; we drop the "or Spacecraft" option (a
+        # stationed Spacecraft is a creature and IS a legal target via
+        # is_creature_now, so the only loss is unstationed Spacecraft).
+        make_sorcery(
+            "Embrace Oblivion", "{B}",
+            effect=DestroyTargetCreature(),
+            additional_cost_sacrifice_creature_or_artifact=True,
         ),
         # Temporal Intervention — directed discard with a Void cost
         # reduction rider.

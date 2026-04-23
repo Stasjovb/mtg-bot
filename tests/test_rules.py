@@ -6778,6 +6778,103 @@ def test_temporal_intervention_no_agent_picks_first():
     assert creature in state.players[1].graveyard
 
 
+def test_additional_costs_payable_returns_true_for_no_cost():
+    """Cards without additional costs pass the check trivially."""
+    from mtg_bot.legal import _additional_costs_payable
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    card = state.new_object(
+        EOE_SPELLS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
+    )
+    assert _additional_costs_payable(state, 0, card) is True
+
+
+def test_cost_reduction_void_condition_active():
+    """apply_cost_reductions with void_active condition fires when Void
+    is active (exercises that branch for coverage)."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import CostReduction, make_instant
+    from mtg_bot.effects import GainLife
+
+    c = make_instant(
+        "Voidy", "{3}",
+        effect=GainLife(amount=1),
+        cost_reductions=(
+            CostReduction(amount=2, condition="void_active"),
+        ),
+    )
+    state = _arena()
+    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
+    state.permanent_left_battlefield_this_turn = True
+    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 1
+
+
+def test_embrace_oblivion_requires_sac_target_to_cast():
+    """With no own creatures/artifacts, Embrace Oblivion can't be cast."""
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    # Caster has mana + a valid target on opponent's side, but NO
+    # creatures or artifacts of their own to sacrifice.
+    swamp = state.new_object(
+        BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(swamp)
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+    obli_in_hand = state.new_object(
+        EOE_SPELLS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(obli_in_hand)
+    actions = legal_moves(state)
+    # CastSpell for Embrace Oblivion should NOT be in legal actions.
+    cast_actions = [
+        a for a in actions
+        if isinstance(a, CastSpell) and a.card_id == obli_in_hand.id
+    ]
+    assert cast_actions == []
+
+
+def test_embrace_oblivion_with_sac_target_casts_and_destroys():
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    swamp = state.new_object(
+        BASIC_LANDS["Swamp"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(swamp)
+    # Fodder for the sac.
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    # Victim to destroy.
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(victim)
+    obli = state.new_object(
+        EOE_SPELLS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(obli)
+    _cast_spell(state, 0, obli.id)
+    assert fodder not in state.battlefield  # sacrificed as cost
+    resolve_top_of_stack(state)
+    assert victim not in state.battlefield  # destroyed by spell
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

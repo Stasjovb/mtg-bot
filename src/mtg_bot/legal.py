@@ -41,6 +41,24 @@ def _targets_are_satisfiable(
     return bool(effect.legal_targets(state, player_id))
 
 
+def _additional_costs_payable(
+    state: GameState, player_id: int, card: GameObject
+) -> bool:
+    """Check that any cast-time additional costs on ``card`` can be paid.
+    Currently: additional_cost_sacrifice_creature_or_artifact requires a
+    creature or artifact the caster controls.
+    """
+    if card.printing.additional_cost_sacrifice_creature_or_artifact:
+        have_sac = any(
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and (o.printing.is_creature or o.printing.is_artifact)
+        )
+        if not have_sac:
+            return False
+    return True
+
+
 def legal_actions(state: GameState, player_id: int) -> list[Action]:
     """Return all legal actions for ``player_id`` right now.
 
@@ -72,12 +90,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             continue
         if can_pay_cost(
             state, player_id, _effective_cost(card, card.printing.mana_cost)
-        ) and _targets_are_satisfiable(state, player_id, card):
+        ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
         if card.printing.warp_cost is not None and can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.warp_cost),
-        ) and _targets_are_satisfiable(state, player_id, card):
+        ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id, use_warp=True))
 
     if not _is_sorcery_timing(state, player_id):
@@ -110,12 +128,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.mana_cost),
-            ) and _targets_are_satisfiable(state, player_id, card):
+            ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
                 actions.append(CastSpell(card.id))
             if card.printing.warp_cost is not None and can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
-            ) and _targets_are_satisfiable(state, player_id, card):
+            ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
                 actions.append(CastSpell(card.id, use_warp=True))
 
     # Warp-exile recasts at sorcery speed (for creatures / sorceries).
@@ -129,7 +147,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.mana_cost),
-        ) and _targets_are_satisfiable(state, player_id, card):
+        ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
     # Activated abilities on permanents this player controls.
