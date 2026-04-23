@@ -3332,6 +3332,75 @@ class DealDamageToTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToTargetCreatureWithExcessLanderRider(Effect):
+    """Orbital Plunge `{3}{R}`:
+    "Orbital Plunge deals 6 damage to target creature. If excess damage
+    was dealt this way, create a Lander token."
+
+    Excess damage is the portion of the 6 that exceeded what was needed
+    to mark lethal on the target — ``damage_amount - max(0, effective
+    toughness - damage already marked)``. We check >0 after the damage
+    is applied. Lifelink/deathtouch are not modeled here; in real MTG
+    "excess" is resolved through rule 120.3e which handles that, but
+    for our simplified model, comparing amount to remaining toughness
+    is sufficient.
+    """
+
+    amount: int = 6
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone, effective_toughness
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        excess = 0
+        if obj is not None:
+            remaining = max(0, effective_toughness(state, obj) - obj.damage)
+            excess = max(0, self.amount - remaining)
+        _apply_damage(state, targets[0], self.amount)
+        if excess > 0:
+            lander = state.new_object(
+                TOKEN_PRINTINGS["Lander"],
+                owner_id=controller_id,
+                zone=Zone.BATTLEFIELD,
+            )
+            put_into_battlefield(state, lander, controller_id)
+            state.log.append(
+                f"Orbital Plunge dealt {excess} excess damage; "
+                f"P{controller_id} creates a Lander token"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.amount} damage to target creature; if excess "
+            f"damage was dealt this way, create a Lander token"
+        )
+
+
+@dataclass(frozen=True)
 class DealDamageToOpponentCreatureByArtifactCount(Effect):
     """Deal damage equal to the number of artifacts you control to target
     creature an opponent controls.

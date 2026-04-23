@@ -68,6 +68,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     CutPropulsionEffect,
     DealDamageToTargetCreatureSpacecraftBoosted,
+    DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,
     AttachToTargetCreatureYouControl,
     BiosynthicBurstEffect,
@@ -3194,9 +3195,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 token_printing=TOKEN_PRINTINGS["Lander"], count=1
             ),
         ),
-        make_sorcery(  # Orbital Plunge — drops excess-damage-Lander rider; plain 6 damage.
+        # Orbital Plunge `{3}{R}` — deals 6 damage to target creature.
+        # If excess damage was dealt this way, create a Lander token.
+        make_sorcery(
             "Orbital Plunge", "{3}{R}",
-            effect=DealDamageToTargetCreature(amount=6),
+            effect=DealDamageToTargetCreatureWithExcessLanderRider(
+                amount=6,
+            ),
         ),
         # Depressurize — -3/-0 UEOT + if power <=0, destroy.
         make_instant(
