@@ -389,6 +389,29 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
+    # Additional cost: designate a creature you control (Close
+    # Encounter). Ungated by sacrifice/tap — just a choice. The chosen
+    # id lands on the StackItem for the effect to read at resolve.
+    additional_cost_choice_id: int | None = None
+    if card.printing.additional_cost_choose_your_creature:
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id and o.printing.is_creature
+        ]
+        if options:
+            chosen_id = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options]
+                )
+                if pick in {o.id for o in options}:
+                    chosen_id = pick
+            additional_cost_choice_id = chosen_id
+            chosen = next(o for o in options if o.id == chosen_id)
+            state.log.append(
+                f"additional cost: P{player_id} designates "
+                f"{chosen.printing.name}"
+            )
     card.zone = Zone.STACK
     card.controller_id = player_id
 
@@ -446,6 +469,7 @@ def _cast_spell(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
+            additional_cost_choice_id=additional_cost_choice_id,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -787,18 +811,23 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.resolving_source = item.source
         state.resolving_x_value = item.x_value
         state.resolving_kicked = item.kicked
+        state.resolving_additional_cost_choice_id = (
+            item.additional_cost_choice_id
+        )
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
             state.resolving_source = None
             state.resolving_x_value = 0
             state.resolving_kicked = False
+            state.resolving_additional_cost_choice_id = None
         return
 
     # Spell resolution
     card = item.source
     state.resolving_x_value = item.x_value
     state.resolving_kicked = item.kicked
+    state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
     try:
         if card.printing.is_permanent and not (
             card.printing.is_instant or card.printing.is_sorcery
@@ -858,6 +887,7 @@ def resolve_top_of_stack(state: GameState) -> None:
     finally:
         state.resolving_x_value = 0
         state.resolving_kicked = False
+        state.resolving_additional_cost_choice_id = None
 
 
 def put_into_battlefield(

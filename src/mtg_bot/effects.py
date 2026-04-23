@@ -794,6 +794,70 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class CloseEncounterEffect(Effect):
+    """Close Encounter `{1}{G}`:
+    "As an additional cost to cast this spell, choose a creature you
+    control or a warped creature card you own in exile.
+    Close Encounter deals damage equal to the power of the chosen
+    creature or card to target creature."
+
+    Reads state.resolving_additional_cost_choice_id to know which
+    creature the caster designated, then deals damage equal to that
+    creature's effective power to the chosen target creature.
+
+    Simplification: the "warped creature card you own in exile" half
+    is dropped — the additional-cost pick is restricted to creatures
+    you control, which is almost always available when casting this.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        chosen_id = state.resolving_additional_cost_choice_id
+        if chosen_id is None:
+            return
+        chosen = next(
+            (o for o in state.battlefield if o.id == chosen_id), None
+        )
+        if chosen is None:
+            # The designated creature left the battlefield before this
+            # resolved (e.g., destroyed in response) — oracle says the
+            # spell still deals damage equal to its power from when it
+            # was designated. We don't track a P/T snapshot at cost-pay
+            # time, so fall back to 0.
+            amount = 0
+        else:
+            amount = effective_power(state, chosen)
+        _apply_damage(state, targets[0], amount)
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the designated creature's power to "
+            "target creature"
+        )
+
+
+@dataclass(frozen=True)
 class ConsultTheStarChartsEffect(Effect):
     """Consult the Star Charts `{1}{U}` (kicker `{1}{U}`):
     "Look at the top X cards of your library, where X is the number of

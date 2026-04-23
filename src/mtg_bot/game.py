@@ -220,6 +220,11 @@ class StackItem:
     # True when the spell was cast with its kicker cost paid. Exposed
     # to the resolving effect via state.resolving_kicked.
     kicked: bool = False
+    # Id of the creature the caster designated as a
+    # choose-your-creature additional cost. None for spells that
+    # don't have such a cost. Mirrored to
+    # state.resolving_additional_cost_choice_id during resolution.
+    additional_cost_choice_id: Optional[int] = None
 
 
 @dataclass
@@ -294,6 +299,10 @@ class GameState:
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
     resolving_kicked: bool = False
+    # Mirrors StackItem.additional_cost_choice_id during resolution so
+    # effects (e.g. Close Encounter) can read the creature the caster
+    # designated as an additional cost. None outside resolution.
+    resolving_additional_cost_choice_id: Optional[int] = None
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

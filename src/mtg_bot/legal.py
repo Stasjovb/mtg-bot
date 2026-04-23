@@ -56,6 +56,13 @@ def _additional_costs_payable(
         )
         if not have_sac:
             return False
+    if card.printing.additional_cost_choose_your_creature:
+        have_creature = any(
+            o for o in state.battlefield
+            if o.controller_id == player_id and o.printing.is_creature
+        )
+        if not have_creature:
+            return False
     return True
 
 

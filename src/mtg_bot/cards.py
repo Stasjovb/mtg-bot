@@ -76,6 +76,7 @@ from mtg_bot.effects import (
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
+    CloseEncounterEffect,
     ConsultTheStarChartsEffect,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
@@ -241,6 +242,11 @@ class CardPrinting:
     # Embrace Oblivion's "As an additional cost to cast this spell,
     # sacrifice an artifact or creature."
     additional_cost_sacrifice_creature_or_artifact: bool = False
+    # Additional cost to cast: designate one of your creatures. The
+    # chosen creature's id is stored on the StackItem and exposed via
+    # state.resolving_additional_cost_choice_id for the effect to use
+    # (e.g. Close Encounter's damage-equal-to-power).
+    additional_cost_choose_your_creature: bool = False
     # Cost reductions: rules that lower this spell's generic mana cost
     # when specific conditions hold at cast time (e.g., "costs {3} less
     # if you've cast another spell this turn"). Consumed by
@@ -444,6 +450,7 @@ def make_instant(
     name: str, cost: str, effect: Effect,
     cost_reductions: tuple[CostReduction, ...] = (),
     kicker: str | None = None,
+    additional_cost_choose_your_creature: bool = False,
 ) -> CardPrinting:
     type_line = "Instant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -459,6 +466,9 @@ def make_instant(
         cost_reductions=tuple(cost_reductions),
         kicker_cost=parse_mana_cost(kicker) if kicker else None,
         kicker_cost_str=kicker or "",
+        additional_cost_choose_your_creature=(
+            additional_cost_choose_your_creature
+        ),
     )
 
 
@@ -3233,9 +3243,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Archenemy's Charm", "{B}{B}{B}",
             effect=ExileTargetCreature(),
         ),
-        make_instant(  # Close Encounter — simplified to plain 3 damage (drop additional-cost + power-based).
+        # Close Encounter `{1}{G}` Instant:
+        # "As an additional cost to cast this spell, choose a creature
+        # you control or a warped creature card you own in exile.
+        # Close Encounter deals damage equal to the power of the chosen
+        # creature or card to target creature."
+        # Simplification: the "warped creature card in exile" branch
+        # of the additional-cost pick is dropped; the cost is
+        # "designate a creature you control". Still a significant
+        # improvement over the plain 3-damage shipped version.
+        make_instant(
             "Close Encounter", "{1}{G}",
-            effect=DealDamageToTargetCreature(amount=3),
+            effect=CloseEncounterEffect(),
+            additional_cost_choose_your_creature=True,
         ),
         make_instant(  # Diplomatic Relations — simplified to +1/+0+vigilance pump-only.
             "Diplomatic Relations", "{2}{G}",
