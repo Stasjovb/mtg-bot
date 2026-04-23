@@ -1224,6 +1224,79 @@ class PumpTargetOtherArtifactYouControlUEOT(Effect):
 
 
 @dataclass(frozen=True)
+class DealNDamageToEachCreature(Effect):
+    """Deal ``amount`` damage to each creature on the battlefield.
+
+    Snapshot semantics: the victim list is captured before any damage
+    is applied, so any deaths mid-pass don't affect what gets damaged.
+    Marks damage via _apply_damage (the same helper used by targeted
+    burn), which routes through creature toughness for SBAs.
+    """
+
+    amount: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        victims = [
+            o for o in state.battlefield if o.printing.is_creature
+        ]
+        for o in victims:
+            _apply_damage(state, ("creature", o.id), self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to each creature"
+
+
+@dataclass(frozen=True)
+class OptionalSacArtifactForEffect(Effect):
+    """"You may sacrifice an artifact. If you do, [inner_effect]."
+
+    Similar to OptionalSacAnotherForEffect but doesn't require a
+    ``state.resolving_source`` for self-exclusion — the "another"
+    clause isn't in the oracle text (Lithobraking: "you may sacrifice
+    an artifact"). Agent picks the sacrifice via ``choose_sacrifice``.
+    """
+
+    inner_effect: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is None:
+            chosen = options[0]
+        else:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        state.log.append(
+            f"P{controller_id} optionally sacrifices {chosen.printing.name}"
+        )
+        _sacrifice(state, chosen)
+        self.inner_effect.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            f"you may sacrifice an artifact; if you do, "
+            f"{self.inner_effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class OptionalSacAnotherForEffect(Effect):
     """"You may sacrifice another creature or artifact. If you do,
     [inner_effect]."

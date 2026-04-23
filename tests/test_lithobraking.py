@@ -1,0 +1,135 @@
+"""Tests for Lithobraking: create Lander + may-sac artifact → damage each creature."""
+
+from mtg_bot.agents import Agent, RandomAgent
+from mtg_bot.cards import (
+    BASIC_LANDS,
+    EOE_SPELLS,
+    SYNTHETIC_CREATURES,
+    TOKEN_PRINTINGS,
+)
+from mtg_bot.effects import (
+    DealNDamageToEachCreature,
+    OptionalSacArtifactForEffect,
+)
+from mtg_bot.game import GameState, Player, Zone
+
+
+class _PickFirstAgent(Agent):
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        return legal_object_ids[0]
+
+
+def _new_state(agent=None):
+    state = GameState()
+    state.players.append(Player(id=0, agent=agent or RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    return state
+
+
+def test_deal_damage_to_each_creature_hits_every_creature():
+    state = _new_state()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    opp = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(opp)
+    DealNDamageToEachCreature(amount=2).resolve(state, 0, ())
+    assert bear.damage == 2
+    assert opp.damage == 2
+
+
+def test_deal_damage_to_each_creature_skips_non_creatures():
+    state = _new_state()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    DealNDamageToEachCreature(amount=2).resolve(state, 0, ())
+    assert bear.damage == 2
+    assert land.damage == 0
+
+
+def test_optional_sac_artifact_runs_inner_when_artifact_exists():
+    state = _new_state(_PickFirstAgent())
+    artifact = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(artifact)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    effect = OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=2),
+    )
+    effect.resolve(state, 0, ())
+    assert artifact not in state.battlefield
+    assert bear.damage == 2
+
+
+def test_optional_sac_artifact_noop_when_no_artifact():
+    state = _new_state(_PickFirstAgent())
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    effect = OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=2),
+    )
+    effect.resolve(state, 0, ())
+    # No artifact to sac → inner effect not run.
+    assert bear.damage == 0
+
+
+def test_optional_sac_artifact_describe():
+    effect = OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=2),
+    )
+    text = effect.describe()
+    assert "sacrifice an artifact" in text
+
+
+def test_deal_damage_to_each_creature_describe():
+    text = DealNDamageToEachCreature(amount=3).describe()
+    assert "3 damage" in text
+
+
+def test_lithobraking_card_full_flow():
+    """End-to-end: Lithobraking resolves, creates Lander, sacrifices it
+    (RandomAgent picks the Lander since it's the only artifact), deals
+    2 damage to each creature."""
+    state = _new_state(_PickFirstAgent())
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    lithobraking = EOE_SPELLS["Lithobraking"]
+    lithobraking.spell_effect.resolve(state, 0, ())
+    # Bear took 2 damage.
+    assert bear.damage == 2
+    # Lander was created then sacrificed immediately.
+    landers_on_bf = [
+        o for o in state.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 0
+    ]
+    assert landers_on_bf == []
+
+
+def test_optional_sac_artifact_no_agent_defaults_to_first():
+    state = GameState()
+    state.players.append(Player(id=0, agent=None))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    artifact = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(artifact)
+    effect = OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=1),
+    )
+    effect.resolve(state, 0, ())
+    assert artifact not in state.battlefield

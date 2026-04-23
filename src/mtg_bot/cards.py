@@ -76,7 +76,9 @@ from mtg_bot.effects import (
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+    DealNDamageToEachCreature,
     ExileAllCreaturesAndSpacecraft,
+    OptionalSacArtifactForEffect,
     PumpTargetOtherArtifactYouControlUEOT,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     SystemsOverrideEffect,
@@ -3246,11 +3248,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=ReturnCreatureFromYourGraveyardToBattlefield(),
             additional_cost_sacrifice_creature_or_artifact=True,
         ),
-        make_instant(  # Lithobraking — drops damage-each-creature; just makes a Lander.
+        # Lithobraking `{2}{R}` — "Create a Lander token. Then you may
+        # sacrifice an artifact. When you do, Lithobraking deals 2
+        # damage to each creature."
+        # Simplification: the "may" decision is always yes (no decline
+        # option on choose_sacrifice); this matches the same treatment
+        # in OptionalSacAnotherForEffect and is often the right call.
+        make_instant(
             "Lithobraking", "{2}{R}",
-            effect=CreateToken(
-                token_printing=TOKEN_PRINTINGS["Lander"], count=1
-            ),
+            effect=Sequence(effects=(
+                CreateToken(
+                    token_printing=TOKEN_PRINTINGS["Lander"], count=1
+                ),
+                OptionalSacArtifactForEffect(
+                    inner_effect=DealNDamageToEachCreature(amount=2),
+                ),
+            )),
         ),
         # Orbital Plunge `{3}{R}` — deals 6 damage to target creature.
         # If excess damage was dealt this way, create a Lander token.
