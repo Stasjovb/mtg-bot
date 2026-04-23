@@ -136,6 +136,13 @@ class CardPrinting:
     # non-Spacecraft cards.
     station_threshold: int | None = None
     stationed_keywords: frozenset[str] = frozenset()
+    # Ward {cost}: when this creature becomes the target of a spell or
+    # ability an opponent controls, counter that spell/ability unless the
+    # controller pays this cost. We simplify to "caster auto-pays if they
+    # can; otherwise the spell is countered at cast time" — no player
+    # choice, no pay-or-counter trigger on the stack.
+    ward_cost: ManaCost | None = None
+    ward_cost_str: str = ""
     # Continuous abilities that buff other permanents while this permanent
     # is on the battlefield (anthems, keyword grants).
     static_abilities: tuple[StaticAbility, ...] = ()
@@ -211,6 +218,7 @@ def make_creature(
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     warp: str | None = None,
     legendary: bool = False,
+    ward: str | None = None,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Creature"
@@ -226,6 +234,8 @@ def make_creature(
         power=power,
         toughness=toughness,
         keywords=frozenset(keywords),
+        ward_cost=parse_mana_cost(ward) if ward else None,
+        ward_cost_str=ward or "",
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -1085,6 +1095,15 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blue
+        # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
+        # drops the "creatures your opponents control get -3/-0 until your
+        # next turn" ETB since "until your next turn" pump durations
+        # aren't tracked.
+        make_creature(
+            "Mouth of the Storm", "{6}{U}", 6, 6,
+            keywords={"flying"},
+            ward="{2}",
+        ),
         # Cloudsculpt Technician: {2}{U} 1/4 Flying. +1/+0 as long as you
         # control an artifact.
         make_creature(

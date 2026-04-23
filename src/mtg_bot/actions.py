@@ -211,11 +211,54 @@ def _cast_spell(
             if chosen is not None:
                 targets = (chosen,)
 
+    countered = _apply_ward_check(state, player_id, targets)
     state.stack.append(
-        StackItem(source=card, controller_id=player_id, targets=targets)
+        StackItem(
+            source=card, controller_id=player_id, targets=targets,
+            countered=countered,
+        )
     )
     mode = " (warp)" if use_warp else ""
     state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
+
+
+def _apply_ward_check(
+    state: GameState, caster_id: int,
+    targets: tuple[tuple[str, int], ...],
+) -> bool:
+    """Apply Ward at cast time. For each creature target controlled by an
+    opponent with Ward {cost}, the caster auto-pays the cost by tapping
+    additional lands. If they can't pay, the spell is countered and this
+    returns True.
+
+    Simplified: no pay-or-counter decision — caster always pays if they
+    can. No player-choice surface; Ward is essentially an additional mana
+    cost on top of the spell's printed cost.
+    """
+    for kind, tid in targets:
+        if kind != "creature":
+            continue
+        obj = next((o for o in state.battlefield if o.id == tid), None)
+        if obj is None:
+            continue
+        if obj.controller_id == caster_id:
+            continue  # ward doesn't fire on your own permanents
+        ward = obj.printing.ward_cost
+        if ward is None:
+            continue
+        if can_pay_cost(state, caster_id, ward):
+            auto_tap_for_cost(state, caster_id, ward)
+            state.log.append(
+                f"P{caster_id} pays Ward {obj.printing.ward_cost_str} "
+                f"for {obj.printing.name}"
+            )
+        else:
+            state.log.append(
+                f"Spell countered by {obj.printing.name}'s Ward "
+                f"{obj.printing.ward_cost_str} (unpaid)"
+            )
+            return True
+    return False
 
 
 def _activate_ability(
@@ -366,6 +409,15 @@ def _declare_blockers(
 
 def resolve_top_of_stack(state: GameState) -> None:
     item = state.stack.pop()
+
+    # Countered spells: no effects, no ETBs; the card goes to its owner's
+    # graveyard (permanents and non-permanents alike) per rule 701.5a.
+    if item.countered:
+        state.log.append(f"{item.source.printing.name} is countered")
+        card = item.source
+        card.zone = Zone.GRAVEYARD
+        state.player_by_id(card.owner_id).graveyard.append(card)
+        return
 
     # Triggered-ability resolution
     if item.ability is not None:

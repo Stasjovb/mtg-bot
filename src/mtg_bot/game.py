@@ -152,6 +152,11 @@ class StackItem:
     # ``.effect`` attribute and resolve the same way.
     ability: "object | None" = None
     targets: tuple[tuple[str, int], ...] = ()
+    # True when the spell was countered at cast time (currently by unpaid
+    # Ward). A countered spell resolves as a no-op, with the card going
+    # to its owner's graveyard (for instants/sorceries) or vanishing
+    # (for permanents) without firing any effects/ETBs.
+    countered: bool = False
 
 
 @dataclass

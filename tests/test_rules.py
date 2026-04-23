@@ -4503,6 +4503,96 @@ def test_return_target_permanent_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+def test_ward_counters_spell_when_caster_cant_pay():
+    """Casting Bombard (target-creature burn) at a warded opponent
+    creature — caster has no mana left → spell countered, nothing dies."""
+    from mtg_bot.actions import _apply_ward_check
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    mouth = state.new_object(
+        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mouth)
+    # Caster has 0 untapped lands → cannot pay the Ward {2}.
+    countered = _apply_ward_check(state, caster_id=0, targets=(("creature", mouth.id),))
+    assert countered is True
+
+
+def test_ward_autopays_when_caster_has_lands():
+    """Caster with 2 untapped lands auto-taps them to pay Ward {2}."""
+    from mtg_bot.actions import _apply_ward_check
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    mouth = state.new_object(
+        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mouth)
+    lands: list = []
+    for _ in range(2):
+        l = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(l)
+        lands.append(l)
+    countered = _apply_ward_check(state, caster_id=0, targets=(("creature", mouth.id),))
+    assert countered is False
+    assert all(l.tapped for l in lands)  # both auto-tapped
+
+
+def test_ward_does_not_fire_on_own_permanent():
+    """A creature's ward is only relevant for OPPONENT spells."""
+    from mtg_bot.actions import _apply_ward_check
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    mouth = state.new_object(
+        EOE_CREATURES["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mouth)
+    countered = _apply_ward_check(state, caster_id=0, targets=(("creature", mouth.id),))
+    assert countered is False
+
+
+def test_countered_spell_goes_to_graveyard_and_no_effect():
+    """End-to-end: cast a burn spell at a warded opponent creature with no
+    mana left → spell resolves as a no-op into the caster's graveyard."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # Caster has exactly {1}{R} (one Mountain) — enough for Bombard's {1}{R}
+    # but NOT for Ward {2} on top.
+    mtn = state.new_object(
+        BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mtn)
+    mtn2 = state.new_object(
+        BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mtn2)
+    # Seed the spell in hand. Bombard = {R} DealDamageToTargetCreature(2)
+    bombard = EOE_SPELLS["Bombard"]
+    hand_card = state.new_object(bombard, owner_id=0, zone=Zone.HAND)
+    state.players[0].hand.append(hand_card)
+    mouth = state.new_object(
+        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mouth)
+
+    _cast_spell(state, 0, hand_card.id)
+    assert state.stack and state.stack[-1].countered is True
+    resolve_top_of_stack(state)
+    # Card landed in graveyard; mouth unharmed.
+    assert hand_card in state.players[0].graveyard
+    assert mouth.damage == 0
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
