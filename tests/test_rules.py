@@ -5413,6 +5413,48 @@ def test_sunstar_expansionist_landfall_pumps_self():
     assert se.temp_power_bonus == 1
 
 
+def test_illvoi_infiltrator_draws_on_combat_damage_to_player():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import _resolve_damage_step
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+    # P1 is defending; no blockers.
+    hand_before = len(state.players[0].hand)
+    _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
+    # 1 damage to P1 → trigger fires → draw a card.
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_combat_damage_to_player_trigger_skips_when_blocked():
+    """No damage to player → no trigger."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import _resolve_damage_step
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+    blocker = state.new_object(
+        SYNTHETIC_CREATURES["Wall of Stone"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    blocker.blocking = inf.id
+    inf.blocked_by = [blocker.id]
+    state.battlefield.append(blocker)
+    hand_before = len(state.players[0].hand)
+    _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
+    assert len(state.players[0].hand) == hand_before  # no trigger
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

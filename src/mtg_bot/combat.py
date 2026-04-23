@@ -118,8 +118,11 @@ def _resolve_damage_step(
     state: GameState, defending_player_id: int, *, first_strike_step: bool
 ) -> None:
     """Build and apply the damage events for one combat damage step."""
-    # Event tuple layout: (kind, target_id, amount, source_keywords, source_controller_id)
-    damage_events_typed: list[tuple[str, int, int, frozenset[str], int]] = []
+    # Event tuple layout:
+    # (kind, target_id, amount, source_id, source_keywords, source_controller_id)
+    damage_events_typed: list[
+        tuple[str, int, int, int, frozenset[str], int]
+    ] = []
 
     for attacker in state.battlefield:
         if not attacker.attacking:
@@ -137,7 +140,7 @@ def _resolve_damage_step(
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
-                         blocker_kws, blocker.controller_id)
+                         blocker.id, blocker_kws, blocker.controller_id)
                     )
             continue
 
@@ -149,7 +152,7 @@ def _resolve_damage_step(
         if not blockers:
             damage_events_typed.append(
                 ("player", defending_player_id, attacker_power,
-                 attacker_kws, attacker_controller)
+                 attacker.id, attacker_kws, attacker_controller)
             )
         else:
             remaining = attacker_power
@@ -166,13 +169,13 @@ def _resolve_damage_step(
                     assigned = min(remaining, need)
                 damage_events_typed.append(
                     ("creature", blocker.id, assigned,
-                     attacker_kws, attacker_controller)
+                     attacker.id, attacker_kws, attacker_controller)
                 )
                 remaining -= assigned
             if has_trample and remaining > 0:
                 damage_events_typed.append(
                     ("player", defending_player_id, remaining,
-                     attacker_kws, attacker_controller)
+                     attacker.id, attacker_kws, attacker_controller)
                 )
             for blocker in blockers:
                 blocker_kws = effective_keywords(state, blocker)
@@ -182,16 +185,20 @@ def _resolve_damage_step(
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
-                         blocker_kws, blocker.controller_id)
+                         blocker.id, blocker_kws, blocker.controller_id)
                     )
 
-    for kind, target_id, amount, source_kws, source_controller in damage_events_typed:
+    sources_hit_player: list[tuple[int, int]] = []
+    for (
+        kind, target_id, amount, source_id, source_kws, source_controller,
+    ) in damage_events_typed:
         if amount <= 0:
             continue
         if kind == "player":
             p = state.player_by_id(target_id)
             p.life -= amount
             state.log.append(f"P{target_id} takes {amount} (life: {p.life})")
+            sources_hit_player.append((source_id, target_id))
         else:
             obj = next((o for o in state.battlefield if o.id == target_id), None)
             if obj is not None:
@@ -206,6 +213,38 @@ def _resolve_damage_step(
             state.log.append(
                 f"P{source_controller} gains {amount} life (life: {gainer.life})"
             )
+
+    # Fire "whenever this creature deals combat damage to a player" triggers
+    # for each (source, target_player) pair that actually dealt damage.
+    _fire_combat_damage_to_player_triggers(state, sources_hit_player)
+
+
+def _fire_combat_damage_to_player_triggers(
+    state: GameState, sources_hit_player: list[tuple[int, int]]
+) -> None:
+    """For each (source_id, target_player_id) pair, fire the source's
+    'combat_damage_to_player' triggers directly (no stack)."""
+    from mtg_bot.turn import should_fire_trigger
+
+    for source_id, _target_player in sources_hit_player:
+        source = next(
+            (o for o in state.battlefield if o.id == source_id), None
+        )
+        if source is None:
+            continue  # source died from simultaneous damage
+        for i, ability in enumerate(source.printing.triggered_abilities):
+            if ability.trigger != "combat_damage_to_player":
+                continue
+            if not should_fire_trigger(state, source.id, i, ability):
+                continue
+            state.log.append(
+                f"{source.printing.name}'s combat-damage-to-player trigger"
+            )
+            state.resolving_source = source
+            try:
+                ability.effect.resolve(state, source.controller_id, ())
+            finally:
+                state.resolving_source = None
 
 
 def clear_combat_state(state: GameState) -> None:

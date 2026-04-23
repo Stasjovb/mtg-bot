@@ -2683,6 +2683,9 @@ class TriggeredAbility:
             "sacrifice_creature_or_artifact": (
                 "Whenever you sacrifice another creature or artifact"
             ),
+            "combat_damage_to_player": (
+                "Whenever this creature deals combat damage to a player"
+            ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:

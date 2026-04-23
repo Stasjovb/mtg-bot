@@ -1262,6 +1262,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Illvoi Infiltrator: {2}{U} 1/3. Whenever this creature deals
+        # combat damage to a player, draw a card. Simplified: drops the
+        # "can't be blocked if you've cast 2+ spells this turn" clause
+        # (conditional unblockable not yet modeled).
+        make_creature(
+            "Illvoi Infiltrator", "{2}{U}", 1, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="combat_damage_to_player",
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
         # drops the "creatures your opponents control get -3/-0 until your
         # next turn" ETB since "until your next turn" pump durations
