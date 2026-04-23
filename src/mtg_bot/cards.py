@@ -925,6 +925,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Elegy Acolyte: 4/4 Lifelink. Real card also has "whenever creatures
+        # you control deal combat damage to a player, draw + lose 1" — we
+        # skip that combat-damage-to-player trigger (not yet implemented)
+        # and keep the Void end-step Robot token trigger.
+        make_creature(
+            "Elegy Acolyte", "{2}{B}{B}", 4, 4,
+            keywords={"lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    requires_void=True,
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
         # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
         # your end step, if [void active], you draw a card and lose 1 life."
         # We model artifact-ness as a plain creature (same shortcut as Edge

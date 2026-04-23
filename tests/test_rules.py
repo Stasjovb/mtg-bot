@@ -3550,6 +3550,30 @@ def test_invasive_maneuvers_noop_paths():
     e.resolve(state, controller_id=0, targets=(("player", 0),))
 
 
+def test_elegy_acolyte_void_creates_robot():
+    """Lifelink-printed + Void EoT creates a 2/2 Robot token."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    acolyte = state.new_object(
+        EOE_CREATURES["Elegy Acolyte"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(acolyte)
+    assert "lifelink" in acolyte.printing.keywords
+
+    # Void inactive → no token.
+    run_beginning_of_end_step_triggers(state)
+    assert not any(o.printing.name == "Robot" for o in state.battlefield)
+
+    # Void active → Robot token joins the battlefield.
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1
+    assert robots[0].controller_id == 0
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
