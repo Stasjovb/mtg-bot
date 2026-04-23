@@ -97,7 +97,7 @@ def test_virulent_silencer_applies_poison_when_my_artifact_creature_hits():
     )
     state.battlefield.append(silencer)
     # Fire the observer: silencer itself hit P1.
-    _fire_combat_damage_to_player_triggers(state, [(silencer.id, 1)])
+    _fire_combat_damage_to_player_triggers(state, [(silencer.id, 1, 2)])
     assert state.players[1].poison_counters == 2
 
 
@@ -113,7 +113,7 @@ def test_virulent_silencer_no_poison_for_token_damage():
         TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(token)
-    _fire_combat_damage_to_player_triggers(state, [(token.id, 1)])
+    _fire_combat_damage_to_player_triggers(state, [(token.id, 1, 1)])
     # Token (is_token=True) should NOT trigger Silencer.
     assert state.players[1].poison_counters == 0
 
@@ -129,7 +129,7 @@ def test_virulent_silencer_no_poison_for_non_artifact_creature():
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(bear)
-    _fire_combat_damage_to_player_triggers(state, [(bear.id, 1)])
+    _fire_combat_damage_to_player_triggers(state, [(bear.id, 1, 2)])
     assert state.players[1].poison_counters == 0
 
 
@@ -146,7 +146,7 @@ def test_virulent_silencer_no_poison_from_opponent_artifact_creature():
     )
     state.battlefield.append(opp_silencer)
     # Opp's silencer hits P0 — my silencer should NOT fire poison.
-    _fire_combat_damage_to_player_triggers(state, [(opp_silencer.id, 0)])
+    _fire_combat_damage_to_player_triggers(state, [(opp_silencer.id, 0, 2)])
     # P0 gets no poison from MY silencer; but the OPP's silencer fires
     # its own observer, giving P0 2 poison counters.
     assert state.players[0].poison_counters == 2

@@ -250,7 +250,7 @@ def _resolve_damage_step(
                          blocker.id, blocker_kws, blocker.controller_id)
                     )
 
-    sources_hit_player: list[tuple[int, int]] = []
+    sources_hit_player: list[tuple[int, int, int]] = []
     for (
         kind, target_id, amount, source_id, source_kws, source_controller,
     ) in damage_events_typed:
@@ -260,7 +260,7 @@ def _resolve_damage_step(
             p = state.player_by_id(target_id)
             p.life -= amount
             state.log.append(f"P{target_id} takes {amount} (life: {p.life})")
-            sources_hit_player.append((source_id, target_id))
+            sources_hit_player.append((source_id, target_id, amount))
         else:
             obj = next((o for o in state.battlefield if o.id == target_id), None)
             if obj is not None:
@@ -282,20 +282,24 @@ def _resolve_damage_step(
 
 
 def _fire_combat_damage_to_player_triggers(
-    state: GameState, sources_hit_player: list[tuple[int, int]]
+    state: GameState, sources_hit_player: list[tuple[int, int, int]]
 ) -> None:
-    """For each (source_id, target_player_id) pair, fire:
-    - the source's own ``combat_damage_to_player`` triggers, and
+    """For each (source_id, target_player_id, amount) triple, fire:
+    - the source's own ``combat_damage_to_player`` triggers,
     - observer triggers on other permanents whose controllers see one
       of their own (nontoken artifact) creatures dealing combat damage
-      (Virulent Silencer).
+      (Virulent Silencer), and
+    - "whenever a creature you control deals combat damage to a player"
+      observer triggers (Starwinder's draw-that-many).
 
     Observer triggers receive the hit player via ``targets=(("player",
-    tid),)`` so the effect can act on that specific player.
+    tid),)`` so the effect can act on that specific player. During
+    resolution, ``state.resolving_combat_damage_amount`` carries the
+    damage amount so effects can read "that many".
     """
     from mtg_bot.turn import should_fire_trigger
 
-    for source_id, target_player in sources_hit_player:
+    for source_id, target_player, amount in sources_hit_player:
         source = next(
             (o for o in state.battlefield if o.id == source_id), None
         )
@@ -311,13 +315,15 @@ def _fire_combat_damage_to_player_triggers(
                 f"{source.printing.name}'s combat-damage-to-player trigger"
             )
             state.resolving_source = source
+            state.resolving_combat_damage_amount = amount
             try:
                 ability.effect.resolve(state, source.controller_id, ())
             finally:
                 state.resolving_source = None
+                state.resolving_combat_damage_amount = 0
 
-        # Observer triggers: "whenever a nontoken artifact creature you
-        # control deals combat damage to a player, ...".
+        # Observer: "whenever a nontoken artifact creature you control
+        # deals combat damage to a player".
         if (
             source.printing.is_artifact
             and source.printing.is_creature
@@ -339,6 +345,7 @@ def _fire_combat_damage_to_player_triggers(
                         f"trigger fires (P{target_player} was hit)"
                     )
                     state.resolving_source = obs
+                    state.resolving_combat_damage_amount = amount
                     try:
                         ability.effect.resolve(
                             state, obs.controller_id,
@@ -346,6 +353,34 @@ def _fire_combat_damage_to_player_triggers(
                         )
                     finally:
                         state.resolving_source = None
+                        state.resolving_combat_damage_amount = 0
+
+        # Observer: "whenever a creature you control deals combat
+        # damage to a player" — Starwinder.
+        for obs in list(state.battlefield):
+            if obs.controller_id != source.controller_id:
+                continue
+            for i, ability in enumerate(obs.printing.triggered_abilities):
+                if ability.trigger != (
+                    "your_creature_combat_damage_to_player"
+                ):
+                    continue
+                if not should_fire_trigger(state, obs.id, i, ability):
+                    continue
+                state.log.append(
+                    f"{obs.printing.name}'s creature-damage-to-player "
+                    f"trigger fires (P{target_player} took {amount})"
+                )
+                state.resolving_source = obs
+                state.resolving_combat_damage_amount = amount
+                try:
+                    ability.effect.resolve(
+                        state, obs.controller_id,
+                        (("player", target_player),),
+                    )
+                finally:
+                    state.resolving_source = None
+                    state.resolving_combat_damage_amount = 0
 
 
 def clear_combat_state(state: GameState) -> None:

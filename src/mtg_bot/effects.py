@@ -1182,6 +1182,37 @@ class FamishedWorldsireETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class DrawCardsEqualToResolvingCombatDamage(Effect):
+    """Draw a number of cards equal to
+    ``state.resolving_combat_damage_amount``. Matches Starwinder's
+    "you may draw that many cards" observer trigger (the "may" is
+    simplified to always yes, consistent with other OptionalXyz
+    simplifications in this engine).
+
+    No-op if the resolving amount is 0 (e.g. accidentally invoked
+    outside a combat-damage trigger).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        amount = state.resolving_combat_damage_amount
+        if amount <= 0:
+            return
+        for _ in range(amount):
+            draw_card(state, controller_id)
+        state.log.append(
+            f"P{controller_id} draws {amount} cards (combat-damage trigger)"
+        )
+
+    def describe(self) -> str:
+        return "you may draw that many cards"
+
+
+@dataclass(frozen=True)
 class TerrapactIntimidatorETBEffect(Effect):
     """Terrapact Intimidator's ETB: "Target opponent may have you create
     two Lander tokens. If they don't, put two +1/+1 counters on this
@@ -5683,6 +5714,10 @@ class TriggeredAbility:
             ),
             "combat_damage_to_player": (
                 "Whenever this creature deals combat damage to a player"
+            ),
+            "your_creature_combat_damage_to_player": (
+                "Whenever a creature you control deals combat damage "
+                "to a player"
             ),
             "another_creature_you_control_dies_or_exiled": (
                 "Whenever another creature you control dies or is put "

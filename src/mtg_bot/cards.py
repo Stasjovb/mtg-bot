@@ -40,6 +40,7 @@ from mtg_bot.effects import (
     PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
     DrawCards,
+    DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
     EachOpponentSacrificesCreature,
     EachOpponentLosesLife,
@@ -2348,9 +2349,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Starfield Vocalist", "{3}{U}", 3, 4,
             warp="{1}{U}",
         ),
-        make_creature(  # Starwinder — dropped "draw that many" trigger; Warp kept.
+        # Starwinder `{5}{U}{U}` 7/7 Creature. Warp `{2}{U}{U}`.
+        # Real oracle: "Whenever a creature you control deals combat
+        # damage to a player, you may draw that many cards."
+        make_creature(
             "Starwinder", "{5}{U}{U}", 7, 7,
             warp="{2}{U}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="your_creature_combat_damage_to_player",
+                    effect=DrawCardsEqualToResolvingCombatDamage(),
+                ),
+            ),
         ),
         make_creature(  # Steelswarm Operator — dropped mana abilities (artifact-only filters).
             "Steelswarm Operator", "{1}{U}", 1, 1,

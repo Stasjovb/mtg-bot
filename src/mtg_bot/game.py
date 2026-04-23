@@ -355,6 +355,11 @@ class GameState:
     # effects (e.g. Close Encounter) can read the creature the caster
     # designated as an additional cost. None outside resolution.
     resolving_additional_cost_choice_id: Optional[int] = None
+    # Amount of combat damage dealt by the source that is currently
+    # firing a combat-damage trigger. 0 outside combat-trigger
+    # resolution. Used by effects like Starwinder's "may draw that
+    # many cards" that need to know the damage amount.
+    resolving_combat_damage_amount: int = 0
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]
