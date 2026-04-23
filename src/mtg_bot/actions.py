@@ -767,7 +767,8 @@ def _activate_ability(
     source = next((o for o in state.battlefield if o.id == source_id), None)
     if source is None or source.controller_id != player_id:
         return
-    abilities = source.printing.activated_abilities
+    from mtg_bot.game import effective_activated_abilities
+    abilities = effective_activated_abilities(state, source)
     if ability_index < 0 or ability_index >= len(abilities):
         return
     ability = abilities[ability_index]
@@ -862,6 +863,34 @@ def _activate_ability(
             f"{chosen.printing.name} (now {chosen.plus_one_counters}) "
             f"(cost for {source.printing.name}'s ability)"
         )
+
+    # "Sacrifice a Food" cost (Ragost). Agent picks via choose_sacrifice.
+    # Food status read through effective_subtypes so Ragost-granted
+    # Foods count. legal_actions gates on at least one legal Food
+    # being available.
+    if ability.cost.sacrifice_food:
+        from mtg_bot.game import effective_subtypes
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and "Food" in effective_subtypes(state, o)
+        ]
+        chosen = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, player_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        state.log.append(
+            f"P{player_id} sacrifices {chosen.printing.name} "
+            f"(Food cost for {source.printing.name}'s ability)"
+        )
+        _sacrifice(state, chosen)
 
     # Sacrifice-self is paid LAST so the source is still on the battlefield
     # for target selection — the Lander case where the ability's effect

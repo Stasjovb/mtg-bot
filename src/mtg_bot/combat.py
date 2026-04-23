@@ -339,8 +339,9 @@ def _resolve_damage_step(
         # Lifelink: the source's controller gains life equal to the damage
         # dealt, regardless of target kind.
         if "lifelink" in source_kws:
+            from mtg_bot.game import gain_life
+            gain_life(state, source_controller, amount)
             gainer = state.player_by_id(source_controller)
-            gainer.life += amount
             state.log.append(
                 f"P{source_controller} gains {amount} life (life: {gainer.life})"
             )

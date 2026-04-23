@@ -67,6 +67,7 @@ from mtg_bot.effects import (
     ExileEachOpponentsGraveyard,
     ExileTargetCreature,
     GainLife,
+    IfGainedLifeThisTurnUntapSelf,
     LoseLife,
     PutCardFromGraveyardOnBottomOfLibrary,
     PumpCreaturesYouControlUntilEOT,
@@ -305,6 +306,15 @@ class CardPrinting:
     # the controller's top-of-library card when it's an artifact and
     # this flag is present on any permanent they control.
     grants_cast_artifact_from_top_of_library: bool = False
+    # "Artifacts you control are Foods in addition to their other
+    # types." Ragost, Deft Gastronaut. Consumed by
+    # game.effective_subtypes to inject "Food" into artifact subtypes.
+    grants_food_to_your_artifacts: bool = False
+    # "Artifacts you control have '{2}, {T}, Sacrifice this artifact:
+    # You gain 3 life.'" Ragost's companion ability-grant clause.
+    # Consumed by game.effective_activated_abilities to append the
+    # pre-built RAGOST_FOOD_GRANTED_ABILITY to artifact activations.
+    grants_food_ability_to_your_artifacts: bool = False
     # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
@@ -458,6 +468,8 @@ def make_creature(
     grants_additional_land_per_turn: int = 0,
     extra_etb_trigger: int = 0,
     grants_cast_artifact_from_top_of_library: bool = False,
+    grants_food_to_your_artifacts: bool = False,
+    grants_food_ability_to_your_artifacts: bool = False,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
@@ -490,6 +502,10 @@ def make_creature(
         extra_etb_trigger=extra_etb_trigger,
         grants_cast_artifact_from_top_of_library=(
             grants_cast_artifact_from_top_of_library
+        ),
+        grants_food_to_your_artifacts=grants_food_to_your_artifacts,
+        grants_food_ability_to_your_artifacts=(
+            grants_food_ability_to_your_artifacts
         ),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
@@ -1008,6 +1024,21 @@ def _make_lander_token() -> CardPrinting:
             ),
         ),
     )
+
+
+# Pre-built activated ability granted to artifacts by Ragost, Deft
+# Gastronaut's static "{2}, {T}, Sacrifice this artifact: You gain 3
+# life." Exposed here so game.effective_activated_abilities can append
+# it without each call-site re-importing effect classes.
+RAGOST_FOOD_GRANTED_ABILITY = ActivatedAbility(
+    cost=ActivationCost(
+        mana=parse_mana_cost("{2}"),
+        mana_str="{2}",
+        tap_self=True,
+        sacrifice_self=True,
+    ),
+    effect=GainLife(amount=3),
+)
 
 
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
@@ -2311,9 +2342,38 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Ragost, Deft Gastronaut — dropped Food + gain-life trigger.
+        # Ragost, Deft Gastronaut `{R}{W}` 2/2 Legendary Creature.
+        # Real oracle: "Artifacts you control are Foods in addition to
+        # their other types and have '{2}, {T}, Sacrifice this
+        # artifact: You gain 3 life.' {1}, {T}, Sacrifice a Food:
+        # Ragost deals 3 damage to each opponent. At the beginning of
+        # each end step, if you gained life this turn, untap Ragost."
+        # Statics are consumed by game.effective_subtypes +
+        # effective_activated_abilities; the activated Food-sac deal-3
+        # ability is wired directly; the untap trigger uses the new
+        # beginning_of_each_end_step firing path.
+        make_creature(
             "Ragost, Deft Gastronaut", "{R}{W}", 2, 2,
             legendary=True,
+            grants_food_to_your_artifacts=True,
+            grants_food_ability_to_your_artifacts=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"),
+                        mana_str="{1}",
+                        tap_self=True,
+                        sacrifice_food=True,
+                    ),
+                    effect=DealDamageEachOpponent(amount=3),
+                ),
+            ),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_each_end_step",
+                    effect=IfGainedLifeThisTurnUntapSelf(),
+                ),
+            ),
         ),
         # Sami, Ship's Engineer `{2}{R}{W}` 2/4 Legendary Creature.
         # Real oracle: "At the beginning of your end step, if you

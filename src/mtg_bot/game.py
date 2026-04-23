@@ -201,6 +201,65 @@ def _dynamic_base_pt(
     return None  # pragma: no cover - defensive fallback
 
 
+def gain_life(state: "GameState", player_id: int, amount: int) -> int:
+    """Add ``amount`` life to ``player_id`` and track it in
+    life_gained_this_turn. Returns the amount actually gained (same as
+    ``amount`` for non-negative values; zero for non-positive).
+
+    Use this helper instead of mutating ``p.life`` directly whenever
+    an effect "gains life" — keys like Ragost's "if you gained life
+    this turn" rely on the tracker being kept up-to-date.
+    """
+    if amount <= 0:
+        return 0
+    p = state.player_by_id(player_id)
+    p.life += amount
+    p.life_gained_this_turn += amount
+    return amount
+
+
+def effective_subtypes(
+    state: "GameState", obj: "GameObject"
+) -> tuple[str, ...]:
+    """Return ``obj``'s subtypes including any granted by permanents
+    on the battlefield. Currently only handles "artifacts you control
+    are Foods" (Ragost, Deft Gastronaut's static)."""
+    subtypes = list(obj.printing.subtypes)
+    if obj.printing.is_artifact:
+        for o in state.battlefield:
+            if o.id == obj.id:
+                continue
+            if o.controller_id != obj.controller_id:
+                continue
+            if o.printing.grants_food_to_your_artifacts:
+                if "Food" not in subtypes:
+                    subtypes.append("Food")
+                break
+    return tuple(subtypes)
+
+
+def effective_activated_abilities(
+    state: "GameState", obj: "GameObject"
+) -> tuple:
+    """Return ``obj``'s activated abilities plus any granted by other
+    permanents. Currently only handles Ragost's "artifacts you control
+    have '{2}, {T}, Sacrifice this: You gain 3 life.'"
+    """
+    from mtg_bot.cards import RAGOST_FOOD_GRANTED_ABILITY
+
+    base = list(obj.printing.activated_abilities)
+    if obj.printing.is_artifact:
+        for o in state.battlefield:
+            if o.id == obj.id:
+                continue
+            if o.controller_id != obj.controller_id:
+                continue
+            if o.printing.grants_food_ability_to_your_artifacts:
+                base.append(RAGOST_FOOD_GRANTED_ABILITY)
+                break
+    return tuple(base)
+
+
 def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
     """Return how many times an ETB-caused triggered ability on a
     permanent controlled by ``controller_id`` should fire.
@@ -352,6 +411,10 @@ class Player:
     # restriction). Populated by mana-ability activations; consumed
     # before lands when paying costs; emptied at cleanup step.
     mana_pool: list["ManaCoin"] = field(default_factory=list)
+    # Total life gained this turn. Reset at cleanup. Consumed by
+    # effects that key on "if you gained life this turn" (Ragost,
+    # Deft Gastronaut's end-step untap). Incremented by gain_life().
+    life_gained_this_turn: int = 0
 
 
 @dataclass

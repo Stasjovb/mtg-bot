@@ -711,26 +711,35 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
 
 
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
-    """Fire "At the beginning of your end step, ..." triggered abilities on
-    permanents controlled by the active player. EoE "Void —" abilities carry
-    a requires_void flag and only fire when is_void_active(state).
+    """Fire end-step triggers for the current end step.
 
-    Simplified model: triggers fire directly (no stack) — functionally
-    equivalent in our current rules set where nothing can counter a
-    triggered ability.
+    Handles two trigger types:
+    - ``beginning_of_end_step`` — fires only on the active player's
+      end step for permanents they control (standard oracle "At the
+      beginning of your end step").
+    - ``beginning_of_each_end_step`` — fires on every player's end
+      step regardless of which player controls the source (Ragost's
+      "At the beginning of each end step, if you gained life this
+      turn, untap Ragost").
+
+    EoE "Void —" abilities carry a requires_void flag and only fire
+    when is_void_active(state). Simplified model: triggers fire
+    directly (no stack).
     """
     from mtg_bot.game import is_void_active
 
     ap_id = state.active_player().id
-    # Snapshot the battlefield so mid-iteration effects don't confuse us.
     candidates = list(state.battlefield)
     void_is_active = is_void_active(state)
     ap = state.player_by_id(ap_id)
     for obj in candidates:
-        if obj.controller_id != ap_id:
-            continue
         for ability in obj.printing.triggered_abilities:
-            if ability.trigger != "beginning_of_end_step":
+            is_each = ability.trigger == "beginning_of_each_end_step"
+            is_yours = (
+                ability.trigger == "beginning_of_end_step"
+                and obj.controller_id == ap_id
+            )
+            if not (is_each or is_yours):
                 continue
             if ability.requires_void and not void_is_active:
                 continue
@@ -741,8 +750,13 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
             # Target selection (mirrors _trigger_etb_abilities).
             effect = ability.effect
             targets: tuple[tuple[str, int], ...] = ()
+            # Each-end-step triggers resolve under the SOURCE's
+            # controller, not the active player. Standard end-step
+            # triggers resolve under the active player.
+            ctrl_id = obj.controller_id if is_each else ap_id
+            ctrl = state.player_by_id(ctrl_id)
             if effect.requires_target():
-                legal = effect.legal_targets(state, ap_id)
+                legal = effect.legal_targets(state, ctrl_id)
                 if not legal:
                     state.resolving_source = None
                     state.log.append(
@@ -750,12 +764,14 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
                         f"(no legal targets)"
                     )
                     continue
-                if ap.agent is not None:
-                    chosen = ap.agent.choose_target(state, ap_id, legal)
+                if ctrl.agent is not None:
+                    chosen = ctrl.agent.choose_target(
+                        state, ctrl_id, legal
+                    )
                     if chosen is not None:
                         targets = (chosen,)
             try:
-                effect.resolve(state, obj.controller_id, targets)
+                effect.resolve(state, ctrl_id, targets)
             finally:
                 state.resolving_source = None
 
@@ -822,6 +838,7 @@ def run_cleanup_step(state: GameState) -> None:
     for p in state.players:
         p.spells_cast_this_turn = 0
         p.attacked_with_spacecraft_this_turn = False
+        p.life_gained_this_turn = 0
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
     # Reset per-turn ability-resolution counters.

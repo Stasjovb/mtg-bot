@@ -263,7 +263,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     for obj in state.battlefield:
         if obj.controller_id != player_id:
             continue
-        for idx, ability in enumerate(obj.printing.activated_abilities):
+        from mtg_bot.game import effective_activated_abilities
+        for idx, ability in enumerate(
+            effective_activated_abilities(state, obj)
+        ):
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
                 continue
             # Cost payability checks.
@@ -304,6 +307,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     and o2.plus_one_counters > 0
                 )
                 if not has_counter_creature:
+                    continue
+            if ability.cost.sacrifice_food:
+                from mtg_bot.game import effective_subtypes
+                has_food = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Food" in effective_subtypes(state, o2)
+                )
+                if not has_food:
                     continue
             # If the effect requires a target, at least one must be legal.
             # Set resolving_source so effects with self-exclusion filters

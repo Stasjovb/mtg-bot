@@ -66,8 +66,10 @@ class GainLife(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import gain_life
+
+        gain_life(state, controller_id, self.amount)
         p = state.player_by_id(controller_id)
-        p.life += self.amount
         state.log.append(
             f"P{controller_id} gains {self.amount} life (life: {p.life})"
         )
@@ -976,8 +978,9 @@ class TargetOpponentLosesNYouGainN(Effect):
         if opp.id == controller_id:
             return
         opp.life -= self.amount
+        from mtg_bot.game import gain_life
+        gain_life(state, controller_id, self.amount)
         you = state.player_by_id(controller_id)
-        you.life += self.amount
         state.log.append(
             f"P{pid} loses {self.amount} life (now {opp.life}); "
             f"P{controller_id} gains {self.amount} life (now {you.life})"
@@ -2018,6 +2021,36 @@ class PossibilityTechnicianETBEffect(Effect):
             "exile the top card of your library; you may play it this "
             "turn"
         )
+
+
+@dataclass(frozen=True)
+class IfGainedLifeThisTurnUntapSelf(Effect):
+    """Ragost, Deft Gastronaut's beginning-of-each-end-step rider:
+    "If you gained life this turn, untap Ragost."
+
+    Reads state.resolving_source for the permanent to untap. Checks
+    the source-controller's life_gained_this_turn counter.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        p = state.player_by_id(source.controller_id)
+        if p.life_gained_this_turn <= 0:
+            return
+        if source.tapped:
+            source.tapped = False
+            state.log.append(
+                f"{source.printing.name} untaps ({p.life_gained_this_turn} "
+                f"life gained this turn)"
+            )
+
+    def describe(self) -> str:
+        return "if you gained life this turn, untap this permanent"
 
 
 @dataclass(frozen=True)
@@ -7017,6 +7050,12 @@ class ActivationCost:
     # "Remove a +1/+1 counter from a creature you control" — Sunstar
     # Chaplain's activated ability. Fails if no such creature exists.
     remove_plus_one_counter_from_your_creature: bool = False
+    # "Sacrifice a Food" — Ragost, Deft Gastronaut's activated. Any
+    # permanent with the Food subtype (including those granted Food
+    # by Ragost's own static) is a legal sacrifice. Can sac the
+    # source itself if the source has Food — but Ragost the Lobster
+    # isn't an artifact so he's not a Food.
+    sacrifice_food: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -7032,6 +7071,8 @@ class ActivationCost:
             parts.append("Sacrifice another artifact or land")
         if self.remove_plus_one_counter_from_your_creature:
             parts.append("Remove a +1/+1 counter from a creature you control")
+        if self.sacrifice_food:
+            parts.append("Sacrifice a Food")
         return ", ".join(parts) if parts else "0"
 
 
