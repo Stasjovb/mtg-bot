@@ -2304,35 +2304,46 @@ class PumpCreaturesYouControlUntilEOT(Effect):
     """Each creature the controller controls gets +power/+toughness until
     end of turn (applied at resolution; creatures entering later don't get
     the bonus — Stage-3 simplification vs. a continuous effect).
+
+    ``exclude_source=True`` models "other creatures you control" — reads
+    ``state.resolving_source`` to skip the triggering permanent.
     """
 
     power_bonus: int = 0
     toughness_bonus: int = 0
     granted_keywords: frozenset[str] = frozenset()
+    exclude_source: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        source = state.resolving_source if self.exclude_source else None
         count = 0
         for obj in state.battlefield:
             if obj.controller_id != controller_id:
                 continue
             if not obj.printing.is_creature:
                 continue
+            if source is not None and obj is source:
+                continue
             obj.temp_power_bonus += self.power_bonus
             obj.temp_toughness_bonus += self.toughness_bonus
             if self.granted_keywords:
                 obj.temp_keywords = obj.temp_keywords | self.granted_keywords
             count += 1
+        scope = "other creatures" if self.exclude_source else "creatures"
         state.log.append(
-            f"P{controller_id}'s creatures ({count}) get "
+            f"P{controller_id}'s {scope} ({count}) get "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
         )
 
     def describe(self) -> str:
+        scope = "other creatures you control" if self.exclude_source else (
+            "creatures you control"
+        )
         return (
-            f"creatures you control get "
+            f"{scope} get "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
         )
 

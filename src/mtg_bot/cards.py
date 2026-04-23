@@ -2172,10 +2172,32 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             keywords={"vigilance", "menace"},
         ),
-        make_creature(  # Syr Vondam, the Lucent — dropped the complex "when creature dies, exile" trigger.
+        # Syr Vondam, the Lucent `{2}{W}{B}{B}` 4/4 Legendary Creature.
+        # Real oracle: "Deathtouch, lifelink. Whenever Syr Vondam enters
+        # or attacks, other creatures you control get +1/+0 and gain
+        # deathtouch until end of turn."
+        make_creature(
             "Syr Vondam, the Lucent", "{2}{W}{B}{B}", 4, 4,
             legendary=True,
             keywords={"deathtouch", "lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpCreaturesYouControlUntilEOT(
+                        power_bonus=1, toughness_bonus=0,
+                        granted_keywords=frozenset({"deathtouch"}),
+                        exclude_source=True,
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=PumpCreaturesYouControlUntilEOT(
+                        power_bonus=1, toughness_bonus=0,
+                        granted_keywords=frozenset({"deathtouch"}),
+                        exclude_source=True,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Tannuk, Memorial Ensign — dropped attacks-discard + graveyard-play.
             "Tannuk, Memorial Ensign", "{1}{R}{G}", 2, 4,
