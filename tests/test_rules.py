@@ -4036,6 +4036,57 @@ def test_pinnacle_kill_ship_etb_deals_damage():
     assert target.damage == 10
 
 
+def test_warmaker_gunship_damage_scales_with_artifacts():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    target = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(target)
+    gunship = state.new_object(
+        EOE_CREATURES["Warmaker Gunship"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(gunship)
+    # Gunship itself counts as an artifact (Spacecraft is an artifact).
+    # Add a Lander for +1.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    etb = next(
+        ab for ab in gunship.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = gunship
+    etb.effect.resolve(state, 0, (("creature", target.id),))
+    # 2 artifacts (gunship + lander) → 2 damage.
+    assert target.damage == 2
+
+
+def test_warmaker_gunship_noop_without_artifacts():
+    from mtg_bot.effects import DealDamageToOpponentCreatureByArtifactCount
+
+    state = _arena()
+    target = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(target)
+    e = DealDamageToOpponentCreatureByArtifactCount()
+    e.resolve(state, controller_id=0, targets=(("creature", target.id),))
+    assert target.damage == 0  # no artifacts → no damage
+
+
+def test_warmaker_gunship_effect_noop_paths():
+    from mtg_bot.effects import DealDamageToOpponentCreatureByArtifactCount
+
+    state = _arena()
+    e = DealDamageToOpponentCreatureByArtifactCount()
+    assert e.requires_target() is True
+    assert "artifacts" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 1),))
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

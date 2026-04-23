@@ -19,6 +19,7 @@ from mtg_bot.effects import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToOpponentCreature,
+    DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
     DestroyTargetCreature,
     DiscardSelf,
@@ -938,6 +939,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=Surveil(amount=2),
+                ),
+            ),
+        ),
+        # Warmaker Gunship: {2}{R} 4/3 Spacecraft. ETB deals damage equal
+        # to your artifacts to opponent's creature. Station 6+ flying.
+        make_spacecraft(
+            "Warmaker Gunship", "{2}{R}", 4, 3,
+            station_threshold=6,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=DealDamageToOpponentCreatureByArtifactCount(),
                 ),
             ),
         ),

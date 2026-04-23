@@ -1498,6 +1498,51 @@ class DealDamageToTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreatureByArtifactCount(Effect):
+    """Deal damage equal to the number of artifacts you control to target
+    creature an opponent controls.
+
+    Matches Warmaker Gunship's ETB. Counts include lands that are also
+    artifacts (there aren't any in EoE) and tokens like Lander.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, _ = targets[0]
+        if kind != "creature":
+            return
+        artifact_count = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        )
+        if artifact_count <= 0:
+            return
+        _apply_damage(state, targets[0], artifact_count)
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of artifacts you control to "
+            "target creature an opponent controls"
+        )
+
+
+@dataclass(frozen=True)
 class FocusFireEffect(Effect):
     """Deal (``base`` + your creatures and Spacecraft) damage to an attacking
     or blocking creature.
