@@ -134,6 +134,13 @@ def apply_cost_reductions(
 
             if is_void_active(state):
                 reduction = rule.amount
+        elif rule.condition == "opponents_control_three_or_more_creatures":
+            opp_creatures = sum(
+                1 for o in state.battlefield
+                if o.controller_id != caster_id and o.printing.is_creature
+            )
+            if opp_creatures >= 3:
+                reduction = rule.amount
         elif rule.condition == "per_differently_named_land":
             if rule.per_land_group:
                 names: set[str] = set()
@@ -740,11 +747,13 @@ def _fire_artifact_enters_triggers(
 ) -> None:
     """Fire "whenever another artifact you control enters" triggers on
     permanents the new artifact's controller controls. Fires directly
-    (no stack) — matches our other trigger events.
+    (no stack) — matches our other trigger events. Resolves optional
+    target selection via the controller's agent.
     """
     from mtg_bot.turn import should_fire_trigger
 
     controller = new_artifact.controller_id
+    p = state.player_by_id(controller)
     for obj in list(state.battlefield):
         if obj.id == new_artifact.id:
             continue
@@ -759,8 +768,25 @@ def _fire_artifact_enters_triggers(
                 f"{obj.printing.name}'s artifact-enters trigger fires"
             )
             state.resolving_source = obj
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            if effect.requires_target():
+                legal = effect.legal_targets(state, controller)
+                if not legal:
+                    state.log.append(
+                        f"{obj.printing.name}'s trigger fizzles "
+                        f"(no legal targets)"
+                    )
+                    state.resolving_source = None
+                    continue
+                if p.agent is not None:
+                    chosen = p.agent.choose_target(
+                        state, controller, legal
+                    )
+                    if chosen is not None:
+                        targets = (chosen,)
             try:
-                ability.effect.resolve(state, controller, ())
+                effect.resolve(state, controller, targets)
             finally:
                 state.resolving_source = None
 

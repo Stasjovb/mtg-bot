@@ -7447,6 +7447,63 @@ def test_planet_land_in_all_printings():
         assert name in printings
 
 
+def test_lashwhip_cost_reduction_with_three_enemy_creatures():
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    card = EOE_CREATURES["Lashwhip Predator"]
+    # 0 enemy creatures → full cost.
+    assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 4
+    # 2 enemy creatures → still full cost.
+    for _ in range(2):
+        b = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1,
+            zone=Zone.BATTLEFIELD,
+        )
+        state.battlefield.append(b)
+    assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 4
+    # 3rd enemy creature → reduction kicks in.
+    b = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(b)
+    assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 2
+
+
+def test_mm_menon_artifact_enters_triggers_counter_on_target():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    from mtg_bot.agents import RandomAgent
+    import random
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    mm = state.new_object(
+        EOE_CREATURES["Mm'menon, Uthros Exile"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(mm)
+    # Target must be available for the trigger.
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    # Create a Lander (artifact) via put_into_battlefield — fires
+    # artifact-enters-you-control trigger on Mm'menon.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, lander, 0)
+    # Some creature (ally or mm itself) got a +1/+1 counter.
+    total_counters = sum(
+        o.plus_one_counters for o in state.battlefield
+        if o.printing.is_creature
+    )
+    assert total_counters >= 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

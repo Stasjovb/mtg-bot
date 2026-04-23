@@ -1526,6 +1526,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Mm'menon, Uthros Exile: {1}{U}{R} 1/3 Legendary Flying.
+        # Whenever an artifact you control enters, put a +1/+1 counter
+        # on target creature. Multicolor — in the pool but
+        # build_mono_color_deck won't pull it; legit for mixed scenarios.
+        make_creature(
+            "Mm'menon, Uthros Exile", "{1}{U}{R}", 1, 3,
+            keywords={"flying"},
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="artifact_enters_you_control",
+                    effect=PutPlusOneCounterOnTargetCreature(amount=1),
+                ),
+            ),
+        ),
         # Cosmogrand Zenith: {2}{W} 2/4. Modal second-spell trigger: two
         # Human Soldier tokens OR +1/+1 counter on each creature you
         # control.
@@ -2387,6 +2402,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 StaticAbility(
                     scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
                     granted_keywords=frozenset({"trample"}),
+                ),
+            ),
+        ),
+        # Lashwhip Predator: {4}{G}{G} 5/7 Reach. Costs {2} less if
+        # your opponents control three or more creatures.
+        make_creature(
+            "Lashwhip Predator", "{4}{G}{G}", 5, 7,
+            keywords={"reach"},
+            cost_reductions=(
+                CostReduction(
+                    amount=2,
+                    condition="opponents_control_three_or_more_creatures",
                 ),
             ),
         ),
