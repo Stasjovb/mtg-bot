@@ -97,6 +97,17 @@ class Agent:
         life and enter untapped; False = enter tapped."""
         raise NotImplementedError
 
+    def choose_card_from_opponent_hand(
+        self,
+        state: "GameState",
+        player_id: int,
+        opponent_hand_ids: list[int],
+    ) -> int:
+        """For directed-discard effects (Temporal Intervention) where
+        the CASTER chooses which card the opponent reveals/discards.
+        Must return an id from the given list."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -150,3 +161,6 @@ class RandomAgent(Agent):
         # Simple heuristic: pay the life if we have healthy buffer,
         # otherwise enter tapped.
         return state.player_by_id(player_id).life > life_cost + 3
+
+    def choose_card_from_opponent_hand(self, state, player_id, opponent_hand_ids):
+        return self.rng.choice(opponent_hand_ids)

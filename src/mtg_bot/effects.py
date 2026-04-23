@@ -2985,6 +2985,76 @@ class EachOpponentSacrificesCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentDiscardsCasterChoice(Effect):
+    """Target opponent reveals their hand. You choose a nonland card
+    from it. That player discards the chosen card.
+
+    Matches Temporal Intervention's main effect. Unlike
+    TargetOpponentDiscards (opponent picks their own discard), here the
+    CASTER picks — a directed discard.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        target = state.player_by_id(target_id)
+        if target.has_lost:
+            return
+        # Nonland cards the target could be forced to discard.
+        options = [
+            c for c in target.hand if not c.printing.is_land
+        ]
+        if not options:
+            state.log.append(
+                f"P{target_id} has no nonland cards — directed discard "
+                f"fizzles"
+            )
+            return
+        caster = state.player_by_id(controller_id)
+        if caster.agent is None:
+            chosen = options[0]
+        else:
+            chosen_id = caster.agent.choose_card_from_opponent_hand(
+                state, controller_id, [c.id for c in options]
+            )
+            chosen = next(
+                (c for c in options if c.id == chosen_id), options[0]
+            )
+        target.hand.remove(chosen)
+        chosen.zone = Zone.GRAVEYARD
+        target.graveyard.append(chosen)
+        state.log.append(
+            f"P{controller_id} forces P{target_id} to discard "
+            f"{chosen.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "target opponent reveals their hand; you choose a nonland "
+            "card from it and they discard it"
+        )
+
+
+@dataclass(frozen=True)
 class TargetOpponentDiscards(Effect):
     """Target opponent discards ``count`` cards.
 

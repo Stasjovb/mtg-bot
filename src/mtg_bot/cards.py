@@ -82,6 +82,7 @@ from mtg_bot.effects import (
     StaticScope,
     Surveil,
     TargetOpponentDiscards,
+    TargetOpponentDiscardsCasterChoice,
     TriggeredAbility,
 )
 
@@ -2358,6 +2359,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 Surveil(use_artifact_count=True),
                 DrawCards(amount=3),
             )),
+        ),
+        # Temporal Intervention — directed discard with a Void cost
+        # reduction rider.
+        make_sorcery(
+            "Temporal Intervention", "{2}{B}",
+            effect=TargetOpponentDiscardsCasterChoice(),
+            cost_reductions=(
+                CostReduction(amount=2, condition="void_active"),
+            ),
         ),
         # Ruinous Rampage — modal: 3 to each opponent OR mass-exile small
         # artifacts.

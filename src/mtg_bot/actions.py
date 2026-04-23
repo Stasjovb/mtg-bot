@@ -129,6 +129,11 @@ def apply_cost_reductions(
                 caster_id
             ).attacked_with_spacecraft_this_turn:
                 reduction = rule.amount
+        elif rule.condition == "void_active":
+            from mtg_bot.game import is_void_active
+
+            if is_void_active(state):
+                reduction = rule.amount
         elif rule.condition == "per_differently_named_land":
             if rule.per_land_group:
                 names: set[str] = set()

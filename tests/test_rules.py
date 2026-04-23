@@ -6690,6 +6690,94 @@ def test_put_counter_on_opponent_creature_rejects_own():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_temporal_intervention_directed_discard():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    # Seed P1's hand: a creature card + a land. Directed discard should
+    # ignore the land (nonland-only).
+    from mtg_bot.cards import BASIC_LANDS
+    creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.HAND
+    )
+    state.players[1].hand.append(creature)
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.HAND
+    )
+    state.players[1].hand.append(land)
+    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+        state, 0, (("player", 1),)
+    )
+    # Creature discarded, land stays.
+    assert creature in state.players[1].graveyard
+    assert land in state.players[1].hand
+
+
+def test_temporal_intervention_no_nonland_cards_noop():
+    """If the opponent has only lands, the directed discard fizzles."""
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.HAND
+    )
+    state.players[1].hand.append(land)
+    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+        state, 0, (("player", 1),)
+    )
+    assert land in state.players[1].hand
+
+
+def test_temporal_intervention_cost_reduced_under_void():
+    """Void active → cost reduced by 2."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    spell = EOE_SPELLS["Temporal Intervention"]
+    # Void inactive.
+    assert apply_cost_reductions(
+        spell, state, 0, spell.mana_cost
+    ).generic == 2
+    # Activate Void.
+    state.permanent_left_battlefield_this_turn = True
+    assert apply_cost_reductions(
+        spell, state, 0, spell.mana_cost
+    ).generic == 0
+
+
+def test_temporal_intervention_noop_paths():
+    from mtg_bot.effects import TargetOpponentDiscardsCasterChoice
+
+    state = _arena()
+    e = TargetOpponentDiscardsCasterChoice()
+    assert e.requires_target() is True
+    assert "discard" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+
+
+def test_temporal_intervention_no_agent_picks_first():
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    state.players[0].agent = None
+    creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.HAND
+    )
+    state.players[1].hand.append(creature)
+    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+        state, 0, (("player", 1),)
+    )
+    assert creature in state.players[1].graveyard
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
