@@ -116,6 +116,24 @@ def move_off_battlefield(
         _fire_dies_triggers(state, obj)
 
 
+def should_fire_trigger(
+    state: GameState, source_id: int, ability_index: int, ability
+) -> bool:
+    """True if ``ability`` on the permanent with id ``source_id`` may fire.
+
+    When ``ability.once_per_turn`` is True, checks and updates
+    state.once_per_turn_fired. Always True for non-once-per-turn
+    abilities.
+    """
+    if not getattr(ability, "once_per_turn", False):
+        return True
+    key = (source_id, ability_index)
+    if key in state.once_per_turn_fired:
+        return False
+    state.once_per_turn_fired.add(key)
+    return True
+
+
 def destroy(state: GameState, obj: "GameObject") -> bool:
     """Attempt to destroy ``obj``. Respects indestructible — the source is
     unaffected and True is returned only if the permanent actually moved
@@ -147,15 +165,37 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
     if obj.tapped:
         return
     obj.tapped = True
-    for ability in obj.printing.triggered_abilities:
+    for i, ability in enumerate(obj.printing.triggered_abilities):
         if ability.trigger != "becomes_tapped":
+            continue
+        if not should_fire_trigger(state, obj.id, i, ability):
             continue
         state.log.append(
             f"{obj.printing.name}'s becomes-tapped ability triggers"
         )
         state.resolving_source = obj
+        # Handle optional targeting for becomes-tapped (Nanoform Sentinel
+        # needs "another target permanent").
+        effect = ability.effect
+        targets: tuple[tuple[str, int], ...] = ()
+        if effect.requires_target():
+            controller = state.player_by_id(obj.controller_id)
+            legal = effect.legal_targets(state, obj.controller_id)
+            if not legal:
+                state.resolving_source = None
+                state.log.append(
+                    f"{obj.printing.name}'s becomes-tapped trigger fizzles "
+                    f"(no legal targets)"
+                )
+                continue
+            if controller.agent is not None:
+                chosen = controller.agent.choose_target(
+                    state, obj.controller_id, legal
+                )
+                if chosen is not None:
+                    targets = (chosen,)
         try:
-            ability.effect.resolve(state, obj.controller_id, ())
+            effect.resolve(state, obj.controller_id, targets)
         finally:
             state.resolving_source = None
 
@@ -309,6 +349,8 @@ def run_cleanup_step(state: GameState) -> None:
     # Reset per-player spell counters for "your Nth spell" triggers.
     for p in state.players:
         p.spells_cast_this_turn = 0
+    # Reset once-per-turn trigger tracking.
+    state.once_per_turn_fired.clear()
 
 
 def state_based_actions(state: GameState) -> bool:

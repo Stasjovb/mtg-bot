@@ -507,14 +507,18 @@ def _fire_artifact_enters_triggers(
     permanents the new artifact's controller controls. Fires directly
     (no stack) — matches our other trigger events.
     """
+    from mtg_bot.turn import should_fire_trigger
+
     controller = new_artifact.controller_id
     for obj in list(state.battlefield):
         if obj.id == new_artifact.id:
             continue
         if obj.controller_id != controller:
             continue
-        for ability in obj.printing.triggered_abilities:
+        for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "artifact_enters_you_control":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
                 continue
             state.log.append(
                 f"{obj.printing.name}'s artifact-enters trigger fires"

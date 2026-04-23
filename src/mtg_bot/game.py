@@ -197,6 +197,10 @@ class GameState:
     # True when either flag is set, which is the Void trigger condition.
     permanent_left_battlefield_this_turn: bool = False
     spell_warped_this_turn: bool = False
+    # Tracks (source_id, ability_index) pairs for triggered abilities that
+    # have already fired this turn under the ``once_per_turn`` restriction.
+    # Reset by run_cleanup_step.
+    once_per_turn_fired: set[tuple[int, int]] = field(default_factory=set)
     # Source GameObject of the currently-resolving ability, if any. Set by
     # resolve_top_of_stack during ability resolution so effects like
     # "put a +1/+1 counter on this creature" can reach the source without

@@ -27,6 +27,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifact,
     DestroyTargetCreature,
     MoveSelfCountersToTargetCreatureYouControl,
+    UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
@@ -1200,6 +1201,37 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         ),
                         PutPlusOneCounterOnEachCreatureYouControl(amount=1),
                     )),
+                ),
+            ),
+        ),
+        # Mechan Assembler: {4}{U} 4/4 Artifact Creature — Robot.
+        # Whenever another artifact you control enters, create a 2/2
+        # Robot token. Once per turn (prevents infinite-Robot loops).
+        make_creature(
+            "Mechan Assembler", "{4}{U}", 4, 4,
+            artifact=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="artifact_enters_you_control",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                    ),
+                    once_per_turn=True,
+                ),
+            ),
+        ),
+        # Nanoform Sentinel: {2}{U} 3/2 Artifact Creature — Robot.
+        # Whenever this creature becomes tapped, untap another target
+        # permanent. Once per turn.
+        make_creature(
+            "Nanoform Sentinel", "{2}{U}", 3, 2,
+            artifact=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=UntapTargetOtherPermanent(),
+                    once_per_turn=True,
                 ),
             ),
         ),

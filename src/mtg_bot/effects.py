@@ -1449,6 +1449,50 @@ class TapTargetArtifactOrCreature(Effect):
 
 
 @dataclass(frozen=True)
+class UntapTargetOtherPermanent(Effect):
+    """Untap target permanent other than the source.
+
+    Matches Nanoform Sentinel's "untap another target permanent" trigger.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        source = state.resolving_source
+        source_id = source.id if source is not None else -1
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.id != source_id and o.tapped
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not obj.tapped:
+            return
+        obj.tapped = False
+        state.log.append(f"{obj.printing.name} is untapped")
+
+    def describe(self) -> str:
+        return "untap another target permanent"
+
+
+@dataclass(frozen=True)
 class DepressurizeEffect(Effect):
     """Target creature gets -3/-0 UEOT; then if its power is 0 or less,
     destroy it.
@@ -2569,6 +2613,11 @@ class TriggeredAbility:
     trigger: str
     effect: Effect
     requires_void: bool = False
+    # "This ability triggers only once each turn." When True, the firing
+    # site records (source_id, ability_index) in state.once_per_turn_fired
+    # and suppresses subsequent fires within the same turn. Reset at
+    # cleanup.
+    once_per_turn: bool = False
 
     def describe(self) -> str:
         prefix = {

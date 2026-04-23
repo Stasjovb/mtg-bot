@@ -5142,6 +5142,108 @@ def test_pangolin_doesnt_trigger_on_itself():
     assert pang.plus_one_counters == 0
 
 
+def test_mechan_assembler_fires_once_per_turn():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    ma = state.new_object(
+        EOE_CREATURES["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ma)
+    # First artifact enters → Robot token created.
+    art1 = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, art1, 0)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1
+    # Second artifact enters → should NOT create another token (once/turn).
+    art2 = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, art2, 0)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1  # still just one
+
+
+def test_once_per_turn_resets_on_cleanup():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import run_cleanup_step
+
+    state = _arena()
+    ma = state.new_object(
+        EOE_CREATURES["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ma)
+    art = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, art, 0)
+    assert state.once_per_turn_fired  # populated
+    run_cleanup_step(state)
+    assert not state.once_per_turn_fired  # reset
+
+
+def test_nanoform_sentinel_fizzles_without_tapped_target():
+    """When no legal untap target exists, the trigger fizzles silently."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    ns = state.new_object(
+        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ns)
+    # No other tapped permanents → legal_targets is empty → fizzle.
+    tap_permanent(state, ns)
+    assert ns.tapped is True  # the tap itself still happened
+
+
+def test_nanoform_sentinel_no_agent_just_taps():
+    """Controller has no agent → trigger can still fire but picks nothing."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    state.players[0].agent = None  # no agent
+    ns = state.new_object(
+        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ns)
+    tapped_ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    tapped_ally.tapped = True
+    state.battlefield.append(tapped_ally)
+    tap_permanent(state, ns)
+    # No agent → no target chosen → resolve with empty targets (no-op).
+    assert tapped_ally.tapped is True
+
+
+def test_nanoform_sentinel_untaps_once_per_turn():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    ns = state.new_object(
+        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ns)
+    tapped_ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    tapped_ally.tapped = True
+    state.battlefield.append(tapped_ally)
+    # Tap Nanoform Sentinel — should fire the trigger, untapping ally.
+    tap_permanent(state, ns)
+    assert tapped_ally.tapped is False
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
