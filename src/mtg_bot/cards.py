@@ -279,8 +279,17 @@ class CardPrinting:
     # Currently supported:
     #   "cosmogoyf": power = number of cards the controller owns in
     #     exile; toughness = that number + 1.
+    #   "harmonious_grovestrider": power = toughness = number of lands
+    #     the controller controls.
+    #   "emissary_escort": +X/+0 where X is the greatest mana value
+    #     among OTHER artifacts the controller controls; base stays
+    #     printed (0/4).
     # None = use printed P/T (default).
     dynamic_pt_formula: str | None = None
+    # Replacement-effect flag: when any permanent with this flag is on
+    # the battlefield under the token-creator's control, the number of
+    # tokens created is doubled. Matches Exalted Sunborn.
+    is_token_doubler: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -365,6 +374,7 @@ def make_creature(
     enters_with_counters_from_x: str | None = None,
     subtypes: tuple[str, ...] = (),
     dynamic_pt_formula: str | None = None,
+    is_token_doubler: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -393,6 +403,7 @@ def make_creature(
         cost_reductions=tuple(cost_reductions),
         enters_with_counters_from_x=enters_with_counters_from_x,
         dynamic_pt_formula=dynamic_pt_formula,
+        is_token_doubler=is_token_doubler,
     )
 
 
@@ -1925,10 +1936,15 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             warp="{2}{W}",
         ),
-        make_creature(  # Exalted Sunborn — dropped "tokens doubled" replacement; Warp kept.
+        # Exalted Sunborn `{3}{W}{W}` 4/5 Angel Wizard — Flying, lifelink.
+        # "If one or more tokens would be created under your control,
+        # twice that many of those tokens are created instead."
+        make_creature(
             "Exalted Sunborn", "{3}{W}{W}", 4, 5,
+            subtypes=("Angel", "Wizard"),
             keywords={"flying", "lifelink"},
             warp="{1}{W}",
+            is_token_doubler=True,
         ),
         # Pulsar Squadron Ace: {1}{W} 1/2 Human Pilot. ETB — look at the
         # top five cards of your library, may reveal a Spacecraft card
@@ -1966,9 +1982,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Weftblade Enhancer", "{5}{W}", 3, 4,
             warp="{2}{W}",
         ),
-        make_creature(  # Emissary Escort — dropped dynamic +X/+0 (no "base P/T" yet).
+        # Emissary Escort `{1}{U}` 0/4 Artifact Creature — Robot Soldier.
+        # "This creature gets +X/+0, where X is the greatest mana value
+        # among other artifacts you control."
+        make_creature(
             "Emissary Escort", "{1}{U}", 0, 4,
             artifact=True,
+            subtypes=("Robot", "Soldier"),
+            dynamic_pt_formula="emissary_escort",
         ),
         make_creature(  # Mechanozoa — dropped ETB tap + stun.
             "Mechanozoa", "{4}{U}{U}", 5, 5,
@@ -3101,10 +3122,17 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Gene Pollinator", "{G}", 1, 2,
             artifact=True,
         ),
-        make_creature(  # Harmonious Grovestrider — Ward + dynamic P/T. Ship 3/3 Reach placeholder.
-            "Harmonious Grovestrider", "{3}{G}{G}", 3, 3,
-            keywords={"reach"},
+        # Harmonious Grovestrider `{3}{G}{G}` Creature — Beast. Ward {2}.
+        # "Power and toughness are each equal to the number of lands
+        # you control." Printed `*/*`; we override via dynamic P/T.
+        # Simplification retained: the printed card has no Reach — we
+        # previously shipped it with Reach as a placeholder, now
+        # removed to match the real card.
+        make_creature(
+            "Harmonious Grovestrider", "{3}{G}{G}", 0, 0,
+            subtypes=("Beast",),
             ward="{2}",
+            dynamic_pt_formula="harmonious_grovestrider",
         ),
         # Cosmogoyf `{B}{G}` Creature — Elemental Lhurgoyf.
         # Power = cards you own in exile. Toughness = that + 1. Printed

@@ -165,6 +165,28 @@ def _dynamic_base_pt(
         controller = state.player_by_id(obj.controller_id)
         n = len(controller.exile)
         return n, n + 1
+    if formula == "harmonious_grovestrider":
+        # P = T = number of lands the controller controls.
+        n = sum(
+            1 for o in state.battlefield
+            if o.controller_id == obj.controller_id and o.printing.is_land
+        )
+        return n, n
+    if formula == "emissary_escort":
+        # "Gets +X/+0 where X is the greatest mana value among other
+        # artifacts you control." We encode that as a dynamic base
+        # derived from printed P/T plus X on power only.
+        mvs = [
+            o2.printing.mana_cost.total
+            for o2 in state.battlefield
+            if o2.controller_id == obj.controller_id
+            and o2.printing.is_artifact
+            and o2.id != obj.id
+        ]
+        x = max(mvs) if mvs else 0
+        printed_p = obj.printing.power or 0
+        printed_t = obj.printing.toughness or 0
+        return printed_p + x, printed_t
     return None  # pragma: no cover - defensive fallback
 
 

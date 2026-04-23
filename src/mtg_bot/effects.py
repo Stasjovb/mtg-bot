@@ -2242,13 +2242,23 @@ class CreateToken(Effect):
             recipients = [controller_id]
 
         for recipient in recipients:
-            for _ in range(self.count):
+            # Token-doubling replacement effects (Exalted Sunborn).
+            # Each controller-side permanent with is_token_doubler
+            # doubles the count before tokens enter.
+            doublers = sum(
+                1 for o in state.battlefield
+                if o.controller_id == recipient
+                and o.printing.is_token_doubler
+            )
+            effective_count = self.count * (2 ** doublers)
+            for _ in range(effective_count):
                 obj = state.new_object(
                     self.token_printing, owner_id=recipient, zone=Zone.BATTLEFIELD
                 )
                 state.log.append(
                     f"P{recipient} creates a {self.token_printing.name} token"
                     + (" (tapped)" if self.tapped else "")
+                    + (f" (doubled x{2 ** doublers})" if doublers else "")
                 )
                 put_into_battlefield(state, obj, recipient)
                 if self.tapped:
