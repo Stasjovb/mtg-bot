@@ -241,11 +241,16 @@ def effective_subtypes(
 def effective_activated_abilities(
     state: "GameState", obj: "GameObject"
 ) -> tuple:
-    """Return ``obj``'s activated abilities plus any granted by other
-    permanents. Currently only handles Ragost's "artifacts you control
-    have '{2}, {T}, Sacrifice this: You gain 3 life.'"
+    """Return ``obj``'s activated abilities plus any granted.
+
+    Current grants:
+    - Ragost: artifacts you control gain {2}, {T}, Sac: gain 3 life.
+    - The Dominion Bracelet: the equipped creature gains the
+      control-opponent-next-turn activated ability.
     """
-    from mtg_bot.cards import RAGOST_FOOD_GRANTED_ABILITY
+    from mtg_bot.cards import (
+        DOMINION_BRACELET_GRANTED_ABILITY, RAGOST_FOOD_GRANTED_ABILITY,
+    )
 
     base = list(obj.printing.activated_abilities)
     if obj.printing.is_artifact:
@@ -257,6 +262,12 @@ def effective_activated_abilities(
             if o.printing.grants_food_ability_to_your_artifacts:
                 base.append(RAGOST_FOOD_GRANTED_ABILITY)
                 break
+    # Equipment-granted abilities: walk attached equipment.
+    for o in state.battlefield:
+        if o.attached_to != obj.id:
+            continue
+        if o.printing.grants_control_opponent_ability_when_equipped:
+            base.append(DOMINION_BRACELET_GRANTED_ABILITY)
     return tuple(base)
 
 
@@ -415,6 +426,14 @@ class Player:
     # effects that key on "if you gained life this turn" (Ragost,
     # Deft Gastronaut's end-step untap). Incremented by gain_life().
     life_gained_this_turn: int = 0
+    # Pending agent swap scheduled by The Dominion Bracelet's
+    # "You control target opponent during their next turn". When set,
+    # run_untap_step installs the override at the start of this
+    # player's next turn (saving the original agent in
+    # ``agent_override_saved`` so cleanup can revert).
+    scheduled_agent_override: Optional["Agent"] = None
+    scheduled_agent_override_by: Optional[int] = None
+    agent_override_saved: Optional["Agent"] = None
 
 
 @dataclass

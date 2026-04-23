@@ -17,6 +17,7 @@ from mtg_bot.effects import (
     ConditionalIfOpponentHasMoreLands,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
+    ControlTargetOpponentNextTurn,
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
     CreateToken,
@@ -315,6 +316,11 @@ class CardPrinting:
     # Consumed by game.effective_activated_abilities to append the
     # pre-built RAGOST_FOOD_GRANTED_ABILITY to artifact activations.
     grants_food_ability_to_your_artifacts: bool = False
+    # Equipment flag. When this equipment is attached to a creature,
+    # that creature gains an activated ability to control the next
+    # turn of a target opponent (The Dominion Bracelet). The full
+    # ability is DOMINION_BRACELET_GRANTED_ABILITY.
+    grants_control_opponent_ability_when_equipped: bool = False
     # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
@@ -665,6 +671,8 @@ def make_equipment(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
+    grants_control_opponent_ability_when_equipped: bool = False,
+    legendary: bool = False,
 ) -> CardPrinting:
     """Build an Artifact — Equipment card.
 
@@ -675,7 +683,8 @@ def make_equipment(
     control" trigger and no Equip activated ability in our simplified
     model (Equip as an activated ability isn't yet wired).
     """
-    type_line = "Artifact — Equipment"
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Artifact — Equipment"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -688,6 +697,9 @@ def make_equipment(
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         activated_abilities=tuple(activated_abilities),
+        grants_control_opponent_ability_when_equipped=(
+            grants_control_opponent_ability_when_equipped
+        ),
         equipment_bonuses=(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
@@ -1038,6 +1050,23 @@ RAGOST_FOOD_GRANTED_ABILITY = ActivatedAbility(
         sacrifice_self=True,
     ),
     effect=GainLife(amount=3),
+)
+
+
+# Pre-built activated ability granted to the equipped creature by
+# The Dominion Bracelet: "{15}, Exile The Dominion Bracelet: You
+# control target opponent during their next turn. This ability costs
+# {X} less to activate, where X is this creature's power. Activate
+# only as a sorcery."
+DOMINION_BRACELET_GRANTED_ABILITY = ActivatedAbility(
+    cost=ActivationCost(
+        mana=parse_mana_cost("{15}"),
+        mana_str="{15}",
+        exile_granting_equipment=True,
+        mana_reduced_by_source_power=True,
+    ),
+    effect=ControlTargetOpponentNextTurn(),
+    sorcery_speed=True,
 )
 
 
@@ -4229,9 +4258,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_equipment(  # The Dominion Bracelet — dropped control-target activated.
+        # The Dominion Bracelet `{2}` Legendary Artifact — Equipment.
+        # Real oracle: "Equipped creature gets +1/+1 and has '{15},
+        # Exile The Dominion Bracelet: You control target opponent
+        # during their next turn. This ability costs {X} less to
+        # activate, where X is this creature's power. Activate only
+        # as a sorcery.' Equip {1}"
+        # The granted ability (DOMINION_BRACELET_GRANTED_ABILITY) is
+        # appended via game.effective_activated_abilities when the
+        # Bracelet is attached.
+        make_equipment(
             "The Dominion Bracelet", "{2}",
+            legendary=True,
             power_bonus=1, toughness_bonus=1,
+            grants_control_opponent_ability_when_equipped=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",

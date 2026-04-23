@@ -269,11 +269,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ):
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
                 continue
-            # Cost payability checks.
-            if ability.cost.mana is not None and not can_pay_cost(
-                state, player_id, ability.cost.mana
-            ):
-                continue
+            # Cost payability checks. Apply ability-level mana
+            # reductions (Dominion Bracelet: {X} less where X is
+            # equipped creature's power) before checking.
+            if ability.cost.mana is not None:
+                from mtg_bot.actions import _effective_ability_mana_cost
+                effective_mana = _effective_ability_mana_cost(state, obj, ability)
+                if not can_pay_cost(state, player_id, effective_mana):
+                    continue
             if ability.cost.tap_self:
                 if obj.tapped:
                     continue
@@ -316,6 +319,17 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     and "Food" in effective_subtypes(state, o2)
                 )
                 if not has_food:
+                    continue
+            if ability.cost.exile_granting_equipment:
+                # The granting equipment must still be attached to
+                # the source. Legal when there's any equipment with
+                # a matching grant-flag attached to obj.
+                has_granter = any(
+                    eq for eq in state.battlefield
+                    if eq.attached_to == obj.id
+                    and eq.printing.grants_control_opponent_ability_when_equipped
+                )
+                if not has_granter:
                     continue
             # If the effect requires a target, at least one must be legal.
             # Set resolving_source so effects with self-exclusion filters

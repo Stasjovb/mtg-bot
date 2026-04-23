@@ -45,6 +45,17 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    # Dominion Bracelet: if this player's next turn was scheduled for
+    # an agent override, install it now (saving the original so
+    # cleanup can revert).
+    if ap.scheduled_agent_override is not None:
+        ap.agent_override_saved = ap.agent
+        ap.agent = ap.scheduled_agent_override
+        ap.scheduled_agent_override = None
+        state.log.append(
+            f"P{ap.id}'s turn now controlled by "
+            f"P{ap.scheduled_agent_override_by}"
+        )
     # Pre-compute ids of permanents whose untap is prevented by an
     # attached aura/equipment with attached_prevents_untap=True
     # (Tractor Beam's "doesn't untap during its controller's untap
@@ -839,6 +850,14 @@ def run_cleanup_step(state: GameState) -> None:
         p.spells_cast_this_turn = 0
         p.attacked_with_spacecraft_this_turn = False
         p.life_gained_this_turn = 0
+        # Revert Dominion Bracelet agent override (applied at untap).
+        if p.agent_override_saved is not None:
+            state.log.append(
+                f"P{p.id}'s agent override expires"
+            )
+            p.agent = p.agent_override_saved
+            p.agent_override_saved = None
+            p.scheduled_agent_override_by = None
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
     # Reset per-turn ability-resolution counters.

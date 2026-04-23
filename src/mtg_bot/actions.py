@@ -758,6 +758,27 @@ def _apply_ward_check(
     return False
 
 
+def _effective_ability_mana_cost(
+    state: GameState, source: "GameObject", ability,
+) -> ManaCost:
+    """Return the mana portion of ``ability.cost`` after applying any
+    ability-level cost reductions. Currently only The Dominion
+    Bracelet's "costs {X} less, where X is this creature's power"
+    (flag ``mana_reduced_by_source_power``). Clamps the generic
+    portion at zero.
+    """
+    from mtg_bot.game import effective_power
+
+    cost = ability.cost.mana
+    if cost is None:
+        return cost
+    if ability.cost.mana_reduced_by_source_power:
+        reduction = effective_power(state, source)
+        if reduction > 0:
+            cost = cost.reduced(reduction)
+    return cost
+
+
 def _activate_ability(
     state: GameState, player_id: int, source_id: int, ability_index: int
 ) -> None:
@@ -773,9 +794,12 @@ def _activate_ability(
         return
     ability = abilities[ability_index]
 
-    # Pay mana first (auto-tap lands).
+    # Pay mana first (auto-tap lands). Dominion Bracelet's granted
+    # ability reduces its generic cost by the equipped creature's
+    # effective power.
     if ability.cost.mana is not None:
-        auto_tap_for_cost(state, player_id, ability.cost.mana)
+        mana = _effective_ability_mana_cost(state, source, ability)
+        auto_tap_for_cost(state, player_id, mana)
 
     # Tap-self (if cost requires it).
     if ability.cost.tap_self:
@@ -863,6 +887,26 @@ def _activate_ability(
             f"{chosen.printing.name} (now {chosen.plus_one_counters}) "
             f"(cost for {source.printing.name}'s ability)"
         )
+
+    # "Exile this equipment" cost (Dominion Bracelet). Walk the
+    # source's attached equipment with a matching grant flag and exile
+    # one. Legal_actions already gated on at least one existing.
+    if ability.cost.exile_granting_equipment:
+        granter = next(
+            (
+                eq for eq in state.battlefield
+                if eq.attached_to == source.id
+                and eq.printing.grants_control_opponent_ability_when_equipped
+            ),
+            None,
+        )
+        if granter is not None:
+            from mtg_bot.turn import move_off_battlefield
+            state.log.append(
+                f"P{player_id} exiles {granter.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            move_off_battlefield(state, granter, destination="exile")
 
     # "Sacrifice a Food" cost (Ragost). Agent picks via choose_sacrifice.
     # Food status read through effective_subtypes so Ragost-granted

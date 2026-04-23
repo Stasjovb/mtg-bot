@@ -2024,6 +2024,53 @@ class PossibilityTechnicianETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class ControlTargetOpponentNextTurn(Effect):
+    """The Dominion Bracelet: "You control target opponent during
+    their next turn."
+
+    Implementation: schedule the target player's ``scheduled_agent_
+    override`` to the source-controller's agent, taking effect the
+    next time it's the target's turn. On cleanup of that turn, the
+    override is reverted automatically by run_cleanup_step.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id)
+            for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        target = state.player_by_id(target_id)
+        caster = state.player_by_id(controller_id)
+        # Schedule the override: the caster's agent will be swapped
+        # into the target at the start of the target's next turn.
+        target.scheduled_agent_override = caster.agent
+        target.scheduled_agent_override_by = controller_id
+        state.log.append(
+            f"P{controller_id} will control P{target_id} during "
+            f"P{target_id}'s next turn"
+        )
+
+    def describe(self) -> str:
+        return "you control target opponent during their next turn"
+
+
+@dataclass(frozen=True)
 class IfGainedLifeThisTurnUntapSelf(Effect):
     """Ragost, Deft Gastronaut's beginning-of-each-end-step rider:
     "If you gained life this turn, untap Ragost."
@@ -7056,6 +7103,15 @@ class ActivationCost:
     # source itself if the source has Food — but Ragost the Lobster
     # isn't an artifact so he's not a Food.
     sacrifice_food: bool = False
+    # "Exile [the granting equipment]" — The Dominion Bracelet. When
+    # True, the cost includes exiling the equipment attached to the
+    # ability's source that granted this ability.
+    exile_granting_equipment: bool = False
+    # "This ability costs {X} less to activate, where X is this
+    # creature's power." The Dominion Bracelet. Reduces the ability's
+    # mana cost generic portion by the source's effective power at
+    # activation time.
+    mana_reduced_by_source_power: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -7073,6 +7129,10 @@ class ActivationCost:
             parts.append("Remove a +1/+1 counter from a creature you control")
         if self.sacrifice_food:
             parts.append("Sacrifice a Food")
+        if self.exile_granting_equipment:
+            parts.append("Exile this equipment")
+        if self.mana_reduced_by_source_power:
+            parts.append("(costs {X} less where X is this creature's power)")
         return ", ".join(parts) if parts else "0"
 
 
