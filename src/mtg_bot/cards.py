@@ -1548,12 +1548,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # The Seriema: {1}{W}{W} 5/5 Legendary Spacecraft. ETB tutor a
-        # legendary creature card to hand. Station 7+ Flying.
-        # Simplified: dropped the "Once each turn, you may cast a
-        # legendary creature spell without paying its mana cost"
-        # ability (cost-payment modifications aren't modeled for spell
-        # casts beyond static reductions).
+        # The Seriema: {1}{W}{W} 5/5 Legendary Spacecraft.
+        # - ETB: search library for a legendary creature card → hand,
+        #   shuffle.
+        # - Station 7+ Flying.
+        # - 7+ | Other tapped legendary creatures you control have
+        #   indestructible.
         make_spacecraft(
             "The Seriema", "{1}{W}{W}", 5, 5,
             station_threshold=7,
@@ -1566,6 +1566,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         filter_name="legendary_creature",
                         may_fail=False,
                     ),
+                ),
+            ),
+            static_abilities=(
+                StaticAbility(
+                    scope=(
+                        StaticScope
+                        .OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL
+                    ),
+                    granted_keywords=frozenset({"indestructible"}),
+                    tier_threshold=7,
                 ),
             ),
         ),

@@ -4613,6 +4613,10 @@ class StaticScope:
     CREATURES_YOU_CONTROL = "creatures_you_control"
     CREATURES_YOU_CONTROL_WITH_COUNTER = "creatures_you_control_with_counter"
     SELF = "self"  # only the source itself
+    # Other tapped legendary creatures you control — The Seriema's 7+.
+    OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL = (
+        "other_tapped_legendary_creatures_you_control"
+    )
 
 
 @dataclass(frozen=True)
@@ -4697,6 +4701,12 @@ class StaticAbility:
             return True
         if self.scope == StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER:
             return target.plus_one_counters > 0
+        if self.scope == StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL:
+            return (
+                target.id != source.id
+                and target.tapped
+                and "Legendary" in target.printing.supertypes
+            )
         return False
 
     def describe(self) -> str:
