@@ -168,6 +168,9 @@ class Player:
     graveyard: list[GameObject] = field(default_factory=list)
     exile: list[GameObject] = field(default_factory=list)
     lands_played_this_turn: int = 0
+    # Number of spells this player has cast in the current turn. Reset at
+    # cleanup. Used by "whenever you cast your Nth spell each turn" triggers.
+    spells_cast_this_turn: int = 0
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None

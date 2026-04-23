@@ -221,6 +221,32 @@ def _cast_spell(
     mode = " (warp)" if use_warp else ""
     state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
 
+    # Track cast-count for "whenever you cast your Nth spell" triggers.
+    p.spells_cast_this_turn += 1
+    if p.spells_cast_this_turn == 2:
+        _fire_second_spell_triggers(state, player_id)
+
+
+def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
+    """Fire "whenever you cast your second spell each turn" triggers on
+    permanents the caster controls. Fired directly (no stack) for
+    consistency with our other trigger events.
+    """
+    for obj in list(state.battlefield):
+        if obj.controller_id != caster_id:
+            continue
+        for ability in obj.printing.triggered_abilities:
+            if ability.trigger != "second_spell_each_turn":
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s second-spell trigger fires"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, caster_id, ())
+            finally:
+                state.resolving_source = None
+
 
 def _apply_ward_check(
     state: GameState, caster_id: int,

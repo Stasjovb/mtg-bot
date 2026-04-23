@@ -2564,6 +2564,9 @@ class TriggeredAbility:
             "dies": "When ~ dies",
             "landfall": "Landfall — Whenever a land you control enters",
             "becomes_tapped": "Whenever ~ becomes tapped",
+            "second_spell_each_turn": (
+                "Whenever you cast your second spell each turn"
+            ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:

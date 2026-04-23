@@ -1170,6 +1170,32 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blue
+        # Illvoi Operative: {1}{U} 2/1. Whenever you cast your second
+        # spell each turn, put a +1/+1 counter on this creature.
+        make_creature(
+            "Illvoi Operative", "{1}{U}", 2, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="second_spell_each_turn",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
+        # Sunstar Lightsmith: {3}{W} 3/3. Whenever you cast your second
+        # spell each turn, put a +1/+1 counter on this creature and draw
+        # a card.
+        make_creature(
+            "Sunstar Lightsmith", "{3}{W}", 3, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="second_spell_each_turn",
+                    effect=Sequence(effects=(
+                        PutPlusOneCounterOnSelf(amount=1),
+                        DrawCards(amount=1),
+                    )),
+                ),
+            ),
+        ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
         # drops the "creatures your opponents control get -3/-0 until your
         # next turn" ETB since "until your next turn" pump durations

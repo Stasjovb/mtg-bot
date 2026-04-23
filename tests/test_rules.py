@@ -4981,6 +4981,59 @@ def test_dubious_delicacy_etb_and_activated():
     assert state.players[0].life == life_before + 3
 
 
+def test_second_spell_trigger_fires_once_per_turn():
+    """Casting two spells in one turn fires 'your second spell' triggers."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # Red mana for Plasma Bolt.
+    for _ in range(4):
+        m = state.new_object(
+            BASIC_LANDS["Mountain"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(m)
+    # Also a {U} land for Illvoi Operative's target-kind universe (we
+    # won't cast it; just need it on battlefield as a trigger host).
+    # Operative already on battlefield; count triggers on its controller.
+    op = state.new_object(
+        EOE_CREATURES["Illvoi Operative"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op)
+    # Plasma Bolt {R} damage — won't add counters to Operative.
+    for _ in range(2):
+        card = state.new_object(
+            EOE_SPELLS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
+        )
+        state.players[0].hand.append(card)
+    # Cast first spell — no trigger yet.
+    first = state.players[0].hand[0]
+    _cast_spell(state, 0, first.id)
+    resolve_top_of_stack(state)
+    assert op.plus_one_counters == 0
+    # Cast second spell — trigger fires on the cast (before resolution).
+    second = state.players[0].hand[0]
+    _cast_spell(state, 0, second.id)
+    assert op.plus_one_counters == 1
+    resolve_top_of_stack(state)
+
+
+def test_second_spell_counter_resets_across_turns():
+    """cleanup step resets spells_cast_this_turn to 0."""
+    from mtg_bot.turn import run_cleanup_step
+
+    state = _arena()
+    state.players[0].spells_cast_this_turn = 5
+    state.players[1].spells_cast_this_turn = 3
+    run_cleanup_step(state)
+    assert state.players[0].spells_cast_this_turn == 0
+    assert state.players[1].spells_cast_this_turn == 0
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

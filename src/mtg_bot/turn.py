@@ -306,6 +306,9 @@ def run_cleanup_step(state: GameState) -> None:
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
+    # Reset per-player spell counters for "your Nth spell" triggers.
+    for p in state.players:
+        p.spells_cast_this_turn = 0
 
 
 def state_based_actions(state: GameState) -> bool:
