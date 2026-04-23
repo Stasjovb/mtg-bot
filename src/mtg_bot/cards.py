@@ -79,6 +79,7 @@ from mtg_bot.effects import (
     SelfMill,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
+    SearchLibraryForCard,
     Sequence,
     StaticAbility,
     StaticScope,
@@ -1280,6 +1281,47 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=DealDamageToTargetCreature(amount=10),
+                ),
+            ),
+        ),
+        # The Seriema: {1}{W}{W} 5/5 Legendary Spacecraft. ETB tutor a
+        # legendary creature card to hand. Station 7+ Flying.
+        # Simplified: dropped the "Once each turn, you may cast a
+        # legendary creature spell without paying its mana cost"
+        # ability (cost-payment modifications aren't modeled for spell
+        # casts beyond static reductions).
+        make_spacecraft(
+            "The Seriema", "{1}{W}{W}", 5, 5,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=SearchLibraryForCard(
+                        filter_name="legendary_creature",
+                        may_fail=False,
+                    ),
+                ),
+            ),
+        ),
+        # Starfield Shepherd: {3}{W}{W} 3/2 Flying. ETB tutor a basic
+        # Plains OR a creature card with MV ≤ 1 to hand. Simplified:
+        # only one mode — creature with MV ≤ 1. (Basic-Plains fetch is
+        # less useful here since we already have the dedicated
+        # SearchLibraryForBasicLandTapped for Landers.)
+        make_creature(
+            "Starfield Shepherd", "{3}{W}{W}", 3, 2,
+            keywords={"flying"},
+            warp="{1}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=SearchLibraryForCard(
+                        filter_name="creature_small",
+                        max_mv=1,
+                        may_fail=False,
+                    ),
                 ),
             ),
         ),

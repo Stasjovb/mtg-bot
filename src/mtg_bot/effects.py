@@ -1138,6 +1138,89 @@ class PumpCreaturesYouControlUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class SearchLibraryForCard(Effect):
+    """Search your library for a card matching the named filter, reveal
+    it, put it into your hand, then shuffle.
+
+    ``filter_name`` selects the filter applied to cards in the library:
+      - ``"legendary_creature"`` — creature with Legendary supertype
+      - ``"basic_plains"`` / ``"basic_island"`` / ... — specific basic
+      - ``"creature_small"`` — creature with mana value ≤ ``max_mv``
+
+    If ``may_fail`` is True, the controller may decline to fetch
+    (shuffle happens either way). Always shuffles at the end — matches
+    MTG wording.
+    """
+
+    filter_name: str
+    max_mv: int = 0
+    may_fail: bool = True
+
+    def _matches(self, printing) -> bool:
+        fn = self.filter_name
+        if fn == "legendary_creature":
+            return (
+                printing.is_creature and "Legendary" in printing.supertypes
+            )
+        if fn.startswith("basic_"):
+            wanted = fn[len("basic_"):].capitalize()
+            return printing.is_basic_land and printing.name == wanted
+        if fn == "creature_small":
+            return (
+                printing.is_creature
+                and printing.mana_cost.total <= self.max_mv
+            )
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _random
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.library if self._matches(c.printing)]
+        if not options:
+            state.log.append(
+                f"P{controller_id} searches library — no "
+                f"{self.filter_name} found"
+            )
+            return
+        chosen_id = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        if chosen_id is None:
+            if self.may_fail:
+                state.log.append(
+                    f"P{controller_id} declines to fetch"
+                )
+                return
+            chosen_id = options[0].id
+        card = next((c for c in options if c.id == chosen_id), options[0])
+        p.library.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(
+            f"P{controller_id} fetches {card.printing.name} to hand"
+        )
+        # Shuffle (deterministic: seed by turn & player to remain
+        # reproducible across test runs).
+        rng = _random.Random(
+            hash(("shuffle", state.turn_number, controller_id, card.id))
+        )
+        rng.shuffle(p.library)
+
+    def describe(self) -> str:
+        return (
+            f"search your library for a {self.filter_name} card, reveal "
+            f"it, put it into your hand, then shuffle"
+        )
+
+
+@dataclass(frozen=True)
 class SearchLibraryForBasicLandTapped(Effect):
     """Search the controller's library for a basic land card, put it onto
     the battlefield tapped, then shuffle.

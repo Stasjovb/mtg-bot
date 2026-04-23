@@ -108,6 +108,18 @@ class Agent:
         Must return an id from the given list."""
         raise NotImplementedError
 
+    def choose_card_from_library(
+        self,
+        state: "GameState",
+        player_id: int,
+        option_ids: list[int],
+    ) -> int | None:
+        """For tutor effects: pick which card from a filtered list of
+        the player's own library to fetch. Return None to decline
+        fetching ("search... you may reveal a creature card"); return
+        an id from ``option_ids`` to fetch that specific card."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -164,3 +176,8 @@ class RandomAgent(Agent):
 
     def choose_card_from_opponent_hand(self, state, player_id, opponent_hand_ids):
         return self.rng.choice(opponent_hand_ids)
+
+    def choose_card_from_library(self, state, player_id, option_ids):
+        if not option_ids:
+            return None
+        return self.rng.choice(option_ids)

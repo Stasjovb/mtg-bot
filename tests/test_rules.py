@@ -7212,6 +7212,183 @@ def test_optional_sac_another_for_effect_no_agent_picks_first():
     assert len(state.players[0].hand) == hand_before + 1
 
 
+def test_seriema_tutors_legendary_creature_to_hand():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    # Seed library with Xu-Ifit (legendary) + non-legendaries.
+    xu_ifit = state.new_object(
+        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(xu_ifit)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(bear)
+    seriema = state.new_object(
+        EOE_CREATURES["The Seriema"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(seriema)
+    etb = next(
+        ab for ab in seriema.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = seriema
+    etb.effect.resolve(state, 0)
+    assert xu_ifit in state.players[0].hand
+    assert xu_ifit not in state.players[0].library
+
+
+def test_starfield_shepherd_tutors_small_creature():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    # Seed library: MV-1 creature + MV-2 creature + land.
+    wisp = state.new_object(
+        SYNTHETIC_CREATURES["Healing Wisp"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )  # {W} MV 1
+    state.players[0].library.append(wisp)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY
+    )  # {1}{G} MV 2 — not a legal target
+    state.players[0].library.append(bear)
+    land = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(land)
+
+    shep = state.new_object(
+        EOE_CREATURES["Starfield Shepherd"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(shep)
+    etb = next(
+        ab for ab in shep.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = shep
+    etb.effect.resolve(state, 0)
+    assert wisp in state.players[0].hand
+    assert bear in state.players[0].library
+    assert land in state.players[0].library
+
+
+def test_search_library_no_match_logs_and_fizzles():
+    from mtg_bot.effects import SearchLibraryForCard
+
+    state = _arena()
+    # Empty library — no matches.
+    e = SearchLibraryForCard(filter_name="legendary_creature")
+    e.resolve(state, 0)
+    assert any("no legendary_creature" in l for l in state.log)
+
+
+def test_search_library_unknown_filter_no_match():
+    from mtg_bot.effects import SearchLibraryForCard
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(bear)
+    e = SearchLibraryForCard(filter_name="invented_filter_name")
+    e.resolve(state, 0)
+    assert bear in state.players[0].library
+    assert "library" in e.describe()
+
+
+def test_search_library_agent_declines_when_may_fail():
+    """If may_fail=True and agent returns None, no fetch happens."""
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.effects import SearchLibraryForCard
+    from mtg_bot.cards import EOE_CREATURES
+
+    class Decliner(RandomAgent):
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return None
+
+    import random
+    state = _arena()
+    state.players[0].agent = Decliner(rng=random.Random(0))
+    xu = state.new_object(
+        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(xu)
+    e = SearchLibraryForCard(filter_name="legendary_creature", may_fail=True)
+    e.resolve(state, 0)
+    assert xu in state.players[0].library  # stayed in library
+
+
+def test_search_library_no_agent_falls_back():
+    """With agent=None, treated as None choice; may_fail=False still fetches."""
+    from mtg_bot.effects import SearchLibraryForCard
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = None
+    xu = state.new_object(
+        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(xu)
+    e = SearchLibraryForCard(filter_name="legendary_creature", may_fail=False)
+    e.resolve(state, 0)
+    assert xu in state.players[0].hand
+
+
+def test_search_library_for_basic_plains():
+    """basic_plains filter fetches a Plains basic."""
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.effects import SearchLibraryForCard
+    from mtg_bot.cards import BASIC_LANDS
+    import random
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(plains)
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(forest)
+    e = SearchLibraryForCard(filter_name="basic_plains", may_fail=False)
+    e.resolve(state, 0)
+    assert plains in state.players[0].hand
+    assert forest in state.players[0].library
+
+
+def test_search_library_forced_fetch_when_may_fail_false():
+    """may_fail=False forces a fetch even if agent returns None."""
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.effects import SearchLibraryForCard
+    from mtg_bot.cards import EOE_CREATURES
+
+    class Decliner(RandomAgent):
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return None
+
+    import random
+    state = _arena()
+    state.players[0].agent = Decliner(rng=random.Random(0))
+    xu = state.new_object(
+        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(xu)
+    e = SearchLibraryForCard(filter_name="legendary_creature", may_fail=False)
+    e.resolve(state, 0)
+    assert xu in state.players[0].hand
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
