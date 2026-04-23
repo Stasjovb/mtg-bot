@@ -329,6 +329,32 @@ def make_sorcery(name: str, cost: str, effect: Effect) -> CardPrinting:
     )
 
 
+def make_artifact(
+    name: str,
+    cost: str,
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
+    legendary: bool = False,
+) -> CardPrinting:
+    """Build a non-creature, non-Spacecraft Artifact permanent."""
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Artifact"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
+        activated_abilities=tuple(activated_abilities),
+    )
+
+
 def make_enchantment(
     name: str,
     cost: str,
@@ -1317,6 +1343,36 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Melded Moxite: {1}{R} Artifact. ETB loot (discard 1 → draw 2);
+        # {3}, Sac: create a tapped 2/2 Robot token. Simplification: the
+        # real card's ETB is "you MAY discard; if you do, draw two" — we
+        # make it unconditional, so an empty-hand cast still draws 2
+        # (slightly stronger than printed). Agents always prefer looting.
+        make_artifact(
+            "Melded Moxite", "{1}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        DiscardSelf(amount=1),
+                        DrawCards(amount=2),
+                    )),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}"), mana_str="{3}",
+                        sacrifice_self=True,
+                    ),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                        tapped=True,
+                    ),
+                ),
+            ),
+        ),
         # Frontline War-Rager: {2}{R} 2/3. Conditional-EoT +1/+1 counter
         # when you control two or more tapped creatures.
         make_creature(

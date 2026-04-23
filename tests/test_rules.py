@@ -4910,6 +4910,45 @@ def test_kavaron_turbodrone_activated_pump():
     assert "haste" in effective_keywords(state, ally)
 
 
+def test_melded_moxite_etb_loot_and_sac_for_robot():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    # Pre-seed a card in hand so the discard has something to discard.
+    discard_fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(discard_fodder)
+
+    moxite = state.new_object(
+        EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(moxite)
+    # Fire ETB (loot: discard 1, draw 2).
+    etb = next(
+        ab for ab in moxite.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = moxite
+    hand_before = len(state.players[0].hand)
+    gy_before = len(state.players[0].graveyard)
+    etb.effect.resolve(state, 0)
+    # Net: -1 discard + 2 draw = +1 in hand
+    assert len(state.players[0].hand) == hand_before + 1
+    assert len(state.players[0].graveyard) == gy_before + 1
+
+    # Activated: create a tapped 2/2 Robot token.
+    act = moxite.printing.activated_abilities[0]
+    assert act.cost.sacrifice_self is True
+    act.effect.resolve(state, 0)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1
+    assert robots[0].tapped is True
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
