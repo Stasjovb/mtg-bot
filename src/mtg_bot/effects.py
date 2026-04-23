@@ -1569,6 +1569,58 @@ class MonoistCircuitFeederETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class AnticausalVestigeLeavesEffect(Effect):
+    """Anticausal Vestige's leaves-battlefield trigger: "Draw a card,
+    then you may put a permanent card with mana value less than or
+    equal to the number of lands you control from your hand onto the
+    battlefield tapped."
+
+    Simplification: "may" is always yes if there's a legal permanent
+    card in hand. Agent picks which via choose_sacrifice (reusing the
+    id-from-list picker — no dedicated "pick from hand" hook exists).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.turn import draw_card
+
+        draw_card(state, controller_id)
+        p = state.player_by_id(controller_id)
+        land_count = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_land
+        )
+        candidates = [
+            c for c in p.hand
+            if c.printing.is_permanent
+            and c.printing.mana_cost.total <= land_count
+        ]
+        if not candidates or p.agent is None:
+            return
+        pick_id = p.agent.choose_sacrifice(
+            state, controller_id, [c.id for c in candidates]
+        )
+        card = next((c for c in candidates if c.id == pick_id), candidates[0])
+        p.hand.remove(card)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the "
+            f"battlefield tapped (Anticausal Vestige)"
+        )
+        put_into_battlefield(state, card, controller_id)
+        card.tapped = True
+
+    def describe(self) -> str:
+        return (
+            "draw a card, then you may put a permanent card with mana "
+            "value X or less from your hand onto the battlefield "
+            "tapped, where X is the number of lands you control"
+        )
+
+
+@dataclass(frozen=True)
 class DefendingPlayerLosesHalfLifeRoundedUp(Effect):
     """Defending player loses half their life, rounded up. Matches
     Alpharael, Stonechosen's Void attack trigger. Simplified to "each

@@ -79,6 +79,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,
+    AnticausalVestigeLeavesEffect,
     AstelliReclaimerETBEffect,
     AttachToTargetCreatureYouControl,
     BiosynthicBurstEffect,
@@ -2316,8 +2317,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # -- Batch #2 of vanilla-simplified creatures. Dropped complex
         # text for each; shipped as keyword-only (or literal vanilla)
         # bodies.
-        make_creature(  # Anticausal Vestige — dropped leaves-BF draw + permanent-ramp rider.
+        # Anticausal Vestige `{6}` 7/5 Creature. Warp `{4}`.
+        # Real oracle: "When this creature leaves the battlefield, draw
+        # a card, then you may put a permanent card with mana value
+        # less than or equal to the number of lands you control from
+        # your hand onto the battlefield tapped."
+        make_creature(
             "Anticausal Vestige", "{6}", 7, 5,
+            warp="{4}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="leaves_battlefield",
+                    effect=AnticausalVestigeLeavesEffect(),
+                ),
+            ),
         ),
         # Astelli Reclaimer `{3}{W}{W}` 5/4 Creature. Warp `{2}{W}`.
         # Real oracle: "Flying. When this creature enters, return
