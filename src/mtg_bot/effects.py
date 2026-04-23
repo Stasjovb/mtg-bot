@@ -1925,13 +1925,15 @@ class PumpTargetCreatureUntilEOT(Effect):
 
     Matches oracle text like "Target creature gets +3/+0 and gains first
     strike and reach until end of turn." Bonuses stack additively and are
-    cleared at cleanup.
+    cleared at cleanup. Negative bonuses model "target creature gets
+    -N/-0" debuffs.
     """
 
     power_bonus: int = 0
     toughness_bonus: int = 0
     granted_keywords: frozenset[str] = frozenset()
     you_control_only: bool = False  # restrict to "target creature you control"
+    opponents_only: bool = False  # restrict to "an opponent controls"
 
     def requires_target(self) -> bool:
         return True
@@ -1944,6 +1946,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             for o in state.battlefield
             if o.printing.is_creature
             and (not self.you_control_only or o.controller_id == controller_id)
+            and (not self.opponents_only or o.controller_id != controller_id)
         ]
 
     def resolve(

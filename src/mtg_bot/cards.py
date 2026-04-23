@@ -2254,9 +2254,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Selfcraft Mechan", "{3}{U}", 3, 4,
             artifact=True,
         ),
-        make_creature(  # Sinister Cryologist — dropped ETB -3/-0 debuff; Warp kept.
+        # Sinister Cryologist `{2}{U}` 2/3 Creature. Warp `{U}`.
+        # Real oracle ETB: "When this creature enters, target creature
+        # an opponent controls gets -3/-0 until end of turn."
+        make_creature(
             "Sinister Cryologist", "{2}{U}", 2, 3,
             warp="{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=-3, toughness_bonus=0,
+                        opponents_only=True,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Starfield Vocalist — dropped replacement-trigger ability; Warp kept.
             "Starfield Vocalist", "{3}{U}", 3, 4,
