@@ -6710,6 +6710,8 @@ class StaticScope:
     OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL = (
         "other_tapped_legendary_creatures_you_control"
     )
+    # Slivers you control — Thrumming Hivepool.
+    SLIVERS_YOU_CONTROL = "slivers_you_control"
 
 
 @dataclass(frozen=True)
@@ -6800,6 +6802,8 @@ class StaticAbility:
                 and target.tapped
                 and "Legendary" in target.printing.supertypes
             )
+        if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
+            return "Sliver" in target.printing.subtypes
         return False
 
     def describe(self) -> str:

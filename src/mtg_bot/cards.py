@@ -995,6 +995,11 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     # Lander — artifact token (not a creature) with a sacrifice-to-ramp
     # activated ability. Created by many EoE spells and triggers.
     "Lander": _make_lander_token(),
+    # 1/1 colorless Sliver creature token — Thrumming Hivepool's upkeep
+    # trigger.
+    "Sliver": make_token_creature(
+        "Sliver", 1, 1, subtypes=("Sliver",),
+    ),
     # Munitions: colorless artifact token created by Weapons Manufacturing.
     # "When this token leaves the battlefield, it deals 2 damage to any
     # target." Modeled via a leaves-battlefield trigger on the token.
@@ -3991,8 +3996,31 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_artifact(  # Thrumming Hivepool — dropped complex attack-triggers.
+        # Thrumming Hivepool `{6}` Artifact. Real oracle: "Affinity for
+        # Slivers. Slivers you control have double strike and haste.
+        # At the beginning of your upkeep, create two 1/1 colorless
+        # Sliver creature tokens."
+        # Simplifications: Affinity (cost reduction) is dropped; the
+        # upkeep trigger is wired to beginning_of_end_step (the engine
+        # has no beginning_of_upkeep trigger yet). The Sliver anthem
+        # grants double strike + haste via a SLIVERS_YOU_CONTROL static.
+        make_artifact(
             "Thrumming Hivepool", "{6}",
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.SLIVERS_YOU_CONTROL,
+                    granted_keywords=frozenset({"double strike", "haste"}),
+                ),
+            ),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Sliver"],
+                        count=2,
+                    ),
+                ),
+            ),
         ),
         make_equipment(  # The Dominion Bracelet — dropped control-target activated.
             "The Dominion Bracelet", "{2}",
