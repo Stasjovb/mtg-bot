@@ -3122,6 +3122,9 @@ class ActivationCost:
     mana_str: str = ""  # display form like "{2}"
     tap_self: bool = False
     sacrifice_self: bool = False
+    # "Sacrifice another creature or artifact" — the caster picks a
+    # legal target via choose_sacrifice. Cannot be the source itself.
+    sacrifice_another_creature_or_artifact: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -3131,6 +3134,8 @@ class ActivationCost:
             parts.append("{T}")
         if self.sacrifice_self:
             parts.append("Sacrifice ~")
+        if self.sacrifice_another_creature_or_artifact:
+            parts.append("Sacrifice another creature or artifact")
         return ", ".join(parts) if parts else "0"
 
 

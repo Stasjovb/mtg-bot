@@ -1717,6 +1717,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Umbral Collar Zealot: {1}{B} 3/2. Activated ability:
+        # "Sacrifice another creature or artifact: Surveil 1."
+        make_creature(
+            "Umbral Collar Zealot", "{1}{B}", 3, 2,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        sacrifice_another_creature_or_artifact=True,
+                    ),
+                    effect=Surveil(amount=1),
+                ),
+            ),
+        ),
         # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
         # your end step, if [void active], you draw a card and lose 1 life."
         # We model artifact-ness as a plain creature (same shortcut as Edge

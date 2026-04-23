@@ -455,6 +455,34 @@ def _activate_ability(
             if chosen is not None:
                 targets = (chosen,)
 
+    # "Sacrifice another" paid BEFORE sacrifice-self so the source is
+    # still on the battlefield and excluded from legal options.
+    # legal_actions already gates on a valid option existing, so this
+    # is always non-empty when we reach it.
+    if ability.cost.sacrifice_another_creature_or_artifact:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and o.id != source.id
+            and (o.printing.is_creature or o.printing.is_artifact)
+        ]
+        chosen = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, player_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        state.log.append(
+            f"P{player_id} sacrifices {chosen.printing.name} "
+            f"(cost for {source.printing.name}'s ability)"
+        )
+        _sacrifice(state, chosen)
+
     # Sacrifice-self is paid LAST so the source is still on the battlefield
     # for target selection — the Lander case where the ability's effect
     # doesn't reference the source but the controller needs to still own it.

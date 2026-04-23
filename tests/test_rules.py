@@ -6875,6 +6875,102 @@ def test_embrace_oblivion_with_sac_target_casts_and_destroys():
     assert victim not in state.battlefield  # destroyed by spell
 
 
+def test_umbral_collar_activated_sac_another_surveil():
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    zealot = state.new_object(
+        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(zealot)
+    # Fodder for the sac.
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    _activate_ability(state, 0, zealot.id, 0)
+    # Fodder was sacrificed.
+    assert fodder not in state.battlefield
+    # Resolve the ability → surveil 1.
+    resolve_top_of_stack(state)
+    assert any("surveils 1" in l for l in state.log)
+
+
+def test_umbral_collar_not_legal_without_another_sac():
+    """Without another creature/artifact to sacrifice, the ability
+    should not appear in legal_actions."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.actions import ActivateAbility
+
+    state = _arena()
+    zealot = state.new_object(
+        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    zealot.summoning_sick = False
+    state.battlefield.append(zealot)
+    actions = legal_moves(state)
+    activate_actions = [
+        a for a in actions
+        if isinstance(a, ActivateAbility) and a.source_id == zealot.id
+    ]
+    assert activate_actions == []
+
+
+def test_umbral_collar_no_agent_uses_first_sac():
+    from mtg_bot.actions import _activate_ability
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = None
+    _stock_library(state, 0, count=5)
+    zealot = state.new_object(
+        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(zealot)
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    _activate_ability(state, 0, zealot.id, 0)
+    assert fodder not in state.battlefield
+
+
+def test_cost_reduction_attacked_with_spacecraft_active():
+    """Exercise the attacked_with_spacecraft_this_turn branch in
+    apply_cost_reductions — dead without at least one test."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import CostReduction, make_instant
+    from mtg_bot.effects import GainLife
+
+    c = make_instant(
+        "SpacecraftDiscount", "{3}",
+        effect=GainLife(amount=1),
+        cost_reductions=(
+            CostReduction(amount=2, condition="attacked_with_spacecraft_this_turn"),
+        ),
+    )
+    state = _arena()
+    # Flag off → full cost.
+    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
+    state.players[0].attacked_with_spacecraft_this_turn = True
+    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 1
+
+
+def test_activation_cost_describe_includes_sac_another():
+    from mtg_bot.effects import ActivationCost
+
+    cost = ActivationCost(sacrifice_another_creature_or_artifact=True)
+    assert "another" in cost.describe().lower()
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

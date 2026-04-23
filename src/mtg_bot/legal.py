@@ -169,6 +169,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 from mtg_bot.game import is_creature_now
                 if is_creature_now(obj) and obj.summoning_sick:
                     continue
+            if ability.cost.sacrifice_another_creature_or_artifact:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and (o2.printing.is_creature or o2.printing.is_artifact)
+                )
+                if not has_another:
+                    continue
             # If the effect requires a target, at least one must be legal.
             if ability.effect.requires_target() and not ability.effect.legal_targets(
                 state, player_id
