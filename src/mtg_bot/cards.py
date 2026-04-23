@@ -43,6 +43,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifactOrTappedCreature,
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    ExileAllCreaturesAndSpacecraft,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     Sequence,
@@ -1080,6 +1081,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_sorcery(
             "Space-Time Anomaly", "{2}{W}{U}",
             effect=MillTargetPlayer(use_controller_life=True),
+        ),
+        # Beyond the Quiet — wrath variant that exiles all creatures AND
+        # Spacecraft (dodges Fires-of-Vengeance style "when dies" triggers).
+        make_sorcery(
+            "Beyond the Quiet", "{3}{W}{W}",
+            effect=ExileAllCreaturesAndSpacecraft(),
         ),
     ]
 }

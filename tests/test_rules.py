@@ -3339,6 +3339,45 @@ def test_mill_noop_paths():
     assert len(state.players[1].library) == before
 
 
+def test_beyond_the_quiet_exiles_creatures_and_spacecraft():
+    """Exiles every creature and Spacecraft from both sides; lands survive."""
+    from mtg_bot.effects import ExileAllCreaturesAndSpacecraft
+    from mtg_bot.cards import BASIC_LANDS
+
+    state = _arena()
+    my_creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(my_creature)
+    their_creature = state.new_object(
+        SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(their_creature)
+    land = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+
+    e = ExileAllCreaturesAndSpacecraft()
+    assert "exile" in e.describe()
+    assert e.requires_target() is False
+    e.resolve(state, controller_id=0)
+
+    assert my_creature not in state.battlefield
+    assert their_creature not in state.battlefield
+    assert land in state.battlefield  # lands untouched
+    assert my_creature in state.players[0].exile
+    assert their_creature in state.players[1].exile
+
+
+def test_beyond_the_quiet_empty_battlefield_is_noop():
+    from mtg_bot.effects import ExileAllCreaturesAndSpacecraft
+
+    state = _arena()
+    e = ExileAllCreaturesAndSpacecraft()
+    e.resolve(state, controller_id=0)  # no crash
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,

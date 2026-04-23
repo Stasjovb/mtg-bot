@@ -1005,6 +1005,34 @@ class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
 
 
 @dataclass(frozen=True)
+class ExileAllCreaturesAndSpacecraft(Effect):
+    """Exile every creature on the battlefield, as well as Spacecraft (whether
+    or not the Spacecraft has been stationed into creature mode).
+
+    Matches Beyond the Quiet. Mass wrath-style effect: no targets, acts on
+    the full battlefield snapshot at resolution. Tokens cease to exist per
+    rule 704.5d.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        victims = [
+            o for o in state.battlefield
+            if o.printing.is_creature or o.printing.is_spacecraft
+        ]
+        for obj in victims:
+            state.log.append(f"{obj.printing.name} is exiled (mass)")
+            move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return "exile all creatures and Spacecraft"
+
+
+@dataclass(frozen=True)
 class ExileTargetCreature(Effect):
     """Exile any target creature on the battlefield.
 
