@@ -7504,6 +7504,34 @@ def test_mm_menon_artifact_enters_triggers_counter_on_target():
     assert total_counters >= 1
 
 
+def test_zookeeper_mechan_pump_activation():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    zoo = state.new_object(
+        EOE_CREATURES["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(zoo)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    act = zoo.printing.activated_abilities[0]
+    act.effect.resolve(state, 0, (("creature", ally.id),))
+    assert effective_power(state, ally) == 6  # 2 + 4
+
+
+def test_skystinger_is_reach_vanilla():
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Skystinger"]
+    assert "reach" in c.keywords
+    assert c.power == 3 and c.toughness == 3
+    # No triggered abilities.
+    assert c.triggered_abilities == ()
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

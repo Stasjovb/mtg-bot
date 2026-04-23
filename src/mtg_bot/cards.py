@@ -2095,6 +2095,33 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Zookeeper Mechan: {1}{R} 1/3 Artifact Creature — Robot.
+        # Activated {6}{R}, sorcery-speed pump +4/+0 UEOT on target
+        # creature you control. Dropped: the {T}: Add {R} mana ability
+        # (creature mana abilities aren't modeled).
+        make_creature(
+            "Zookeeper Mechan", "{1}{R}", 1, 3,
+            artifact=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{6}{R}"), mana_str="{6}{R}",
+                    ),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=4, toughness_bonus=0,
+                        you_control_only=True,
+                    ),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
+        # Skystinger: {2}{G} 3/3 Reach. Dropped its "blocks a creature
+        # with flying → +5/+0 UEOT" trigger (blocks-with-filter trigger
+        # type not modeled).
+        make_creature(
+            "Skystinger", "{2}{G}", 3, 3,
+            keywords={"reach"},
+        ),
         # Oreplate Pangolin: {1}{R} 2/2 Artifact Creature. "Whenever
         # another artifact you control enters, you may pay {1}. If you do,
         # put a +1/+1 counter on this creature." Simplified: drop the
