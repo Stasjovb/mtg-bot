@@ -83,6 +83,7 @@ from mtg_bot.effects import (
     DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
     FamishedWorldsireETBEffect,
+    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     OptionalSacLandOrLanderForBasicLandRamp,
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
@@ -1939,8 +1940,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Mightform Harmonizer", "{2}{G}{G}", 4, 4,
             warp="{1}{G}",
         ),
-        make_creature(  # Ouroboroid — dropped ETB "mill/put-in-hand" ramp.
+        # Ouroboroid `{2}{G}{G}` 1/3 Creature.
+        # "At the beginning of combat on your turn, put X +1/+1
+        # counters on each creature you control, where X is this
+        # creature's power." (Pump engine — counters on Ouroboroid
+        # cascade across the whole team each turn.)
+        make_creature(
             "Ouroboroid", "{2}{G}{G}", 1, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_combat",
+                    effect=(
+                        PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Alpharael, Dreaming Acolyte — dropped "if you cast 2+ → draw" trigger.
             "Alpharael, Dreaming Acolyte", "{1}{U}{B}", 2, 3,

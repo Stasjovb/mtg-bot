@@ -873,6 +873,48 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower(Effect):
+    """Put X +1/+1 counters on each creature you control, where X is
+    this effect's source's effective power. Reads
+    ``state.resolving_source`` for the power. No-op if source is None
+    or X <= 0.
+
+    Matches Ouroboroid's beginning-of-combat trigger.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import add_plus_one_counters, effective_power
+
+        source = state.resolving_source
+        if source is None:
+            return
+        x = effective_power(state, source)
+        if x <= 0:
+            return
+        count = 0
+        for obj in state.battlefield:
+            if obj.controller_id != controller_id:
+                continue
+            if not obj.printing.is_creature:
+                continue
+            add_plus_one_counters(state, obj, x)
+            count += 1
+        state.log.append(
+            f"P{controller_id}'s {count} creature(s) each get {x} "
+            f"+1/+1 counter(s) (source power)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put X +1/+1 counters on each creature you control, where X "
+            "is this creature's power"
+        )
+
+
+@dataclass(frozen=True)
 class FamishedWorldsireETBEffect(Effect):
     """Famished Worldsire's ETB: "Look at the top X cards of your
     library, where X is this creature's power. Put any number of land
