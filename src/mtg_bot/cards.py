@@ -29,6 +29,7 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    ExileTargetCreatureUntilSourceLeaves,
     SeedshipImpactEffect,
     MoveSelfCountersToTargetCreatureYouControl,
     UntapTargetOtherPermanent,
@@ -1359,6 +1360,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=DealDamageToTargetCreature(amount=10),
+                ),
+            ),
+        ),
+        # All-Fates Stalker: {3}{W} 2/3. ETB exile target creature
+        # until Stalker leaves. Ships with Warp {1}{W}. Dropped the
+        # "non-Assassin" filter (subtype-based targeting not modeled).
+        make_creature(
+            "All-Fates Stalker", "{3}{W}", 2, 3,
+            warp="{1}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ExileTargetCreatureUntilSourceLeaves(),
                 ),
             ),
         ),

@@ -1742,6 +1742,60 @@ class DestroyTargetArtifact(Effect):
 
 
 @dataclass(frozen=True)
+class ExileTargetCreatureUntilSourceLeaves(Effect):
+    """Exile any target creature until the source leaves the battlefield.
+
+    Matches All-Fates Stalker's ETB (simplified: drops the "non-Assassin"
+    filter since we don't track creature subtypes at target time).
+    Uses the Oblivion-Ring-style exiled_by_source bookkeeping so the
+    exiled creature returns when the source leaves play.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        from mtg_bot.turn import move_off_battlefield
+
+        obj.exiled_by_source = source.id
+        state.log.append(
+            f"{obj.printing.name} is exiled by {source.printing.name}"
+        )
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            "exile target creature until this creature leaves the "
+            "battlefield"
+        )
+
+
+@dataclass(frozen=True)
 class ExileOpponentsNonlandPermanentUntilLeaves(Effect):
     """ETB exile target nonland permanent an opponent controls, optionally
     restricted by mana value. The exiled card returns when the source

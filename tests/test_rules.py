@@ -7532,6 +7532,50 @@ def test_skystinger_is_reach_vanilla():
     assert c.triggered_abilities == ()
 
 
+def test_all_fates_stalker_exiles_and_returns_on_death():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import destroy
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    stalker = state.new_object(
+        EOE_CREATURES["All-Fates Stalker"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(stalker)
+    # Fire ETB.
+    etb = next(
+        ab for ab in stalker.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = stalker
+    etb.effect.resolve(state, 0, (("creature", victim.id),))
+    assert victim in state.players[1].exile
+    # Kill Stalker → victim returns.
+    destroy(state, stalker)
+    assert victim in state.battlefield
+
+
+def test_exile_target_creature_until_source_leaves_noop_paths():
+    from mtg_bot.effects import ExileTargetCreatureUntilSourceLeaves
+
+    state = _arena()
+    e = ExileTargetCreatureUntilSourceLeaves()
+    assert e.requires_target() is True
+    assert "exile" in e.describe()
+    state.resolving_source = None
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Missing / wrong target handling.
+    state.resolving_source = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
