@@ -90,6 +90,8 @@ from mtg_bot.effects import (
     DealNDamageToEachCreature,
     DestroyTargetNoncreaturePermanent,
     DiscardHandThenDrawN,
+    DoubleTargetCreaturesPowerUEOT,
+    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
@@ -1965,15 +1967,39 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Hemosymbic Mite — dropped Deathtouch + dies Lander trigger (only kept body).
+        # Hemosymbic Mite `{G}` 1/1 Creature. Real oracle:
+        # "Whenever this creature becomes tapped, another target
+        # creature you control gets +X/+X until end of turn, where X
+        # is this creature's power."
+        # Note: previous comment mentioned deathtouch + dies/Lander,
+        # neither of which is in the printed card.
+        make_creature(
             "Hemosymbic Mite", "{G}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=(
+                        PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Icetill Explorer — dropped additional-land + graveyard-play + Landfall mill.
             "Icetill Explorer", "{2}{G}{G}", 2, 4,
         ),
-        make_creature(  # Mightform Harmonizer — dropped "attacks → counter + search" trigger.
+        # Mightform Harmonizer `{2}{G}{G}` 4/4 Creature. Warp `{2}{G}`.
+        # Real oracle: "Landfall — Whenever a land you control enters,
+        # double the power of target creature you control until end
+        # of turn."
+        make_creature(
             "Mightform Harmonizer", "{2}{G}{G}", 4, 4,
-            warp="{1}{G}",
+            warp="{2}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=DoubleTargetCreaturesPowerUEOT(),
+                ),
+            ),
         ),
         # Ouroboroid `{2}{G}{G}` 1/3 Creature.
         # "At the beginning of combat on your turn, put X +1/+1

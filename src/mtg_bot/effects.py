@@ -873,6 +873,120 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class PumpTargetOtherCreatureByXOverXWhereXIsSourcePower(Effect):
+    """Target another creature you control gets +X/+X until end of turn,
+    where X is the effect's source's effective power. Reads
+    ``state.resolving_source``; target must be under the same
+    controller and not be the source itself.
+
+    Matches Hemosymbic Mite's becomes-tapped trigger.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        source = state.resolving_source
+        source_id = source.id if source is not None else -1
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+            and o.id != source_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        source = state.resolving_source
+        if source is None:
+            return
+        x = effective_power(state, source)
+        if x <= 0:
+            return
+        if not targets:
+            return
+        kind, tid = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == tid), None
+        )
+        if obj is None:
+            return
+        obj.temp_power_bonus += x
+        obj.temp_toughness_bonus += x
+        state.log.append(
+            f"{obj.printing.name} gets +{x}/+{x} UEOT (source power)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "another target creature you control gets +X/+X until end "
+            "of turn, where X is this creature's power"
+        )
+
+
+@dataclass(frozen=True)
+class DoubleTargetCreaturesPowerUEOT(Effect):
+    """Target creature you control has its effective power doubled
+    until end of turn. Implemented by adding the target's current
+    effective power as a temp_power_bonus.
+
+    Matches Mightform Harmonizer's landfall trigger. Simplification:
+    the bonus is a one-time snapshot at resolution — further counter
+    gains or other pumps don't re-double within the same turn.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        if not targets:
+            return
+        kind, tid = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == tid), None
+        )
+        if obj is None:
+            return
+        snapshot = effective_power(state, obj)
+        if snapshot <= 0:
+            return
+        obj.temp_power_bonus += snapshot
+        state.log.append(
+            f"{obj.printing.name}'s power is doubled UEOT "
+            f"(+{snapshot} temp power)"
+        )
+
+    def describe(self) -> str:
+        return "double the power of target creature you control until end of turn"
+
+
+@dataclass(frozen=True)
 class DiscardHandThenDrawN(Effect):
     """Discard every card in your hand, then draw ``amount`` cards.
 

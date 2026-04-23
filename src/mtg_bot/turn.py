@@ -373,9 +373,12 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
     permanents the new land's controller controls.
 
     Called from every code path that puts a land onto the battlefield
-    (PlayLand, SearchLibraryForBasicLandTapped, etc.).
+    (PlayLand, SearchLibraryForBasicLandTapped, etc.). For effects
+    with targets, the controller's agent selects via choose_target;
+    if no legal target exists, the trigger fizzles.
     """
     controller = new_land.controller_id
+    p = state.player_by_id(controller)
     # Snapshot to avoid mid-iteration surprises if a trigger ETBs something.
     for obj in list(state.battlefield):
         if obj.controller_id != controller:
@@ -385,8 +388,24 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
                 continue
             state.log.append(f"{obj.printing.name}'s landfall triggers")
             state.resolving_source = obj
+            targets: tuple[tuple[str, int], ...] = ()
             try:
-                ability.effect.resolve(state, obj.controller_id, ())
+                effect = ability.effect
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, controller)
+                    if not legal:
+                        state.log.append(
+                            f"{obj.printing.name}'s landfall trigger "
+                            f"fizzles (no legal targets)"
+                        )
+                        continue
+                    if p.agent is not None:
+                        chosen = p.agent.choose_target(
+                            state, controller, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                effect.resolve(state, controller, targets)
             finally:
                 state.resolving_source = None
 
