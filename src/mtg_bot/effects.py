@@ -1789,6 +1789,43 @@ class EachOpponentDiscards(Effect):
 
 
 @dataclass(frozen=True)
+class EachOpponentSacrificesCreature(Effect):
+    """Each opponent sacrifices a nontoken creature of their choice.
+
+    Each sacrificing player picks via their agent's ``choose_sacrifice``.
+    If an opponent has no legal nontoken creature, they skip — no target
+    required to match the standard MTG "of their choice" wording.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            legal = [
+                o for o in state.battlefield
+                if o.controller_id == p.id
+                and o.printing.is_creature
+                and not o.printing.is_token
+            ]
+            if not legal or p.agent is None:
+                continue
+            chosen_id = p.agent.choose_sacrifice(
+                state, p.id, [o.id for o in legal]
+            )
+            obj = next((o for o in legal if o.id == chosen_id), legal[0])
+            state.log.append(f"P{p.id} sacrifices {obj.printing.name}")
+            move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return "each opponent sacrifices a nontoken creature of their choice"
+
+
+@dataclass(frozen=True)
 class TargetOpponentDiscards(Effect):
     """Target opponent discards ``count`` cards.
 

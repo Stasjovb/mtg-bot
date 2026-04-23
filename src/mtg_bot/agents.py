@@ -64,6 +64,19 @@ class Agent:
         graveyard, False = leave it on top of the library."""
         raise NotImplementedError
 
+    def choose_sacrifice(
+        self,
+        state: "GameState",
+        player_id: int,
+        legal_object_ids: list[int],
+    ) -> int:
+        """When forced to sacrifice, pick which battlefield object to sac.
+
+        Consumers (e.g., "each opponent sacrifices a nontoken creature")
+        pass the list of legal IDs they want the player to pick from.
+        """
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -106,3 +119,6 @@ class RandomAgent(Agent):
     def choose_surveil(self, state, player_id, top_card_id):
         # Coin flip: mill or keep. Good enough for a random-action baseline.
         return self.rng.random() < 0.5
+
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        return self.rng.choice(legal_object_ids)

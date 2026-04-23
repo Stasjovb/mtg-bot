@@ -4087,6 +4087,50 @@ def test_warmaker_gunship_effect_noop_paths():
     e.resolve(state, controller_id=0, targets=(("player", 1),))
 
 
+def test_susurian_dirgecraft_forces_opponent_sac():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # Give opponent two nontoken creatures.
+    victims = []
+    for _ in range(2):
+        bear = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(bear)
+        victims.append(bear)
+
+    ship = state.new_object(
+        EOE_CREATURES["Susurian Dirgecraft"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ship)
+    etb = next(
+        ab for ab in ship.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ship
+    etb.effect.resolve(state, 0)
+    # One of the two victims should now be in P1's graveyard.
+    sac_count = sum(1 for v in victims if v in state.players[1].graveyard)
+    assert sac_count == 1
+
+
+def test_each_opponent_sac_with_only_tokens_is_noop():
+    from mtg_bot.effects import EachOpponentSacrificesCreature
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state = _arena()
+    # P1 has only a token creature → can't be sacrificed.
+    robot = state.new_object(
+        TOKEN_PRINTINGS["Robot"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(robot)
+    EachOpponentSacrificesCreature().resolve(state, controller_id=0)
+    assert robot in state.battlefield
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

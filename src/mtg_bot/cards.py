@@ -25,6 +25,7 @@ from mtg_bot.effects import (
     DiscardSelf,
     DrawCards,
     EachOpponentDiscards,
+    EachOpponentSacrificesCreature,
     EachOpponentLosesLife,
     EachPlayerDraws,
     Effect,
@@ -939,6 +940,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=Surveil(amount=2),
+                ),
+            ),
+        ),
+        # Susurian Dirgecraft: {4}{B} 4/3 Spacecraft. ETB each opponent
+        # sacrifices a nontoken creature of their choice. Station 7+ for
+        # Menace (simplified to just Menace when stationed — real card has
+        # additional abilities we skip).
+        make_spacecraft(
+            "Susurian Dirgecraft", "{4}{B}", 4, 3,
+            station_threshold=7,
+            stationed_keywords={"menace"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=EachOpponentSacrificesCreature(),
                 ),
             ),
         ),
