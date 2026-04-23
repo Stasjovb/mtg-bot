@@ -63,6 +63,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureSpacecraftBoosted,
     ExileAllArtifactsWithManaValueAtMost,
     AttachToTargetCreatureYouControl,
+    CreateTokenAndAttachSelf,
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
     FocusFireEffect,
@@ -1528,6 +1529,36 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Auxiliary Boosters: {4}{W} Equipment. ETB create a 2/2 Robot
+        # token and auto-attach to it. Equipped creature gets +1/+2 and
+        # flying. Dropped: Equip {3} activated ability.
+        make_equipment(
+            "Auxiliary Boosters", "{4}{W}",
+            power_bonus=1, toughness_bonus=2,
+            granted_keywords=frozenset({"flying"}),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateTokenAndAttachSelf(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                    ),
+                ),
+            ),
+        ),
+        # Hylderblade: {B} Equipment. Equipped creature gets +3/+1.
+        # Void — end step: attach this to target creature you control.
+        # Dropped: Equip {4} activated ability.
+        make_equipment(
+            "Hylderblade", "{B}",
+            power_bonus=3, toughness_bonus=1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    requires_void=True,
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
         # Meltstrider's Gear: {G} Equipment. ETB auto-attach; equipped
         # creature gets +2/+1 and reach. Dropped: the Equip {5} activated
         # ability (Equip costs aren't modeled — the ETB attachment is

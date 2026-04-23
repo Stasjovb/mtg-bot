@@ -5613,6 +5613,72 @@ def test_attach_fizzle_paths():
     assert gear.attached_to is None
 
 
+def test_auxiliary_boosters_etb_creates_and_attaches():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_toughness, effective_keywords
+
+    state = _arena()
+    gear = state.new_object(
+        EOE_CREATURES["Auxiliary Boosters"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(gear)
+    etb = next(
+        ab for ab in gear.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = gear
+    etb.effect.resolve(state, 0)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1
+    robot = robots[0]
+    assert gear.attached_to == robot.id
+    # Robot is 2/2, Boosters grant +1/+2 + flying → 3/4 flying.
+    assert effective_power(state, robot) == 3
+    assert effective_toughness(state, robot) == 4
+    assert "flying" in effective_keywords(state, robot)
+
+
+def test_hylderblade_void_reattaches_at_end_step():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
+
+    state = _arena(step=Step.END, active=0)
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    hyl = state.new_object(
+        EOE_CREATURES["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(hyl)
+    # Void inactive → no re-attach.
+    run_beginning_of_end_step_triggers(state)
+    assert hyl.attached_to is None
+    # Activate Void.
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert hyl.attached_to == ally.id
+
+
+def test_end_step_trigger_fizzles_without_legal_targets():
+    """Hylderblade on an otherwise-empty battlefield: no target → fizzle."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
+
+    state = _arena(step=Step.END, active=0)
+    hyl = state.new_object(
+        EOE_CREATURES["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(hyl)
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert hyl.attached_to is None
+    assert any("fizzles" in l for l in state.log)
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

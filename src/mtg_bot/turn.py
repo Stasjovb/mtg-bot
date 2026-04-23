@@ -361,6 +361,7 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
     # Snapshot the battlefield so mid-iteration effects don't confuse us.
     candidates = list(state.battlefield)
     void_is_active = is_void_active(state)
+    ap = state.player_by_id(ap_id)
     for obj in candidates:
         if obj.controller_id != ap_id:
             continue
@@ -373,8 +374,24 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
                 f"{obj.printing.name}'s end-step ability triggers"
             )
             state.resolving_source = obj
+            # Target selection (mirrors _trigger_etb_abilities).
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            if effect.requires_target():
+                legal = effect.legal_targets(state, ap_id)
+                if not legal:
+                    state.resolving_source = None
+                    state.log.append(
+                        f"{obj.printing.name}'s end-step trigger fizzles "
+                        f"(no legal targets)"
+                    )
+                    continue
+                if ap.agent is not None:
+                    chosen = ap.agent.choose_target(state, ap_id, legal)
+                    if chosen is not None:
+                        targets = (chosen,)
             try:
-                ability.effect.resolve(state, obj.controller_id, ())
+                effect.resolve(state, obj.controller_id, targets)
             finally:
                 state.resolving_source = None
 

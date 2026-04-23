@@ -327,6 +327,48 @@ class AttachToTargetCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class CreateTokenAndAttachSelf(Effect):
+    """Create a token and attach the source (Equipment) to it.
+
+    Matches Auxiliary Boosters' ETB. Reads state.resolving_source for
+    the Equipment. No-op if source isn't Equipment.
+    """
+
+    token_printing: "CardPrinting"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        source = state.resolving_source
+        if source is None:
+            return
+        if "Equipment" not in source.printing.subtypes:
+            return
+        token = state.new_object(
+            self.token_printing, owner_id=controller_id,
+            zone=Zone.BATTLEFIELD,
+        )
+        state.log.append(
+            f"P{controller_id} creates a {self.token_printing.name} token"
+        )
+        put_into_battlefield(state, token, controller_id)
+        source.attached_to = token.id
+        state.log.append(
+            f"{source.printing.name} is attached to {token.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"create a {self.token_printing.name} token and attach this "
+            f"Equipment to it"
+        )
+
+
+@dataclass(frozen=True)
 class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
     """Target creature card from your graveyard enters the battlefield under
     your control. Fires ETB triggers (via put_into_battlefield).
