@@ -4593,6 +4593,35 @@ def test_countered_spell_goes_to_graveyard_and_no_effect():
     assert mouth.damage == 0
 
 
+def test_eusocial_engineering_landfall_makes_robot():
+    """Enchantment sits on battlefield and fires Landfall."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import fire_landfall_triggers
+
+    state = _arena()
+    euso = state.new_object(
+        EOE_CREATURES["Eusocial Engineering"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(euso)
+    land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    fire_landfall_triggers(state, land)
+    robots = [o for o in state.battlefield if o.printing.name == "Robot"]
+    assert len(robots) == 1
+
+
+def test_enchantment_is_permanent_but_not_creature():
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Eusocial Engineering"]
+    assert c.is_permanent is True
+    assert c.is_creature is False
+    assert c.is_instant is False
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

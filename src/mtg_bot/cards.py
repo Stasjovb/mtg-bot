@@ -327,6 +327,35 @@ def make_sorcery(name: str, cost: str, effect: Effect) -> CardPrinting:
     )
 
 
+def make_enchantment(
+    name: str,
+    cost: str,
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
+    legendary: bool = False,
+) -> CardPrinting:
+    """Build a non-Aura Enchantment permanent. Casts onto the battlefield
+    like any other permanent and sits there firing triggers or providing
+    static bonuses. Auras (enchant creature) aren't modeled yet.
+    """
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Enchantment"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
+        activated_abilities=tuple(activated_abilities),
+    )
+
+
 def make_token_creature(
     name: str,
     power: int,
@@ -1302,6 +1331,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="landfall",
                     effect=PumpSelfUntilEOT(power_bonus=1),
+                ),
+            ),
+        ),
+        # Eusocial Engineering: {3}{G}{G} Enchantment. Landfall → create
+        # a 2/2 Robot token. Simplification: drops Warp (our warp mechanic
+        # is creature-only; enchantment warps would need the flow wired
+        # for non-creature permanents).
+        make_enchantment(
+            "Eusocial Engineering", "{3}{G}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                    ),
                 ),
             ),
         ),
