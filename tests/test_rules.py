@@ -7389,6 +7389,30 @@ def test_search_library_forced_fetch_when_may_fail_false():
     assert xu in state.players[0].hand
 
 
+def test_colorless_land_taps_for_generic():
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards import UTILITY_LANDS, parse_mana_cost
+
+    state = _arena()
+    starforge = state.new_object(
+        UTILITY_LANDS["Secluded Starforge"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(starforge)
+    # Can pay {1} (pure generic).
+    assert can_pay_cost(state, 0, parse_mana_cost("{1}")) is True
+    # Cannot pay {W} (colored requirement not met).
+    assert can_pay_cost(state, 0, parse_mana_cost("{W}")) is False
+
+
+def test_colorless_land_is_in_all_printings():
+    from mtg_bot.cards import all_printings
+
+    printings = all_printings()
+    assert "Secluded Starforge" in printings
+    assert "Command Bridge" in printings
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

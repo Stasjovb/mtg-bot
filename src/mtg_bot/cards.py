@@ -584,6 +584,25 @@ def make_token_creature(
     )
 
 
+def make_colorless_land(name: str, subtypes_str: str = "") -> CardPrinting:
+    """A non-basic land that taps for {C} only. Useful for utility
+    lands whose activated abilities aren't modeled — taps-for-generic
+    still works via auto_tap_for_cost's generic-mana fallback.
+    """
+    type_line = f"Land — {subtypes_str}" if subtypes_str else "Land"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        produces=frozenset(),  # generic-only
+    )
+
+
 def make_shock_land(
     name: str, colors: tuple[str, str], subtypes_str: str,
     life_cost: int = 2,
@@ -634,6 +653,20 @@ BASIC_LANDS: dict[str, CardPrinting] = {
 # Shock-land cycle from EoE. Each is Land — L1 L2 producing both colors,
 # "As this land enters, you may pay 2 life. If you don't, it enters
 # tapped."
+UTILITY_LANDS: dict[str, CardPrinting] = {
+    # Secluded Starforge: simplified to just a {T}: Add {C} utility
+    # land. Dropped: the "{2},{T}, Tap X artifacts: +X/+0 UEOT" and
+    # "{5},{T}: create a Robot token" activated abilities (tap-X-things
+    # cost + Robot-token activated not worth wiring for one card).
+    "Secluded Starforge": make_colorless_land("Secluded Starforge"),
+    # Command Bridge: simplified to just a {T}: Add {C} utility land.
+    # Dropped: "enters tapped + sac-unless-tap-permanent" ETB (ETB
+    # replacement with an alt cost isn't modeled) and the "tap for
+    # any color" rider.
+    "Command Bridge": make_colorless_land("Command Bridge"),
+}
+
+
 SHOCK_LANDS: dict[str, CardPrinting] = {
     "Breeding Pool": make_shock_land(
         "Breeding Pool", ("G", "U"), "Forest Island",
@@ -2641,7 +2674,7 @@ CREATURE_POOL: dict[str, CardPrinting] = NONLAND_POOL
 
 
 def all_printings() -> dict[str, CardPrinting]:
-    return {**BASIC_LANDS, **SHOCK_LANDS, **NONLAND_POOL}
+    return {**BASIC_LANDS, **SHOCK_LANDS, **UTILITY_LANDS, **NONLAND_POOL}
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
