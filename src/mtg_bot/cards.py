@@ -2090,6 +2090,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ExileAllArtifactsWithManaValueAtMost(max_mv=3),
             )),
         ),
+        # Dark Endurance — +2/+0 and indestructible UEOT. Simplified:
+        # drops the "costs {1} less if it targets a blocking creature"
+        # rider (cost modification not yet modeled).
+        make_instant(
+            "Dark Endurance", "{1}{B}",
+            effect=PumpTargetCreatureUntilEOT(
+                power_bonus=2, toughness_bonus=0,
+                granted_keywords=frozenset({"indestructible"}),
+            ),
+        ),
         # Full Bore — +3/+2 UEOT on target creature you control.
         # Simplified: drops the "if it was cast for its warp cost, also
         # gains trample and haste UEOT" rider (warp-cast detection would

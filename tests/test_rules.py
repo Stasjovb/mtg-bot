@@ -5918,6 +5918,38 @@ def test_multi_target_agent_declines_after_min():
     assert bounced == 1
 
 
+def test_multi_target_etb_runs_out_of_legal_targets():
+    """Freighter ETB wants up to 2 but only 1 legal target → picks 1."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    for _ in range(6):
+        l = state.new_object(
+            BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(l)
+    # Only ONE enemy creature.
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(freighter)
+    _cast_spell(state, 0, freighter.id)
+    resolve_top_of_stack(state)  # Freighter enters → ETB triggered
+    # ETB targets picked at trigger-push time; fires with 1 target since
+    # only 1 legal. Resolve the ETB.
+    resolve_top_of_stack(state)
+    assert victim in state.players[1].hand
+
+
 def test_multi_target_agent_picks_out_of_set():
     """Agent returns a target not in the remaining set → stop picking early."""
     from mtg_bot.effects import ReturnUpToNTargetCreaturesToOwnersHands
@@ -5955,6 +5987,22 @@ def test_multi_target_agent_picks_out_of_set():
     _cast_spell(state, 0, freighter.id)
     # The cast-path loop should abort with 0 targets chosen (rogue agent).
     assert state.stack[-1].targets == ()
+
+
+def test_dark_endurance_pumps_and_protects():
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_power, effective_keywords
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    EOE_SPELLS["Dark Endurance"].spell_effect.resolve(
+        state, 0, (("creature", bear.id),)
+    )
+    assert effective_power(state, bear) == 4  # 2 + 2
+    assert "indestructible" in effective_keywords(state, bear)
 
 
 def test_full_bore_pumps_own_creature():
