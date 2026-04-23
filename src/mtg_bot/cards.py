@@ -2455,12 +2455,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Skystinger: {2}{G} 3/3 Reach. Dropped its "blocks a creature
-        # with flying → +5/+0 UEOT" trigger (blocks-with-filter trigger
-        # type not modeled).
+        # Skystinger: {2}{G} 3/3 Reach. Whenever this creature blocks a
+        # creature with flying, it gets +5/+0 until end of turn.
         make_creature(
             "Skystinger", "{2}{G}", 3, 3,
+            subtypes=("Insect", "Warrior"),
             keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="blocks_creature_with_flying",
+                    effect=PumpSelfUntilEOT(
+                        power_bonus=5, toughness_bonus=0,
+                    ),
+                ),
+            ),
         ),
         # Oreplate Pangolin: {1}{R} 2/2 Artifact Creature. "Whenever
         # another artifact you control enters, you may pay {1}. If you do,

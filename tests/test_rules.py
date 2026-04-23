@@ -7548,14 +7548,15 @@ def test_zookeeper_mechan_pump_activation():
     assert effective_power(state, ally) == 6  # 2 + 4
 
 
-def test_skystinger_is_reach_vanilla():
+def test_skystinger_has_blocks_flying_trigger():
     from mtg_bot.cards import EOE_CREATURES
 
     c = EOE_CREATURES["Skystinger"]
     assert "reach" in c.keywords
     assert c.power == 3 and c.toughness == 3
-    # No triggered abilities.
-    assert c.triggered_abilities == ()
+    # Blocks-a-flying-creature trigger pumps Skystinger +5/+0 UEOT.
+    assert len(c.triggered_abilities) == 1
+    assert c.triggered_abilities[0].trigger == "blocks_creature_with_flying"
 
 
 def test_all_fates_stalker_exiles_and_returns_on_death():

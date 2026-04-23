@@ -103,12 +103,33 @@ def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> N
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     """``assignments`` maps blocker id → attacker id."""
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import should_fire_trigger
+
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
         attacker = next(o for o in state.battlefield if o.id == attacker_id)
         blocker.blocking = attacker_id
         attacker.blocked_by.append(blocker_id)
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")
+        # Fire "whenever ~ blocks a creature with flying" triggers on
+        # the blocker (Skystinger). Extend with more filters as needed.
+        attacker_kws = effective_keywords(state, attacker)
+        for i, ability in enumerate(blocker.printing.triggered_abilities):
+            if ability.trigger != "blocks_creature_with_flying":
+                continue
+            if "flying" not in attacker_kws:
+                continue
+            if not should_fire_trigger(state, blocker.id, i, ability):
+                continue
+            state.log.append(
+                f"{blocker.printing.name}'s blocks-flying trigger fires"
+            )
+            state.resolving_source = blocker
+            try:
+                ability.effect.resolve(state, blocker.controller_id, ())
+            finally:
+                state.resolving_source = None
 
 
 def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
