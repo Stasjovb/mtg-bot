@@ -3851,6 +3851,57 @@ def test_conditional_on_tapped_creatures_forwards_targets():
     assert "tapped" in cond.describe()
 
 
+def test_sunstar_chaplain_conditional_plus_one():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    state.players[0].agent = None  # we'll drive the trigger manually
+    cpn = state.new_object(
+        EOE_CREATURES["Sunstar Chaplain"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(cpn)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+
+    trigger = cpn.printing.triggered_abilities[0]
+    # Condition unmet → no counter.
+    state.resolving_source = cpn
+    trigger.effect.resolve(state, 0, (("creature", ally.id),))
+    assert ally.plus_one_counters == 0
+
+    # Condition met: two tapped creatures.
+    cpn.tapped = True
+    ally.tapped = True
+    trigger.effect.resolve(state, 0, (("creature", ally.id),))
+    assert ally.plus_one_counters == 1
+
+
+def test_dawnstrike_vanguard_mass_buff_when_condition_met():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    van = state.new_object(
+        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(van)
+    for _ in range(2):
+        ally = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        ally.tapped = True
+        state.battlefield.append(ally)
+    van.tapped = True
+    assert "lifelink" in van.printing.keywords
+    trigger = van.printing.triggered_abilities[0]
+    state.resolving_source = van
+    trigger.effect.resolve(state, 0)
+    for o in state.battlefield:
+        if o.controller_id == 0:
+            assert o.plus_one_counters == 1
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

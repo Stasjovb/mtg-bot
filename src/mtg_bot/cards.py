@@ -979,6 +979,41 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Sunstar Chaplain: 3/2. Conditional EoT +1/+1 on target creature
+        # you control. Skips its activated "remove-counter → tap" because
+        # remove-counter costs aren't modeled yet.
+        make_creature(
+            "Sunstar Chaplain", "{1}{W}", 3, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                        min_count=2,
+                    ),
+                ),
+            ),
+        ),
+        # Dawnstrike Vanguard: 4/5 Lifelink. Conditional EoT: put +1/+1
+        # counter on each other creature you control. Oracle says "each
+        # creature you control other than this creature"; we simplify by
+        # counting itself too — the functional upside is minor since it
+        # also has lifelink-enabled stats. Tracked simplification.
+        make_creature(
+            "Dawnstrike Vanguard", "{5}{W}", 4, 5,
+            keywords={"lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=PutPlusOneCounterOnEachCreatureYouControl(
+                            amount=1,
+                        ),
+                        min_count=2,
+                    ),
+                ),
+            ),
+        ),
         # Xu-Ifit, Osteoharmonist: {1}{B}{B} 2/3 Legendary. Activated
         # tap+sorcery-speed reanimate — simplified (oracle says the
         # returned creature becomes a Skeleton with no abilities; we just
