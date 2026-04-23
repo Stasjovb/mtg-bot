@@ -1182,6 +1182,59 @@ class FamishedWorldsireETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class PutCardFromGraveyardOnBottomOfLibrary(Effect):
+    """Put target card from a graveyard on the bottom of its owner's
+    library. Matches Chrome Companion's activated ability. Any
+    graveyard is a legal target source (either player's).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import Zone
+
+        return [
+            ("card_in_graveyard", c.id)
+            for p in state.players
+            for c in p.graveyard
+            if c.zone == Zone.GRAVEYARD
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "card_in_graveyard":
+            return
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.LIBRARY
+            p.library.append(card)  # bottom = end of list
+            state.log.append(
+                f"{card.printing.name} put on the bottom of "
+                f"P{p.id}'s library"
+            )
+            return
+
+    def describe(self) -> str:
+        return (
+            "put target card from a graveyard on the bottom of its "
+            "owner's library"
+        )
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnEachOfUpToNTargetCreatures(Effect):
     """Put a +1/+1 counter on each of up to ``max_n`` target creatures.
 

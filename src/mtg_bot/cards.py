@@ -50,6 +50,7 @@ from mtg_bot.effects import (
     ExileTargetCreature,
     GainLife,
     LoseLife,
+    PutCardFromGraveyardOnBottomOfLibrary,
     PumpCreaturesYouControlUntilEOT,
     PutPlusOneCounterOnOpponentsCreature,
     PumpSelfUntilEOT,
@@ -2242,9 +2243,29 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Tannuk, Memorial Ensign", "{1}{R}{G}", 2, 4,
             legendary=True,
         ),
-        make_creature(  # Chrome Companion — dropped "cast: turn into creature" animation.
+        # Chrome Companion `{2}` 2/1 Artifact Creature. Real oracle:
+        # "Whenever this creature becomes tapped, you gain 1 life.
+        # {2}, {T}: Put target card from a graveyard on the bottom of
+        # its owner's library."
+        make_creature(
             "Chrome Companion", "{2}", 2, 1,
             artifact=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=GainLife(amount=1),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"),
+                        mana_str="{2}",
+                        tap_self=True,
+                    ),
+                    effect=PutCardFromGraveyardOnBottomOfLibrary(),
+                ),
+            ),
         ),
         # -- Batch #2 of vanilla-simplified creatures. Dropped complex
         # text for each; shipped as keyword-only (or literal vanilla)
