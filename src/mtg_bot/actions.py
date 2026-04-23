@@ -827,9 +827,12 @@ def _activate_ability(
             legal = [t for t in legal if t[1] != source.id]
         if legal:
             p = state.player_by_id(player_id)
-            chosen = p.agent.choose_target(state, player_id, legal)
-            if chosen is not None:
-                targets = (chosen,)
+            if p.agent is not None:
+                chosen = p.agent.choose_target(state, player_id, legal)
+                if chosen is not None:
+                    targets = (chosen,)
+            else:
+                targets = (legal[0],)
 
     # "Sacrifice another ..." paid BEFORE sacrifice-self so the source
     # stays on the battlefield and is excluded from the option set.
