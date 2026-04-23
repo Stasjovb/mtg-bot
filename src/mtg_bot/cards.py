@@ -82,6 +82,7 @@ from mtg_bot.effects import (
     DrawCardPerMulticoloredPermanent,
     DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
+    FamishedWorldsireETBEffect,
     OptionalSacLandOrLanderForBasicLandRamp,
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
@@ -225,6 +226,11 @@ class CardPrinting:
     # the planeswalker enters the battlefield it starts with this many
     # loyalty counters on it (GameObject.loyalty_counters).
     loyalty: int | None = None
+    # Devour land N: "As this creature enters, you may sacrifice any
+    # number of lands. It enters with N times that many +1/+1 counters
+    # on it." Non-zero enables the replacement in put_into_battlefield.
+    # 0 = no devour. Matches Famished Worldsire (N=3).
+    devour_land_multiplier: int = 0
     # EoE Spacecraft Station mechanic. For a Spacecraft card: once it has
     # station_threshold or more charge counters on it, it becomes an artifact
     # creature with its printed P/T and gains stationed_keywords. None on
@@ -389,6 +395,7 @@ def make_creature(
     subtypes: tuple[str, ...] = (),
     dynamic_pt_formula: str | None = None,
     is_token_doubler: bool = False,
+    devour_land_multiplier: int = 0,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -418,6 +425,7 @@ def make_creature(
         enters_with_counters_from_x=enters_with_counters_from_x,
         dynamic_pt_formula=dynamic_pt_formula,
         is_token_doubler=is_token_doubler,
+        devour_land_multiplier=devour_land_multiplier,
     )
 
 
@@ -3171,8 +3179,25 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Famished Worldsire — complex Devour + search. Ship as 6/6 vanilla.
+        # Famished Worldsire `{5}{G}{G}{G}` Creature — Leviathan.
+        # - Ward {3}.
+        # - Devour land 3: "As this creature enters, you may sacrifice
+        #   any number of lands. It enters with three times that many
+        #   +1/+1 counters on it."
+        # - ETB: "Look at the top X cards of your library, where X is
+        #   this creature's power. Put any number of land cards from
+        #   among them onto the battlefield tapped, then shuffle."
+        make_creature(
             "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
+            subtypes=("Leviathan",),
+            ward="{3}",
+            devour_land_multiplier=3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=FamishedWorldsireETBEffect(),
+                ),
+            ),
         ),
         make_creature(  # Gene Pollinator — mana ability. Ship as vanilla Artifact Creature 1/2.
             "Gene Pollinator", "{G}", 1, 2,

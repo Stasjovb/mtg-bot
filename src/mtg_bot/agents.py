@@ -133,6 +133,17 @@ class Agent:
         an int in ``[0, upper_bound]``."""
         raise NotImplementedError
 
+    def choose_devour_lands(
+        self,
+        state: "GameState",
+        player_id: int,
+        land_ids: list[int],
+    ) -> list[int]:
+        """For Devour land N: pick any subset of ``land_ids`` to
+        sacrifice. Returning an empty list declines. Returned ids must
+        be a subset of ``land_ids``; others are ignored."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -200,3 +211,9 @@ class RandomAgent(Agent):
         # almost always correct for a random-action baseline — saving mana
         # rarely pays off when the agent picks moves uniformly at random.
         return upper_bound
+
+    def choose_devour_lands(self, state, player_id, land_ids):
+        # Random-baseline: never sacrifice lands for Devour. Trading
+        # lands for +1/+1 counters is usually a losing trade and a
+        # uniform random agent has no way to evaluate the tradeoff.
+        return []

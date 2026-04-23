@@ -872,6 +872,64 @@ class ExileEachOpponentsGraveyard(Effect):
         return "exile each opponent's graveyard"
 
 
+@dataclass(frozen=True)
+class FamishedWorldsireETBEffect(Effect):
+    """Famished Worldsire's ETB: "Look at the top X cards of your
+    library, where X is this creature's power. Put any number of land
+    cards from among them onto the battlefield tapped, then shuffle."
+
+    Reads state.resolving_source to compute X from the source's
+    effective power (post-Devour counters). Picks all land cards from
+    the top-X (a strong simplification — the oracle allows choosing
+    "any number", but greedy land-picking is strictly ramp-positive).
+    Non-land cards go back into the library (bottom, random order).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _random
+        from mtg_bot.game import Zone, effective_power
+        from mtg_bot.turn import fire_landfall_triggers
+
+        source = state.resolving_source
+        if source is None:
+            return
+        x = effective_power(state, source)
+        if x <= 0:
+            return
+        p = state.player_by_id(controller_id)
+        examined = p.library[:x]
+        lands = [c for c in examined if c.printing.is_land]
+        rest = [c for c in examined if c not in lands]
+        for land in lands:
+            p.library.remove(land)
+            land.zone = Zone.BATTLEFIELD
+            land.tapped = True
+            land.controller_id = controller_id
+            state.battlefield.append(land)
+            state.log.append(
+                f"P{controller_id} puts {land.printing.name} onto the "
+                f"battlefield tapped (Famished Worldsire)"
+            )
+            fire_landfall_triggers(state, land)
+        # Shuffle what's left (rest goes back where it was, then the
+        # whole library is shuffled per oracle).
+        rng = _random.Random(
+            hash(("famished_shuffle", state.turn_number, controller_id,
+                  len(p.library)))
+        )
+        rng.shuffle(p.library)
+
+    def describe(self) -> str:
+        return (
+            "look at the top X cards of your library, where X is this "
+            "creature's power; put any number of land cards from among "
+            "them onto the battlefield tapped, then shuffle"
+        )
+
+
 def _multicolored_permanents_count(
     state: "GameState", controller_id: int
 ) -> int:

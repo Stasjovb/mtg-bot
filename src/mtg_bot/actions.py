@@ -924,12 +924,56 @@ def put_into_battlefield(
     # battlefield (loyalty_counters starts at 0).
     if obj.printing.is_planeswalker and obj.printing.loyalty is not None:
         obj.loyalty_counters = obj.printing.loyalty
+    # Devour land N: as ``obj`` enters, agent may sacrifice any number
+    # of lands; obj enters with N counters per land sacrificed.
+    # Simplification: the random baseline doesn't ramp Famished's own
+    # counters — see docstring on CardPrinting.devour_land_multiplier.
+    if obj.printing.devour_land_multiplier > 0:
+        _apply_devour(state, obj, controller_id)
     state.battlefield.append(obj)
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:
         _fire_artifact_enters_triggers(state, obj)
     if obj.printing.is_creature or obj.printing.is_artifact:
         _fire_creature_or_artifact_enters_triggers(state, obj)
+
+
+def _apply_devour(
+    state: GameState, obj: "GameObject", controller_id: int
+) -> None:
+    """Devour land N: ask the agent (via ``choose_devour_lands``) for
+    the subset of lands to sacrifice; sacrifice those and add
+    N * (count sacrificed) +1/+1 counters to ``obj``.
+    """
+    from mtg_bot.turn import sacrifice as _sacrifice
+
+    p = state.player_by_id(controller_id)
+    if p.agent is None:
+        return
+    land_ids = [
+        o.id for o in state.battlefield
+        if o.controller_id == controller_id and o.printing.is_land
+    ]
+    if not land_ids:
+        return
+    picks = p.agent.choose_devour_lands(state, controller_id, land_ids)
+    valid_picks = [pid for pid in picks if pid in set(land_ids)]
+    sacrificed = 0
+    for pid in valid_picks:
+        victim = next(
+            (o for o in state.battlefield if o.id == pid), None
+        )
+        if victim is None or not victim.printing.is_land:
+            continue
+        _sacrifice(state, victim)
+        sacrificed += 1
+    if sacrificed > 0:
+        counters = obj.printing.devour_land_multiplier * sacrificed
+        obj.plus_one_counters += counters
+        state.log.append(
+            f"{obj.printing.name} devours {sacrificed} land(s) and "
+            f"enters with {counters} +1/+1 counters"
+        )
 
 
 def _fire_creature_or_artifact_enters_triggers(
