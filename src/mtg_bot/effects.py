@@ -873,6 +873,87 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class DyadrineAttackEffect(Effect):
+    """Dyadrine, Synthesis Amalgam's attack trigger:
+    "Whenever you attack, you may remove a +1/+1 counter from each of
+    two creatures you control. If you do, draw a card and create a
+    2/2 colorless Robot artifact creature token."
+
+    Simplifications:
+    - Agent always opts to pay the cost when possible (consistent
+      with other OptionalSac-like effects in the codebase).
+    - The two creatures are picked by iteration order — the agent's
+      choose_sacrifice hook is re-used to select one creature at a
+      time so at least some agency is exposed.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        candidates = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.printing.is_creature
+            and o.plus_one_counters > 0
+        ]
+        if len(candidates) < 2:
+            state.log.append(
+                "Dyadrine's attack trigger: fewer than 2 creatures "
+                "with +1/+1 counters — skipped"
+            )
+            return
+        picks: list = []
+        remaining = list(candidates)
+        for _ in range(2):
+            chosen = remaining[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, controller_id, [o.id for o in remaining]
+                )
+                chosen = next(
+                    (o for o in remaining if o.id == pick_id),
+                    remaining[0],
+                )
+            chosen.plus_one_counters -= 1
+            picks.append(chosen)
+            remaining.remove(chosen)
+            state.log.append(
+                f"Dyadrine removes +1/+1 counter from "
+                f"{chosen.printing.name} (now {chosen.plus_one_counters})"
+            )
+        # Draw a card.
+        if p.library:
+            card = p.library.pop(0)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            state.log.append(
+                f"Dyadrine: P{controller_id} draws {card.printing.name}"
+            )
+        # Create the Robot token.
+        token = state.new_object(
+            TOKEN_PRINTINGS["Robot"], owner_id=controller_id,
+            zone=Zone.BATTLEFIELD,
+        )
+        put_into_battlefield(state, token, controller_id)
+        state.log.append(
+            f"Dyadrine: P{controller_id} creates a Robot token"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you may remove a +1/+1 counter from each of two creatures "
+            "you control; if you do, draw a card and create a 2/2 "
+            "colorless Robot artifact creature token"
+        )
+
+
+@dataclass(frozen=True)
 class PutLoyaltyCounterOnSelf(Effect):
     """Put ``amount`` loyalty counter(s) on the ability's source.
 

@@ -78,6 +78,7 @@ from mtg_bot.effects import (
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
     OptionalPutCreatureFromHandOntoBattlefield,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
@@ -3195,16 +3196,26 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             subtypes=("Elemental", "Lhurgoyf"),
             dynamic_pt_formula="cosmogoyf",
         ),
-        # Dyadrine, Synthesis Amalgam `{X}{G}{W}` — Trample. Enters with
-        # +1/+1 counters equal to the amount of mana spent to cast it
-        # (X + 2, since the base cost has {G}{W}). Attack trigger
-        # (remove-counters → draw + Robot token) still simplified away.
+        # Dyadrine, Synthesis Amalgam `{X}{G}{W}`:
+        # - Trample.
+        # - Enters with +1/+1 counters equal to the amount of mana
+        #   spent to cast it (X + base generic + colored pips).
+        # - Whenever you attack, you may remove a +1/+1 counter from
+        #   each of two creatures you control. If you do, draw a card
+        #   and create a 2/2 colorless Robot artifact creature token.
         make_creature(
             "Dyadrine, Synthesis Amalgam", "{X}{G}{W}", 0, 1,
             artifact=True,
             legendary=True,
+            subtypes=("Construct",),
             keywords={"trample"},
             enters_with_counters_from_x="mana_spent",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=DyadrineAttackEffect(),
+                ),
+            ),
         ),
         # Virulent Silencer `{3}` 2/3 Artifact Creature — Robot Assassin.
         # "Whenever a nontoken artifact creature you control deals combat
