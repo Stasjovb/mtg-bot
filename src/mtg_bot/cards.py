@@ -48,6 +48,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureSpacecraftBoosted,
     ExileAllCreaturesAndSpacecraft,
     FocusFireEffect,
+    SelfMill,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     Sequence,
@@ -1051,6 +1052,30 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="landfall",
                     effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
+        # Seedship Broodtender: {B}{G} 2/3. ETB mill 3; activated
+        # sorcery-speed reanimate (mana + sac self). Real card says
+        # "creature or Spacecraft" graveyard card — we restrict to
+        # creature for now.
+        make_creature(
+            "Seedship Broodtender", "{B}{G}", 2, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=SelfMill(amount=3),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}{B}{G}"),
+                        mana_str="{3}{B}{G}",
+                        sacrifice_self=True,
+                    ),
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+                    sorcery_speed=True,
                 ),
             ),
         ),

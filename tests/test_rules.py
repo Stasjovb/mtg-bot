@@ -3729,6 +3729,55 @@ def test_return_creature_to_hand_noop_paths():
     assert "hand" in e.describe()
 
 
+def test_self_mill_moves_cards_to_graveyard():
+    from mtg_bot.effects import SelfMill
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    e = SelfMill(amount=3)
+    assert "mill" in e.describe()
+    e.resolve(state, controller_id=0)
+    assert len(state.players[0].library) == 2
+    assert len(state.players[0].graveyard) >= 3
+
+
+def test_self_mill_empty_library():
+    from mtg_bot.effects import SelfMill
+
+    state = _arena()  # library empty
+    SelfMill(amount=5).resolve(state, controller_id=0)  # no crash
+
+
+def test_seedship_broodtender_etb_and_reanimate():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    _stock_library(state, 0, count=10)
+    # Pre-seed a creature card in graveyard.
+    gone = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD
+    )
+    state.players[0].graveyard.append(gone)
+
+    broodt = state.new_object(
+        EOE_CREATURES["Seedship Broodtender"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(broodt)
+    # Fire ETB (mills 3).
+    etb = next(
+        ab for ab in broodt.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = broodt
+    etb.effect.resolve(state, 0)
+    assert len(state.players[0].library) == 10 - 3
+
+    # Fire activated (reanimate the Wild Bear).
+    act = broodt.printing.activated_abilities[0]
+    assert act.sorcery_speed is True
+    act.effect.resolve(state, 0, (("graveyard_creature", gone.id),))
+    assert gone in state.battlefield
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

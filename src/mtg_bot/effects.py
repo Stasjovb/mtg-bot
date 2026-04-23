@@ -375,6 +375,37 @@ class Surveil(Effect):
 
 
 @dataclass(frozen=True)
+class SelfMill(Effect):
+    """Controller mills ``amount`` cards from the top of their own library.
+
+    Matches oracle text like "mill three cards" on triggered abilities,
+    where no target selection is needed.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        milled = 0
+        for _ in range(self.amount):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            milled += 1
+        state.log.append(f"P{controller_id} mills {milled} cards")
+
+    def describe(self) -> str:
+        return f"mill {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class MillTargetPlayer(Effect):
     """Target player puts the top N cards of their library into their
     graveyard.
