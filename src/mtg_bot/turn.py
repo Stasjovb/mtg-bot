@@ -149,6 +149,13 @@ def move_off_battlefield(
     if destination == "graveyard" and (was_creature or obj.printing.is_artifact):
         _fire_your_creature_or_artifact_dies_triggers(state, obj)
 
+    # Observer trigger: "whenever another creature you control dies or
+    # is put into exile" — Syr Vondam, Sunstar Exemplar. Fires on both
+    # graveyard and exile destinations, creatures only, excluding the
+    # dying object (the "another" qualifier).
+    if was_creature and destination in ("graveyard", "exile"):
+        _fire_another_creature_dies_or_exiled_triggers(state, obj)
+
     # Generic "when this leaves the battlefield" triggers — fires for
     # artifacts, enchantments, and anything else with a matching
     # triggered ability. Used by Cryogen Relic ("enters or leaves →
@@ -197,6 +204,52 @@ def _fire_your_creature_or_artifact_dies_triggers(
             )
             state.resolving_source = obs
             controller = state.player_by_id(controller_id)
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            try:
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, controller_id)
+                    if not legal:
+                        state.log.append(
+                            f"{obs.printing.name}'s trigger fizzles "
+                            f"(no legal targets)"
+                        )
+                        continue
+                    if controller.agent is not None:
+                        chosen = controller.agent.choose_target(
+                            state, controller_id, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                effect.resolve(state, controller_id, targets)
+            finally:
+                state.resolving_source = None
+
+
+def _fire_another_creature_dies_or_exiled_triggers(
+    state: GameState, dead: "GameObject"
+) -> None:
+    """Fire "whenever another creature you control dies or is put into
+    exile" observer triggers. Iterates the dying creature's controller's
+    battlefield; the dead object is already moved off so it's naturally
+    excluded (matches the "another" qualifier). Effects requiring a
+    target use the standard agent target-selection path.
+    """
+    controller_id = dead.controller_id
+    controller = state.player_by_id(controller_id)
+    for obs in list(state.battlefield):
+        if obs.controller_id != controller_id:
+            continue
+        for i, ability in enumerate(obs.printing.triggered_abilities):
+            if ability.trigger != "another_creature_you_control_dies_or_exiled":
+                continue
+            if not should_fire_trigger(state, obs.id, i, ability):
+                continue
+            state.log.append(
+                f"{obs.printing.name}'s another-creature-dies-or-exiled "
+                f"trigger fires"
+            )
+            state.resolving_source = obs
             effect = ability.effect
             targets: tuple[tuple[str, int], ...] = ()
             try:

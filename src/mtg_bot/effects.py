@@ -2632,6 +2632,53 @@ class ConditionalOnTappedCreatures(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalIfSourcePowerAtLeast(Effect):
+    """Run ``effect`` only if the triggering source's effective power is
+    at least ``threshold`` at resolution. Reads state.resolving_source
+    for the source (typically set by the trigger dispatcher).
+
+    Matches oracle wording like "while its power is 4 or greater" on
+    Syr Vondam, Sunstar Exemplar's leaves-battlefield trigger.
+    """
+
+    effect: Effect
+    threshold: int = 4
+
+    def requires_target(self) -> bool:
+        return self.effect.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.effect.legal_targets(state, controller_id)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        source = state.resolving_source
+        if source is None:
+            state.log.append("power-threshold conditional has no source")
+            return
+        power = effective_power(state, source)
+        if power < self.threshold:
+            state.log.append(
+                f"conditional skipped (need power ≥ {self.threshold}, "
+                f"have {power})"
+            )
+            return
+        self.effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"if this permanent's power is {self.threshold} or greater, "
+            f"{self.effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class DealDamageEachOpponent(Effect):
     """Deal ``amount`` damage to each living opponent. Untargeted — mass
     burn half of Ruinous Rampage's choice.
@@ -5567,6 +5614,10 @@ class TriggeredAbility:
             ),
             "combat_damage_to_player": (
                 "Whenever this creature deals combat damage to a player"
+            ),
+            "another_creature_you_control_dies_or_exiled": (
+                "Whenever another creature you control dies or is put "
+                "into exile"
             ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."

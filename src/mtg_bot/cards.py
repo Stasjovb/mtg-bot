@@ -15,6 +15,7 @@ from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
     ConditionalIfOpponentHasMoreLands,
+    ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
@@ -2167,10 +2168,34 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Syr Vondam, Sunstar Exemplar — dropped die/exile → counter, death rider.
+        # Syr Vondam, Sunstar Exemplar `{W}{B}` 2/2 Legendary Creature.
+        # Real oracle: "Vigilance, menace. Whenever another creature you
+        # control dies or is put into exile, put a +1/+1 counter on Syr
+        # Vondam and you gain 1 life. When Syr Vondam dies or is put
+        # into exile while its power is 4 or greater, destroy up to
+        # one target nonland permanent."
+        # The self death-rider uses leaves_battlefield — it already
+        # fires on graveyard and exile paths and skips bounce-to-hand.
+        make_creature(
             "Syr Vondam, Sunstar Exemplar", "{W}{B}", 2, 2,
             legendary=True,
             keywords={"vigilance", "menace"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="another_creature_you_control_dies_or_exiled",
+                    effect=Sequence(effects=(
+                        PutPlusOneCounterOnSelf(amount=1),
+                        GainLife(amount=1),
+                    )),
+                ),
+                TriggeredAbility(
+                    trigger="leaves_battlefield",
+                    effect=ConditionalIfSourcePowerAtLeast(
+                        effect=DestroyTargetNonlandPermanent(),
+                        threshold=4,
+                    ),
+                ),
+            ),
         ),
         # Syr Vondam, the Lucent `{2}{W}{B}{B}` 4/4 Legendary Creature.
         # Real oracle: "Deathtouch, lifelink. Whenever Syr Vondam enters
