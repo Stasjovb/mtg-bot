@@ -7413,6 +7413,40 @@ def test_colorless_land_is_in_all_printings():
     assert "Command Bridge" in printings
 
 
+def test_planet_lands_enter_tapped_and_produce_one_color():
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards import PLANET_LANDS
+
+    for name, expected_color in [
+        ("Adagia, Windswept Bastion", "W"),
+        ("Uthros, Titanic Godcore", "U"),
+        ("Susur Secundi, Void Altar", "B"),
+        ("Kavaron, Memorial World", "R"),
+        ("Evendo, Waking Haven", "G"),
+    ]:
+        state = _arena()
+        card = state.new_object(
+            PLANET_LANDS[name], owner_id=0, zone=Zone.HAND
+        )
+        state.players[0].hand.append(card)
+        _play_land(state, 0, card.id)
+        assert card in state.battlefield
+        assert card.tapped is True
+        assert expected_color in card.printing.produces
+
+
+def test_planet_land_in_all_printings():
+    from mtg_bot.cards import all_printings
+
+    printings = all_printings()
+    for name in (
+        "Adagia, Windswept Bastion", "Uthros, Titanic Godcore",
+        "Susur Secundi, Void Altar", "Kavaron, Memorial World",
+        "Evendo, Waking Haven",
+    ):
+        assert name in printings
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

@@ -198,6 +198,9 @@ class CardPrinting:
     # enters untapped, no enters tapped. 0 means "no choice — enters
     # per its usual rules".
     shock_land_life_cost: int = 0
+    # When True, this card always enters the battlefield tapped
+    # (Planet-style utility lands and other "enters tapped" permanents).
+    enters_tapped: bool = False
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches
     # Embrace Oblivion's "As an additional cost to cast this spell,
@@ -584,6 +587,29 @@ def make_token_creature(
     )
 
 
+def make_planet_land(
+    name: str, color: str,
+) -> CardPrinting:
+    """EoE Planet land: enters tapped, taps for a single color.
+    Simplification: drops the Station mechanic and all tiered abilities
+    (Planets with Station are functionally a non-creature Spacecraft —
+    not modeled for Planets here).
+    """
+    type_line = f"Land — Planet"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        produces=frozenset({color}),
+        enters_tapped=True,
+    )
+
+
 def make_colorless_land(name: str, subtypes_str: str = "") -> CardPrinting:
     """A non-basic land that taps for {C} only. Useful for utility
     lands whose activated abilities aren't modeled — taps-for-generic
@@ -653,6 +679,25 @@ BASIC_LANDS: dict[str, CardPrinting] = {
 # Shock-land cycle from EoE. Each is Land — L1 L2 producing both colors,
 # "As this land enters, you may pay 2 life. If you don't, it enters
 # tapped."
+PLANET_LANDS: dict[str, CardPrinting] = {
+    "Adagia, Windswept Bastion": make_planet_land(
+        "Adagia, Windswept Bastion", "W",
+    ),
+    "Uthros, Titanic Godcore": make_planet_land(
+        "Uthros, Titanic Godcore", "U",
+    ),
+    "Susur Secundi, Void Altar": make_planet_land(
+        "Susur Secundi, Void Altar", "B",
+    ),
+    "Kavaron, Memorial World": make_planet_land(
+        "Kavaron, Memorial World", "R",
+    ),
+    "Evendo, Waking Haven": make_planet_land(
+        "Evendo, Waking Haven", "G",
+    ),
+}
+
+
 UTILITY_LANDS: dict[str, CardPrinting] = {
     # Secluded Starforge: simplified to just a {T}: Add {C} utility
     # land. Dropped: the "{2},{T}, Tap X artifacts: +X/+0 UEOT" and
@@ -2674,7 +2719,13 @@ CREATURE_POOL: dict[str, CardPrinting] = NONLAND_POOL
 
 
 def all_printings() -> dict[str, CardPrinting]:
-    return {**BASIC_LANDS, **SHOCK_LANDS, **UTILITY_LANDS, **NONLAND_POOL}
+    return {
+        **BASIC_LANDS,
+        **SHOCK_LANDS,
+        **UTILITY_LANDS,
+        **PLANET_LANDS,
+        **NONLAND_POOL,
+    }
 
 
 def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:

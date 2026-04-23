@@ -211,7 +211,8 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     p.hand.remove(card)
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
-    card.tapped = False
+    # "Enters tapped" covers Planets + most non-basic utility lands.
+    card.tapped = bool(card.printing.enters_tapped)
     # Shock land: optional life payment on ETB. Agent decides; if they
     # can't/won't pay, the land enters tapped.
     life_cost = card.printing.shock_land_life_cost
