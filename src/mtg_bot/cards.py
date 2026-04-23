@@ -46,6 +46,7 @@ from mtg_bot.effects import (
     GainLife,
     LoseLife,
     PumpCreaturesYouControlUntilEOT,
+    PutPlusOneCounterOnOpponentsCreature,
     PumpSelfUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
@@ -1689,6 +1690,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="sacrifice_creature_or_artifact",
                     effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
+        # Sunset Saboteur: {1}{B} 4/1 Menace. Attacks-trigger puts a
+        # +1/+1 counter on a creature an opponent controls (unusual
+        # flavor — buffing their threat). Dropped: Ward—Discard a card
+        # (non-mana ward costs not modeled).
+        make_creature(
+            "Sunset Saboteur", "{1}{B}", 4, 1,
+            keywords={"menace"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=PutPlusOneCounterOnOpponentsCreature(amount=1),
                 ),
             ),
         ),

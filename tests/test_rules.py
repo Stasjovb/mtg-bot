@@ -6633,6 +6633,63 @@ def test_exile_until_leaves_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+def test_sunset_saboteur_attacks_trigger_fires():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import declare_attackers
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    sab = state.new_object(
+        EOE_CREATURES["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    sab.summoning_sick = False
+    state.battlefield.append(sab)
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+    declare_attackers(state, [sab.id])
+    assert enemy.plus_one_counters == 1
+
+
+def test_attacks_trigger_fizzles_without_targets():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import declare_attackers
+
+    state = _arena()
+    sab = state.new_object(
+        EOE_CREATURES["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    sab.summoning_sick = False
+    state.battlefield.append(sab)
+    # No opponent creatures — trigger fizzles.
+    declare_attackers(state, [sab.id])
+    assert any("fizzles" in l for l in state.log)
+
+
+def test_put_counter_on_opponent_creature_rejects_own():
+    from mtg_bot.effects import PutPlusOneCounterOnOpponentsCreature
+
+    state = _arena()
+    mine = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mine)
+    e = PutPlusOneCounterOnOpponentsCreature(amount=1)
+    assert e.requires_target() is True
+    assert "opponent" in e.describe()
+    legal = {tid for _, tid in e.legal_targets(state, 0)}
+    assert mine.id not in legal
+    # Even if passed, filtered at resolve.
+    e.resolve(state, controller_id=0, targets=(("creature", mine.id),))
+    assert mine.plus_one_counters == 0
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

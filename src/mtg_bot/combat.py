@@ -49,7 +49,7 @@ def can_block(
 
 
 def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
-    from mtg_bot.turn import tap_permanent
+    from mtg_bot.turn import tap_permanent, should_fire_trigger
 
     for oid in attacker_ids:
         obj = next(o for o in state.battlefield if o.id == oid)
@@ -63,6 +63,42 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
             state.player_by_id(
                 obj.controller_id
             ).attacked_with_spacecraft_this_turn = True
+        # Fire "whenever this creature attacks" triggers on the attacker.
+        _fire_attacks_triggers(state, obj, should_fire_trigger)
+
+
+def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> None:
+    for i, ability in enumerate(attacker.printing.triggered_abilities):
+        if ability.trigger != "attacks":
+            continue
+        if not should_fire_trigger(state, attacker.id, i, ability):
+            continue
+        state.log.append(
+            f"{attacker.printing.name}'s attacks trigger fires"
+        )
+        state.resolving_source = attacker
+        controller = state.player_by_id(attacker.controller_id)
+        effect = ability.effect
+        targets: tuple[tuple[str, int], ...] = ()
+        if effect.requires_target():
+            legal = effect.legal_targets(state, attacker.controller_id)
+            if not legal:
+                state.resolving_source = None
+                state.log.append(
+                    f"{attacker.printing.name}'s attacks trigger "
+                    f"fizzles (no legal targets)"
+                )
+                continue
+            if controller.agent is not None:
+                chosen = controller.agent.choose_target(
+                    state, attacker.controller_id, legal
+                )
+                if chosen is not None:
+                    targets = (chosen,)
+        try:
+            effect.resolve(state, attacker.controller_id, targets)
+        finally:
+            state.resolving_source = None
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:

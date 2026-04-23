@@ -2485,6 +2485,51 @@ class PutPlusOneCounterOnSelf(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCounterOnOpponentsCreature(Effect):
+    """Put a +1/+1 counter on a creature an opponent controls. Matches
+    Sunset Saboteur's attacks trigger — unusual flavor (buffing an
+    opponent's creature in exchange for the trigger's other effects).
+    """
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or obj.controller_id == controller_id:
+            return
+        obj.plus_one_counters += self.amount
+        state.log.append(
+            f"{obj.printing.name} gets a +1/+1 counter "
+            f"(now {obj.plus_one_counters})"
+        )
+
+    def describe(self) -> str:
+        return "put a +1/+1 counter on target creature an opponent controls"
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnCreatureYouControl(Effect):
     """Put N +1/+1 counter(s) on target creature you control.
 
@@ -3190,6 +3235,7 @@ class TriggeredAbility:
             "creature_or_artifact_enters_you_control": (
                 "Whenever another creature or artifact you control enters"
             ),
+            "attacks": "Whenever ~ attacks",
             "creature_you_control_with_counter_dies": (
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"
