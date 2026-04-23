@@ -1913,6 +1913,35 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Weftstalker Ardent: {2}{R} 3/2. Whenever another creature or
+        # artifact you control enters, this creature deals 1 damage to
+        # each opponent. Dropped: Warp {R} (would work but printed text
+        # is the main card; skipping to keep the change tight).
+        make_creature(
+            "Weftstalker Ardent", "{2}{R}", 3, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="creature_or_artifact_enters_you_control",
+                    effect=DealDamageEachOpponent(amount=1),
+                ),
+            ),
+            warp="{R}",
+        ),
+        # Haliya, Guided by Light: {2}{W} 2/3 Legendary. Whenever Haliya
+        # or another creature or artifact you control enters, you gain
+        # 1 life. Dropped the "draw if you've gained 3 life this turn"
+        # EoT rider + Warp {W} (life-gained-this-turn tracking not yet
+        # modeled).
+        make_creature(
+            "Haliya, Guided by Light", "{2}{W}", 2, 3,
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="creature_or_artifact_enters_you_control",
+                    effect=GainLife(amount=1),
+                ),
+            ),
+        ),
         # Kavaron Skywarden: 4/5 Reach. Void — at your end step, put a
         # +1/+1 counter on this creature.
         make_creature(

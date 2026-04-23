@@ -3049,6 +3049,9 @@ class TriggeredAbility:
             "artifact_enters_you_control": (
                 "Whenever another artifact you control enters"
             ),
+            "creature_or_artifact_enters_you_control": (
+                "Whenever another creature or artifact you control enters"
+            ),
             "creature_you_control_with_counter_dies": (
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"

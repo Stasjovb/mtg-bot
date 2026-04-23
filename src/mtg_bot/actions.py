@@ -631,6 +631,39 @@ def put_into_battlefield(
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:
         _fire_artifact_enters_triggers(state, obj)
+    if obj.printing.is_creature or obj.printing.is_artifact:
+        _fire_creature_or_artifact_enters_triggers(state, obj)
+
+
+def _fire_creature_or_artifact_enters_triggers(
+    state: GameState, new_obj: "GameObject"
+) -> None:
+    """Fire 'whenever another creature or artifact you control enters'
+    triggers on other permanents the controller controls. Excludes the
+    entering object itself.
+    """
+    from mtg_bot.turn import should_fire_trigger
+
+    controller = new_obj.controller_id
+    for obj in list(state.battlefield):
+        if obj.id == new_obj.id:
+            continue
+        if obj.controller_id != controller:
+            continue
+        for i, ability in enumerate(obj.printing.triggered_abilities):
+            if ability.trigger != "creature_or_artifact_enters_you_control":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s creature-or-artifact-enters "
+                f"trigger fires"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, controller, ())
+            finally:
+                state.resolving_source = None
 
 
 def _fire_artifact_enters_triggers(

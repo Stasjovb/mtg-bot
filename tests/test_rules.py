@@ -6387,6 +6387,60 @@ def test_shock_land_without_agent_enters_normal():
     assert state.players[0].life == 20  # no life paid
 
 
+def test_weftstalker_ardent_pings_opponent_on_creature_enter():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    stalker = state.new_object(
+        EOE_CREATURES["Weftstalker Ardent"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(stalker)
+    p1_life_before = state.players[1].life
+    # New creature enters → trigger fires.
+    mate = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, mate, 0)
+    assert state.players[1].life == p1_life_before - 1
+
+
+def test_haliya_gains_life_on_creature_enter():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    haliya = state.new_object(
+        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(haliya)
+    life_before = state.players[0].life
+    mate = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, mate, 0)
+    assert state.players[0].life == life_before + 1
+
+
+def test_creature_or_artifact_trigger_skips_self_entry():
+    """The trigger says 'another creature or artifact'. Self-entry
+    shouldn't trigger — the source is excluded."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    stalker = state.new_object(
+        EOE_CREATURES["Weftstalker Ardent"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    put_into_battlefield(state, stalker, 0)
+    # Own entry didn't self-trigger (we excluded source in the firing
+    # loop).
+    assert state.players[1].life == 20
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
