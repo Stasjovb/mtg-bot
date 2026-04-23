@@ -38,6 +38,7 @@ from mtg_bot.effects import (
     MemorialVaultActivatedEffect,
     PossibilityTechnicianETBEffect,
     TerritorialBruntarLandfallEffect,
+    TractorBeamETBEffect,
     SacrificeSelfUnlessVoidActive,
     WeftwalkingETBEffect,
     PinnacleStarcageETBEffect,
@@ -3862,9 +3863,21 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Moonlit Meditation", "{2}{U}",
             power_bonus=1, toughness_bonus=1,
         ),
-        make_aura(  # Tractor Beam — dropped gain-control + tap rider.
+        # Tractor Beam `{2}{U}{U}` Enchantment — Aura. Real oracle:
+        # "Enchant creature or Spacecraft. When this Aura enters, tap
+        # enchanted permanent. You control enchanted permanent.
+        # Enchanted permanent doesn't untap during its controller's
+        # untap step." Simplifications: the gain-control and
+        # don't-untap clauses are NOT modeled; only the ETB tap fires.
+        # Stand-in's placeholder +2/+2 bonus dropped (real card has none).
+        make_aura(
             "Tractor Beam", "{2}{U}{U}",
-            power_bonus=2, toughness_bonus=2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=TractorBeamETBEffect(),
+                ),
+            ),
         ),
         # Chorale of the Void `{3}{B}` Enchantment — Aura. Real oracle:
         # "Enchant creature you control. Whenever enchanted creature

@@ -1808,6 +1808,40 @@ class PainForAllDamageEchoEffect(Effect):
 
 
 @dataclass(frozen=True)
+class TractorBeamETBEffect(Effect):
+    """Tractor Beam's ETB (simplified): "Tap enchanted permanent."
+
+    Real oracle adds "You control enchanted permanent." and
+    "Enchanted permanent doesn't untap during its controller's untap
+    step." Neither is modeled — engine has no "don't untap" replacement
+    effect and no persistent gain-control mechanic yet.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        aura = state.resolving_source
+        if aura is None or aura.attached_to is None:
+            return
+        target = next(
+            (o for o in state.battlefield if o.id == aura.attached_to),
+            None,
+        )
+        if target is None:
+            return
+        tap_permanent(state, target)
+        state.log.append(
+            f"Tractor Beam taps {target.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return "tap enchanted permanent"
+
+
+@dataclass(frozen=True)
 class WeftwalkingETBEffect(Effect):
     """Weftwalking's ETB (simplified): "Shuffle your hand and graveyard
     into your library, then draw seven cards."
