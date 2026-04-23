@@ -2056,9 +2056,30 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Haliya, Ascendant Cadet — dropped "attacks → token + life" trigger.
+        # Haliya, Ascendant Cadet `{2}{G}{W}{W}` 3/3 Legendary Creature.
+        # Real oracle:
+        # - "Whenever Haliya enters or attacks, put a +1/+1 counter on
+        #   target creature you control."
+        # - "Whenever one or more creatures you control with +1/+1
+        #   counters on them deal combat damage to a player, draw a
+        #   card."
+        # Simplification: the second, combat-damage-observer trigger
+        # needs a "your creature with counter dealt damage to player"
+        # observer — not modeled yet, so dropped. The first (etb +
+        # attacks) is fully restored.
+        make_creature(
             "Haliya, Ascendant Cadet", "{2}{G}{W}{W}", 3, 3,
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+            ),
         ),
         make_creature(  # Pinnacle Emissary — dropped Void rider and ETB surveil.
             "Pinnacle Emissary", "{1}{U}{R}", 3, 3,
