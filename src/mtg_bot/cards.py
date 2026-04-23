@@ -3149,17 +3149,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # (empty bodies, vanilla bodies, or small placeholder effects).
         # Each card is noted per-item. These are pool-completeness ships;
         # they're playable but functionally much weaker than printed.
-        # Broodguard Elite — `{X}{G}{G}` enters with X +1/+1 counters.
-        # Full oracle also has Warp `{X}{G}` and a leaves-battlefield
-        # "put its counters on target creature you control" trigger.
-        # Warp side handled via warp_cost parsing (x_pips supported).
-        # The leaves-battlefield counter-transfer is the remaining
-        # simplification — will follow when the counter-moving leaves
-        # trigger gets a generic implementation.
+        # Broodguard Elite `{X}{G}{G}`:
+        # - Enters with X +1/+1 counters on it.
+        # - When this creature leaves the battlefield, put its counters
+        #   on target creature you control.
+        # - Warp `{X}{G}`.
         make_creature(
             "Broodguard Elite", "{X}{G}{G}", 0, 0,
+            subtypes=("Insect", "Knight"),
             warp="{X}{G}",
             enters_with_counters_from_x="x",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="leaves_battlefield",
+                    effect=MoveSelfCountersToTargetCreatureYouControl(),
+                ),
+            ),
         ),
         make_creature(  # Famished Worldsire — complex Devour + search. Ship as 6/6 vanilla.
             "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
