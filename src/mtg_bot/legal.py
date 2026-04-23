@@ -232,6 +232,33 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
+    # Cast-from-library (top card only): Mm'menon, the Right Hand.
+    # "You may cast artifact spells from the top of your library."
+    # Offered when the controller has any permanent with the grant
+    # flag AND the top card is an artifact at sorcery speed.
+    has_cast_artifact_top = any(
+        o.printing.grants_cast_artifact_from_top_of_library
+        for o in state.battlefield
+        if o.controller_id == player_id
+    )
+    if has_cast_artifact_top and p.library:
+        top = p.library[0]
+        if top.printing.is_artifact and not top.printing.is_creature:
+            # Sorcery timing check for non-instant tops.
+            if _is_sorcery_timing(state, player_id) and can_pay_cost(
+                state, player_id,
+                _effective_cost(top, top.printing.mana_cost),
+                spell_kind="artifact_spell",
+            ) and _targets_are_satisfiable(state, player_id, top):
+                actions.append(CastSpell(top.id))
+        elif top.printing.is_artifact and top.printing.is_creature:
+            if _is_sorcery_timing(state, player_id) and can_pay_cost(
+                state, player_id,
+                _effective_cost(top, top.printing.mana_cost),
+                spell_kind="artifact_spell",
+            ) and _targets_are_satisfiable(state, player_id, top):
+                actions.append(CastSpell(top.id))
+
     # Activated abilities on permanents this player controls.
     for obj in state.battlefield:
         if obj.controller_id != player_id:

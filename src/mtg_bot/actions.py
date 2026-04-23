@@ -402,8 +402,11 @@ def _cast_spell(
 ) -> None:
     p = state.player_by_id(player_id)
 
-    # A spell can be cast from the hand (normal or warp cost) or from the
-    # "warped" exile zone (normal cost only).
+    # A spell can be cast from the hand (normal or warp cost), from
+    # the "warped" / impulse-playable exile zone (normal cost), or —
+    # when a permanent grants it — from the top of the library
+    # (Mm'menon, the Right Hand). We resolve the source zone up
+    # front so the rest of the flow treats it uniformly.
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
         cost = (
@@ -430,16 +433,33 @@ def _cast_spell(
             ),
             None,
         )
-        if card is None:  # pragma: no cover - defensive (legal_actions gates)
-            raise ValueError(
-                f"card {card_id} not castable by P{player_id}"
-            )
-        cost = card.printing.mana_cost
-        p.exile.remove(card)
-        card.warped = False
-        card.playable_from_exile_this_turn = False
-        # Neither re-triggers the warp-exile cycle.
-        card.cast_via_warp = False
+        if card is not None:
+            cost = card.printing.mana_cost
+            p.exile.remove(card)
+            card.warped = False
+            card.playable_from_exile_this_turn = False
+            card.cast_via_warp = False
+        else:
+            # Cast from top of library (Mm'menon grant). Legal only
+            # for the topmost card, and only if the controller has a
+            # permanent granting it. legal_actions also requires the
+            # card to be an artifact.
+            if (
+                p.library
+                and p.library[0].id == card_id
+                and any(
+                    o.printing.grants_cast_artifact_from_top_of_library
+                    for o in state.battlefield
+                    if o.controller_id == player_id
+                )
+            ):
+                card = p.library.pop(0)
+                cost = card.printing.mana_cost
+                card.cast_via_warp = False
+            else:  # pragma: no cover - defensive (legal_actions gates)
+                raise ValueError(
+                    f"card {card_id} not castable by P{player_id}"
+                )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
     # spell this turn"). Warp costs are reduced too — the rules don't
@@ -1264,10 +1284,12 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     """
     from mtg_bot.game import StackItem
 
-    from mtg_bot.game import etb_trigger_multiplier
+    from mtg_bot.game import etb_trigger_multiplier, is_void_active
 
     for ability in creature.printing.triggered_abilities:
         if ability.trigger != "etb":
+            continue
+        if ability.requires_void and not is_void_active(state):
             continue
         controller_id = creature.controller_id
         effect = ability.effect

@@ -46,6 +46,7 @@ from mtg_bot.effects import (
     SotheraExileOpponentCreatureEffect,
     PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
+    RovingActuatorETBEffect,
     PutStunCounterOnTappedCreature,
     TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
@@ -299,6 +300,11 @@ class CardPrinting:
     # you may instead create that many tokens that are copies of
     # enchanted permanent." Moonlit Meditation. Aura-only flag.
     replaces_first_tokens_with_copies: bool = False
+    # "You may cast artifact spells from the top of your library."
+    # Mm'menon, the Right Hand. legal_actions offers a CastSpell for
+    # the controller's top-of-library card when it's an artifact and
+    # this flag is present on any permanent they control.
+    grants_cast_artifact_from_top_of_library: bool = False
     # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
@@ -451,6 +457,7 @@ def make_creature(
     ward_discard_random: bool = False,
     grants_additional_land_per_turn: int = 0,
     extra_etb_trigger: int = 0,
+    grants_cast_artifact_from_top_of_library: bool = False,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
@@ -481,6 +488,9 @@ def make_creature(
         ward_discard_random=ward_discard_random,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         extra_etb_trigger=extra_etb_trigger,
+        grants_cast_artifact_from_top_of_library=(
+            grants_cast_artifact_from_top_of_library
+        ),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -1962,10 +1972,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # -- Batch #3 of vanilla-simplified creatures. Each drops its
         # complex text to ship as keyword-only (or pure vanilla / vanilla
         # + Warp). Simplification noted per card.
-        make_creature(  # Mm'menon, the Right Hand — dropped "cast from top + mana-ability grant".
+        # Mm'menon, the Right Hand `{3}{U}{U}` 3/4 Legendary Creature.
+        # Real oracle: "Flying. You may look at the top card of your
+        # library any time. You may cast artifact spells from the top
+        # of your library. Artifacts you control have '{T}: Add {U}.
+        # Spend this mana only to cast a spell from anywhere other
+        # than your hand.'"
+        # Implemented: flying + cast-artifact-from-top-of-library.
+        # Dropped: (1) the "look at top any time" info ability (our
+        # engine doesn't gate information anyway), (2) the static
+        # artifacts-have-mana-ability clause (engine has no
+        # static-grants-activated-ability plumbing yet).
+        make_creature(  # Mm'menon, the Right Hand
             "Mm'menon, the Right Hand", "{3}{U}{U}", 3, 4,
             keywords={"flying"},
             legendary=True,
+            grants_cast_artifact_from_top_of_library=True,
         ),
         # Alpharael, Stonechosen `{3}{B}{B}` 3/3 Legendary Creature.
         # Warp `{2}{B}`. Real oracle: "Ward—Discard a card at random.
@@ -2089,10 +2111,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Roving Actuator — dropped Void copy-instant rider.
+        # Roving Actuator `{3}{R}` 3/4 Artifact Creature. Warp `{1}{R}`.
+        # Real oracle: "Void — When this creature enters, if a nonland
+        # permanent left the battlefield this turn or a spell was
+        # warped this turn, exile up to one target instant or sorcery
+        # card with mana value 2 or less from your graveyard. Copy it.
+        # You may cast the copy without paying its mana cost."
+        make_creature(  # Roving Actuator
             "Roving Actuator", "{3}{R}", 3, 4,
             artifact=True,
             warp="{1}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=RovingActuatorETBEffect(),
+                    requires_void=True,
+                ),
+            ),
         ),
         # Terrapact Intimidator `{1}{R}` 2/1 Creature. Real oracle:
         # "When this creature enters, target opponent may have you

@@ -2021,6 +2021,98 @@ class PossibilityTechnicianETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class RovingActuatorETBEffect(Effect):
+    """Roving Actuator's Void ETB: "Exile up to one target instant or
+    sorcery card with mana value 2 or less from your graveyard. Copy
+    it. You may cast the copy without paying its mana cost."
+
+    Simplification: the "copy and cast" machinery short-circuits to
+    directly resolving the exiled card's spell_effect with fresh
+    targets selected by the agent. The copy doesn't go on the stack
+    and can't be counterspelled — acceptable given the engine's lack
+    of responses. "May" is always yes.
+    """
+
+    max_mv: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_spell", c.id)
+            for c in p.graveyard
+            if (c.printing.is_instant or c.printing.is_sorcery)
+            and c.printing.mana_cost.total <= self.max_mv
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_spell":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        # Exile the original.
+        p.graveyard.remove(card)
+        card.zone = Zone.EXILE
+        p.exile.append(card)
+        state.log.append(
+            f"Roving Actuator exiles {card.printing.name} and copies it"
+        )
+        # Resolve a copy of its spell_effect. Fresh targets if any.
+        spell_effect = card.printing.spell_effect
+        if spell_effect is None:
+            return
+        copy_targets: tuple[Target, ...] = ()
+        min_t, max_t = spell_effect.target_count_range()
+        if max_t > 0:
+            legal = spell_effect.legal_targets(state, controller_id)
+            if not legal and min_t > 0:
+                state.log.append(
+                    f"Copy of {card.printing.name} fizzles "
+                    f"(no legal targets)"
+                )
+                return
+            if p.agent is not None:
+                chosen_list: list[Target] = []
+                remaining = list(legal)
+                for _ in range(max_t):
+                    if not remaining:
+                        break
+                    pick = p.agent.choose_target(
+                        state, controller_id, remaining
+                    )
+                    if pick is None or pick not in remaining:
+                        break
+                    chosen_list.append(pick)
+                    remaining.remove(pick)
+                copy_targets = tuple(chosen_list)
+        spell_effect.resolve(state, controller_id, copy_targets)
+
+    def describe(self) -> str:
+        return (
+            f"exile up to one target instant or sorcery card with "
+            f"mana value {self.max_mv} or less from your graveyard, "
+            f"copy it; you may cast the copy without paying its cost"
+        )
+
+
+@dataclass(frozen=True)
 class RequiemMonolithActivatedEffect(Effect):
     """Requiem Monolith's activated ability (simplified): immediately
     deals 1 damage to target creature; that creature's controller
