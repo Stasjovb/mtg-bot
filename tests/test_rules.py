@@ -3550,6 +3550,29 @@ def test_invasive_maneuvers_noop_paths():
     e.resolve(state, controller_id=0, targets=(("player", 0),))
 
 
+def test_kavaron_skywarden_void_eot_counter():
+    """Reach + Void EoT +1/+1 counter on self."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    warden = state.new_object(
+        EOE_CREATURES["Kavaron Skywarden"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(warden)
+    # Sanity: reach keyword on printing.
+    assert "reach" in warden.printing.keywords
+
+    # Void inactive → no change.
+    run_beginning_of_end_step_triggers(state)
+    assert warden.plus_one_counters == 0
+
+    # Void active → +1/+1 counter added.
+    state.permanent_left_battlefield_this_turn = True
+    run_beginning_of_end_step_triggers(state)
+    assert warden.plus_one_counters == 1
+
+
 def test_voidforged_titan_fires_only_when_void_active():
     """End-step Void trigger draws + loses 1 when void is active."""
     from mtg_bot.cards import EOE_CREATURES

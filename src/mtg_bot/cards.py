@@ -942,6 +942,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Red
+        # Kavaron Skywarden: 4/5 Reach. Void — at your end step, put a
+        # +1/+1 counter on this creature.
+        make_creature(
+            "Kavaron Skywarden", "{4}{R}", 4, 5,
+            keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    requires_void=True,
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
         # Green
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,
