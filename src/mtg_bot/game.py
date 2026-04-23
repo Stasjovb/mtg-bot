@@ -201,6 +201,23 @@ def _dynamic_base_pt(
     return None  # pragma: no cover - defensive fallback
 
 
+def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
+    """Return how many times an ETB-caused triggered ability on a
+    permanent controlled by ``controller_id`` should fire.
+
+    1 by default, +1 per permanent the controller controls with
+    ``extra_etb_trigger > 0`` (Starfield Vocalist). Matches the
+    oracle wording: "If a permanent entering the battlefield causes
+    a triggered ability of a permanent you control to trigger, that
+    ability triggers an additional time."
+    """
+    extra = sum(
+        o.printing.extra_etb_trigger for o in state.battlefield
+        if o.controller_id == controller_id
+    )
+    return 1 + extra
+
+
 def add_plus_one_counters(
     state: GameState, obj: GameObject, amount: int
 ) -> int:
@@ -417,6 +434,10 @@ class GameState:
     # Cleared during clear_combat_state after processing.
     # Used by Kavaron Harrier's attack token.
     pending_end_of_combat_sacrifices: list[int] = field(default_factory=list)
+    # Player ids who have already created one or more tokens this turn.
+    # Gates "the first time you would create tokens each turn"
+    # replacement effects (Moonlit Meditation). Cleared at cleanup.
+    players_who_created_tokens_this_turn: set[int] = field(default_factory=set)
     # Per-turn counter of how many times a tagged ability has resolved.
     # Keys are effect-specific labels (typically ("tag", source_id)).
     # Reset by run_cleanup_step. Used by Tannuk, Memorial Ensign's

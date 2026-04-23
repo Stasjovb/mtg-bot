@@ -284,6 +284,21 @@ class CardPrinting:
     # value contributes to the land-per-turn cap via legal_actions.
     # Icetill Explorer has this at 1.
     grants_additional_land_per_turn: int = 0
+    # "If a permanent entering the battlefield causes a triggered
+    # ability of a permanent you control to trigger, that ability
+    # triggers an additional time." Starfield Vocalist. Summed across
+    # permanents the acting player controls by etb_trigger_multiplier
+    # — each one adds 1 extra firing.
+    extra_etb_trigger: int = 0
+    # "Enchanted/equipped permanent doesn't untap during its
+    # controller's untap step." Tractor Beam's don't-untap clause.
+    # When True on an aura/equipment attached to a permanent, the
+    # untap step skips that permanent.
+    attached_prevents_untap: bool = False
+    # "The first time you would create one or more tokens each turn,
+    # you may instead create that many tokens that are copies of
+    # enchanted permanent." Moonlit Meditation. Aura-only flag.
+    replaces_first_tokens_with_copies: bool = False
     # Ward—Discard a card at random (non-mana ward). Alpharael, Stonechosen.
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
@@ -435,6 +450,7 @@ def make_creature(
     ward: str | None = None,
     ward_discard_random: bool = False,
     grants_additional_land_per_turn: int = 0,
+    extra_etb_trigger: int = 0,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
@@ -464,6 +480,7 @@ def make_creature(
         ward_cost_str=ward or "",
         ward_discard_random=ward_discard_random,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
+        extra_etb_trigger=extra_etb_trigger,
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
@@ -659,6 +676,8 @@ def make_aura(
     granted_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     aura_enchant_type: str = "creature",
+    attached_prevents_untap: bool = False,
+    replaces_first_tokens_with_copies: bool = False,
 ) -> CardPrinting:
     """Build an Enchantment — Aura card that attaches to a creature.
 
@@ -688,6 +707,8 @@ def make_aura(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
         aura_enchant_type=aura_enchant_type,
+        attached_prevents_untap=attached_prevents_untap,
+        replaces_first_tokens_with_copies=replaces_first_tokens_with_copies,
     )
 
 
@@ -2536,9 +2557,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Starfield Vocalist — dropped replacement-trigger ability; Warp kept.
+        # Starfield Vocalist `{3}{U}` 3/4 Creature. Warp `{1}{U}`.
+        # Real oracle: "If a permanent entering the battlefield causes
+        # a triggered ability of a permanent you control to trigger,
+        # that ability triggers an additional time." Implemented via
+        # CardPrinting.extra_etb_trigger, summed by
+        # game.etb_trigger_multiplier at every ETB-caused firing site.
+        make_creature(
             "Starfield Vocalist", "{3}{U}", 3, 4,
             warp="{1}{U}",
+            extra_etb_trigger=1,
         ),
         # Starwinder `{5}{U}{U}` 7/7 Creature. Warp `{2}{U}{U}`.
         # Real oracle: "Whenever a creature you control deals combat
@@ -3879,19 +3907,31 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_aura(  # Moonlit Meditation — dropped tokens-are-copies replacement.
+        # Moonlit Meditation `{2}{U}` Enchantment — Aura. Real oracle:
+        # "Enchant artifact or creature you control. The first time
+        # you would create one or more tokens each turn, you may
+        # instead create that many tokens that are copies of enchanted
+        # permanent." Replacement effect wired via
+        # replaces_first_tokens_with_copies + state.players_who_
+        # created_tokens_this_turn (cleared at cleanup). Stand-in's
+        # placeholder +1/+1 P/T bonus dropped — real card has none.
+        make_aura(
             "Moonlit Meditation", "{2}{U}",
-            power_bonus=1, toughness_bonus=1,
+            replaces_first_tokens_with_copies=True,
         ),
         # Tractor Beam `{2}{U}{U}` Enchantment — Aura. Real oracle:
         # "Enchant creature or Spacecraft. When this Aura enters, tap
         # enchanted permanent. You control enchanted permanent.
         # Enchanted permanent doesn't untap during its controller's
-        # untap step." Simplifications: the gain-control and
-        # don't-untap clauses are NOT modeled; only the ETB tap fires.
-        # Stand-in's placeholder +2/+2 bonus dropped (real card has none).
+        # untap step."
+        # Partial implementation: ETB tap + don't-untap clause
+        # (attached_prevents_untap). The gain-control clause is NOT
+        # modeled — the enchanted permanent remains under its original
+        # controller even while Tractor Beam is on it. Stand-in's
+        # placeholder +2/+2 bonus dropped (real card has none).
         make_aura(
             "Tractor Beam", "{2}{U}{U}",
+            attached_prevents_untap=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",

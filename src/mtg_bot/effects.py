@@ -4318,6 +4318,24 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             state.log.append(f"{obj.printing.name} takes {amount} damage")
 
 
+def _find_moonlit_replacement_source(
+    state: "GameState", controller_id: int,
+):
+    """Return an attached aura with replaces_first_tokens_with_copies
+    controlled by ``controller_id`` whose enchanted permanent is also
+    under the controller's control, or None.
+    """
+    for o in state.battlefield:
+        if o.controller_id != controller_id:
+            continue
+        if not o.printing.replaces_first_tokens_with_copies:
+            continue
+        if o.attached_to is None:
+            continue
+        return o
+    return None
+
+
 @dataclass(frozen=True)
 class CreateToken(Effect):
     """Create ``count`` creature tokens of the given printing under the
@@ -4341,6 +4359,7 @@ class CreateToken(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        import dataclasses as _dc
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import Zone
 
@@ -4351,6 +4370,37 @@ class CreateToken(Effect):
             recipients = [controller_id]
 
         for recipient in recipients:
+            # Moonlit Meditation replacement: "The first time you would
+            # create one or more tokens each turn, you may instead
+            # create that many tokens that are copies of enchanted
+            # permanent." Use enchanted-permanent's printing (with
+            # Token supertype added) for this batch if applicable.
+            printing = self.token_printing
+            moonlit = None
+            if (
+                recipient not in state.players_who_created_tokens_this_turn
+            ):
+                moonlit = _find_moonlit_replacement_source(state, recipient)
+            if moonlit is not None:
+                enchanted = next(
+                    (
+                        o for o in state.battlefield
+                        if o.id == moonlit.attached_to
+                    ),
+                    None,
+                )
+                if enchanted is not None:
+                    base = enchanted.printing
+                    printing = _dc.replace(
+                        base, supertypes=tuple(
+                            list(base.supertypes)
+                            + (["Token"] if "Token" not in base.supertypes else [])
+                        ),
+                    )
+                    state.log.append(
+                        f"Moonlit Meditation: tokens become copies of "
+                        f"{base.name}"
+                    )
             # Token-doubling replacement effects (Exalted Sunborn).
             # Each controller-side permanent with is_token_doubler
             # doubles the count before tokens enter.
@@ -4362,16 +4412,18 @@ class CreateToken(Effect):
             effective_count = self.count * (2 ** doublers)
             for _ in range(effective_count):
                 obj = state.new_object(
-                    self.token_printing, owner_id=recipient, zone=Zone.BATTLEFIELD
+                    printing, owner_id=recipient, zone=Zone.BATTLEFIELD,
                 )
                 state.log.append(
-                    f"P{recipient} creates a {self.token_printing.name} token"
+                    f"P{recipient} creates a {printing.name} token"
                     + (" (tapped)" if self.tapped else "")
                     + (f" (doubled x{2 ** doublers})" if doublers else "")
                 )
                 put_into_battlefield(state, obj, recipient)
                 if self.tapped:
                     obj.tapped = True
+            if effective_count > 0:
+                state.players_who_created_tokens_this_turn.add(recipient)
 
     def describe(self) -> str:
         p = self.token_printing

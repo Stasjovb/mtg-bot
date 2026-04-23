@@ -45,6 +45,15 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    # Pre-compute ids of permanents whose untap is prevented by an
+    # attached aura/equipment with attached_prevents_untap=True
+    # (Tractor Beam's "doesn't untap during its controller's untap
+    # step").
+    no_untap_ids = {
+        att.attached_to for att in state.battlefield
+        if att.attached_to is not None
+        and att.printing.attached_prevents_untap
+    }
     for obj in state.battlefield:
         if obj.controller_id == ap.id:
             # Stun counters: instead of untapping, remove one counter.
@@ -53,6 +62,12 @@ def run_untap_step(state: GameState) -> None:
                 state.log.append(
                     f"{obj.printing.name} stays tapped (stun counter "
                     f"removed; {obj.stun_counters} remaining)"
+                )
+                continue
+            if obj.id in no_untap_ids:
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (attached-"
+                    f"prevents-untap effect)"
                 )
                 continue
             obj.tapped = False
@@ -528,8 +543,11 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
     with targets, the controller's agent selects via choose_target;
     if no legal target exists, the trigger fizzles.
     """
+    from mtg_bot.game import etb_trigger_multiplier
+
     controller = new_land.controller_id
     p = state.player_by_id(controller)
+    firings = etb_trigger_multiplier(state, controller)
     # Snapshot to avoid mid-iteration surprises if a trigger ETBs something.
     for obj in list(state.battlefield):
         if obj.controller_id != controller:
@@ -537,28 +555,31 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
         for ability in obj.printing.triggered_abilities:
             if ability.trigger != "landfall":
                 continue
-            state.log.append(f"{obj.printing.name}'s landfall triggers")
-            state.resolving_source = obj
-            targets: tuple[tuple[str, int], ...] = ()
-            try:
-                effect = ability.effect
-                if effect.requires_target():
-                    legal = effect.legal_targets(state, controller)
-                    if not legal:
-                        state.log.append(
-                            f"{obj.printing.name}'s landfall trigger "
-                            f"fizzles (no legal targets)"
-                        )
-                        continue
-                    if p.agent is not None:
-                        chosen = p.agent.choose_target(
-                            state, controller, legal
-                        )
-                        if chosen is not None:
-                            targets = (chosen,)
-                effect.resolve(state, controller, targets)
-            finally:
-                state.resolving_source = None
+            for _ in range(firings):
+                state.log.append(
+                    f"{obj.printing.name}'s landfall triggers"
+                )
+                state.resolving_source = obj
+                targets: tuple[tuple[str, int], ...] = ()
+                try:
+                    effect = ability.effect
+                    if effect.requires_target():
+                        legal = effect.legal_targets(state, controller)
+                        if not legal:
+                            state.log.append(
+                                f"{obj.printing.name}'s landfall trigger "
+                                f"fizzles (no legal targets)"
+                            )
+                            continue
+                        if p.agent is not None:
+                            chosen = p.agent.choose_target(
+                                state, controller, legal
+                            )
+                            if chosen is not None:
+                                targets = (chosen,)
+                    effect.resolve(state, controller, targets)
+                finally:
+                    state.resolving_source = None
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
@@ -792,6 +813,8 @@ def run_cleanup_step(state: GameState) -> None:
                 f"({len(p.mana_pool)} coin(s) lost)"
             )
             p.mana_pool.clear()
+    # Reset first-time-tokens-created gate (Moonlit Meditation).
+    state.players_who_created_tokens_this_turn.clear()
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False

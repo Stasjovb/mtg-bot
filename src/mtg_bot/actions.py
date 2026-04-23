@@ -1156,9 +1156,11 @@ def _fire_creature_or_artifact_enters_triggers(
     triggers on other permanents the controller controls. Excludes the
     entering object itself.
     """
+    from mtg_bot.game import etb_trigger_multiplier
     from mtg_bot.turn import should_fire_trigger
 
     controller = new_obj.controller_id
+    firings = etb_trigger_multiplier(state, controller)
     for obj in list(state.battlefield):
         if obj.id == new_obj.id:
             continue
@@ -1169,15 +1171,16 @@ def _fire_creature_or_artifact_enters_triggers(
                 continue
             if not should_fire_trigger(state, obj.id, i, ability):
                 continue
-            state.log.append(
-                f"{obj.printing.name}'s creature-or-artifact-enters "
-                f"trigger fires"
-            )
-            state.resolving_source = obj
-            try:
-                ability.effect.resolve(state, controller, ())
-            finally:
-                state.resolving_source = None
+            for _ in range(firings):
+                state.log.append(
+                    f"{obj.printing.name}'s creature-or-artifact-enters "
+                    f"trigger fires"
+                )
+                state.resolving_source = obj
+                try:
+                    ability.effect.resolve(state, controller, ())
+                finally:
+                    state.resolving_source = None
 
 
 def _fire_artifact_enters_triggers(
@@ -1191,9 +1194,11 @@ def _fire_artifact_enters_triggers(
     Also fires "nontoken_artifact_enters_you_control" triggers when the
     entering artifact is not a token.
     """
+    from mtg_bot.game import etb_trigger_multiplier
     from mtg_bot.turn import should_fire_trigger
 
     controller = new_artifact.controller_id
+    firings = etb_trigger_multiplier(state, controller)
     is_nontoken = not new_artifact.printing.is_token
     p = state.player_by_id(controller)
     for obj in list(state.battlefield):
@@ -1209,31 +1214,32 @@ def _fire_artifact_enters_triggers(
                 continue
             if not should_fire_trigger(state, obj.id, i, ability):
                 continue
-            state.log.append(
-                f"{obj.printing.name}'s artifact-enters trigger fires"
-            )
-            state.resolving_source = obj
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            if effect.requires_target():
-                legal = effect.legal_targets(state, controller)
-                if not legal:  # pragma: no cover - defensive fizzle
-                    state.log.append(
-                        f"{obj.printing.name}'s trigger fizzles "
-                        f"(no legal targets)"
-                    )
+            for _ in range(firings):
+                state.log.append(
+                    f"{obj.printing.name}'s artifact-enters trigger fires"
+                )
+                state.resolving_source = obj
+                effect = ability.effect
+                targets: tuple[tuple[str, int], ...] = ()
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, controller)
+                    if not legal:  # pragma: no cover - defensive fizzle
+                        state.log.append(
+                            f"{obj.printing.name}'s trigger fizzles "
+                            f"(no legal targets)"
+                        )
+                        state.resolving_source = None
+                        continue
+                    if p.agent is not None:
+                        chosen = p.agent.choose_target(
+                            state, controller, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                try:
+                    effect.resolve(state, controller, targets)
+                finally:
                     state.resolving_source = None
-                    continue
-                if p.agent is not None:
-                    chosen = p.agent.choose_target(
-                        state, controller, legal
-                    )
-                    if chosen is not None:
-                        targets = (chosen,)
-            try:
-                effect.resolve(state, controller, targets)
-            finally:
-                state.resolving_source = None
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
@@ -1246,57 +1252,60 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     """
     from mtg_bot.game import StackItem
 
+    from mtg_bot.game import etb_trigger_multiplier
+
     for ability in creature.printing.triggered_abilities:
         if ability.trigger != "etb":
             continue
         controller_id = creature.controller_id
         effect = ability.effect
-        targets: tuple[tuple[str, int], ...] = ()
-        min_t, max_t = effect.target_count_range()
-        if max_t > 0:
-            # Set resolving_source during legality check so effects that
-            # inspect the source (e.g. Astelli Reclaimer reading its own
-            # paid cost) see it. Cleared after selection; re-set at
-            # resolve_top_of_stack.
-            state.resolving_source = creature
-            try:
-                legal = effect.legal_targets(state, controller_id)
-            finally:
-                state.resolving_source = None
-            if not legal and min_t > 0:
-                state.log.append(
-                    f"{creature.printing.name}'s ETB has no legal targets; "
-                    f"trigger fizzles"
+        # Starfield Vocalist and similar permanents multiply ETB-caused
+        # trigger firings. Each firing independently selects its target
+        # set via the controller's agent.
+        firings = etb_trigger_multiplier(state, controller_id)
+        for _ in range(firings):
+            targets: tuple[tuple[str, int], ...] = ()
+            min_t, max_t = effect.target_count_range()
+            if max_t > 0:
+                state.resolving_source = creature
+                try:
+                    legal = effect.legal_targets(state, controller_id)
+                finally:
+                    state.resolving_source = None
+                if not legal and min_t > 0:
+                    state.log.append(
+                        f"{creature.printing.name}'s ETB has no legal "
+                        f"targets; trigger fizzles"
+                    )
+                    continue
+                controller = state.player_by_id(controller_id)
+                chosen_list: list[tuple[str, int]] = []
+                remaining = list(legal)
+                for _ in range(max_t):
+                    if not remaining:
+                        break
+                    pick = controller.agent.choose_target(
+                        state, controller_id, remaining
+                    )
+                    if pick is None or pick not in remaining:
+                        break
+                    chosen_list.append(pick)
+                    remaining.remove(pick)
+                if len(chosen_list) < min_t:  # pragma: no cover
+                    state.log.append(
+                        f"{creature.printing.name}'s ETB had no target "
+                        f"chosen; trigger fizzles"
+                    )
+                    continue
+                targets = tuple(chosen_list)
+            state.stack.append(
+                StackItem(
+                    source=creature,
+                    controller_id=controller_id,
+                    ability=ability,
+                    targets=targets,
                 )
-                continue
-            controller = state.player_by_id(controller_id)
-            chosen_list: list[tuple[str, int]] = []
-            remaining = list(legal)
-            for _ in range(max_t):
-                if not remaining:
-                    break
-                pick = controller.agent.choose_target(
-                    state, controller_id, remaining
-                )
-                if pick is None or pick not in remaining:
-                    break
-                chosen_list.append(pick)
-                remaining.remove(pick)
-            if len(chosen_list) < min_t:  # pragma: no cover - min_t>0 unused
-                state.log.append(
-                    f"{creature.printing.name}'s ETB had no target chosen; "
-                    f"trigger fizzles"
-                )
-                continue
-            targets = tuple(chosen_list)
-        state.stack.append(
-            StackItem(
-                source=creature,
-                controller_id=controller_id,
-                ability=ability,
-                targets=targets,
             )
-        )
-        state.log.append(
-            f"{creature.printing.name}'s ETB trigger goes on the stack"
-        )
+            state.log.append(
+                f"{creature.printing.name}'s ETB trigger goes on the stack"
+            )
