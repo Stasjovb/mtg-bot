@@ -2877,6 +2877,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 GainLife(amount=3),
             )),
         ),
+        # Tezzeret, Cruel Captain — Legendary Planeswalker. Planeswalkers
+        # aren't modeled as a permanent type (no loyalty, no loyalty
+        # abilities, no planeswalker-as-target-of-damage). Shipped as a
+        # legendary artifact stub so the card is present in the pool.
+        # The artifact-enters loyalty trigger and the three loyalty
+        # abilities are dropped.
+        make_artifact(
+            "Tezzeret, Cruel Captain", "{3}",
+            legendary=True,
+        ),
         # -- Final batch: remaining cards shipped as heavy simplifications
         # (empty bodies, vanilla bodies, or small placeholder effects).
         # Each card is noted per-item. These are pool-completeness ships;
