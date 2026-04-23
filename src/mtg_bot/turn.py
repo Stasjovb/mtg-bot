@@ -134,6 +134,40 @@ def should_fire_trigger(
     return True
 
 
+def sacrifice(state: GameState, obj: "GameObject") -> None:
+    """Sacrifice ``obj``: move it to its owner's graveyard and fire any
+    "whenever you sacrifice another creature or artifact" triggers on
+    other permanents the sacrificed object's controller controls.
+
+    Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
+    not a "destroy" effect).
+    """
+    controller_id = obj.controller_id
+    was_creature = obj.printing.is_creature
+    was_artifact = obj.printing.is_artifact
+    move_off_battlefield(state, obj, destination="graveyard")
+    if not (was_creature or was_artifact):
+        return
+    for other in list(state.battlefield):
+        if other.id == obj.id:
+            continue
+        if other.controller_id != controller_id:
+            continue
+        for i, ability in enumerate(other.printing.triggered_abilities):
+            if ability.trigger != "sacrifice_creature_or_artifact":
+                continue
+            if not should_fire_trigger(state, other.id, i, ability):
+                continue
+            state.log.append(
+                f"{other.printing.name}'s sacrifice-trigger fires"
+            )
+            state.resolving_source = other
+            try:
+                ability.effect.resolve(state, controller_id, ())
+            finally:
+                state.resolving_source = None
+
+
 def destroy(state: GameState, obj: "GameObject") -> bool:
     """Attempt to destroy ``obj``. Respects indestructible — the source is
     unaffected and True is returned only if the permanent actually moved

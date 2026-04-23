@@ -1420,6 +1420,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Lightless Evangel: {1}{B} 2/2. Whenever you sacrifice another
+        # creature or artifact, put a +1/+1 counter on this creature.
+        make_creature(
+            "Lightless Evangel", "{1}{B}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="sacrifice_creature_or_artifact",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
         # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
         # your end step, if [void active], you draw a card and lose 1 life."
         # We model artifact-ness as a plain creature (same shortcut as Edge

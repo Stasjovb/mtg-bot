@@ -2364,7 +2364,7 @@ class EachOpponentSacrificesCreature(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import sacrifice as _sacrifice
 
         for p in state.players:
             if p.id == controller_id or p.has_lost:
@@ -2382,7 +2382,7 @@ class EachOpponentSacrificesCreature(Effect):
             )
             obj = next((o for o in legal if o.id == chosen_id), legal[0])
             state.log.append(f"P{p.id} sacrifices {obj.printing.name}")
-            move_off_battlefield(state, obj, destination="graveyard")
+            _sacrifice(state, obj)
 
     def describe(self) -> str:
         return "each opponent sacrifices a nontoken creature of their choice"
@@ -2636,6 +2636,9 @@ class TriggeredAbility:
             "creature_you_control_with_counter_dies": (
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"
+            ),
+            "sacrifice_creature_or_artifact": (
+                "Whenever you sacrifice another creature or artifact"
             ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."

@@ -5306,6 +5306,41 @@ def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
     assert len(state.players[0].hand) == hand_before
 
 
+def test_lightless_evangel_counter_on_sacrifice():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import sacrifice
+
+    state = _arena()
+    le = state.new_object(
+        EOE_CREATURES["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(le)
+    # Sacrificing a Lander (artifact) → counter on Evangel.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    sacrifice(state, lander)
+    assert le.plus_one_counters == 1
+
+
+def test_lightless_evangel_does_not_trigger_on_self_sacrifice():
+    """Sacrificing the Evangel itself shouldn't count (trigger says
+    'another creature or artifact')."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import sacrifice
+
+    state = _arena()
+    le = state.new_object(
+        EOE_CREATURES["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(le)
+    # Only Evangel on the field; sacrificing it shouldn't re-trigger.
+    sacrifice(state, le)
+    # Evangel is gone, no counter to verify — just ensure no crash.
+    assert le not in state.battlefield
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

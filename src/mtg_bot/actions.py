@@ -324,10 +324,12 @@ def _activate_ability(
     # for target selection — the Lander case where the ability's effect
     # doesn't reference the source but the controller needs to still own it.
     if ability.cost.sacrifice_self:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
         state.log.append(
             f"P{player_id} sacrifices {source.printing.name}"
         )
-        move_off_battlefield(state, source, destination="graveyard")
+        _sacrifice(state, source)
 
     # Put the ability on the stack using the existing StackItem shape.
     state.stack.append(
