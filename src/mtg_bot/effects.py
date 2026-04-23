@@ -873,6 +873,51 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class DiscardHandThenDrawN(Effect):
+    """Discard every card in your hand, then draw ``amount`` cards.
+
+    Matches Vaultguard Trooper's conditional end-step ability. Acts
+    on the CONTROLLER's hand. No agent decision — the card is always
+    accepted (consistent with our other "may do X" simplifications).
+    """
+
+    amount: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        # Discard every card.
+        discarded_count = 0
+        while p.hand:
+            card = p.hand.pop(0)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            discarded_count += 1
+        state.log.append(
+            f"P{controller_id} discards hand ({discarded_count} cards)"
+        )
+        # Draw N cards.
+        drew = 0
+        for _ in range(self.amount):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            drew += 1
+        state.log.append(
+            f"P{controller_id} draws {drew} card(s)"
+        )
+
+    def describe(self) -> str:
+        return f"discard your hand, then draw {self.amount} cards"
+
+
+@dataclass(frozen=True)
 class PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower(Effect):
     """Put X +1/+1 counters on each creature you control, where X is
     this effect's source's effective power. Reads

@@ -89,6 +89,7 @@ from mtg_bot.effects import (
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealNDamageToEachCreature,
     DestroyTargetNoncreaturePermanent,
+    DiscardHandThenDrawN,
     TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
@@ -1899,9 +1900,27 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             keywords={"flying"},
         ),
-        make_creature(  # Perigee Beckoner — dropped ETB "reveal creature from hand" rider.
+        # Perigee Beckoner `{4}{B}` 4/5 Creature. Warp `{1}{B}` (real
+        # warp cost per oracle — note previous build had `{2}{B}`).
+        # "When this creature enters, until end of turn, another target
+        # creature you control gets +2/+0 and gains 'When this creature
+        # dies, return it to the battlefield tapped under its owner's
+        # control.'"
+        # Simplification: the granted "dies → return tapped" rider is
+        # dropped (requires granted-triggered-ability infrastructure).
+        # The +2/+0 UEOT pump is kept.
+        make_creature(
             "Perigee Beckoner", "{4}{B}", 4, 5,
-            warp="{2}{B}",
+            warp="{1}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=2, toughness_bonus=0,
+                        you_control_only=True,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Susurian Voidborn — dropped Void attack triggers.
             "Susurian Voidborn", "{2}{B}", 2, 2,
@@ -1927,8 +1946,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Territorial Bruntar", "{4}{R}{R}", 6, 6,
             keywords={"reach"},
         ),
-        make_creature(  # Vaultguard Trooper — dropped "dies, return" self-revive.
+        # Vaultguard Trooper `{4}{R}` 5/5 Creature. Real oracle:
+        # "At the beginning of your end step, if you control two or
+        # more tapped creatures, you may discard your hand. If you do,
+        # draw two cards."
+        # Simplification: the "may" is always yes (consistent with
+        # other OptionalSac-style effects). The tapped-creatures
+        # threshold is honored via ConditionalOnTappedCreatures.
+        make_creature(
             "Vaultguard Trooper", "{4}{R}", 5, 5,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=DiscardHandThenDrawN(amount=2),
+                        min_count=2,
+                    ),
+                ),
+            ),
         ),
         make_creature(  # Hemosymbic Mite — dropped Deathtouch + dies Lander trigger (only kept body).
             "Hemosymbic Mite", "{G}", 1, 1,
