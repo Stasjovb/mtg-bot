@@ -44,6 +44,12 @@ class GameObject:
     # +1/+1 counters raise effective power and toughness by equal amounts.
     # Persist across turns (never wear off on their own).
     plus_one_counters: int = 0
+    # "Can't be blocked this turn" marker (cleared at cleanup).
+    temp_unblockable: bool = False
+    # Base P/T override ("has base power and toughness 1/1 until end of
+    # turn") — Atomic Microsizer. None = use printed P/T. Cleared at
+    # cleanup.
+    temp_base_pt_override: "tuple[int, int] | None" = None
     # Warp-cast state. ``cast_via_warp`` is set True when this card was cast
     # from hand for its warp cost — it triggers an exile at the next end step.
     # ``warped`` is set True when this card sits in exile having been exiled
@@ -231,7 +237,10 @@ def effective_power(state: GameState, obj: GameObject) -> int:
     instead of reading ``printing.power``.
     """
     dynamic = _dynamic_base_pt(state, obj)
-    base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
+    if obj.temp_base_pt_override is not None:
+        base = obj.temp_base_pt_override[0]
+    else:
+        base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
     power_bonus, _, _ = _static_bonuses(state, obj)
     return (
         base + obj.plus_one_counters + power_bonus + obj.temp_power_bonus
@@ -244,7 +253,10 @@ def effective_toughness(state: GameState, obj: GameObject) -> int:
     instead of reading ``printing.toughness``.
     """
     dynamic = _dynamic_base_pt(state, obj)
-    base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
+    if obj.temp_base_pt_override is not None:
+        base = obj.temp_base_pt_override[1]
+    else:
+        base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
     _, toughness_bonus, _ = _static_bonuses(state, obj)
     return (
         base + obj.plus_one_counters + toughness_bonus + obj.temp_toughness_bonus

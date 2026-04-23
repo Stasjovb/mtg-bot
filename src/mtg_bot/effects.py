@@ -1598,6 +1598,60 @@ class SotheraEndStepReanimateEffect(Effect):
 
 
 @dataclass(frozen=True)
+class AtomicMicrosizerAttackEffect(Effect):
+    """Atomic Microsizer's equipped-attacks trigger: "Choose up to one
+    target creature. That creature can't be blocked this turn and has
+    base power and toughness 1/1 until end of turn."
+
+    Max 1 target; if no creature exists it fizzles (0 is fine per
+    "up to one").
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_unblockable = True
+        obj.temp_base_pt_override = (1, 1)
+        state.log.append(
+            f"{obj.printing.name} can't be blocked this turn and has "
+            f"base P/T 1/1 UEOT"
+        )
+
+    def describe(self) -> str:
+        return (
+            "choose up to one target creature. That creature can't be "
+            "blocked this turn and has base power and toughness 1/1 "
+            "until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class ChoraleReanimateDefenderGraveCreatureEffect(Effect):
     """Chorale of the Void's attacks trigger: "Put target creature
     card from defending player's graveyard onto the battlefield under

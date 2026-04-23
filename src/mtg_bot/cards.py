@@ -88,6 +88,7 @@ from mtg_bot.effects import (
     ExileAllArtifactsWithManaValueAtMost,
     AnticausalVestigeLeavesEffect,
     AstelliReclaimerETBEffect,
+    AtomicMicrosizerAttackEffect,
     AttachToTargetCreatureYouControl,
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
@@ -3944,13 +3945,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_equipment(  # Atomic Microsizer — dropped complex attack-unblockable trigger.
+        # Atomic Microsizer `{U}` Artifact — Equipment. Real oracle:
+        # "Equipped creature gets +1/+0. Whenever equipped creature
+        # attacks, choose up to one target creature. That creature
+        # can't be blocked this turn and has base power and toughness
+        # 1/1 until end of turn. Equip {2}"
+        make_equipment(
             "Atomic Microsizer", "{U}",
             power_bonus=1, toughness_bonus=0,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
                     effect=AttachToTargetCreatureYouControl(),
+                ),
+                TriggeredAbility(
+                    trigger="equipped_creature_attacks",
+                    effect=AtomicMicrosizerAttackEffect(),
                 ),
             ),
         ),

@@ -103,25 +103,31 @@ def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> N
             effect.resolve(state, attacker.controller_id, targets)
         finally:
             state.resolving_source = None
-    # Auras attached to the attacker: fire their "whenever enchanted
-    # creature attacks" triggers. Matches Chorale of the Void. Each
-    # aura's controller owns the trigger and is the caster for target
-    # selection.
-    for aura in list(state.battlefield):
-        if aura.attached_to != attacker.id:
+    # Auras/Equipment attached to the attacker: fire their
+    # "whenever enchanted/equipped creature attacks" triggers.
+    # Matches Chorale of the Void (aura) and Atomic Microsizer (eq).
+    for attached in list(state.battlefield):
+        if attached.attached_to != attacker.id:
             continue
-        if not aura.printing.is_aura:
+        is_aura = attached.printing.is_aura
+        is_equipment = attached.printing.equipment_bonuses is not None
+        if not (is_aura or is_equipment):
             continue
-        for i, ability in enumerate(aura.printing.triggered_abilities):
-            if ability.trigger != "enchanted_creature_attacks":
+        wanted = (
+            "enchanted_creature_attacks" if is_aura
+            else "equipped_creature_attacks"
+        )
+        for i, ability in enumerate(attached.printing.triggered_abilities):
+            if ability.trigger != wanted:
                 continue
-            if not should_fire_trigger(state, aura.id, i, ability):
+            if not should_fire_trigger(state, attached.id, i, ability):
                 continue
             state.log.append(
-                f"{aura.printing.name}'s enchanted-attacks trigger fires"
+                f"{attached.printing.name}'s attached-attacks trigger "
+                f"fires"
             )
-            state.resolving_source = aura
-            ac_id = aura.controller_id
+            state.resolving_source = attached
+            ac_id = attached.controller_id
             controller = state.player_by_id(ac_id)
             effect = ability.effect
             targets: tuple[tuple[str, int], ...] = ()
@@ -130,8 +136,8 @@ def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> N
                     legal = effect.legal_targets(state, ac_id)
                     if not legal:
                         state.log.append(
-                            f"{aura.printing.name}'s trigger fizzles "
-                            f"(no legal targets)"
+                            f"{attached.printing.name}'s trigger "
+                            f"fizzles (no legal targets)"
                         )
                         continue
                     if controller.agent is not None:
@@ -153,6 +159,12 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
         attacker = next(o for o in state.battlefield if o.id == attacker_id)
+        if attacker.temp_unblockable:
+            state.log.append(
+                f"{attacker.printing.name} can't be blocked — "
+                f"{blocker.printing.name}'s block is ignored"
+            )
+            continue
         blocker.blocking = attacker_id
         attacker.blocked_by.append(blocker_id)
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")
