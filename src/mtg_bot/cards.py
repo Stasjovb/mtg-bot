@@ -1663,7 +1663,63 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # -- Batch of vanilla-simplified creatures. Each drops its
+        # -- Batch #2 of vanilla-simplified creatures. Dropped complex
+        # text for each; shipped as keyword-only (or literal vanilla)
+        # bodies.
+        make_creature(  # Anticausal Vestige — dropped leaves-BF draw + permanent-ramp rider.
+            "Anticausal Vestige", "{6}", 7, 5,
+        ),
+        make_creature(  # Astelli Reclaimer — dropped ETB graveyard reanimate; Warp kept.
+            "Astelli Reclaimer", "{3}{W}{W}", 5, 4,
+            keywords={"flying"},
+            warp="{2}{W}",
+        ),
+        make_creature(  # Exalted Sunborn — dropped "tokens doubled" replacement; Warp kept.
+            "Exalted Sunborn", "{3}{W}{W}", 4, 5,
+            keywords={"flying", "lifelink"},
+            warp="{1}{W}",
+        ),
+        make_creature(  # Pulsar Squadron Ace — dropped library-dig ETB.
+            "Pulsar Squadron Ace", "{1}{W}", 1, 2,
+        ),
+        make_creature(  # Starport Security — dropped tap-another activation.
+            "Starport Security", "{W}", 1, 1,
+            artifact=True,
+        ),
+        make_creature(  # Weftblade Enhancer — dropped multi-target counter ETB; Warp kept.
+            "Weftblade Enhancer", "{5}{W}", 3, 4,
+            warp="{2}{W}",
+        ),
+        make_creature(  # Emissary Escort — dropped dynamic +X/+0 (no "base P/T" yet).
+            "Emissary Escort", "{1}{U}", 0, 4,
+            artifact=True,
+        ),
+        make_creature(  # Mechanozoa — dropped ETB tap + stun.
+            "Mechanozoa", "{4}{U}{U}", 5, 5,
+            artifact=True,
+        ),
+        make_creature(  # Selfcraft Mechan — dropped may-sac ETB → counter+draw.
+            "Selfcraft Mechan", "{3}{U}", 3, 4,
+            artifact=True,
+        ),
+        make_creature(  # Sinister Cryologist — dropped ETB -3/-0 debuff; Warp kept.
+            "Sinister Cryologist", "{2}{U}", 2, 3,
+            warp="{U}",
+        ),
+        make_creature(  # Starfield Vocalist — dropped replacement-trigger ability; Warp kept.
+            "Starfield Vocalist", "{3}{U}", 3, 4,
+            warp="{1}{U}",
+        ),
+        make_creature(  # Starwinder — dropped "draw that many" trigger; Warp kept.
+            "Starwinder", "{5}{U}{U}", 7, 7,
+            warp="{2}{U}{U}",
+        ),
+        make_creature(  # Steelswarm Operator — dropped mana abilities (artifact-only filters).
+            "Steelswarm Operator", "{1}{U}", 1, 1,
+            artifact=True,
+            keywords={"flying"},
+        ),
+        # -- Batch #1 of vanilla-simplified creatures. Each drops its
         # non-keyword text to ship a keyword-only version. Simplification
         # status is noted in-line; functional Magic is preserved, the
         # cards are just weaker than printed.

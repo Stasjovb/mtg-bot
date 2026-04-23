@@ -7621,6 +7621,41 @@ def test_codecracker_single_card_library_goes_to_hand():
     assert last_card in state.players[0].hand
 
 
+def test_effect_describe_coverage():
+    """Exercise describe() on a handful of effects that aren't hit by
+    other card tests — keeps module coverage above threshold."""
+    from mtg_bot.effects import (
+        PumpSelfUntilEOT,
+        UntapTargetOtherPermanent,
+    )
+
+    assert "until end of turn" in PumpSelfUntilEOT(
+        power_bonus=1, toughness_bonus=2
+    ).describe()
+    assert "untap" in UntapTargetOtherPermanent().describe()
+
+
+def test_codecracker_agent_chooses_to_mill_top():
+    """When the agent says 'mill' on the top card, the top goes to GY
+    and the second to hand."""
+    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    class AlwaysMill(RandomAgent):
+        def choose_surveil(self, state, player_id, top_card_id):
+            return True  # mill it
+
+    state = _arena()
+    state.players[0].agent = AlwaysMill(rng=random.Random(0))
+    _stock_library(state, 0, count=2)
+    top = state.players[0].library[0]
+    second = state.players[0].library[1]
+    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    assert top in state.players[0].graveyard
+    assert second in state.players[0].hand
+
+
 def test_codecracker_no_agent_default_assignment():
     from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
 
