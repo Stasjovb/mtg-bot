@@ -965,6 +965,33 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Blue
+        # Cloudsculpt Technician: {2}{U} 1/4 Flying. +1/+0 as long as you
+        # control an artifact.
+        make_creature(
+            "Cloudsculpt Technician", "{2}{U}", 1, 4,
+            keywords={"flying"},
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.SELF,
+                    power_bonus=1,
+                    requires_artifact_you_control=True,
+                ),
+            ),
+        ),
+        # Gravblade Heavy: {3}{B} 3/4. +1/+0 and deathtouch as long as you
+        # control an artifact.
+        make_creature(
+            "Gravblade Heavy", "{3}{B}", 3, 4,
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.SELF,
+                    power_bonus=1,
+                    granted_keywords=frozenset({"deathtouch"}),
+                    requires_artifact_you_control=True,
+                ),
+            ),
+        ),
         # Flight-Deck Coordinator: 3/3. "At the beginning of your end step,
         # if you control two or more tapped creatures, you gain 2 life."
         make_creature(

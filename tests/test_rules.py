@@ -3902,6 +3902,65 @@ def test_dawnstrike_vanguard_mass_buff_when_condition_met():
             assert o.plus_one_counters == 1
 
 
+def test_cloudsculpt_technician_self_buff_with_artifact():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.game import effective_power, effective_keywords
+
+    state = _arena()
+    tech = state.new_object(
+        EOE_CREATURES["Cloudsculpt Technician"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(tech)
+    # No artifact → base 1/4.
+    assert effective_power(state, tech) == 1
+    # Add a Lander artifact → +1/+0 applies (now 2/4).
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    assert effective_power(state, tech) == 2
+    assert "flying" in effective_keywords(state, tech)
+
+
+def test_gravblade_heavy_self_buff_plus_deathtouch():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.game import effective_power, effective_keywords
+
+    state = _arena()
+    grav = state.new_object(
+        EOE_CREATURES["Gravblade Heavy"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(grav)
+    # Base 3/4, no deathtouch.
+    assert effective_power(state, grav) == 3
+    assert "deathtouch" not in effective_keywords(state, grav)
+
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    assert effective_power(state, grav) == 4
+    assert "deathtouch" in effective_keywords(state, grav)
+
+
+def test_self_static_missing_state_returns_false():
+    """applies_to with state=None on a conditional static returns False."""
+    from mtg_bot.effects import StaticAbility, StaticScope
+
+    ab = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        requires_artifact_you_control=True,
+    )
+    state = _arena()
+    tech = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    # applies_to without state → cannot verify artifact presence → False.
+    assert ab.applies_to(tech, tech, state=None) is False
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

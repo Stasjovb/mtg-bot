@@ -1849,6 +1849,7 @@ class StaticScope:
 
     OTHER_CREATURES_YOU_CONTROL = "other_creatures_you_control"
     CREATURES_YOU_CONTROL = "creatures_you_control"
+    SELF = "self"  # only the source itself
 
 
 @dataclass(frozen=True)
@@ -1865,6 +1866,11 @@ class StaticAbility:
     ``active_turn_only=True`` gates the ability on "it's the source
     controller's turn", matching EoE riders like "During your turn,
     [anthem]".
+
+    ``requires_artifact_you_control=True`` gates the ability on the source's
+    controller having at least one non-land artifact on the battlefield —
+    the common "as long as you control an artifact" rider in EoE's
+    blue/black artifacts-matter subtheme.
     """
 
     scope: str
@@ -1875,6 +1881,7 @@ class StaticAbility:
     # Tiered abilities on Spacecraft: the ability is only active when the
     # source has ``tier_threshold`` or more charge counters. 0 = always on.
     tier_threshold: int = 0
+    requires_artifact_you_control: bool = False
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
@@ -1894,6 +1901,19 @@ class StaticAbility:
         # Spacecraft tier gate — source needs enough charge counters.
         if self.tier_threshold > 0 and source.charge_counters < self.tier_threshold:
             return False
+        # "As long as you control an artifact" gate.
+        if self.requires_artifact_you_control:
+            if state is None:
+                return False
+            has_artifact = any(
+                o.controller_id == source.controller_id
+                and o.printing.is_artifact
+                for o in state.battlefield
+            )
+            if not has_artifact:
+                return False
+        if self.scope == StaticScope.SELF:
+            return target.id == source.id
         if self.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL:
             return target.id != source.id
         if self.scope == StaticScope.CREATURES_YOU_CONTROL:
