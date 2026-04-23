@@ -1566,6 +1566,66 @@ class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
 
 
 @dataclass(frozen=True)
+class CounterTargetSpell(Effect):
+    """Counter target spell on the stack.
+
+    ``filter_types`` optionally restricts what card types can be
+    countered (e.g., frozenset({"Artifact", "Enchantment"}) for Annul).
+    Empty set means "any spell".
+
+    Targets a stack item by its index via the new ``"stack"`` target kind.
+    Triggered and activated abilities on the stack can't be countered by
+    this effect (only spells — items where ``ability`` is None).
+    """
+
+    filter_types: frozenset[str] = frozenset()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        out: list[Target] = []
+        for i, item in enumerate(state.stack):
+            if item.ability is not None:
+                continue  # not a spell
+            if item.countered:
+                continue
+            src = item.source.printing
+            if self.filter_types:
+                if not any(t in src.card_types for t in self.filter_types):
+                    continue
+            out.append(("stack", i))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, idx = targets[0]
+        if kind != "stack":
+            return
+        if not (0 <= idx < len(state.stack)):
+            return
+        item = state.stack[idx]
+        if item.ability is not None:
+            return
+        item.countered = True
+        state.log.append(
+            f"counterspell: {item.source.printing.name} is countered"
+        )
+
+    def describe(self) -> str:
+        if not self.filter_types:
+            return "counter target spell"
+        types = ", ".join(sorted(t.lower() for t in self.filter_types))
+        return f"counter target {types} spell"
+
+
+@dataclass(frozen=True)
 class DestroyAllCreatures(Effect):
     """Destroy every creature on the battlefield. Wrath-style effect.
 

@@ -4778,6 +4778,93 @@ def test_destroy_all_creatures_respects_indestructible():
     assert victim not in state.battlefield
 
 
+def test_annul_counters_artifact_spell_on_stack():
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    # P1 has Mountain for their own spell; P0 has Island for Annul.
+    p1_land = state.new_object(
+        BASIC_LANDS["Mountain"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(p1_land)
+    p0_land = state.new_object(
+        BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(p0_land)
+
+    # P1 casts Hullcarver (artifact creature) — put on stack.
+    # Actually Hullcarver is in EOE_CREATURES; pick any artifact card.
+    # Let's use a Spacecraft which is an artifact card.
+    skiff_in_hand = state.new_object(
+        EOE_CREATURES["Synthesizer Labship"], owner_id=1, zone=Zone.HAND
+    )
+    state.players[1].hand.append(skiff_in_hand)
+    # Only enough mana for {U} not {1}{U}; our cost engine auto-taps
+    # generic-from-colored, which works — Synthesizer Labship costs {U}.
+    _cast_spell(state, 1, skiff_in_hand.id)
+    assert len(state.stack) == 1
+    assert state.stack[0].source.printing.name == "Synthesizer Labship"
+
+    # P0 casts Annul targeting the Synthesizer Labship.
+    annul_in_hand = state.new_object(
+        EOE_SPELLS["Annul"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(annul_in_hand)
+    _cast_spell(state, 0, annul_in_hand.id)
+    # Annul picked the stack item it can see (the Synthesizer Labship).
+    assert len(state.stack) == 2
+    # Resolve top (Annul) first — it marks Labship as countered.
+    resolve_top_of_stack(state)
+    assert state.stack[0].countered is True
+    # Resolve the countered Labship — it goes to graveyard, no ETB etc.
+    resolve_top_of_stack(state)
+    assert skiff_in_hand in state.players[1].graveyard
+    assert skiff_in_hand not in state.battlefield
+
+
+def test_counter_target_spell_filters_types():
+    from mtg_bot.effects import CounterTargetSpell
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
+
+    state = _arena()
+    # Put an artifact-creature spell and an instant on the stack manually.
+    art_card = state.new_object(
+        EOE_CREATURES["Synthesizer Labship"], owner_id=1, zone=Zone.STACK
+    )
+    state.stack.append(StackItem(source=art_card, controller_id=1))
+    bolt_card = state.new_object(
+        EOE_SPELLS["Plasma Bolt"], owner_id=1, zone=Zone.STACK
+    )
+    state.stack.append(StackItem(source=bolt_card, controller_id=1))
+
+    e = CounterTargetSpell(filter_types=frozenset({"Artifact"}))
+    assert "artifact" in e.describe()
+    legal = e.legal_targets(state, 0)
+    # Only the artifact spell (index 0) should be legal.
+    assert ("stack", 0) in legal
+    assert ("stack", 1) not in legal
+
+
+def test_counter_noop_paths():
+    from mtg_bot.effects import CounterTargetSpell
+
+    state = _arena()
+    e = CounterTargetSpell()
+    assert e.requires_target() is True
+    assert "counter" in e.describe()
+    # No stack → no legal targets.
+    assert e.legal_targets(state, 0) == []
+    # Resolve paths:
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("stack", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

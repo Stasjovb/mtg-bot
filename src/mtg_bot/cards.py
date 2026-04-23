@@ -16,6 +16,7 @@ from mtg_bot.effects import (
     ActivationCost,
     ConditionalIfVoid,
     ConditionalOnTappedCreatures,
+    CounterTargetSpell,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
@@ -1602,6 +1603,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Depressurize", "{1}{B}",
             effect=DepressurizeEffect(power_penalty=3),
+        ),
+        # Annul — counter target artifact or enchantment spell. Uses the
+        # new "stack" target kind.
+        make_instant(
+            "Annul", "{U}",
+            effect=CounterTargetSpell(
+                filter_types=frozenset({"Artifact", "Enchantment"})
+            ),
         ),
         # Cerebral Download — Surveil X + draw 3. X = your artifact count.
         make_instant(
