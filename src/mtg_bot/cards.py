@@ -74,6 +74,7 @@ from mtg_bot.effects import (
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
     FocusFireEffect,
+    OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     SelfMill,
     MillTargetPlayer,
@@ -1699,6 +1700,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=DestroyTargetCreature(),
+                ),
+            ),
+        ),
+        # Swarm Culler: {3}{B} 2/4 Flying. Becomes-tapped → may
+        # sacrifice another creature or artifact for a draw.
+        make_creature(
+            "Swarm Culler", "{3}{B}", 2, 4,
+            keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="becomes_tapped",
+                    effect=OptionalSacAnotherForEffect(
+                        inner_effect=DrawCards(amount=1),
+                    ),
                 ),
             ),
         ),

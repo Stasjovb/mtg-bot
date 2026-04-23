@@ -938,6 +938,64 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class OptionalSacAnotherForEffect(Effect):
+    """"You may sacrifice another creature or artifact. If you do,
+    [inner_effect]."
+
+    General version of OptionalSacAnotherForPumpSelfUEOT: the inner
+    effect (e.g., DrawCards) runs only if the sacrifice is paid. Agent
+    decides via choose_sacrifice; no legal option → silent no-op.
+    """
+
+    inner_effect: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.id != source.id
+            and (o.printing.is_creature or o.printing.is_artifact)
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is None:
+            chosen = options[0]
+        else:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} "
+            f"for {source.printing.name}'s trigger"
+        )
+        _sacrifice(state, chosen)
+        # The source itself might have been sacrificed — clear resolving
+        # source temporarily? No — state.resolving_source still points to
+        # the source object even if it's off the battlefield now. Inner
+        # effect can still read it if needed (e.g., for a self-target),
+        # but for DrawCards/GainLife etc. we only need controller_id.
+        self.inner_effect.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            f"you may sacrifice another creature or artifact; if you "
+            f"do, {self.inner_effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class OptionalSacAnotherForPumpSelfUEOT(Effect):
     """"You may sacrifice another creature or artifact. If you do, this
     creature gets +P/+T until end of turn."

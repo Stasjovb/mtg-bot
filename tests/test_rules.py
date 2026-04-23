@@ -7137,6 +7137,81 @@ def test_optional_sac_missing_source_is_noop():
     assert "sacrifice" in e.describe()
 
 
+def test_swarm_culler_becomes_tapped_may_sac_for_draw():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    culler = state.new_object(
+        EOE_CREATURES["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(culler)
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    hand_before = len(state.players[0].hand)
+    tap_permanent(state, culler)
+    # Fodder sacrificed, hand grew by 1 (drawn card).
+    assert fodder not in state.battlefield
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_swarm_culler_becomes_tapped_no_fodder_noop():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    _stock_library(state, 0, count=5)
+    culler = state.new_object(
+        EOE_CREATURES["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(culler)
+    hand_before = len(state.players[0].hand)
+    tap_permanent(state, culler)
+    # No fodder to sacrifice → no draw.
+    assert len(state.players[0].hand) == hand_before
+
+
+def test_optional_sac_another_for_effect_no_source():
+    from mtg_bot.effects import OptionalSacAnotherForEffect, DrawCards
+
+    state = _arena()
+    state.resolving_source = None
+    e = OptionalSacAnotherForEffect(inner_effect=DrawCards(amount=1))
+    assert "sacrifice" in e.describe()
+    e.resolve(state, 0)  # no crash
+
+
+def test_optional_sac_another_for_effect_no_agent_picks_first():
+    from mtg_bot.effects import OptionalSacAnotherForEffect, DrawCards
+
+    state = _arena()
+    state.players[0].agent = None
+    _stock_library(state, 0, count=5)
+    source = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(source)
+    fodder = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(fodder)
+    state.resolving_source = source
+    hand_before = len(state.players[0].hand)
+    e = OptionalSacAnotherForEffect(inner_effect=DrawCards(amount=1))
+    e.resolve(state, 0)
+    assert fodder not in state.battlefield
+    assert len(state.players[0].hand) == hand_before + 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
