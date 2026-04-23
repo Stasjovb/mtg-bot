@@ -1663,6 +1663,39 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # -- Batch of vanilla-simplified creatures. Each drops its
+        # non-keyword text to ship a keyword-only version. Simplification
+        # status is noted in-line; functional Magic is preserved, the
+        # cards are just weaker than printed.
+        make_creature(  # Lightstall Inquisitor — drops the ETB "each opponent exiles a card..." clause.
+            "Lightstall Inquisitor", "{W}", 2, 1,
+            keywords={"vigilance"},
+        ),
+        make_creature(  # Timeline Culler — drops "when this attacks, mill 3 / return creature" rider.
+            "Timeline Culler", "{B}{B}", 2, 2,
+            keywords={"haste"},
+        ),
+        make_creature(  # Rust Harvester — drops its "discard a card, sacrifice an artifact" trigger.
+            "Rust Harvester", "{R}", 1, 1,
+            keywords={"menace"},
+        ),
+        make_creature(  # Frenzied Baloth — drops "{R}: this creature gets +1/+0" activated.
+            "Frenzied Baloth", "{G}{G}", 3, 2,
+            keywords={"trample", "haste"},
+        ),
+        make_creature(  # Tapestry Warden — drops conditional counter pump on dying friends.
+            "Tapestry Warden", "{3}{G}", 3, 4,
+            keywords={"vigilance"},
+        ),
+        make_creature(  # Genemorph Imago — drops Landfall "base P/T 3/3 or 6/6" rider.
+            "Genemorph Imago", "{G}{U}", 1, 3,
+            keywords={"flying"},
+        ),
+        make_creature(  # Survey Mechan — drops search-library ETB rider.
+            "Survey Mechan", "{4}", 1, 3,
+            artifact=True,
+            keywords={"flying"},
+        ),
         # Uthros Psionicist: {2}{U} 2/4. "The second spell you cast each
         # turn costs {2} less to cast." This is a STATIC ability (it's
         # not a cost reduction on the Psionicist itself) but our cost-

@@ -779,7 +779,7 @@ def _fire_artifact_enters_triggers(
             targets: tuple[tuple[str, int], ...] = ()
             if effect.requires_target():
                 legal = effect.legal_targets(state, controller)
-                if not legal:
+                if not legal:  # pragma: no cover - defensive fizzle
                     state.log.append(
                         f"{obj.printing.name}'s trigger fizzles "
                         f"(no legal targets)"
