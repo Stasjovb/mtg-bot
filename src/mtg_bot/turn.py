@@ -224,9 +224,14 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
-    """Run "dies" triggered abilities on ``dead``. Fires directly (no stack)
-    for consistency with other trigger events in this engine. Source is
-    exposed via state.resolving_source for effects that need it."""
+    """Run "dies" triggered abilities on ``dead``, then fire any
+    "creature_you_control_with_counter_dies" triggers on other permanents
+    the dying creature's controller controls.
+
+    Fires directly (no stack) for consistency with other trigger events
+    in this engine. Source is exposed via state.resolving_source for
+    effects that need it.
+    """
     for ability in dead.printing.triggered_abilities:
         if ability.trigger != "dies":
             continue
@@ -236,6 +241,27 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             ability.effect.resolve(state, dead.controller_id, ())
         finally:
             state.resolving_source = None
+    # "Whenever a creature you control with a +1/+1 counter on it dies" —
+    # only fires if the dying creature actually had a +1/+1 counter.
+    if dead.plus_one_counters > 0:
+        controller = dead.controller_id
+        for obj in list(state.battlefield):
+            if obj.controller_id != controller:
+                continue
+            for i, ability in enumerate(obj.printing.triggered_abilities):
+                if ability.trigger != "creature_you_control_with_counter_dies":
+                    continue
+                if not should_fire_trigger(state, obj.id, i, ability):
+                    continue
+                state.log.append(
+                    f"{obj.printing.name}'s counter-creature-dies "
+                    f"trigger fires"
+                )
+                state.resolving_source = obj
+                try:
+                    ability.effect.resolve(state, controller, ())
+                finally:
+                    state.resolving_source = None
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:

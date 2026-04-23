@@ -5244,6 +5244,68 @@ def test_nanoform_sentinel_untaps_once_per_turn():
     assert tapped_ally.tapped is False
 
 
+def test_meltstrider_eulogist_counter_dies_triggers_draw():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    eul = state.new_object(
+        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(eul)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    victim.plus_one_counters = 1  # has a counter
+    state.battlefield.append(victim)
+    hand_before = len(state.players[0].hand)
+    move_off_battlefield(state, victim, destination="graveyard")
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_meltstrider_eulogist_no_trigger_if_no_counter():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    eul = state.new_object(
+        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(eul)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )  # no counter
+    state.battlefield.append(victim)
+    hand_before = len(state.players[0].hand)
+    move_off_battlefield(state, victim, destination="graveyard")
+    assert len(state.players[0].hand) == hand_before
+
+
+def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
+    """Only YOUR creatures dying trigger it."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield
+
+    state = _arena()
+    eul = state.new_object(
+        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(eul)
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    enemy.plus_one_counters = 1
+    state.battlefield.append(enemy)
+    hand_before = len(state.players[0].hand)
+    move_off_battlefield(state, enemy, destination="graveyard")
+    assert len(state.players[0].hand) == hand_before
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

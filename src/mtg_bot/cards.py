@@ -1549,6 +1549,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Meltstrider Eulogist: {2}{G} 3/3. Whenever a creature you
+        # control with a +1/+1 counter on it dies, draw a card.
+        make_creature(
+            "Meltstrider Eulogist", "{2}{G}", 3, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="creature_you_control_with_counter_dies",
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
         # Kavaron Skywarden: 4/5 Reach. Void — at your end step, put a
         # +1/+1 counter on this creature.
         make_creature(

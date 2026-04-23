@@ -2633,6 +2633,10 @@ class TriggeredAbility:
             "artifact_enters_you_control": (
                 "Whenever another artifact you control enters"
             ),
+            "creature_you_control_with_counter_dies": (
+                "Whenever a creature you control with a +1/+1 counter on "
+                "it dies"
+            ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:
