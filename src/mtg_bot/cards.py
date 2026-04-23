@@ -25,6 +25,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifact,
     DestroyTargetCreature,
     MoveSelfCountersToTargetCreatureYouControl,
+    PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
     DrawCards,
@@ -1072,6 +1073,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     power_bonus=1,
                     granted_keywords=frozenset({"deathtouch"}),
                     requires_artifact_you_control=True,
+                ),
+            ),
+        ),
+        # Luxknight Breacher: {3}{W} 2/2. Enters with a +1/+1 counter for
+        # each other creature and/or artifact you control.
+        make_creature(
+            "Luxknight Breacher", "{3}{W}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(),
                 ),
             ),
         ),

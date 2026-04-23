@@ -1200,6 +1200,46 @@ class MoveSelfCountersToTargetCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
+    """Put a +1/+1 counter on this creature for each OTHER creature and/or
+    artifact you control.
+
+    Matches Luxknight Breacher's "enters with" clause (modeled as an ETB
+    trigger since we don't implement replacement effects). Counts are
+    sampled at resolution; the source itself is excluded (it's on the
+    battlefield by the time the ETB trigger resolves).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        count = 0
+        for o in state.battlefield:
+            if o.id == source.id:
+                continue
+            if o.controller_id != controller_id:
+                continue
+            if o.printing.is_creature or o.printing.is_artifact:
+                count += 1
+        if count <= 0:
+            return
+        source.plus_one_counters += count
+        state.log.append(
+            f"{source.printing.name} enters with {count} +1/+1 counters"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put a +1/+1 counter on this creature for each other creature "
+            "and/or artifact you control"
+        )
+
+
+@dataclass(frozen=True)
 class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
     """Put ``amount`` charge counters on a Spacecraft you control.
 

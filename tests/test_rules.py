@@ -4346,6 +4346,67 @@ def test_put_charge_counters_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+def test_luxknight_breacher_enters_with_scaled_counters():
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    # Seed two existing creatures + one artifact (Lander) for P0.
+    for _ in range(2):
+        mate = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(mate)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    # Opponent board shouldn't count.
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+
+    lux = state.new_object(
+        EOE_CREATURES["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lux)
+    etb = next(
+        ab for ab in lux.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = lux
+    etb.effect.resolve(state, 0)
+    # 2 creatures + 1 artifact = 3 counters (self excluded).
+    assert lux.plus_one_counters == 3
+
+
+def test_luxknight_breacher_noop_with_empty_board():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    lux = state.new_object(
+        EOE_CREATURES["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lux)
+    etb = next(
+        ab for ab in lux.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = lux
+    etb.effect.resolve(state, 0)
+    assert lux.plus_one_counters == 0
+
+
+def test_put_counters_per_other_noop_without_source():
+    from mtg_bot.effects import (
+        PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    )
+
+    state = _arena()
+    e = PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()
+    state.resolving_source = None
+    e.resolve(state, controller_id=0)
+    assert "each other" in e.describe()
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
