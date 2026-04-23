@@ -1796,6 +1796,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Bioengineered Future: {1}{G}{G} Enchantment. ETB create a
+        # Lander token. Simplified: drops the "each creature you control
+        # enters with an additional +1/+1 counter" replacement effect
+        # (replacement effects aren't modeled).
+        make_enchantment(
+            "Bioengineered Future", "{1}{G}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
         # Eusocial Engineering: {3}{G}{G} Enchantment. Landfall → create
         # a 2/2 Robot token. Simplification: drops Warp (our warp mechanic
         # is creature-only; enchantment warps would need the flow wired

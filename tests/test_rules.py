@@ -4593,6 +4593,24 @@ def test_countered_spell_goes_to_graveyard_and_no_effect():
     assert mouth.damage == 0
 
 
+def test_bioengineered_future_etb_makes_lander():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    enc = state.new_object(
+        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(enc)
+    etb = next(
+        ab for ab in enc.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = enc
+    etb.effect.resolve(state, 0)
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert len(landers) == 1
+
+
 def test_eusocial_engineering_landfall_makes_robot():
     """Enchantment sits on battlefield and fires Landfall."""
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
