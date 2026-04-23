@@ -81,6 +81,7 @@ from mtg_bot.effects import (
     OptionalSacArtifactForEffect,
     PumpTargetOtherArtifactYouControlUEOT,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    SingularityRuptureEffect,
     SystemsOverrideEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
@@ -3416,12 +3417,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Beyond the Quiet", "{3}{W}{W}",
             effect=ExileAllCreaturesAndSpacecraft(),
         ),
-        # Singularity Rupture — simplified to just "destroy all creatures".
-        # Dropped: the "any number of target players each mill half their
-        # library" rider (multi-target player selection not supported).
+        # Singularity Rupture `{3}{U}{B}{B}`:
+        # "Destroy all creatures, then any number of target players
+        # each mill half their library, rounded down."
         make_sorcery(
             "Singularity Rupture", "{3}{U}{B}{B}",
-            effect=DestroyAllCreatures(),
+            effect=SingularityRuptureEffect(),
         ),
         # Focus Fire — combat damage spike: 2 + your creatures/Spacecraft.
         make_instant(

@@ -3123,6 +3123,83 @@ class DestroyAllCreatures(Effect):
 
 
 @dataclass(frozen=True)
+class SingularityRuptureEffect(Effect):
+    """Singularity Rupture `{3}{U}{B}{B}`:
+    "Destroy all creatures, then any number of target players each mill
+    half their library, rounded down."
+
+    Multi-target: min 0, max = number of living players. After the
+    wrath, each chosen player mills ``floor(library_size / 2)`` cards.
+    """
+
+    def requires_target(self) -> bool:
+        # "Any number of target" — technically optional, but the cast
+        # pipeline only requires a target pool to exist. legal_actions
+        # won't gate casting on this since there's always at least one
+        # living player.
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        # "Any number" — min 0, max bounded by a reasonable ceiling.
+        # Two-player games → max 2. We pick 8 to cover any plausible
+        # multiplayer pod size; the cast pipeline clamps to actual
+        # legal_targets length anyway.
+        return (0, 8)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players if not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import destroy
+
+        # Wrath phase.
+        victims = [o for o in state.battlefield if o.printing.is_creature]
+        for o in victims:
+            state.log.append(
+                f"{o.printing.name} destroyed by Singularity Rupture"
+            )
+            destroy(state, o)
+        # Mill phase — each targeted player mills half their library,
+        # rounded down.
+        for kind, tid in targets:
+            if kind != "player":
+                continue
+            try:
+                p = state.player_by_id(tid)
+            except KeyError:
+                continue
+            if p.has_lost:
+                continue
+            n = len(p.library) // 2
+            milled = 0
+            for _ in range(n):
+                if not p.library:
+                    break
+                card = p.library.pop(0)
+                card.zone = Zone.GRAVEYARD
+                p.graveyard.append(card)
+                milled += 1
+            state.log.append(
+                f"P{tid} mills {milled} card(s) from Singularity Rupture "
+                f"(library now {len(p.library)})"
+            )
+
+    def describe(self) -> str:
+        return (
+            "destroy all creatures; then any number of target players "
+            "each mill half their library, rounded down"
+        )
+
+
+@dataclass(frozen=True)
 class ZeroPointBalladEffect(Effect):
     """Zero Point Ballad `{X}{B}`:
     "Destroy all creatures with toughness X or less. You lose X life. If
