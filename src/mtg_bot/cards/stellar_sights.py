@@ -380,8 +380,37 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Mirrorpool": make_colorless_land(  # dropped copy-spell / copy-creature activated.
-        "Mirrorpool",
+    # Mirrorpool: Legendary Land. Enters tapped. {T}: Add {C}.
+    # {2}{C}, {T}, Sacrifice: Copy target instant or sorcery spell you
+    # control; you may choose new targets.
+    # {4}{C}, {T}, Sacrifice: Create a token that's a copy of target
+    # creature you control.
+    #
+    # Simplification: copy-spell short-circuits to re-resolving the
+    # target spell's effect rather than pushing a fresh StackItem.
+    # Counterspell-proofing and split-moment responses aren't modeled.
+    "Mirrorpool": make_utility_land(
+        "Mirrorpool", legendary=True, enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}{C}"),
+                    mana_str="{2}{C}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=CopyTargetInstantOrSorceryYouControl(),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{4}{C}"),
+                    mana_str="{4}{C}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=CreateTokenCopyOfTargetCreatureYouControl(),
+            ),
+        ),
     ),
     # Mutavault: {T}: C. {1}: → 2/2 creature with all creature types
     # UEOT. "All creature types" isn't modeled; the 2/2 body lands
@@ -590,8 +619,24 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Thespian's Stage": make_colorless_land(  # dropped {2},{T}: become-copy-of-target-land.
+    # Thespian's Stage: {T}: Add {C}. {2},{T}: This land becomes a copy
+    # of target land, except it has this ability.
+    #
+    # Implementation: BecomesCopyOfTargetLand mutates source.printing
+    # to match the target's printing, re-attaching Thespian's own
+    # activated abilities so "it has this ability" survives.
+    "Thespian's Stage": make_utility_land(
         "Thespian's Stage",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"),
+                    mana_str="{2}",
+                    tap_self=True,
+                ),
+                effect=BecomesCopyOfTargetLand(),
+            ),
+        ),
     ),
     # Wandering Fumarole: enters tapped, {T}: U or R, {2}{U}{R}: → 1/4
     # U/R Elemental UEOT. Real oracle also grants "{0}: Switch P/T

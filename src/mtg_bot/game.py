@@ -97,6 +97,13 @@ class GameObject:
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
     loyalty_counters: int = 0
+    # Snapshot of this object's original CardPrinting, taken the first
+    # time a "becomes a copy of target X" effect mutates ``printing``.
+    # Restored on cleanup? No — "becomes a copy" is a continuous effect
+    # with no end condition, so the mutation persists. The snapshot is
+    # kept so a second copy activation can re-derive "retained own
+    # abilities" (Thespian's Stage: "except it has this ability").
+    original_printing: Optional["CardPrinting"] = None
 
 
 def is_void_active(state: GameState) -> bool:

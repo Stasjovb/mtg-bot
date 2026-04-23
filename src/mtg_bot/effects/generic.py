@@ -2806,6 +2806,227 @@ class BecomeLandCreatureUEOT(Effect):
 
 
 @dataclass(frozen=True)
+class BecomesCopyOfTargetLand(Effect):
+    """Thespian's Stage: "This land becomes a copy of target land,
+    except it has this ability." Continuous effect — persists until the
+    source leaves play or another copy effect overrides.
+
+    Implementation: mutates ``source.printing`` to point at a fresh
+    CardPrinting derived from the target's, with the source's own
+    activated abilities appended (so "it has this ability" is
+    preserved across repeated re-copies).
+
+    Simplifications:
+    - Re-copying from the newly-mutated printing still re-derives
+      "retained own abilities" from ``source.original_printing``, which
+      is snapshotted on the first resolve. Prevents accidental
+      ability accumulation across multiple copies.
+    - Copying a token target (rare but possible) carries the token
+      supertype through unchanged; the source itself doesn't become a
+      token.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import dataclasses as _dc
+
+        source = state.resolving_source
+        if source is None or not targets:
+            return
+        _, tid = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == tid), None,
+        )
+        if target is None:
+            return
+        # Snapshot the original printing the first time we copy — so
+        # re-copy activations don't lose "this ability".
+        if source.original_printing is None:
+            source.original_printing = source.printing
+        retained = source.original_printing.activated_abilities
+        source.printing = _dc.replace(
+            target.printing,
+            activated_abilities=tuple(target.printing.activated_abilities)
+            + tuple(retained),
+        )
+        state.log.append(
+            f"{source.original_printing.name} becomes a copy of "
+            f"{target.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "this land becomes a copy of target land, except it has "
+            "this ability"
+        )
+
+
+
+@dataclass(frozen=True)
+class CreateTokenCopyOfTargetCreatureYouControl(Effect):
+    """Mirrorpool mode 2: "Create a token that's a copy of target
+    creature you control."
+
+    The token shares the target's printing with the Token supertype
+    injected. Uses the existing CreateToken machinery so doublers and
+    ETB triggers work normally.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if is_creature_now(o) and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import dataclasses as _dc
+
+        if not targets:
+            return
+        _, tid = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == tid), None,
+        )
+        if target is None:
+            return
+        base = target.printing
+        # Inject Token supertype if not already present.
+        token_printing = _dc.replace(
+            base,
+            supertypes=tuple(
+                list(base.supertypes)
+                + (["Token"] if "Token" not in base.supertypes else [])
+            ),
+        )
+        CreateToken(
+            token_printing=token_printing, count=1,
+        ).resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            "create a token that's a copy of target creature you control"
+        )
+
+
+
+@dataclass(frozen=True)
+class CopyTargetInstantOrSorceryYouControl(Effect):
+    """Mirrorpool mode 1: "Copy target instant or sorcery spell you
+    control. You may choose new targets for the copy."
+
+    Simplification: rather than pushing a real stack copy (which would
+    require mid-resolution target selection — not supported by the
+    engine's cast-time target pipeline), we short-circuit by re-
+    resolving the target spell's ``spell_effect`` with freshly-chosen
+    targets. Functionally equivalent for anything our engine models.
+    Close enough for flavor; counterspell-proofing isn't modeled.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Target key is the spell source's object id, NOT the stack
+        # index — the cost-payment pipeline filters targets whose id
+        # matches the ability source (``sacrifice_self``), so stack
+        # indices (0, 1, …) would collide with low object ids.
+        out: list[Target] = []
+        for item in state.stack:
+            if item.controller_id != controller_id:
+                continue
+            src = item.source
+            if src is None:
+                continue
+            if not (src.printing.is_instant or src.printing.is_sorcery):
+                continue
+            out.append(("stack_spell", src.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, src_id = targets[0]
+        if kind != "stack_spell":
+            return
+        item = next(
+            (
+                i for i in state.stack
+                if i.source is not None and i.source.id == src_id
+            ),
+            None,
+        )
+        if item is None:
+            return
+        src = item.source
+        if src is None:
+            return
+        spell_effect = src.printing.spell_effect
+        if spell_effect is None:
+            return
+        # Choose fresh targets for the copy.
+        copy_targets: tuple[Target, ...] = ()
+        if spell_effect.requires_target():
+            legal = spell_effect.legal_targets(state, controller_id)
+            if legal:
+                p = state.player_by_id(controller_id)
+                if p.agent is not None:
+                    chosen = p.agent.choose_target(
+                        state, controller_id, legal
+                    )
+                    if chosen is not None:
+                        copy_targets = (chosen,)
+                if not copy_targets:
+                    copy_targets = (legal[0],)
+        state.log.append(
+            f"Mirrorpool copies {src.printing.name}"
+        )
+        # Short-circuit: resolve the copy by re-running the spell
+        # effect with the freshly-chosen target.
+        prior = state.resolving_source
+        state.resolving_source = src
+        try:
+            spell_effect.resolve(state, controller_id, copy_targets)
+        finally:
+            state.resolving_source = prior
+
+    def describe(self) -> str:
+        return (
+            "copy target instant or sorcery spell you control; you may "
+            "choose new targets for the copy"
+        )
+
+
+
+@dataclass(frozen=True)
 class UntapTargetLand(Effect):
     """Deserted Temple: `{1}, {T}: Untap target land.`"""
 
