@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
+    ConditionalIfOpponentHasMoreLands,
     ConditionalIfVoid,
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
@@ -1318,6 +1319,27 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="etb",
                     effect=ReturnTargetPermanentYouControlToOwnersHand(),
+                ),
+            ),
+        ),
+        # Sunstar Expansionist: {1}{W} 2/3. ETB conditional create Lander
+        # + Landfall self-pump. The ETB fires only if an opponent controls
+        # more lands than you.
+        make_creature(
+            "Sunstar Expansionist", "{1}{W}", 2, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ConditionalIfOpponentHasMoreLands(
+                        effect=CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Lander"],
+                            count=1,
+                        ),
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=PumpSelfUntilEOT(power_bonus=1),
                 ),
             ),
         ),

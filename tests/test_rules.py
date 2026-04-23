@@ -5341,6 +5341,78 @@ def test_lightless_evangel_does_not_trigger_on_self_sacrifice():
     assert le not in state.battlefield
 
 
+def test_sunstar_expansionist_etb_triggers_only_when_behind():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    # Opponent has 2 lands, caster has 0.
+    for _ in range(2):
+        land = state.new_object(
+            BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(land)
+
+    se = state.new_object(
+        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(se)
+    etb = next(
+        ab for ab in se.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = se
+    etb.effect.resolve(state, 0)
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert len(landers) == 1
+
+
+def test_sunstar_expansionist_etb_skipped_when_ahead():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    # Caster has 3 lands, opponent has 1.
+    for _ in range(3):
+        land = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(land)
+    opp_land = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(opp_land)
+
+    se = state.new_object(
+        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(se)
+    etb = next(
+        ab for ab in se.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = se
+    etb.effect.resolve(state, 0)
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert len(landers) == 0
+
+
+def test_sunstar_expansionist_landfall_pumps_self():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import fire_landfall_triggers
+
+    state = _arena()
+    se = state.new_object(
+        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(se)
+    land = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(land)
+    fire_landfall_triggers(state, land)
+    assert se.temp_power_bonus == 1
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

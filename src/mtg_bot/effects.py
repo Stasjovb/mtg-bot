@@ -772,6 +772,49 @@ class SearchLibraryForBasicLandTapped(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalIfOpponentHasMoreLands(Effect):
+    """Run ``effect`` only if an opponent controls more lands than the
+    controller at resolution.
+
+    Matches EoE's "if an opponent controls more lands than you" ETB
+    riders (Sunstar Expansionist). Untargeted and untargeted-only.
+    """
+
+    effect: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        my_lands = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_land
+        )
+        enemy_max = 0
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            count = sum(
+                1 for o in state.battlefield
+                if o.controller_id == p.id and o.printing.is_land
+            )
+            if count > enemy_max:
+                enemy_max = count
+        if enemy_max <= my_lands:
+            state.log.append(
+                "conditional skipped (no opponent has more lands)"
+            )
+            return
+        self.effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"if an opponent controls more lands than you, "
+            f"{self.effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class ConditionalOnTappedCreatures(Effect):
     """Run ``effect`` only if the controller has at least ``min_count``
     tapped creatures on the battlefield at resolution.
