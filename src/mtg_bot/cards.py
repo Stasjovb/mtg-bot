@@ -2872,6 +2872,39 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 GainLife(amount=3),
             )),
         ),
+        # -- Batch of simplified spells. Each drops complex riders in
+        # favor of a minimal usable effect. Simplifications noted.
+        make_instant(  # Consult the Star Charts — drops kicker + look-at-top-X; ships as plain draw.
+            "Consult the Star Charts", "{1}{U}",
+            effect=DrawCards(amount=1),
+        ),
+        make_instant(  # Divert Disaster — drops pay-{2}-or-lander rider; ships as plain counter.
+            "Divert Disaster", "{1}{U}",
+            effect=CounterTargetSpell(),
+        ),
+        make_instant(  # Lost in Space — drops bounce-to-library; ships as Surveil 1.
+            "Lost in Space", "{3}{U}",
+            effect=Surveil(amount=1),
+        ),
+        make_instant(  # Unravel — drops the draw-card rider; ships as plain counter.
+            "Unravel", "{1}{U}{U}",
+            effect=CounterTargetSpell(),
+        ),
+        make_sorcery(  # Scrounge for Eternity — drops the Lander rider; creature-card-only graveyard return.
+            "Scrounge for Eternity", "{2}{B}",
+            effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+            additional_cost_sacrifice_creature_or_artifact=True,
+        ),
+        make_instant(  # Lithobraking — drops damage-each-creature; just makes a Lander.
+            "Lithobraking", "{2}{R}",
+            effect=CreateToken(
+                token_printing=TOKEN_PRINTINGS["Lander"], count=1
+            ),
+        ),
+        make_sorcery(  # Orbital Plunge — drops excess-damage-Lander rider; plain 6 damage.
+            "Orbital Plunge", "{3}{R}",
+            effect=DealDamageToTargetCreature(amount=6),
+        ),
         # Depressurize — -3/-0 UEOT + if power <=0, destroy.
         make_instant(
             "Depressurize", "{1}{B}",
