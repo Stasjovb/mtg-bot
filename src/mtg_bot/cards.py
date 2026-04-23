@@ -104,6 +104,7 @@ from mtg_bot.effects import (
     SetLifeToHalfStartingRoundedUp,
     SingularityRuptureEffect,
     SystemsOverrideEffect,
+    TerrapactIntimidatorETBEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
     FocusFireEffect,
@@ -1979,8 +1980,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             warp="{1}{R}",
         ),
-        make_creature(  # Terrapact Intimidator — dropped ETB opponent-choice rider.
+        # Terrapact Intimidator `{1}{R}` 2/1 Creature. Real oracle:
+        # "When this creature enters, target opponent may have you
+        # create two Lander tokens. If they don't, put two +1/+1
+        # counters on this creature."
+        make_creature(
             "Terrapact Intimidator", "{1}{R}", 2, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=TerrapactIntimidatorETBEffect(),
+                ),
+            ),
         ),
         make_creature(  # Territorial Bruntar — dropped Landfall exile-impulse-cast.
             "Territorial Bruntar", "{4}{R}{R}", 6, 6,

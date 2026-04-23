@@ -1181,6 +1181,75 @@ class FamishedWorldsireETBEffect(Effect):
         )
 
 
+@dataclass(frozen=True)
+class TerrapactIntimidatorETBEffect(Effect):
+    """Terrapact Intimidator's ETB: "Target opponent may have you create
+    two Lander tokens. If they don't, put two +1/+1 counters on this
+    creature."
+
+    Targets a player (the chosen opponent). The opponent then picks:
+    option 0 = controller creates two Landers; option 1 = controller
+    puts two +1/+1 counters on the source. Reads state.resolving_source
+    for the source permanent.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id)
+            for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+
+        source = state.resolving_source
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        opponent = state.player_by_id(target_id)
+        if opponent.has_lost or opponent.agent is None:
+            return
+        modes = ["have controller create two Lander tokens", "decline"]
+        choice = opponent.agent.choose_mode(state, opponent.id, modes)
+        if choice == 0:
+            lander_printing = TOKEN_PRINTINGS["Lander"]
+            for _ in range(2):
+                token = state.new_object(
+                    lander_printing, controller_id, Zone.BATTLEFIELD,
+                )
+                state.battlefield.append(token)
+            state.log.append(
+                f"P{opponent.id} elected — P{controller_id} creates "
+                f"two Lander tokens"
+            )
+        else:
+            if source is not None:
+                source.plus_one_counters += 2
+                state.log.append(
+                    f"P{opponent.id} declined — {source.printing.name} "
+                    f"gets two +1/+1 counters (now "
+                    f"{source.plus_one_counters})"
+                )
+
+    def describe(self) -> str:
+        return (
+            "target opponent may have you create two Lander tokens; if "
+            "they don't, put two +1/+1 counters on this creature"
+        )
+
+
 def _multicolored_permanents_count(
     state: "GameState", controller_id: int
 ) -> int:
