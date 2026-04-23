@@ -90,6 +90,11 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    # Any Equipment attached to this object falls off (stays on
+    # battlefield, attached_to cleared).
+    for equip in state.battlefield:
+        if equip.attached_to == obj.id:
+            equip.attached_to = None
     state.battlefield.remove(obj)
     obj.damage = 0
     obj.marked_lethal = False
@@ -97,6 +102,9 @@ def move_off_battlefield(
     obj.attacking = False
     obj.blocking = None
     obj.blocked_by = []
+    # If the departing permanent itself was Equipment, clear its
+    # attachment state.
+    obj.attached_to = None
     # If a warp-cast creature leaves the battlefield by any means (death,
     # exile, etc.) its pending end-step exile trigger no longer applies.
     obj.cast_via_warp = False

@@ -62,6 +62,7 @@ from mtg_bot.effects import (
     CutPropulsionEffect,
     DealDamageToTargetCreatureSpacecraftBoosted,
     ExileAllArtifactsWithManaValueAtMost,
+    AttachToTargetCreatureYouControl,
     ExileAllCreaturesAndSpacecraft,
     ModalChooseOne,
     FocusFireEffect,
@@ -148,6 +149,10 @@ class CardPrinting:
     # choice, no pay-or-counter trigger on the stack.
     ward_cost: ManaCost | None = None
     ward_cost_str: str = ""
+    # Equipment: continuous bonuses granted to the equipped creature.
+    # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
+    # non-Equipment cards. Consumed by game._static_bonuses.
+    equipment_bonuses: tuple[int, int, frozenset[str]] | None = None
     # Continuous abilities that buff other permanents while this permanent
     # is on the battlefield (anthems, keyword grants).
     static_abilities: tuple[StaticAbility, ...] = ()
@@ -359,6 +364,44 @@ def make_artifact(
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
+    )
+
+
+def make_equipment(
+    name: str,
+    cost: str,
+    power_bonus: int = 0,
+    toughness_bonus: int = 0,
+    granted_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    activated_abilities: tuple[ActivatedAbility, ...] = (),
+) -> CardPrinting:
+    """Build an Artifact — Equipment card.
+
+    ``power_bonus``/``toughness_bonus``/``granted_keywords`` define the
+    continuous bonus granted to the equipped creature via the Equipment
+    subsystem. ``keywords`` are on the Equipment itself (e.g., Flash).
+    Most EoE Equipment cards have an ETB "attach to target creature you
+    control" trigger and no Equip activated ability in our simplified
+    model (Equip as an activated ability isn't yet wired).
+    """
+    type_line = "Artifact — Equipment"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str=cost,
+        mana_cost=parse_mana_cost(cost),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        keywords=frozenset(keywords),
+        triggered_abilities=tuple(triggered_abilities),
+        activated_abilities=tuple(activated_abilities),
+        equipment_bonuses=(
+            power_bonus, toughness_bonus, frozenset(granted_keywords)
+        ),
     )
 
 
@@ -1485,6 +1528,51 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Meltstrider's Gear: {G} Equipment. ETB auto-attach; equipped
+        # creature gets +2/+1 and reach. Dropped: the Equip {5} activated
+        # ability (Equip costs aren't modeled — the ETB attachment is
+        # permanent in this simplified model).
+        make_equipment(
+            "Meltstrider's Gear", "{G}",
+            power_bonus=2, toughness_bonus=1,
+            granted_keywords=frozenset({"reach"}),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        # Squire's Lightblade: {W} Equipment with Flash. ETB auto-attach;
+        # equipped creature gets +1/+0. Dropped: the one-shot "gains
+        # first strike UEOT" on ETB (would be a separate Sequence effect,
+        # skipped for clarity), and the Equip {3} activated ability.
+        make_equipment(
+            "Squire's Lightblade", "{W}",
+            power_bonus=1, toughness_bonus=0,
+            keywords={"flash"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        # Illvoi Light Jammer: {1}{U} Equipment with Flash. ETB
+        # auto-attach; equipped creature gets +1/+2. Dropped: "that
+        # creature gains hexproof UEOT" rider (hexproof not yet modeled)
+        # and the Equip {3} activated ability.
+        make_equipment(
+            "Illvoi Light Jammer", "{1}{U}",
+            power_bonus=1, toughness_bonus=2,
+            keywords={"flash"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=AttachToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
         # Thaumaton Torpedo: {1} Artifact. {6}, {T}, Sacrifice: Destroy
         # target nonland permanent. Simplified: drops the "{3} less if
         # you attacked with a Spacecraft this turn" cost-reduction

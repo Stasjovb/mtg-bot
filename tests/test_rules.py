@@ -5497,6 +5497,122 @@ def test_destroy_target_nonland_permanent_noop_paths():
     assert land in state.battlefield
 
 
+def test_meltstriders_gear_equips_and_buffs():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_keywords
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    gear = state.new_object(
+        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(gear)
+    assert "Equipment" in gear.printing.subtypes
+    # Trigger ETB to attach.
+    etb = next(
+        ab for ab in gear.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = gear
+    etb.effect.resolve(state, 0, (("creature", ally.id),))
+    assert gear.attached_to == ally.id
+    # Ally is now 4/3 with reach.
+    assert effective_power(state, ally) == 4  # 2 + 2
+    assert "reach" in effective_keywords(state, ally)
+
+
+def test_equipment_falls_off_when_creature_dies():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import destroy, move_off_battlefield
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    gear = state.new_object(
+        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(gear)
+    gear.attached_to = ally.id
+
+    # Destroy the attached creature.
+    move_off_battlefield(state, ally, destination="graveyard")
+    assert gear in state.battlefield  # Equipment survives
+    assert gear.attached_to is None  # but falls off
+
+
+def test_squires_lightblade_has_flash_and_buff():
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Squire's Lightblade"]
+    assert "flash" in c.keywords
+    assert c.equipment_bonuses == (1, 0, frozenset())
+
+
+def test_illvoi_light_jammer_has_flash_plus_buff():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_toughness
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    jammer = state.new_object(
+        EOE_CREATURES["Illvoi Light Jammer"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(jammer)
+    etb = next(
+        ab for ab in jammer.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = jammer
+    etb.effect.resolve(state, 0, (("creature", ally.id),))
+    assert effective_power(state, ally) == 3  # 2 + 1
+    assert effective_toughness(state, ally) == 4  # 2 + 2
+
+
+def test_attach_fizzle_paths():
+    """AttachToTargetCreatureYouControl no-ops when misused."""
+    from mtg_bot.effects import AttachToTargetCreatureYouControl
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    e = AttachToTargetCreatureYouControl()
+    assert e.requires_target() is True
+    assert "attach" in e.describe()
+    # No resolving_source.
+    state.resolving_source = None
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Non-Equipment source.
+    state.resolving_source = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    # Equipment source, missing targets.
+    gear = state.new_object(
+        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.resolving_source = gear
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+    # Target is an opponent's creature.
+    enemy = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy)
+    e.resolve(state, controller_id=0, targets=(("creature", enemy.id),))
+    assert gear.attached_to is None
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

@@ -59,6 +59,10 @@ class GameObject:
     temp_power_bonus: int = 0
     temp_toughness_bonus: int = 0
     temp_keywords: frozenset[str] = field(default_factory=frozenset)
+    # Equipment attachment: if this object is Equipment, ``attached_to``
+    # is the id of the creature it's attached to (or None if unattached).
+    # Plays no role if the object isn't Equipment.
+    attached_to: Optional[int] = None
 
 
 def is_void_active(state: GameState) -> bool:
@@ -92,6 +96,7 @@ def _static_bonuses(
 
     Returns (power_bonus, toughness_bonus, granted_keywords). Used by the
     effective_* helpers below.
+    Also folds in bonuses from any Equipment attached to ``obj``.
     """
     power_bonus = 0
     toughness_bonus = 0
@@ -102,6 +107,17 @@ def _static_bonuses(
                 power_bonus += ability.power_bonus
                 toughness_bonus += ability.toughness_bonus
                 granted |= ability.granted_keywords
+    # Equipment attached to obj contributes its equipment_bonuses.
+    for source in state.battlefield:
+        if source.attached_to != obj.id:
+            continue
+        eb = source.printing.equipment_bonuses
+        if eb is None:
+            continue
+        ep, et, ek = eb
+        power_bonus += ep
+        toughness_bonus += et
+        granted |= ek
     return power_bonus, toughness_bonus, frozenset(granted)
 
 

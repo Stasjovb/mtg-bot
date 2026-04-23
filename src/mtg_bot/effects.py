@@ -276,6 +276,57 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
 
 
 @dataclass(frozen=True)
+class AttachToTargetCreatureYouControl(Effect):
+    """Attach the source (Equipment) to target creature the controller
+    controls. Matches the common ETB trigger on EoE Equipment.
+
+    Reads state.resolving_source for the Equipment. No-op if the source
+    isn't an Equipment (is_equipment check on subtypes).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        if "Equipment" not in source.printing.subtypes:
+            return
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        target = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if target is None or not target.printing.is_creature:
+            return
+        if target.controller_id != controller_id:
+            return
+        source.attached_to = target_id
+        state.log.append(
+            f"{source.printing.name} is attached to {target.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return "attach this Equipment to target creature you control"
+
+
+@dataclass(frozen=True)
 class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
     """Target creature card from your graveyard enters the battlefield under
     your control. Fires ETB triggers (via put_into_battlefield).
