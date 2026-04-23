@@ -1004,6 +1004,83 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class PumpTargetOtherArtifactYouControlUEOT(Effect):
+    """Synthesizer Labship's 2+ tier trigger effect (simplified):
+    up to one other target artifact you control that's a creature gets
+    +power/+toughness and gains ``granted_keywords`` until end of turn.
+
+    Simplification: the real card reads "up to one other target artifact
+    you control becomes an artifact creature with base P/T 2/2 and gains
+    flying UEOT". We drop the "becomes a creature" aspect (which needs
+    layered continuous effects) and require the target to be a creature
+    already — good for stationed Spacecraft and artifact creatures. The
+    target filter still excludes the effect's own source ("other").
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        # "Up to one" — declining is legal.
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source
+        source_id = source.id if source is not None else -1
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.printing.is_artifact
+            and is_creature_now(o)
+            and o.id != source_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_power_bonus += self.power_bonus
+        obj.temp_toughness_bonus += self.toughness_bonus
+        if self.granted_keywords:
+            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        state.log.append(
+            f"{obj.printing.name} gets "
+            f"+{self.power_bonus}/+{self.toughness_bonus}"
+            + (f" and gains {', '.join(sorted(self.granted_keywords))}"
+               if self.granted_keywords else "")
+            + " until end of turn"
+        )
+
+    def describe(self) -> str:
+        kw = ""
+        if self.granted_keywords:
+            kw = f" and gains {', '.join(sorted(self.granted_keywords))}"
+        return (
+            f"up to one other target artifact you control gets "
+            f"+{self.power_bonus}/+{self.toughness_bonus}{kw} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class OptionalSacAnotherForEffect(Effect):
     """"You may sacrifice another creature or artifact. If you do,
     [inner_effect]."
@@ -3823,6 +3900,10 @@ class TriggeredAbility:
     # and suppresses subsequent fires within the same turn. Reset at
     # cleanup.
     once_per_turn: bool = False
+    # EoE Spacecraft tier gate: ability is active only when the source has
+    # ``tier_threshold`` or more charge counters. 0 = always on. Mirrors
+    # ``StaticAbility.tier_threshold``. Consumed by should_fire_trigger.
+    tier_threshold: int = 0
 
     def describe(self) -> str:
         prefix = {

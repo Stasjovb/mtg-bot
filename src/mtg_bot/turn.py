@@ -216,10 +216,16 @@ def should_fire_trigger(
 ) -> bool:
     """True if ``ability`` on the permanent with id ``source_id`` may fire.
 
-    When ``ability.once_per_turn`` is True, checks and updates
-    state.once_per_turn_fired. Always True for non-once-per-turn
-    abilities.
+    Honors both ``ability.tier_threshold`` (EoE Spacecraft tier gate:
+    source must have at least that many charge counters) and
+    ``ability.once_per_turn`` (records fire in state.once_per_turn_fired
+    to prevent a second fire this turn).
     """
+    tier = getattr(ability, "tier_threshold", 0)
+    if tier > 0:
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        if source is None or source.charge_counters < tier:
+            return False
     if not getattr(ability, "once_per_turn", False):
         return True
     key = (source_id, ability_index)
@@ -404,8 +410,10 @@ def run_beginning_of_combat_triggers(state: GameState) -> None:
     for obj in list(state.battlefield):
         if obj.controller_id != ap_id:
             continue
-        for ability in obj.printing.triggered_abilities:
+        for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "beginning_of_combat":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
                 continue
             # Target selection mirrors _trigger_etb_abilities.
             targets: tuple[tuple[str, int], ...] = ()

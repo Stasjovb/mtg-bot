@@ -75,6 +75,7 @@ from mtg_bot.effects import (
     CreateTokenAndAttachSelf,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     ExileAllCreaturesAndSpacecraft,
+    PumpTargetOtherArtifactYouControlUEOT,
     ZeroPointBalladEffect,
     ModalChooseOne,
     FocusFireEffect,
@@ -1470,12 +1471,27 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "deathtouch"},
         ),
         # Synthesizer Labship: {U} 4/4 Spacecraft. Station 9+ flying.
-        # Simplified: drops the "2+ tier" ability (tiered triggered
-        # abilities aren't modeled — tiers currently only gate statics).
+        # 2+ | At the beginning of combat on your turn, up to one other
+        # target artifact you control becomes an artifact creature with
+        # base P/T 2/2 and gains flying until end of turn.
+        # Simplification: we can't make a non-creature artifact "become"
+        # a creature (needs layered continuous effects). We approximate
+        # by restricting the target to artifacts that are already
+        # creatures and pumping +2/+2 + flying UEOT on them.
         make_spacecraft(
             "Synthesizer Labship", "{U}", 4, 4,
             station_threshold=9,
             stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_combat",
+                    effect=PumpTargetOtherArtifactYouControlUEOT(
+                        power_bonus=2, toughness_bonus=2,
+                        granted_keywords=frozenset({"flying"}),
+                    ),
+                    tier_threshold=2,
+                ),
+            ),
         ),
         # Sledge-Class Seedship: {2}{G} 4/5 Spacecraft. Station 7+ flying.
         # Simplified: drops the "7+ | whenever it attacks, put a creature
@@ -2963,11 +2979,27 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             legendary=True,
         ),
-        make_spacecraft(  # Dawnsire, Sunstar Dreadnought — drop 100-damage attack rider.
+        # Dawnsire, Sunstar Dreadnought: {5} 20/20 Legendary Spacecraft.
+        # Station 20+ flying. 10+ | Whenever you attack, Dawnsire deals
+        # 100 damage to up to one target creature or planeswalker.
+        # Simplifications: "whenever you attack" is modeled as "whenever
+        # this attacks" (close enough — Dawnsire is usually part of the
+        # attack). "Up to one target creature or planeswalker" narrows
+        # to "target creature" since we don't have planeswalkers yet;
+        # the "up to" aspect is approximated — if there's no legal
+        # target the trigger fizzles (functionally the same: no damage).
+        make_spacecraft(
             "Dawnsire, Sunstar Dreadnought", "{5}", 20, 20,
             station_threshold=20,
             stationed_keywords={"flying"},
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=DealDamageToTargetCreature(amount=100),
+                    tier_threshold=10,
+                ),
+            ),
         ),
         make_spacecraft(  # Extinguisher Battleship — drop ETB destroy + 4-damage-each.
             "Extinguisher Battleship", "{8}", 10, 10,
