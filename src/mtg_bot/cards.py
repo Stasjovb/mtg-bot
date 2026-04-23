@@ -1381,6 +1381,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Uthros Psionicist: {2}{U} 2/4 vanilla Jellyfish Scientist.
+        # Simplified: the real card's "second spell you cast each turn
+        # costs {2} less" ability is cost-modification we don't model.
+        make_creature(
+            "Uthros Psionicist", "{2}{U}", 2, 4,
+        ),
         # Gigastorm Titan: {4}{U} 4/4 vanilla Elemental. Simplified: the
         # real card has "this spell costs {3} less to cast if you've cast
         # another spell this turn" — dropped (cost modification not
