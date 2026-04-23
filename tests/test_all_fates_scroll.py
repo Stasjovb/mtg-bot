@@ -48,10 +48,17 @@ def test_effect_describe():
     assert "X cards" in d and "differently named" in d
 
 
-def test_scroll_printing_has_activated_ability():
+def test_scroll_printing_has_two_activated_abilities():
+    """Mana ability ({T}: Add any-color) + sac-for-draw ({7},{T},sac)."""
     s = EOE_SPELLS["All-Fates Scroll"]
-    assert len(s.activated_abilities) == 1
-    a = s.activated_abilities[0]
-    assert a.cost.tap_self
-    assert a.cost.sacrifice_self
-    assert a.cost.mana_str == "{7}"
+    assert len(s.activated_abilities) == 2
+    mana_abil = next(
+        a for a in s.activated_abilities if a.is_mana_ability
+    )
+    assert mana_abil.cost.tap_self
+    draw_abil = next(
+        a for a in s.activated_abilities if not a.is_mana_ability
+    )
+    assert draw_abil.cost.tap_self
+    assert draw_abil.cost.sacrifice_self
+    assert draw_abil.cost.mana_str == "{7}"

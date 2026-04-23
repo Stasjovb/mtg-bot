@@ -88,18 +88,69 @@ def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
     ]
 
 
-def can_pay_cost(state: GameState, player_id: int, cost: ManaCost) -> bool:
-    """Check whether the player can pay ``cost`` by tapping untapped lands they control."""
+def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
+    """True if ``coin`` can pay for a ``{color}`` requirement."""
+    if coin.color == "any":
+        return True
+    return coin.color == color
+
+
+def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
+    """True if ``coin``'s spend restriction is compatible with a
+    payment for ``spell_kind``. Known spell_kind values:
+      - "spell" (default): only unrestricted coins.
+      - "artifact_spell": unrestricted or "artifact_spell"-tagged.
+      - "activated_ability": unrestricted only (for now — future
+        "artifact_activation" tag would go here).
+    """
+    if coin.spend_restriction is None:
+        return True
+    if spell_kind == "artifact_spell" and coin.spend_restriction == "artifact_spell":
+        return True
+    return False
+
+
+def can_pay_cost(
+    state: GameState, player_id: int, cost: ManaCost,
+    spell_kind: str = "spell",
+) -> bool:
+    """Check whether the player can pay ``cost`` by consuming floating
+    mana in their pool (respecting spend restrictions for ``spell_kind``)
+    then tapping untapped lands.
+    """
+    p = state.player_by_id(player_id)
+    usable_pool = [
+        c for c in p.mana_pool
+        if _coin_satisfies_context(c, spell_kind)
+    ]
     lands = _untapped_lands(state, player_id)
-    used: set[int] = set()
+    used_coins: set[int] = set()
+    used_lands: set[int] = set()
+    # Pay colored requirements first — prefer pool coins, then lands.
     for color, count in cost.colored:
-        matching = [l for l in lands if color in l.printing.produces and l.id not in used]
-        if len(matching) < count:
+        need = count
+        for idx, coin in enumerate(usable_pool):
+            if idx in used_coins:
+                continue
+            if _coin_matches_color(coin, color):
+                used_coins.add(idx)
+                need -= 1
+                if need == 0:
+                    break
+        if need == 0:
+            continue
+        matching = [
+            l for l in lands
+            if color in l.printing.produces and l.id not in used_lands
+        ]
+        if len(matching) < need:
             return False
-        for l in matching[:count]:
-            used.add(l.id)
-    remaining = [l for l in lands if l.id not in used]
-    return len(remaining) >= cost.generic
+        for l in matching[:need]:
+            used_lands.add(l.id)
+    # Pay generic with remaining pool coins (any color) + remaining lands.
+    remaining_pool = len(usable_pool) - len(used_coins)
+    remaining_lands = sum(1 for l in lands if l.id not in used_lands)
+    return remaining_pool + remaining_lands >= cost.generic
 
 
 def apply_cost_reductions(
@@ -210,20 +261,59 @@ def _choose_and_apply_x(
 
 
 def auto_tap_for_cost(
-    state: GameState, player_id: int, cost: ManaCost
+    state: GameState, player_id: int, cost: ManaCost,
+    spell_kind: str = "spell",
 ) -> list[GameObject]:
-    """Tap untapped lands to pay the cost. Returns lands tapped (and mutates them)."""
+    """Pay ``cost`` by consuming floating mana first (respecting spend
+    restrictions for ``spell_kind``), then tapping lands for the
+    remainder. Returns the list of lands tapped. Mutates the pool
+    and the tapped lands.
+    """
+    p = state.player_by_id(player_id)
     lands = _untapped_lands(state, player_id)
-    used: set[int] = set()
+    used_coin_ids: list[int] = []  # indices into p.mana_pool
+    used_lands: set[int] = set()
     tapped: list[GameObject] = []
+    # Consume pool coins by preference for colored requirements.
     for color, count in cost.colored:
-        matching = [l for l in lands if color in l.printing.produces and l.id not in used]
-        for l in matching[:count]:
-            used.add(l.id)
+        need = count
+        for idx, coin in enumerate(p.mana_pool):
+            if idx in used_coin_ids:
+                continue
+            if not _coin_satisfies_context(coin, spell_kind):
+                continue
+            if _coin_matches_color(coin, color):
+                used_coin_ids.append(idx)
+                need -= 1
+                if need == 0:
+                    break
+        if need == 0:
+            continue
+        matching = [
+            l for l in lands
+            if color in l.printing.produces and l.id not in used_lands
+        ]
+        for l in matching[:need]:
+            used_lands.add(l.id)
             tapped.append(l)
-    remaining = [l for l in lands if l.id not in used]
-    for l in remaining[: cost.generic]:
+    # Generic cost: pool first, then lands.
+    generic_need = cost.generic
+    for idx, coin in enumerate(p.mana_pool):
+        if generic_need == 0:
+            break
+        if idx in used_coin_ids:
+            continue
+        if not _coin_satisfies_context(coin, spell_kind):
+            continue
+        used_coin_ids.append(idx)
+        generic_need -= 1
+    remaining_lands = [l for l in lands if l.id not in used_lands]
+    for l in remaining_lands[:generic_need]:
         tapped.append(l)
+    # Remove consumed coins from the pool (high index first to keep
+    # lower indices stable).
+    for idx in sorted(used_coin_ids, reverse=True):
+        del p.mana_pool[idx]
     for l in tapped:
         l.tapped = True
     return tapped
@@ -369,7 +459,10 @@ def _cast_spell(
             colored=cost.colored,
             x_pips=0,
         )
-    auto_tap_for_cost(state, player_id, cost)
+    spell_kind = (
+        "artifact_spell" if card.printing.is_artifact else "spell"
+    )
+    auto_tap_for_cost(state, player_id, cost, spell_kind=spell_kind)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -748,6 +841,20 @@ def _activate_ability(
             f"P{player_id} sacrifices {source.printing.name}"
         )
         _sacrifice(state, source)
+
+    # Mana abilities bypass the stack — resolve the effect immediately
+    # (MTG rule 605). Source is exposed via resolving_source for any
+    # effect that needs it.
+    if ability.is_mana_ability:
+        state.resolving_source = source
+        try:
+            ability.effect.resolve(state, player_id, targets)
+        finally:
+            state.resolving_source = None
+        state.log.append(
+            f"P{player_id} activates {source.printing.name}'s mana ability"
+        )
+        return
 
     # Put the ability on the stack using the existing StackItem shape.
     state.stack.append(

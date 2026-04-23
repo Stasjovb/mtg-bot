@@ -1808,6 +1808,57 @@ class PainForAllDamageEchoEffect(Effect):
 
 
 @dataclass(frozen=True)
+class AddManaToPool(Effect):
+    """Add mana to the controller's mana pool. Paired with an
+    ActivatedAbility flagged is_mana_ability=True so activation
+    bypasses the stack.
+
+    ``produces`` is a parsed list of (color, count) tuples. ``color``
+    is one of "W", "U", "B", "R", "G", "C" (colorless), or "any"
+    (wildcard satisfying any colored requirement; used by All-Fates
+    Scroll's "Add one mana of any color").
+
+    ``spend_restriction`` tags each generated coin for cost-payment
+    filtering (e.g., "artifact_spell" for Steelswarm Operator's
+    "Spend this mana only to cast an artifact spell").
+    """
+
+    produces: tuple[tuple[str, int], ...]
+    spend_restriction: "str | None" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        minted: list[str] = []
+        for color, count in self.produces:
+            for _ in range(count):
+                p.mana_pool.append(
+                    ManaCoin(color=color, spend_restriction=self.spend_restriction)
+                )
+                minted.append(color)
+        restriction = (
+            f" ({self.spend_restriction})" if self.spend_restriction else ""
+        )
+        state.log.append(
+            f"P{controller_id} adds {'+'.join(minted)}{restriction} to "
+            f"mana pool"
+        )
+
+    def describe(self) -> str:
+        parts = [
+            (f"{{{c}}}" * n if c != "any" else "{any}") for c, n in self.produces
+        ]
+        base = "Add " + "".join(parts)
+        if self.spend_restriction:
+            base += f" (spend only to {self.spend_restriction})"
+        return base
+
+
+@dataclass(frozen=True)
 class AllFatesScrollDrawEffect(Effect):
     """All-Fates Scroll's sac-draw: "Draw X cards, where X is the
     number of differently named lands you control."
@@ -6847,11 +6898,16 @@ class ActivatedAbility:
 
     ``sorcery_speed=True`` limits activation to main-phase-with-empty-stack
     timing (matches "Activate only as a sorcery").
+
+    ``is_mana_ability=True`` short-circuits the stack: the effect
+    resolves immediately on activation (real MTG rule 605 — mana
+    abilities don't use the stack). Pair with an AddManaToPool effect.
     """
 
     cost: ActivationCost
     effect: Effect
     sorcery_speed: bool = False
+    is_mana_ability: bool = False
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"

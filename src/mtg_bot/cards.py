@@ -95,6 +95,7 @@ from mtg_bot.effects import (
     DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,
     AnticausalVestigeLeavesEffect,
+    AddManaToPool,
     AllFatesScrollDrawEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
@@ -2552,10 +2553,28 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Steelswarm Operator — dropped mana abilities (artifact-only filters).
+        # Steelswarm Operator `{1}{U}` 1/1 Artifact Creature. Real
+        # oracle: "Flying. {T}: Add {U}. Spend this mana only to cast
+        # an artifact spell. {T}: Add {U}{U}. Spend this mana only to
+        # activate abilities of artifact sources."
+        # Simplification: both mana abilities use the same cost ({T}),
+        # so a turn only activates one. The second (Add {U}{U}, spend
+        # on artifact-activation-abilities) is dropped — the engine
+        # doesn't model "artifact_activation" spend restrictions.
+        make_creature(
             "Steelswarm Operator", "{1}{U}", 1, 1,
             artifact=True,
             keywords={"flying"},
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("U", 1),),
+                        spend_restriction="artifact_spell",
+                    ),
+                    is_mana_ability=True,
+                ),
+            ),
         ),
         # -- Batch #1 of vanilla-simplified creatures. Each drops its
         # non-keyword text to ship a keyword-only version. Simplification
@@ -3983,12 +4002,18 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # All-Fates Scroll `{3}` Artifact. Real oracle: "{T}: Add one
         # mana of any color. {7}, {T}, Sacrifice this artifact: Draw X
         # cards, where X is the number of differently named lands you
-        # control." Simplification: the tap-for-mana ability is NOT
-        # modeled (requires mana-pool abstraction); only the
-        # {7},{T},Sac draw ability is implemented.
+        # control." Now that the engine has a mana pool the first
+        # ability is implemented as AddManaToPool(any-color). Each
+        # ability uses {T} so activating one locks out the other on
+        # a given turn.
         make_artifact(
             "All-Fates Scroll", "{3}",
             activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("any", 1),)),
+                    is_mana_ability=True,
+                ),
                 ActivatedAbility(
                     cost=ActivationCost(
                         mana=parse_mana_cost("{7}"),

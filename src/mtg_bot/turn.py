@@ -782,6 +782,16 @@ def run_cleanup_step(state: GameState) -> None:
     for p in state.players:
         for c in p.exile:
             c.playable_from_exile_this_turn = False
+    # Empty each player's mana pool. MTG's real rule empties at end of
+    # each step/phase; our simplified engine holds mana across phases
+    # within a turn and clears at cleanup.
+    for p in state.players:
+        if p.mana_pool:
+            state.log.append(
+                f"P{p.id}'s mana pool empties "
+                f"({len(p.mana_pool)} coin(s) lost)"
+            )
+            p.mana_pool.clear()
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False

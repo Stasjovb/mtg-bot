@@ -331,6 +331,29 @@ class Player:
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None
+    # Mana pool: list of ManaCoin entries (color + optional spend
+    # restriction). Populated by mana-ability activations; consumed
+    # before lands when paying costs; emptied at cleanup step.
+    mana_pool: list["ManaCoin"] = field(default_factory=list)
+
+
+@dataclass
+class ManaCoin:
+    """A unit of mana in a player's pool.
+
+    ``color`` is one of "W", "U", "B", "R", "G", "C" (colorless), or
+    "any" (a wildcard produced by effects like All-Fates Scroll's
+    "{T}: Add one mana of any color"). An "any" coin can satisfy any
+    colored requirement; colorless coins only satisfy generic
+    requirements.
+
+    ``spend_restriction`` gates what the coin can pay for. None =
+    unrestricted. Known values: "artifact_spell" (Steelswarm Operator's
+    "Spend this mana only to cast an artifact spell").
+    """
+
+    color: str
+    spend_restriction: Optional[str] = None
 
 
 @dataclass
