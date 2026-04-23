@@ -31,6 +31,8 @@ from mtg_bot.effects import (
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    PinnacleStarcageETBEffect,
+    PinnacleStarcageSacEffect,
     PutStunCounterOnTappedCreature,
     TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
@@ -3802,8 +3804,30 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             power_bonus=3, toughness_bonus=0,
         ),
         # Artifacts — ship as empty/inert bodies, dropping complex text.
-        make_artifact(  # Pinnacle Starcage — dropped mass-exile-until-leaves + tokens rider.
+        # Pinnacle Starcage `{1}{W}{W}` Artifact. Real oracle:
+        # "When this artifact enters, exile all artifacts and creatures
+        # with mana value 2 or less until this artifact leaves the
+        # battlefield. {6}{W}{W}: Put each card exiled with this
+        # artifact into its owner's graveyard, then create a 2/2
+        # colorless Robot artifact creature token for each card put
+        # into a graveyard this way. Sacrifice this artifact."
+        make_artifact(
             "Pinnacle Starcage", "{1}{W}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PinnacleStarcageETBEffect(),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{6}{W}{W}"),
+                        mana_str="{6}{W}{W}",
+                    ),
+                    effect=PinnacleStarcageSacEffect(),
+                ),
+            ),
         ),
         make_artifact(  # Requiem Monolith — dropped activated ability.
             "Requiem Monolith", "{2}{B}",

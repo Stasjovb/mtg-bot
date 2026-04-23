@@ -3825,6 +3825,99 @@ class ExileOpponentsNonlandPermanentUntilLeaves(Effect):
 
 
 @dataclass(frozen=True)
+class PinnacleStarcageETBEffect(Effect):
+    """Pinnacle Starcage's ETB: "Exile all artifacts and creatures with
+    mana value 2 or less until this artifact leaves the battlefield."
+
+    Untargeted mass exile filtered by type (artifact or creature) and
+    mana value. Uses the same ``exiled_by_source`` bookkeeping as other
+    "exile until this leaves" effects so they return when the Starcage
+    itself leaves the battlefield.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        victims = [
+            o for o in list(state.battlefield)
+            if o is not source
+            and (o.printing.is_artifact or o.printing.is_creature)
+            and not o.printing.is_land
+            and o.printing.mana_cost.total <= 2
+        ]
+        for obj in victims:
+            obj.exiled_by_source = source.id
+            state.log.append(
+                f"{obj.printing.name} exiled by "
+                f"{source.printing.name}"
+            )
+            move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            "exile all artifacts and creatures with mana value 2 or "
+            "less until this artifact leaves the battlefield"
+        )
+
+
+@dataclass(frozen=True)
+class PinnacleStarcageSacEffect(Effect):
+    """Pinnacle Starcage's {6}{W}{W} activated ability: "Put each card
+    exiled with this artifact into its owner's graveyard, then create
+    a 2/2 colorless Robot artifact creature token for each card put
+    into a graveyard this way. Sacrifice this artifact."
+
+    The Starcage is sacrificed at the end, which also releases any
+    remaining exiled-by-it cards back — but we've already moved them
+    to graveyards explicitly, so the release-on-leave is a no-op here.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+
+        source = state.resolving_source
+        if source is None:
+            return
+        moved = 0
+        for p in state.players:
+            still_exiled = [c for c in p.exile if c.exiled_by_source == source.id]
+            for card in still_exiled:
+                p.exile.remove(card)
+                card.zone = Zone.GRAVEYARD
+                card.exiled_by_source = None
+                p.graveyard.append(card)
+                moved += 1
+        state.log.append(
+            f"{source.printing.name} moves {moved} exiled cards to "
+            f"graveyards; creates {moved} Robot tokens"
+        )
+        robot = TOKEN_PRINTINGS["Robot"]
+        for _ in range(moved):
+            token = state.new_object(robot, controller_id, Zone.BATTLEFIELD)
+            state.battlefield.append(token)
+        # Sacrifice the Starcage itself.
+        from mtg_bot.turn import sacrifice as _sacrifice
+        _sacrifice(state, source)
+
+    def describe(self) -> str:
+        return (
+            "put each card exiled with this artifact into its owner's "
+            "graveyard, then create a 2/2 Robot for each; sacrifice "
+            "this artifact"
+        )
+
+
+@dataclass(frozen=True)
 class SeedshipImpactEffect(Effect):
     """Destroy target artifact or enchantment. If its mana value was 2
     or less, create a Lander token.
