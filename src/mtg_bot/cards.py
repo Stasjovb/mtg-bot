@@ -1467,6 +1467,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Oreplate Pangolin: {1}{R} 2/2. "Whenever another artifact you
+        # control enters, you may pay {1}. If you do, put a +1/+1 counter
+        # on this creature." Simplified: drop the optional {1} payment —
+        # we always put the counter (strictly stronger than printed).
+        make_creature(
+            "Oreplate Pangolin", "{1}{R}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="artifact_enters_you_control",
+                    effect=PutPlusOneCounterOnSelf(amount=1),
+                ),
+            ),
+        ),
         # Frontline War-Rager: {2}{R} 2/3. Conditional-EoT +1/+1 counter
         # when you control two or more tapped creatures.
         make_creature(

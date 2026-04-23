@@ -5104,6 +5104,44 @@ def test_brightspear_zealot_power_boost_requires_two_spells():
     assert effective_power(state, z) == 2
 
 
+def test_oreplate_pangolin_artifact_enters_trigger():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()
+    pang = state.new_object(
+        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(pang)
+    # Another artifact enters via token creation → +1/+1 counter on pangolin.
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, lander, 0)
+    assert pang.plus_one_counters == 1
+
+    # An opponent's artifact entering shouldn't trigger.
+    enemy_art = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, enemy_art, 1)
+    assert pang.plus_one_counters == 1  # unchanged
+
+
+def test_pangolin_doesnt_trigger_on_itself():
+    """The trigger says 'another artifact' — self-entry shouldn't fire."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    pang = state.new_object(
+        EOE_CREATURES["Oreplate Pangolin"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    put_into_battlefield(state, pang, 0)
+    assert pang.plus_one_counters == 0
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

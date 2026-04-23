@@ -485,6 +485,10 @@ def put_into_battlefield(
 
     Shared by spell resolution and token-creation effects so both flows go
     through the same state transition and trigger pipeline.
+
+    After the object's own ETB triggers, fires "whenever another artifact
+    you control enters" triggers on other permanents the controller
+    controls if the entering object is an artifact.
     """
     obj.zone = Zone.BATTLEFIELD
     obj.controller_id = controller_id
@@ -492,6 +496,34 @@ def put_into_battlefield(
     obj.summoning_sick = True
     state.battlefield.append(obj)
     _trigger_etb_abilities(state, obj)
+    if obj.printing.is_artifact:
+        _fire_artifact_enters_triggers(state, obj)
+
+
+def _fire_artifact_enters_triggers(
+    state: GameState, new_artifact: "GameObject"
+) -> None:
+    """Fire "whenever another artifact you control enters" triggers on
+    permanents the new artifact's controller controls. Fires directly
+    (no stack) — matches our other trigger events.
+    """
+    controller = new_artifact.controller_id
+    for obj in list(state.battlefield):
+        if obj.id == new_artifact.id:
+            continue
+        if obj.controller_id != controller:
+            continue
+        for ability in obj.printing.triggered_abilities:
+            if ability.trigger != "artifact_enters_you_control":
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s artifact-enters trigger fires"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, controller, ())
+            finally:
+                state.resolving_source = None
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:

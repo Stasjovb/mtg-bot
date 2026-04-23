@@ -2581,6 +2581,9 @@ class TriggeredAbility:
             "second_spell_each_turn": (
                 "Whenever you cast your second spell each turn"
             ),
+            "artifact_enters_you_control": (
+                "Whenever another artifact you control enters"
+            ),
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:
