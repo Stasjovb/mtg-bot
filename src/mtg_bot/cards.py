@@ -1317,6 +1317,36 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Red
+        # Frontline War-Rager: {2}{R} 2/3. Conditional-EoT +1/+1 counter
+        # when you control two or more tapped creatures.
+        make_creature(
+            "Frontline War-Rager", "{2}{R}", 2, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=PutPlusOneCounterOnSelf(amount=1),
+                        min_count=2,
+                    ),
+                ),
+            ),
+        ),
+        # Kavaron Turbodrone: {2}{R} 2/3. {T}: target creature you control
+        # gets +1/+1 and haste UEOT. Sorcery-speed activation.
+        make_creature(
+            "Kavaron Turbodrone", "{2}{R}", 2, 3,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=1, toughness_bonus=1,
+                        granted_keywords=frozenset({"haste"}),
+                        you_control_only=True,
+                    ),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
         # Kavaron Skywarden: 4/5 Reach. Void — at your end step, put a
         # +1/+1 counter on this creature.
         make_creature(

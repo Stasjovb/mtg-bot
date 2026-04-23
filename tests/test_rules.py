@@ -4865,6 +4865,51 @@ def test_counter_noop_paths():
     e.resolve(state, controller_id=0, targets=(("stack", 99999),))
 
 
+def test_frontline_war_rager_conditional_counter():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    rager = state.new_object(
+        EOE_CREATURES["Frontline War-Rager"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(rager)
+    # Only one tapped creature → no counter.
+    rager.tapped = True
+    run_beginning_of_end_step_triggers(state)
+    assert rager.plus_one_counters == 0
+    # Add a second tapped creature.
+    mate = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    mate.tapped = True
+    state.battlefield.append(mate)
+    run_beginning_of_end_step_triggers(state)
+    assert rager.plus_one_counters == 1
+
+
+def test_kavaron_turbodrone_activated_pump():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords, effective_power
+
+    state = _arena()
+    drone = state.new_object(
+        EOE_CREATURES["Kavaron Turbodrone"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(drone)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    act = drone.printing.activated_abilities[0]
+    assert act.cost.tap_self is True
+    assert act.sorcery_speed is True
+    act.effect.resolve(state, 0, (("creature", ally.id),))
+    assert effective_power(state, ally) == 3  # 2 base + 1
+    assert "haste" in effective_keywords(state, ally)
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
