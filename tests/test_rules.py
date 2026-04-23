@@ -5764,6 +5764,54 @@ def test_multi_target_cast_path_through_cast_spell():
     assert all(b in state.players[1].hand for b in bears)
 
 
+def test_scout_for_survivors_returns_with_counters():
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    # Seed 3 small creatures in graveyard + 1 big one.
+    small = []
+    for _ in range(3):
+        c = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,
+            zone=Zone.GRAVEYARD,
+        )  # {1}{G}, MV 2
+        state.players[0].graveyard.append(c)
+        small.append(c)
+    big = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=0,
+        zone=Zone.GRAVEYARD,
+    )  # {3}{U}, MV 4
+    state.players[0].graveyard.append(big)
+
+    effect = EOE_SPELLS["Scout for Survivors"].spell_effect
+    legal = effect.legal_targets(state, 0)
+    legal_ids = {tid for _, tid in legal}
+    # All 3 small creatures legal, big one NOT legal (MV > 3).
+    for s in small:
+        assert s.id in legal_ids
+    assert big.id not in legal_ids
+
+    effect.resolve(
+        state, 0,
+        tuple(("graveyard_creature", s.id) for s in small),
+    )
+    # All 3 small creatures are back on the battlefield with a counter.
+    for s in small:
+        assert s in state.battlefield
+        assert s.plus_one_counters == 1
+
+
+def test_scout_for_survivors_noop_paths():
+    from mtg_bot.effects import ReturnUpToNSmallCreaturesFromGraveyardWithCounters
+
+    state = _arena()
+    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n=2, max_mv=1)
+    assert "graveyard" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("graveyard_creature", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

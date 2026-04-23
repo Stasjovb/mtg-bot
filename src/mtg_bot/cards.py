@@ -54,6 +54,7 @@ from mtg_bot.effects import (
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
+    ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
@@ -2071,6 +2072,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DealDamageEachOpponent(amount=3),
                 ExileAllArtifactsWithManaValueAtMost(max_mv=3),
             )),
+        ),
+        # Scout for Survivors — reanimate up to 3 small creatures with
+        # +1/+1 counter on each. Simplified: real card says "total mana
+        # value 3 or less" (sum); we use per-card filter instead.
+        make_sorcery(
+            "Scout for Survivors", "{2}{W}",
+            effect=ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+                max_n=3, max_mv=3,
+            ),
         ),
         # Drill Too Deep — modal: charge counters on a Spacecraft you
         # control OR destroy target artifact. "Planet" mode simplified out.

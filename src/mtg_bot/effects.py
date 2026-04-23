@@ -407,6 +407,65 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
+    """Return up to ``max_n`` creature cards with mana value ≤ ``max_mv``
+    from your graveyard to the battlefield. Put a +1/+1 counter on each.
+
+    Matches Scout for Survivors (simplified: the real card's "total
+    mana value 3 or less" is the SUM constraint; we use per-card filter
+    instead — slightly stronger).
+    """
+
+    max_n: int = 3
+    max_mv: int = 3
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+            and c.printing.mana_cost.total <= self.max_mv
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        p = state.player_by_id(controller_id)
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            state.log.append(
+                f"{card.printing.name} returns to the battlefield under "
+                f"P{controller_id} with a +1/+1 counter"
+            )
+            put_into_battlefield(state, card, controller_id)
+            card.plus_one_counters += 1
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creature cards with mana "
+            f"value {self.max_mv} or less from your graveyard to the "
+            f"battlefield with a +1/+1 counter on each"
+        )
+
+
+@dataclass(frozen=True)
 class CreateTokenAndAttachSelf(Effect):
     """Create a token and attach the source (Equipment) to it.
 
