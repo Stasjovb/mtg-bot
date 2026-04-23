@@ -1247,8 +1247,17 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Meteor Crater": make_colorless_land(  # dropped tap-for-color-of-creature-you-control.
+    # Meteor Crater: {T}: Choose a color of a permanent you control.
+    # Add one mana of that color. Simplified to "any" coin.
+    "Meteor Crater": make_utility_land(
         "Meteor Crater",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Mirrorpool": make_colorless_land(  # dropped copy-spell / copy-creature activated.
         "Mirrorpool",
@@ -1281,11 +1290,17 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Plaza of Heroes": make_colorless_land(  # dropped legendary-tribal + pay-2-any.
         "Plaza of Heroes",
     ),
-    # Power Depot is an Artifact Land — both card types. Built inline
-    # so the card_types tuple is ("Artifact", "Land") instead of the
-    # make_colorless_land default ("Land",).
+    # Power Depot `Artifact Land`. Oracle: "This land enters tapped.
+    # {T}: Add {C}. {T}: Add one mana of any color. Spend this mana
+    # only to cast artifact spells or activate abilities of artifacts.
+    # Modular 1."
+    # Simplifications: the second ability adds an "any" coin tagged
+    # artifact_spell (our engine doesn't model the artifact-activation
+    # branch of the restriction). Modular 1 (enters-with-+1/+1 counter
+    # plus dies-move-to-creature) is NOT modeled — Modular is an
+    # artifact-equipment archetype, and Power Depot dying rarely
+    # happens in our sim.
     "Power Depot": CardPrinting(
-        # dropped 2-mode tap (W/U/B/R/G or {C}{C}) + artifact tribal.
         name="Power Depot",
         mana_cost_str="",
         mana_cost=ManaCost(),
@@ -1294,12 +1309,34 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         card_types=("Artifact", "Land"),
         subtypes=(),
         produces=frozenset(),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 1),),
+                    spend_restriction="artifact_spell",
+                ),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Raging Ravine": make_colorless_land(  # dropped manland attacks-enters-counter.
         "Raging Ravine",
     ),
-    "Reflecting Pool": make_colorless_land(  # dropped tap-for-color-your-lands-produce.
+    # Reflecting Pool: {T}: Add one mana of any type that a land you
+    # control could produce. Simplified to "any" coin — the dynamic
+    # "type your lands could produce" is a wildcard in practice
+    # (our agents don't reason about conditional mana availability).
+    "Reflecting Pool": make_utility_land(
         "Reflecting Pool",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     # Scavenger Grounds: {T}: Add {C}. {2}, {T}, Sacrifice a Desert:
     # Exile all graveyards.
