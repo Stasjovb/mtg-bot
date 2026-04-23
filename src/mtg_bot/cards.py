@@ -118,6 +118,7 @@ from mtg_bot.effects import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SelfcraftMechanETBEffect,
+    TannukEnsignLandfallEffect,
     Sequence,
     StaticAbility,
     StaticScope,
@@ -2239,9 +2240,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Tannuk, Memorial Ensign — dropped attacks-discard + graveyard-play.
+        # Tannuk, Memorial Ensign `{1}{R}{G}` 2/4 Legendary Creature.
+        # Real oracle: "Landfall — Whenever a land you control enters,
+        # Tannuk deals 1 damage to each opponent. If this is the second
+        # time this ability has resolved this turn, draw a card."
+        # (Earlier preview text showed a different ability — ignore.)
+        make_creature(
             "Tannuk, Memorial Ensign", "{1}{R}{G}", 2, 4,
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="landfall",
+                    effect=TannukEnsignLandfallEffect(),
+                ),
+            ),
         ),
         # Chrome Companion `{2}` 2/1 Artifact Creature. Real oracle:
         # "Whenever this creature becomes tapped, you gain 1 life.

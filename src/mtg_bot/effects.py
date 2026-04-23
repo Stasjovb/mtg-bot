@@ -1182,6 +1182,52 @@ class FamishedWorldsireETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class TannukEnsignLandfallEffect(Effect):
+    """Tannuk, Memorial Ensign's landfall: "Tannuk deals 1 damage to
+    each opponent. If this is the second time this ability has
+    resolved this turn, draw a card."
+
+    Tracks resolutions per source in state.ability_resolutions_this_turn
+    (reset at cleanup). The draw fires only on the exact 2nd resolution
+    this turn; 3rd, 4th, etc. get the damage but not the draw.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        # Damage each opponent 1 (log even without a source).
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= 1
+            state.log.append(
+                f"Tannuk deals 1 to P{p.id} (life: {p.life})"
+            )
+        if source is None:
+            return
+        key = ("tannuk_landfall", source.id)
+        count = state.ability_resolutions_this_turn.get(key, 0) + 1
+        state.ability_resolutions_this_turn[key] = count
+        if count == 2:
+            from mtg_bot.turn import draw_card
+
+            draw_card(state, controller_id)
+            state.log.append(
+                f"Tannuk landfall second-time bonus: P{controller_id} "
+                f"draws a card"
+            )
+
+    def describe(self) -> str:
+        return (
+            "Tannuk deals 1 damage to each opponent; if this is the "
+            "second time this ability has resolved this turn, draw a "
+            "card"
+        )
+
+
+@dataclass(frozen=True)
 class PutCardFromGraveyardOnBottomOfLibrary(Effect):
     """Put target card from a graveyard on the bottom of its owner's
     library. Matches Chrome Companion's activated ability. Any

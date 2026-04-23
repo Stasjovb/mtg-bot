@@ -360,6 +360,11 @@ class GameState:
     # resolution. Used by effects like Starwinder's "may draw that
     # many cards" that need to know the damage amount.
     resolving_combat_damage_amount: int = 0
+    # Per-turn counter of how many times a tagged ability has resolved.
+    # Keys are effect-specific labels (typically ("tag", source_id)).
+    # Reset by run_cleanup_step. Used by Tannuk, Memorial Ensign's
+    # "if this is the second time this ability has resolved" rider.
+    ability_resolutions_this_turn: dict = field(default_factory=dict)
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

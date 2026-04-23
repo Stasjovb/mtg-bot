@@ -751,6 +751,8 @@ def run_cleanup_step(state: GameState) -> None:
         p.attacked_with_spacecraft_this_turn = False
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
+    # Reset per-turn ability-resolution counters.
+    state.ability_resolutions_this_turn.clear()
 
 
 def state_based_actions(state: GameState) -> bool:
