@@ -1031,6 +1031,46 @@ class DestroyTargetArtifactOrTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapTargetArtifactOrCreature(Effect):
+    """Tap target artifact or creature. Matches Mental Modulation's middle
+    clause. No-op if the target is already tapped.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact or o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        tap_permanent(state, obj)
+
+    def describe(self) -> str:
+        return "tap target artifact or creature"
+
+
+@dataclass(frozen=True)
 class DepressurizeEffect(Effect):
     """Target creature gets -3/-0 UEOT; then if its power is 0 or less,
     destroy it.

@@ -4155,6 +4155,36 @@ def test_cerebral_download_surveil_x_then_draw_three():
     assert any("surveils 2" in l for l in state.log)
 
 
+def test_mental_modulation_taps_and_draws():
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    _stock_library(state, 0, count=3)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    mental = EOE_SPELLS["Mental Modulation"]
+    hand_before = len(state.players[0].hand)
+    mental.spell_effect.resolve(
+        state, controller_id=0, targets=(("permanent", victim.id),)
+    )
+    assert victim.tapped is True
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_tap_target_noop_paths():
+    from mtg_bot.effects import TapTargetArtifactOrCreature
+
+    state = _arena()
+    e = TapTargetArtifactOrCreature()
+    assert "tap" in e.describe()
+    assert e.requires_target() is True
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES

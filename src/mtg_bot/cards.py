@@ -45,6 +45,7 @@ from mtg_bot.effects import (
     ReturnTargetCreatureToOwnersHand,
     DestroyTargetNonlandPermanentWithLanderForController,
     DestroyTargetArtifactOrTappedCreature,
+    TapTargetArtifactOrCreature,
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     CutPropulsionEffect,
@@ -1428,6 +1429,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=Sequence(effects=(
                 Surveil(use_artifact_count=True),
                 DrawCards(amount=3),
+            )),
+        ),
+        # Mental Modulation — tap target artifact or creature, then draw a
+        # card. Skips the "costs {1} less during your turn" rider (cost
+        # modification during casting isn't modeled yet).
+        make_instant(
+            "Mental Modulation", "{1}{U}",
+            effect=Sequence(effects=(
+                TapTargetArtifactOrCreature(),
+                DrawCards(amount=1),
             )),
         ),
         # Shattered Wings — destroy artifact/enchantment/creature-with-flying,
