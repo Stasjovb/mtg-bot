@@ -1494,6 +1494,54 @@ class CutPropulsionEffect(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
+    """Deal ``base`` damage to a target creature; ``boosted`` instead if you
+    control a Spacecraft.
+
+    Matches Invasive Maneuvers (3/5). Any-target creature.
+    """
+
+    base: int = 3
+    boosted: int = 5
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def _amount(self, state: "GameState", controller_id: int) -> int:
+        has_spacecraft = any(
+            o.controller_id == controller_id and o.printing.is_spacecraft
+            for o in state.battlefield
+        )
+        return self.boosted if has_spacecraft else self.base
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, _ = targets[0]
+        if kind != "creature":
+            return
+        _apply_damage(state, targets[0], self._amount(state, controller_id))
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.base} damage to target creature, {self.boosted} "
+            f"instead if you control a Spacecraft"
+        )
+
+
+@dataclass(frozen=True)
 class DealDamageToOpponentCreature(Effect):
     """Deal ``amount`` damage to target creature an opponent controls.
 

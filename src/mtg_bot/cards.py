@@ -44,6 +44,7 @@ from mtg_bot.effects import (
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     CutPropulsionEffect,
+    DealDamageToTargetCreatureSpacecraftBoosted,
     ExileAllCreaturesAndSpacecraft,
     FocusFireEffect,
     MillTargetPlayer,
@@ -1099,6 +1100,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Cut Propulsion", "{2}{R}",
             effect=CutPropulsionEffect(),
+        ),
+        # Invasive Maneuvers — 3 damage burst, 5 with a Spacecraft.
+        make_instant(
+            "Invasive Maneuvers", "{1}{R}",
+            effect=DealDamageToTargetCreatureSpacecraftBoosted(
+                base=3, boosted=5
+            ),
         ),
     ]
 }

@@ -3508,6 +3508,48 @@ def test_cut_propulsion_noop_paths():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_invasive_maneuvers_base_damage():
+    from mtg_bot.effects import DealDamageToTargetCreatureSpacecraftBoosted
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    e = DealDamageToTargetCreatureSpacecraftBoosted(base=3, boosted=5)
+    assert e.requires_target() is True
+    assert "Spacecraft" in e.describe()
+    e.resolve(state, controller_id=0, targets=(("creature", victim.id),))
+    assert victim.damage == 3
+
+
+def test_invasive_maneuvers_boosted_by_spacecraft():
+    from mtg_bot.effects import DealDamageToTargetCreatureSpacecraftBoosted
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    skiff = state.new_object(
+        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(skiff)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    e = DealDamageToTargetCreatureSpacecraftBoosted(base=3, boosted=5)
+    e.resolve(state, controller_id=0, targets=(("creature", victim.id),))
+    assert victim.damage == 5
+
+
+def test_invasive_maneuvers_noop_paths():
+    from mtg_bot.effects import DealDamageToTargetCreatureSpacecraftBoosted
+
+    state = _arena()
+    e = DealDamageToTargetCreatureSpacecraftBoosted()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,
