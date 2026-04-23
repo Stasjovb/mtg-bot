@@ -142,6 +142,13 @@ def move_off_battlefield(
     if destination == "graveyard" and was_creature:
         _fire_dies_triggers(state, obj)
 
+    # Observer trigger: "whenever a creature or artifact you control
+    # dies" — fires on OTHER permanents the dying object's controller
+    # controls (includes the source itself per oracle text — "this
+    # creature or another creature or artifact you control dies").
+    if destination == "graveyard" and (was_creature or obj.printing.is_artifact):
+        _fire_your_creature_or_artifact_dies_triggers(state, obj)
+
     # Generic "when this leaves the battlefield" triggers — fires for
     # artifacts, enchantments, and anything else with a matching
     # triggered ability. Used by Cryogen Relic ("enters or leaves →
@@ -152,6 +159,64 @@ def move_off_battlefield(
     # their owner's battlefield. Applies whether the source is destroyed
     # or exiled itself.
     _release_exiled_until_leaves(state, obj.id)
+
+
+def _fire_your_creature_or_artifact_dies_triggers(
+    state: GameState, dead: "GameObject"
+) -> None:
+    """Fire "whenever this or another creature or artifact you control
+    dies" triggers on all permanents the dead object's controller
+    controls. The source of this observer trigger INCLUDES the
+    dearly-departed (Susurian Voidborn: "this creature or another ...
+    you control dies") — since ``dead`` has already been moved off the
+    battlefield by the caller, we explicitly include it as a candidate
+    observer so its own trigger fires too.
+
+    Effects with targets get one via choose_target; if no legal
+    targets, the trigger fizzles.
+    """
+    controller_id = dead.controller_id
+    # dead itself + live battlefield (dead is not in state.battlefield
+    # by the time we get here — it was moved in move_off_battlefield).
+    candidates: list = [dead] + [
+        o for o in state.battlefield if o.controller_id == controller_id
+    ]
+    for obs in candidates:
+        # Filter battlefield-controlled entries by controller (dead
+        # already passes since we only add it above when relevant).
+        if obs is not dead and obs.controller_id != controller_id:
+            continue
+        for i, ability in enumerate(obs.printing.triggered_abilities):
+            if ability.trigger != "your_creature_or_artifact_dies":
+                continue
+            if not should_fire_trigger(state, obs.id, i, ability):
+                continue
+            state.log.append(
+                f"{obs.printing.name}'s creature-or-artifact-dies "
+                f"trigger fires"
+            )
+            state.resolving_source = obs
+            controller = state.player_by_id(controller_id)
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            try:
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, controller_id)
+                    if not legal:
+                        state.log.append(
+                            f"{obs.printing.name}'s trigger fizzles "
+                            f"(no legal targets)"
+                        )
+                        continue
+                    if controller.agent is not None:
+                        chosen = controller.agent.choose_target(
+                            state, controller_id, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                effect.resolve(state, controller_id, targets)
+            finally:
+                state.resolving_source = None
 
 
 def _fire_leaves_battlefield_triggers(

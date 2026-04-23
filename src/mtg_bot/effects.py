@@ -873,6 +873,56 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentLosesNYouGainN(Effect):
+    """Target opponent loses ``amount`` life; the ability's controller
+    gains ``amount`` life. Matches Susurian Voidborn's
+    your_creature_or_artifact_dies trigger.
+    """
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, pid = targets[0]
+        if kind != "player":
+            return
+        try:
+            opp = state.player_by_id(pid)
+        except KeyError:
+            return
+        if opp.id == controller_id:
+            return
+        opp.life -= self.amount
+        you = state.player_by_id(controller_id)
+        you.life += self.amount
+        state.log.append(
+            f"P{pid} loses {self.amount} life (now {opp.life}); "
+            f"P{controller_id} gains {self.amount} life (now {you.life})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"target opponent loses {self.amount} life and you gain "
+            f"{self.amount} life"
+        )
+
+
+@dataclass(frozen=True)
 class PumpTargetOtherCreatureByXOverXWhereXIsSourcePower(Effect):
     """Target another creature you control gets +X/+X until end of turn,
     where X is the effect's source's effective power. Reads

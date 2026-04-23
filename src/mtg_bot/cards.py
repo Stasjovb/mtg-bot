@@ -92,6 +92,7 @@ from mtg_bot.effects import (
     DiscardHandThenDrawN,
     DoubleTargetCreaturesPowerUEOT,
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    TargetOpponentLosesNYouGainN,
     TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,
     OptionalSacArtifactForEffect,
@@ -1924,9 +1925,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Susurian Voidborn — dropped Void attack triggers.
+        # Susurian Voidborn `{2}{B}` 2/2 Creature. Warp `{B}`. Real
+        # oracle: "Whenever this creature or another creature or
+        # artifact you control dies, target opponent loses 1 life and
+        # you gain 1 life."
+        make_creature(
             "Susurian Voidborn", "{2}{B}", 2, 2,
             warp="{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="your_creature_or_artifact_dies",
+                    effect=TargetOpponentLosesNYouGainN(amount=1),
+                ),
+            ),
         ),
         make_creature(  # Kavaron Harrier — dropped attacks may-pay for Robot token.
             "Kavaron Harrier", "{R}", 2, 1,
@@ -2017,9 +2028,33 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        make_creature(  # Alpharael, Dreaming Acolyte — dropped "if you cast 2+ → draw" trigger.
+        # Alpharael, Dreaming Acolyte `{1}{U}{B}` 2/3 Legendary Creature.
+        # Real oracle:
+        # - "When Alpharael enters, draw two cards. Then discard two
+        #   cards unless you discard an artifact card."
+        # - "During your turn, Alpharael has deathtouch."
+        # Simplifications retained: the "unless you discard an artifact"
+        # dodge isn't modeled — the caster just discards two cards
+        # unconditionally.
+        make_creature(
             "Alpharael, Dreaming Acolyte", "{1}{U}{B}", 2, 3,
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=2),
+                    )),
+                ),
+            ),
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.SELF,
+                    granted_keywords=frozenset({"deathtouch"}),
+                    active_turn_only=True,
+                ),
+            ),
         ),
         make_creature(  # Haliya, Ascendant Cadet — dropped "attacks → token + life" trigger.
             "Haliya, Ascendant Cadet", "{2}{G}{W}{W}", 3, 3,
