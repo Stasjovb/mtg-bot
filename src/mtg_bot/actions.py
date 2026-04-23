@@ -283,6 +283,9 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
     fire_landfall_triggers(state, card)
+    # Fire "whenever you play a land or cast a spell" triggers (The
+    # Endstone). The spell-cast path fires the same from _cast_spell.
+    _fire_cast_or_play_triggers(state, player_id)
 
 
 def _cast_spell(
@@ -429,6 +432,9 @@ def _cast_spell(
     p.spells_cast_this_turn += 1
     if p.spells_cast_this_turn == 2:
         _fire_second_spell_triggers(state, player_id)
+    # Fire "whenever you play a land or cast a spell" triggers — both
+    # events share a trigger type since The Endstone wants them both.
+    _fire_cast_or_play_triggers(state, player_id)
 
 
 def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
@@ -448,6 +454,33 @@ def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
             state.resolving_source = obj
             try:
                 ability.effect.resolve(state, caster_id, ())
+            finally:
+                state.resolving_source = None
+
+
+def _fire_cast_or_play_triggers(state: GameState, player_id: int) -> None:
+    """Fire "whenever you play a land or cast a spell" triggers on
+    permanents the acting player controls. Called from both _play_land
+    (land event) and _cast_spell (spell event) so both paths fire it.
+
+    Matches The Endstone. Fires directly (no stack) for consistency.
+    """
+    from mtg_bot.turn import should_fire_trigger
+
+    for obj in list(state.battlefield):
+        if obj.controller_id != player_id:
+            continue
+        for i, ability in enumerate(obj.printing.triggered_abilities):
+            if ability.trigger != "cast_spell_or_play_land":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
+                continue
+            state.log.append(
+                f"{obj.printing.name}'s cast-or-play trigger fires"
+            )
+            state.resolving_source = obj
+            try:
+                ability.effect.resolve(state, player_id, ())
             finally:
                 state.resolving_source = None
 

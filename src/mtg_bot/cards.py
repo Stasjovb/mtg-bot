@@ -81,6 +81,7 @@ from mtg_bot.effects import (
     OptionalSacArtifactForEffect,
     PumpTargetOtherArtifactYouControlUEOT,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    SetLifeToHalfStartingRoundedUp,
     SingularityRuptureEffect,
     SystemsOverrideEffect,
     ZeroPointBalladEffect,
@@ -3131,9 +3132,23 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_artifact(  # All-Fates Scroll — dropped mana ability + draw-X activated.
             "All-Fates Scroll", "{3}",
         ),
-        make_artifact(  # The Endstone — dropped land-or-spell draw + life-halving.
+        # The Endstone `{7}` Legendary Artifact:
+        # - Whenever you play a land or cast a spell, draw a card.
+        # - At the beginning of your end step, your life total becomes
+        #   half your starting life total, rounded up.
+        make_artifact(
             "The Endstone", "{7}",
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="cast_spell_or_play_land",
+                    effect=DrawCards(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=SetLifeToHalfStartingRoundedUp(),
+                ),
+            ),
         ),
         make_artifact(  # Nutrient Block — dropped gain-3-life / sac-for-draw.
             "Nutrient Block", "{1}",

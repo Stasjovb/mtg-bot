@@ -77,6 +77,34 @@ class GainLife(Effect):
 
 
 @dataclass(frozen=True)
+class SetLifeToHalfStartingRoundedUp(Effect):
+    """Set the controller's life total to half their starting life, rounded up.
+
+    Matches The Endstone's end-step trigger. In standard MTG,
+    starting life = 20 → target becomes 10. Rounds up via
+    ``(starting_life + 1) // 2``.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        new_life = (p.starting_life + 1) // 2
+        state.log.append(
+            f"P{controller_id}'s life becomes {new_life} "
+            f"(was {p.life}, starting {p.starting_life})"
+        )
+        p.life = new_life
+
+    def describe(self) -> str:
+        return (
+            "your life total becomes half your starting life total, "
+            "rounded up"
+        )
+
+
+@dataclass(frozen=True)
 class LoseLife(Effect):
     """Controller loses ``amount`` life."""
 
