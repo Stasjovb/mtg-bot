@@ -18,6 +18,7 @@ from mtg_bot.effects import (
     ConditionalOnTappedCreatures,
     CreateToken,
     DealDamageAnyTarget,
+    DealDamageEachOpponent,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
@@ -50,7 +51,9 @@ from mtg_bot.effects import (
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     CutPropulsionEffect,
     DealDamageToTargetCreatureSpacecraftBoosted,
+    ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
+    ModalChooseOne,
     FocusFireEffect,
     SelfMill,
     MillTargetPlayer,
@@ -1429,6 +1432,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=Sequence(effects=(
                 Surveil(use_artifact_count=True),
                 DrawCards(amount=3),
+            )),
+        ),
+        # Ruinous Rampage — modal: 3 to each opponent OR mass-exile small
+        # artifacts.
+        make_sorcery(
+            "Ruinous Rampage", "{1}{R}{R}",
+            effect=ModalChooseOne(modes=(
+                DealDamageEachOpponent(amount=3),
+                ExileAllArtifactsWithManaValueAtMost(max_mv=3),
             )),
         ),
         # Mental Modulation — tap target artifact or creature, then draw a

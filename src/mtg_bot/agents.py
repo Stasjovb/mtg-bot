@@ -77,6 +77,16 @@ class Agent:
         """
         raise NotImplementedError
 
+    def choose_mode(
+        self,
+        state: "GameState",
+        player_id: int,
+        mode_descriptions: list[str],
+    ) -> int:
+        """For modal "choose one" spells/abilities, return the index of the
+        chosen mode. Default: 0 (first mode)."""
+        raise NotImplementedError
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -122,3 +132,6 @@ class RandomAgent(Agent):
 
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         return self.rng.choice(legal_object_ids)
+
+    def choose_mode(self, state, player_id, mode_descriptions):
+        return self.rng.randrange(len(mode_descriptions))

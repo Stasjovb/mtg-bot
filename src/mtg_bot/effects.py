@@ -754,6 +754,131 @@ class ConditionalOnTappedCreatures(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageEachOpponent(Effect):
+    """Deal ``amount`` damage to each living opponent. Untargeted — mass
+    burn half of Ruinous Rampage's choice.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= self.amount
+            state.log.append(
+                f"P{p.id} takes {self.amount} (life: {p.life})"
+            )
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to each opponent"
+
+
+@dataclass(frozen=True)
+class ExileAllArtifactsWithManaValueAtMost(Effect):
+    """Exile every artifact on the battlefield with mana value ≤ ``max_mv``.
+
+    Ruinous Rampage's anti-artifact mode. Lander tokens (MV 0) are hit.
+    """
+
+    max_mv: int = 3
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        victims = [
+            o for o in state.battlefield
+            if o.printing.is_artifact and o.printing.mana_cost.total <= self.max_mv
+        ]
+        for obj in victims:
+            state.log.append(f"{obj.printing.name} is exiled (mass-artifact)")
+            move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            f"exile all artifacts with mana value {self.max_mv} or less"
+        )
+
+
+@dataclass(frozen=True)
+class ModalChooseOne(Effect):
+    """A "choose one" spell or ability effect. Delegates mode pick to the
+    controller's agent via ``choose_mode``, then resolves that mode.
+
+    Currently supports modes that are EITHER untargeted OR require a
+    single target; the chosen mode's ``legal_targets`` is surfaced through
+    the spell-cast pipeline via ``requires_target``.
+
+    Sequencing: we exit early at cast time if the caller only wants to
+    know about targets — the chosen mode is cached on a mutable box since
+    dataclasses are frozen. Simpler alternative: call choose_mode at
+    resolve time and discard any pre-picked target if the mode is
+    untargeted. We take the simpler path here.
+    """
+
+    modes: tuple[Effect, ...]
+
+    def requires_target(self) -> bool:
+        # Optimistic: expose as targeted if ANY mode is, so the caller
+        # surfaces a legal-targets menu at cast time (modes are typically
+        # 2 — all or none require targets in practice for EoE).
+        return any(m.requires_target() for m in self.modes)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Union of all modes' legal targets. The picked mode's resolve
+        # will ignore targets it doesn't use.
+        out: list[Target] = []
+        seen: set[Target] = set()
+        for m in self.modes:
+            if not m.requires_target():
+                continue
+            for t in m.legal_targets(state, controller_id):
+                if t not in seen:
+                    seen.add(t)
+                    out.append(t)
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        if p.agent is None:
+            idx = 0
+        else:
+            idx = p.agent.choose_mode(
+                state, controller_id, [m.describe() for m in self.modes]
+            )
+            idx = max(0, min(idx, len(self.modes) - 1))
+        chosen = self.modes[idx]
+        state.log.append(
+            f"modal: P{controller_id} chooses mode {idx} ({chosen.describe()})"
+        )
+        # If the chosen mode requires a target but the passed target is
+        # not in its legal set (target was picked for a different mode),
+        # fizzle silently rather than crash.
+        if chosen.requires_target():
+            legal = chosen.legal_targets(state, controller_id)
+            if not targets or targets[0] not in legal:
+                state.log.append(
+                    f"modal fizzle: chosen mode requires a legal target"
+                )
+                return
+        chosen.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return " OR ".join(m.describe() for m in self.modes)
+
+
+@dataclass(frozen=True)
 class Sequence(Effect):
     """Run multiple effects in order as a single composite effect.
 

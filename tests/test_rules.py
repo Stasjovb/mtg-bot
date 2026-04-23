@@ -4185,6 +4185,96 @@ def test_tap_target_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+def test_ruinous_rampage_mode_zero_damages_opponents():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    # Deterministic agent that always picks mode 0 (burn).
+    class PickZero(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 0
+    state.players[0].agent = PickZero(rng=random.Random(0))
+    life_before = state.players[1].life
+    EOE_SPELLS["Ruinous Rampage"].spell_effect.resolve(state, 0)
+    assert state.players[1].life == life_before - 3
+
+
+def test_ruinous_rampage_mode_one_exiles_artifacts():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+
+    state = _arena()
+
+    class PickOne(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 1
+    state.players[0].agent = PickOne(rng=random.Random(0))
+    # Put some low-MV artifacts on the battlefield.
+    lander0 = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander0)
+    lander1 = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander1)
+
+    EOE_SPELLS["Ruinous Rampage"].spell_effect.resolve(state, 0)
+    # Both Landers exiled (tokens cease to exist regardless of player).
+    assert lander0 not in state.battlefield
+    assert lander1 not in state.battlefield
+
+
+def test_modal_choose_one_out_of_bounds_clamped_and_describe():
+    from mtg_bot.effects import (
+        ModalChooseOne, GainLife, DealDamageEachOpponent,
+        ExileAllArtifactsWithManaValueAtMost,
+    )
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    modes = (
+        GainLife(amount=1),
+        DealDamageEachOpponent(amount=1),
+    )
+    mc = ModalChooseOne(modes=modes)
+    assert "OR" in mc.describe()
+    assert mc.requires_target() is False
+    assert mc.legal_targets(_arena(), 0) == []
+
+    class OutOfBounds(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 9999
+    state = _arena()
+    state.players[0].agent = OutOfBounds(rng=random.Random(0))
+    mc.resolve(state, 0)  # shouldn't crash; clamps to last mode
+
+
+def test_modal_fizzles_when_targeted_mode_has_no_legal_target():
+    """If mode picker chooses a target-requiring mode but no legal target
+    was passed, silently fizzle."""
+    from mtg_bot.effects import (
+        ModalChooseOne, GainLife, DestroyTargetCreature,
+    )
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    class PickTargeted(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 1  # the targeted mode
+
+    state = _arena()
+    state.players[0].agent = PickTargeted(rng=random.Random(0))
+    modes = (GainLife(amount=1), DestroyTargetCreature())
+    mc = ModalChooseOne(modes=modes)
+    # No target passed → silent fizzle.
+    mc.resolve(state, 0)
+    assert state.players[0].life == 20  # unchanged
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
