@@ -1169,6 +1169,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Faller's Faithful: {2}{B} 3/1. ETB destroy target creature.
+        # Simplification: real card says "up to one" and includes a
+        # conditional "if that creature wasn't dealt damage this turn,
+        # controller draws two". We drop the optionality and the "not
+        # damaged this turn" draw rider (damage-this-turn tracking isn't
+        # modeled).
+        make_creature(
+            "Faller's Faithful", "{2}{B}", 3, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=DestroyTargetCreature(),
+                ),
+            ),
+        ),
         # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
         # your end step, if [void active], you draw a card and lose 1 life."
         # We model artifact-ness as a plain creature (same shortcut as Edge

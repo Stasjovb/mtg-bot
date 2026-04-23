@@ -4407,6 +4407,26 @@ def test_put_counters_per_other_noop_without_source():
     assert "each other" in e.describe()
 
 
+def test_fallers_faithful_etb_destroys_creature():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    ff = state.new_object(
+        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ff)
+    etb = next(
+        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ff
+    etb.effect.resolve(state, 0, (("creature", victim.id),))
+    assert victim not in state.battlefield
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
