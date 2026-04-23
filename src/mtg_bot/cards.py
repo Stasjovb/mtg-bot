@@ -28,6 +28,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
+    SeedshipImpactEffect,
     MoveSelfCountersToTargetCreatureYouControl,
     UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
@@ -2346,6 +2347,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 power_bonus=3, toughness_bonus=2,
                 you_control_only=True,
             ),
+        ),
+        # Seedship Impact — destroy artifact/enchantment; if MV ≤ 2,
+        # create a Lander.
+        make_instant(
+            "Seedship Impact", "{1}{G}",
+            effect=SeedshipImpactEffect(),
         ),
         # Biosynthic Burst — +1/+1 counter + reach/trample/indestructible
         # UEOT + untap.

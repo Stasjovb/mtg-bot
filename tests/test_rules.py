@@ -6493,6 +6493,66 @@ def test_drix_fatemaker_etb_adds_counter_to_target():
     assert ally.plus_one_counters == 1
 
 
+def test_seedship_impact_destroys_small_artifact_and_makes_lander():
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+
+    state = _arena()
+    # Lander is an artifact with MV 0 → qualifies for the rider.
+    enemy_art = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(enemy_art)
+    EOE_SPELLS["Seedship Impact"].spell_effect.resolve(
+        state, 0, (("permanent", enemy_art.id),)
+    )
+    assert enemy_art not in state.battlefield
+    # We should now have our own Lander.
+    our_landers = [
+        o for o in state.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 0
+    ]
+    assert len(our_landers) == 1
+
+
+def test_seedship_impact_big_artifact_no_lander():
+    """A Spacecraft with MV > 2 doesn't get the Lander rider."""
+    from mtg_bot.cards import EOE_SPELLS, EOE_CREATURES
+
+    state = _arena()
+    big = state.new_object(
+        EOE_CREATURES["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # {5}{W} MV=6
+    state.battlefield.append(big)
+    EOE_SPELLS["Seedship Impact"].spell_effect.resolve(
+        state, 0, (("permanent", big.id),)
+    )
+    assert big not in state.battlefield
+    our_landers = [
+        o for o in state.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 0
+    ]
+    assert len(our_landers) == 0
+
+
+def test_seedship_impact_noop_paths():
+    from mtg_bot.effects import SeedshipImpactEffect
+
+    state = _arena()
+    e = SeedshipImpactEffect()
+    assert e.requires_target() is True
+    assert "enchantment" in e.describe()
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+    # Non-artifact / non-enchantment target → filtered at resolve.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    e.resolve(state, controller_id=0, targets=(("permanent", bear.id),))
+    assert bear in state.battlefield
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

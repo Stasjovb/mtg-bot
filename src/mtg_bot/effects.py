@@ -1529,6 +1529,69 @@ class DestroyTargetArtifact(Effect):
 
 
 @dataclass(frozen=True)
+class SeedshipImpactEffect(Effect):
+    """Destroy target artifact or enchantment. If its mana value was 2
+    or less, create a Lander token.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact
+            or "Enchantment" in o.printing.card_types
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import destroy
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not (
+            obj.printing.is_artifact
+            or "Enchantment" in obj.printing.card_types
+        ):
+            return
+        mv = obj.printing.mana_cost.total
+        state.log.append(f"{obj.printing.name} is destroyed")
+        if not destroy(state, obj):
+            return  # indestructible — no Lander consolation
+        if mv <= 2:
+            lander = state.new_object(
+                TOKEN_PRINTINGS["Lander"],
+                owner_id=controller_id,
+                zone=Zone.BATTLEFIELD,
+            )
+            state.log.append(f"P{controller_id} creates a Lander token")
+            put_into_battlefield(state, lander, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "destroy target artifact or enchantment; if its mana value "
+            "was 2 or less, create a Lander token"
+        )
+
+
+@dataclass(frozen=True)
 class DestroyTargetNonlandPermanent(Effect):
     """Destroy target nonland permanent. Indestructible permanents are
     unaffected. Tokens cease to exist normally.
