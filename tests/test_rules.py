@@ -4014,6 +4014,28 @@ def test_fell_gravship_etb_mill_and_return():
     assert len(state.players[0].library) == 10 - 3
 
 
+def test_pinnacle_kill_ship_etb_deals_damage():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    target = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )  # 4/4
+    state.battlefield.append(target)
+    ship = state.new_object(
+        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(ship)
+    etb = next(
+        ab for ab in ship.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ship
+    etb.effect.resolve(state, 0, (("creature", target.id),))
+    assert target.damage == 10
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
