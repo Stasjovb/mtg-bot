@@ -320,6 +320,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_food:
                     continue
+            if ability.cost.pay_life:
+                if p.life <= ability.cost.pay_life:
+                    # MTG lets you pay to 0 life (it kills you) but
+                    # pragmatically our bot avoids that line — gate
+                    # strictly to require surviving the payment.
+                    continue
             if ability.cost.exile_granting_equipment:
                 # The granting equipment must still be attached to
                 # the source. Legal when there's any equipment with

@@ -18,6 +18,13 @@ from mtg_bot.effects import (
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
     ControlTargetOpponentNextTurn,
+    DealDamageToControllerAndAddMana,
+    DestroyTargetLand,
+    GrantLifeToEachOpponent,
+    PutBasicLandFromHandOntoBattlefieldTapped,
+    ReturnTargetLandFromGraveyardToHand,
+    Sequence,
+    AddManaToPool,
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
     CreateToken,
@@ -910,6 +917,39 @@ def make_colorless_land(
     )
 
 
+def make_utility_land(
+    name: str,
+    produces: "frozenset[str]" = frozenset(),
+    subtypes_str: str = "",
+    legendary: bool = False,
+    triggered_abilities: tuple = (),
+    activated_abilities: tuple = (),
+    enters_tapped: bool = False,
+    keywords: "frozenset[str] | set[str] | tuple[str, ...]" = (),
+) -> CardPrinting:
+    """Build a non-basic land with arbitrary activated/triggered
+    abilities and an explicit produces set. Used by Stellar Sights."""
+    prefix = "Legendary " if legendary else ""
+    type_line = (
+        f"{prefix}Land — {subtypes_str}" if subtypes_str else f"{prefix}Land"
+    )
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        produces=frozenset(produces),
+        triggered_abilities=tuple(triggered_abilities),
+        activated_abilities=tuple(activated_abilities),
+        enters_tapped=enters_tapped,
+        keywords=frozenset(keywords),
+    )
+
+
 def make_shock_land(
     name: str, colors: tuple[str, str], subtypes_str: str,
     life_cost: int = 2,
@@ -1018,8 +1058,18 @@ SHOCK_LANDS: dict[str, CardPrinting] = {
 # the same pattern used to track EOE_CREATURES restoration progress);
 # incremental branches restore the real oracle ability.
 STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
-    "Ancient Tomb": make_colorless_land(  # dropped {T}: Add {C}{C}. Deals 2 to you.
+    # Ancient Tomb: `{T}: Add {C}{C}. This land deals 2 damage to you.`
+    "Ancient Tomb": make_utility_land(
         "Ancient Tomb",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=DealDamageToControllerAndAddMana(
+                    damage=2, produces=(("C", 2),),
+                ),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Blast Zone": make_colorless_land(  # dropped enters-with-counters + sac-mass-destroy.
         "Blast Zone",
@@ -1066,8 +1116,21 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Gemstone Caverns": make_colorless_land(  # dropped opening-hand luck-counter + any-color.
         "Gemstone Caverns", legendary=True,
     ),
-    "Grove of the Burnwillows": make_colorless_land(  # dropped {T}: Add {R} or {G}; each opp gains 1.
+    # Grove of the Burnwillows: `{T}: Add {C}. {T}: Add {R} or {G}.
+    # Each opponent gains 1 life.` Modeled as produces={R,G} + a
+    # becomes-tapped trigger granting 1 to each opp. Simplification:
+    # the lifegain fires on every tap (including generic-only use),
+    # which is slightly over-broad compared to the printed two-mode
+    # mana ability.
+    "Grove of the Burnwillows": make_utility_land(
         "Grove of the Burnwillows",
+        produces=frozenset({"R", "G"}),
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="becomes_tapped",
+                effect=GrantLifeToEachOpponent(amount=1),
+            ),
+        ),
     ),
     "High Market": make_colorless_land(  # dropped sac-creature-gain-1.
         "High Market",
@@ -1090,8 +1153,16 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Lumbering Falls": make_colorless_land(  # dropped manland hexproof.
         "Lumbering Falls",
     ),
-    "Mana Confluence": make_colorless_land(  # dropped pay-1-for-any-color.
+    # Mana Confluence: `{T}, Pay 1 life: Add one mana of any color.`
+    "Mana Confluence": make_utility_land(
         "Mana Confluence",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True, pay_life=1),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Meteor Crater": make_colorless_land(  # dropped tap-for-color-of-creature-you-control.
         "Meteor Crater",
@@ -1111,8 +1182,18 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Nesting Grounds": make_colorless_land(  # dropped move-a-counter-from-X-to-Y activated.
         "Nesting Grounds",
     ),
-    "Petrified Field": make_colorless_land(  # dropped return-land-from-graveyard activated.
+    # Petrified Field: `{T}: Add {C}. {T}, Sacrifice this land:
+    # Return target land card from your graveyard to your hand.`
+    "Petrified Field": make_utility_land(
         "Petrified Field",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True, sacrifice_self=True,
+                ),
+                effect=ReturnTargetLandFromGraveyardToHand(),
+            ),
+        ),
     ),
     "Plaza of Heroes": make_colorless_land(  # dropped legendary-tribal + pay-2-any.
         "Plaza of Heroes",
@@ -1146,8 +1227,18 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Stirring Wildwood": make_colorless_land(  # dropped manland reach (enters tapped too).
         "Stirring Wildwood",
     ),
-    "Strip Mine": make_colorless_land(  # dropped sac-to-destroy-target-land.
+    # Strip Mine: `{T}: Add {C}. {T}, Sacrifice this land: Destroy
+    # target land.`
+    "Strip Mine": make_utility_land(
         "Strip Mine",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True, sacrifice_self=True,
+                ),
+                effect=DestroyTargetLand(),
+            ),
+        ),
     ),
     "Sunken Citadel": make_colorless_land(  # dropped cave-discount-tap-for-2.
         "Sunken Citadel", subtypes_str="Cave",
@@ -1155,8 +1246,20 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     "Swarmyard": make_colorless_land(  # dropped regenerate-Rats/Spiders/etc.
         "Swarmyard",
     ),
-    "Terrain Generator": make_colorless_land(  # dropped pay-2-tap-put-basic-tapped.
+    # Terrain Generator: `{T}: Add {C}. {2}, {T}: You may put a basic
+    # land card from your hand onto the battlefield tapped.`
+    "Terrain Generator": make_utility_land(
         "Terrain Generator",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"),
+                    mana_str="{2}",
+                    tap_self=True,
+                ),
+                effect=PutBasicLandFromHandOntoBattlefieldTapped(),
+            ),
+        ),
     ),
     "Thespian's Stage": make_colorless_land(  # dropped {2},{T}: become-copy-of-target-land.
         "Thespian's Stage",

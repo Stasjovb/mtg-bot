@@ -5041,6 +5041,210 @@ class DestroyTargetNoncreaturePermanent(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyTargetLand(Effect):
+    """Destroy target land. Matches Strip Mine's activated ability.
+
+    ``nonbasic_only=True`` models "destroy target nonbasic land"
+    (Dust Bowl).
+    """
+
+    nonbasic_only: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        out: list[Target] = []
+        for o in state.battlefield:
+            if not o.printing.is_land:
+                continue
+            if self.nonbasic_only and "Basic" in o.printing.supertypes:
+                continue
+            out.append(("permanent", o.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import destroy
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not obj.printing.is_land:
+            return
+        if self.nonbasic_only and "Basic" in obj.printing.supertypes:
+            return
+        state.log.append(f"{obj.printing.name} is destroyed")
+        destroy(state, obj)
+
+    def describe(self) -> str:
+        return (
+            "destroy target nonbasic land"
+            if self.nonbasic_only
+            else "destroy target land"
+        )
+
+
+@dataclass(frozen=True)
+class PutBasicLandFromHandOntoBattlefieldTapped(Effect):
+    """Terrain Generator's {2}, {T} activated: "You may put a basic
+    land card from your hand onto the battlefield tapped."
+    Simplification: "may" always yes when a basic is in hand.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_landfall_triggers
+
+        p = state.player_by_id(controller_id)
+        basic = next(
+            (
+                c for c in p.hand
+                if c.printing.is_land and "Basic" in c.printing.supertypes
+            ),
+            None,
+        )
+        if basic is None:
+            return
+        p.hand.remove(basic)
+        basic.zone = Zone.BATTLEFIELD
+        basic.controller_id = controller_id
+        basic.tapped = True
+        state.battlefield.append(basic)
+        state.log.append(
+            f"P{controller_id} puts {basic.printing.name} onto the "
+            f"battlefield tapped (Terrain Generator)"
+        )
+        fire_landfall_triggers(state, basic)
+
+    def describe(self) -> str:
+        return (
+            "you may put a basic land card from your hand onto the "
+            "battlefield tapped"
+        )
+
+
+@dataclass(frozen=True)
+class ReturnTargetLandFromGraveyardToHand(Effect):
+    """Petrified Field's {T}, Sacrifice: Return target land card from
+    your graveyard to your hand.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_land", c.id)
+            for c in p.graveyard
+            if c.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_land":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand (Petrified Field)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "return target land card from your graveyard to your hand"
+        )
+
+
+@dataclass(frozen=True)
+class DealDamageToControllerAndAddMana(Effect):
+    """Ancient Tomb's mana ability: "{T}: Add {C}{C}. This land deals
+    2 damage to you." Two-step: self-damage + pool fill. Paired with
+    is_mana_ability=True so it bypasses the stack.
+    """
+
+    damage: int = 2
+    produces: tuple[tuple[str, int], ...] = (("C", 2),)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        p.life -= self.damage
+        state.log.append(
+            f"{state.resolving_source.printing.name if state.resolving_source else 'land'} "
+            f"deals {self.damage} to P{controller_id} (life: {p.life})"
+        )
+        for color, count in self.produces:
+            for _ in range(count):
+                p.mana_pool.append(ManaCoin(color=color))
+
+    def describe(self) -> str:
+        return (
+            f"add "
+            + "".join("{" + c + "}" for c, n in self.produces for _ in range(n))
+            + f"; this land deals {self.damage} damage to you"
+        )
+
+
+@dataclass(frozen=True)
+class GrantLifeToEachOpponent(Effect):
+    """Grove of the Burnwillows' "Each opponent gains 1 life" clause
+    (runs alongside the mana add via Sequence).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import gain_life
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            gain_life(state, p.id, self.amount)
+            state.log.append(
+                f"P{p.id} gains {self.amount} life (Grove) — life: {p.life}"
+            )
+
+    def describe(self) -> str:
+        return f"each opponent gains {self.amount} life"
+
+
+@dataclass(frozen=True)
 class DestroyTargetNonlandPermanent(Effect):
     """Destroy target nonland permanent. Indestructible permanents are
     unaffected. Tokens cease to exist normally.
@@ -7112,6 +7316,9 @@ class ActivationCost:
     # mana cost generic portion by the source's effective power at
     # activation time.
     mana_reduced_by_source_power: bool = False
+    # Pay N life. Mana Confluence's "{T}, Pay 1 life: Add one mana
+    # of any color." Paid at activation; gated by current life total.
+    pay_life: int = 0
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -7133,6 +7340,8 @@ class ActivationCost:
             parts.append("Exile this equipment")
         if self.mana_reduced_by_source_power:
             parts.append("(costs {X} less where X is this creature's power)")
+        if self.pay_life:
+            parts.append(f"Pay {self.pay_life} life")
         return ", ".join(parts) if parts else "0"
 
 

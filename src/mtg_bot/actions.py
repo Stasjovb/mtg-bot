@@ -314,8 +314,11 @@ def auto_tap_for_cost(
     # lower indices stable).
     for idx in sorted(used_coin_ids, reverse=True):
         del p.mana_pool[idx]
+    # Route through tap_permanent so becomes_tapped triggers fire
+    # (Chrome Companion, Grove of the Burnwillows, etc.).
+    from mtg_bot.turn import tap_permanent
     for l in tapped:
-        l.tapped = True
+        tap_permanent(state, l)
     return tapped
 
 
@@ -810,6 +813,9 @@ def _activate_ability(
     # via state.resolving_source during selection so effects with
     # self-exclusion filters (e.g. "another target creature") can read
     # it. Cleared after selection; re-set at resolve_top_of_stack.
+    # When the cost sacrifices the source, exclude the source from
+    # legal targets — Strip Mine, Petrified Field, etc. can't target
+    # themselves because they're sacrificed as part of cost.
     targets: tuple[tuple[str, int], ...] = ()
     if ability.effect.requires_target():
         state.resolving_source = source
@@ -817,6 +823,8 @@ def _activate_ability(
             legal = ability.effect.legal_targets(state, player_id)
         finally:
             state.resolving_source = None
+        if ability.cost.sacrifice_self:
+            legal = [t for t in legal if t[1] != source.id]
         if legal:
             p = state.player_by_id(player_id)
             chosen = p.agent.choose_target(state, player_id, legal)
@@ -886,6 +894,15 @@ def _activate_ability(
             f"P{player_id} removes a +1/+1 counter from "
             f"{chosen.printing.name} (now {chosen.plus_one_counters}) "
             f"(cost for {source.printing.name}'s ability)"
+        )
+
+    # "Pay N life" cost (Mana Confluence etc.). Straight life debit.
+    if ability.cost.pay_life:
+        p = state.player_by_id(player_id)
+        p.life -= ability.cost.pay_life
+        state.log.append(
+            f"P{player_id} pays {ability.cost.pay_life} life "
+            f"(cost for {source.printing.name}'s ability; life: {p.life})"
         )
 
     # "Exile this equipment" cost (Dominion Bracelet). Walk the
