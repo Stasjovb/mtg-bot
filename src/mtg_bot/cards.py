@@ -28,6 +28,7 @@ from mtg_bot.effects import (
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
+    ExileOpponentsNonlandPermanentUntilLeaves,
     SeedshipImpactEffect,
     MoveSelfCountersToTargetCreatureYouControl,
     UntapTargetOtherPermanent,
@@ -2002,6 +2003,31 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Meltstrider's Resolve", "{G}",
             power_bonus=0, toughness_bonus=2,
             granted_keywords=frozenset({"menace"}),
+        ),
+        # Banishing Light: {2}{W} Enchantment. Oblivion-Ring-style ETB
+        # exile target nonland permanent an opponent controls; returns
+        # when this enchantment leaves the battlefield.
+        make_enchantment(
+            "Banishing Light", "{2}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ExileOpponentsNonlandPermanentUntilLeaves(),
+                ),
+            ),
+        ),
+        # Seam Rip: {W} Enchantment. Same shape as Banishing Light but
+        # only targets MV 2 or less.
+        make_enchantment(
+            "Seam Rip", "{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=ExileOpponentsNonlandPermanentUntilLeaves(
+                        max_mv=2,
+                    ),
+                ),
+            ),
         ),
         # Bioengineered Future: {1}{G}{G} Enchantment. ETB create a
         # Lander token. Simplified: drops the "each creature you control

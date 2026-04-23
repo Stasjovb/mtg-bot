@@ -6553,6 +6553,86 @@ def test_seedship_impact_noop_paths():
     assert bear in state.battlefield
 
 
+def test_banishing_light_exiles_then_returns_on_leave():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import destroy
+
+    state = _arena()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    bl = state.new_object(
+        EOE_CREATURES["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bl)
+    # Fire Banishing Light's ETB trigger.
+    etb = next(
+        ab for ab in bl.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = bl
+    etb.effect.resolve(state, 0, (("permanent", victim.id),))
+    assert victim not in state.battlefield
+    assert victim in state.players[1].exile
+    assert victim.exiled_by_source == bl.id
+
+    # Now destroy Banishing Light. Victim should return.
+    destroy(state, bl)
+    assert victim in state.battlefield
+    assert victim.exiled_by_source is None
+
+
+def test_seam_rip_rejects_big_permanents():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
+
+    state = _arena()
+    big = state.new_object(
+        EOE_CREATURES["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # MV 6
+    state.battlefield.append(big)
+    small = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # MV 2
+    state.battlefield.append(small)
+    e = ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2)
+    assert e.requires_target() is True
+    assert "2" in e.describe()
+    legal = {tid for _, tid in e.legal_targets(state, 0)}
+    assert small.id in legal
+    assert big.id not in legal
+
+
+def test_banishing_light_cant_target_own():
+    from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
+
+    state = _arena()
+    mine = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mine)
+    e = ExileOpponentsNonlandPermanentUntilLeaves()
+    legal = {tid for _, tid in e.legal_targets(state, 0)}
+    assert mine.id not in legal
+
+
+def test_exile_until_leaves_noop_paths():
+    from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
+
+    state = _arena()
+    e = ExileOpponentsNonlandPermanentUntilLeaves()
+    # No resolving source.
+    state.resolving_source = None
+    e.resolve(state, controller_id=0, targets=(("permanent", 1),))
+    # Source set, but empty targets / wrong kind / missing id.
+    state.resolving_source = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("creature", 1),))
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 

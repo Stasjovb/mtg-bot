@@ -1529,6 +1529,78 @@ class DestroyTargetArtifact(Effect):
 
 
 @dataclass(frozen=True)
+class ExileOpponentsNonlandPermanentUntilLeaves(Effect):
+    """ETB exile target nonland permanent an opponent controls, optionally
+    restricted by mana value. The exiled card returns when the source
+    enchantment leaves the battlefield (Oblivion Ring / Banishing Light
+    pattern). Uses state.resolving_source as the "source" for tracking.
+
+    ``max_mv`` = 0 means no MV filter (Banishing Light); > 0 restricts
+    to permanents with mana value ≤ max_mv (Seam Rip).
+    """
+
+    max_mv: int = 0
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        out: list[Target] = []
+        for o in state.battlefield:
+            if o.printing.is_land:
+                continue
+            if o.controller_id == controller_id:
+                continue
+            if self.max_mv and o.printing.mana_cost.total > self.max_mv:
+                continue
+            out.append(("permanent", o.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or obj.printing.is_land:
+            return
+        if obj.controller_id == controller_id:
+            return
+        if self.max_mv and obj.printing.mana_cost.total > self.max_mv:
+            return
+        from mtg_bot.turn import move_off_battlefield
+
+        obj.exiled_by_source = source.id
+        state.log.append(
+            f"{obj.printing.name} is exiled by {source.printing.name}"
+        )
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        if self.max_mv:
+            return (
+                f"exile target nonland permanent an opponent controls "
+                f"with mana value {self.max_mv} or less until this "
+                f"enchantment leaves the battlefield"
+            )
+        return (
+            "exile target nonland permanent an opponent controls until "
+            "this enchantment leaves the battlefield"
+        )
+
+
+@dataclass(frozen=True)
 class SeedshipImpactEffect(Effect):
     """Destroy target artifact or enchantment. If its mana value was 2
     or less, create a Lander token.

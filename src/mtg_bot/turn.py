@@ -134,6 +134,30 @@ def move_off_battlefield(
     if destination == "graveyard" and was_creature:
         _fire_dies_triggers(state, obj)
 
+    # Return any cards this object exiled with "until this leaves" to
+    # their owner's battlefield. Applies whether the source is destroyed
+    # or exiled itself.
+    _release_exiled_until_leaves(state, obj.id)
+
+
+def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
+    """Move any objects from exile back to the battlefield under their
+    owner's control if they were exiled by the given source (Oblivion-
+    Ring-style). Returns them as fresh ETBs so ETB triggers fire again.
+    """
+    from mtg_bot.actions import put_into_battlefield
+
+    for p in state.players:
+        released = [c for c in p.exile if c.exiled_by_source == source_id]
+        for c in released:
+            p.exile.remove(c)
+            c.exiled_by_source = None
+            state.log.append(
+                f"{c.printing.name} returns from exile to "
+                f"P{p.id}'s battlefield"
+            )
+            put_into_battlefield(state, c, p.id)
+
 
 def should_fire_trigger(
     state: GameState, source_id: int, ability_index: int, ability

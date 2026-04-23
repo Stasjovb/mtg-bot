@@ -63,6 +63,12 @@ class GameObject:
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.
     attached_to: Optional[int] = None
+    # Oblivion-Ring-style "until X leaves the battlefield" tracking: when
+    # a card is exiled by a specific source, its ``exiled_by_source`` is
+    # set to that source's id. When the source leaves the battlefield,
+    # move_off_battlefield returns all cards tagged with its id from
+    # exile back to their owner's battlefield.
+    exiled_by_source: Optional[int] = None
 
 
 def is_void_active(state: GameState) -> bool:
