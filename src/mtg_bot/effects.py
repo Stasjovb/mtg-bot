@@ -1372,6 +1372,66 @@ class DealDamageToTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class FocusFireEffect(Effect):
+    """Deal (``base`` + your creatures and Spacecraft) damage to an attacking
+    or blocking creature.
+
+    Matches Focus Fire. Dynamic amount is recomputed at resolution.
+    Legality is filtered to attackers/blockers only; that's re-checked at
+    resolve time so a creature that stops attacking/blocking between cast
+    and resolve fizzles the damage.
+    """
+
+    base: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    @staticmethod
+    def _is_in_combat(obj: "GameObject") -> bool:
+        return obj.attacking or obj.blocking is not None
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and self._is_in_combat(o)
+        ]
+
+    def _amount(self, state: "GameState", controller_id: int) -> int:
+        bonus = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id
+            and (o.printing.is_creature or o.printing.is_spacecraft)
+        )
+        return self.base + bonus
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not self._is_in_combat(obj):
+            return
+        _apply_damage(state, targets[0], self._amount(state, controller_id))
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.base}+X damage to target attacking or blocking "
+            f"creature, where X is creatures and Spacecraft you control"
+        )
+
+
+@dataclass(frozen=True)
 class DealDamageToOpponentCreature(Effect):
     """Deal ``amount`` damage to target creature an opponent controls.
 

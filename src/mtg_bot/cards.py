@@ -44,6 +44,7 @@ from mtg_bot.effects import (
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     ExileAllCreaturesAndSpacecraft,
+    FocusFireEffect,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     Sequence,
@@ -1087,6 +1088,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_sorcery(
             "Beyond the Quiet", "{3}{W}{W}",
             effect=ExileAllCreaturesAndSpacecraft(),
+        ),
+        # Focus Fire — combat damage spike: 2 + your creatures/Spacecraft.
+        make_instant(
+            "Focus Fire", "{W}",
+            effect=FocusFireEffect(base=2),
         ),
     ]
 }

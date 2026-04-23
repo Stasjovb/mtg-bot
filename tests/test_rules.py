@@ -3378,6 +3378,82 @@ def test_beyond_the_quiet_empty_battlefield_is_noop():
     e.resolve(state, controller_id=0)  # no crash
 
 
+def test_focus_fire_only_legal_against_attackers_or_blockers():
+    from mtg_bot.effects import FocusFireEffect
+
+    state = _arena()
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(attacker)
+    blocker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(blocker)
+    idle = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(idle)
+    attacker.attacking = True
+    blocker.blocking = attacker.id
+
+    e = FocusFireEffect(base=2)
+    assert e.requires_target() is True
+    assert "attacking" in e.describe()
+    legal = {tid for _, tid in e.legal_targets(state, controller_id=0)}
+    assert attacker.id in legal
+    assert blocker.id in legal
+    assert idle.id not in legal
+
+
+def test_focus_fire_damage_scales_with_board():
+    from mtg_bot.effects import FocusFireEffect
+
+    state = _arena()
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 4/4
+    state.battlefield.append(attacker)
+    attacker.attacking = True
+
+    # P0 controls two creatures of their own.
+    for _ in range(2):
+        mine = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(mine)
+
+    # Focus Fire = 2 base + 2 = 4 damage
+    e = FocusFireEffect(base=2)
+    e.resolve(state, controller_id=0, targets=(("creature", attacker.id),))
+    assert attacker.damage == 4
+
+
+def test_focus_fire_fizzles_if_target_exits_combat():
+    from mtg_bot.effects import FocusFireEffect
+
+    state = _arena()
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(attacker)
+    attacker.attacking = True
+    attacker.attacking = False  # exits combat before resolve
+    e = FocusFireEffect(base=2)
+    e.resolve(state, controller_id=0, targets=(("creature", attacker.id),))
+    assert attacker.damage == 0
+
+
+def test_focus_fire_noop_paths():
+    from mtg_bot.effects import FocusFireEffect
+
+    state = _arena()
+    e = FocusFireEffect(base=2)
+    e.resolve(state, controller_id=0, targets=())
+    e.resolve(state, controller_id=0, targets=(("player", 0),))
+    e.resolve(state, controller_id=0, targets=(("creature", 99999),))
+
+
 def test_emergency_eject_describe_and_noop_paths():
     from mtg_bot.effects import (
         DestroyTargetNonlandPermanentWithLanderForController,
