@@ -2131,9 +2131,25 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Ragost, Deft Gastronaut", "{R}{W}", 2, 2,
             legendary=True,
         ),
-        make_creature(  # Sami, Ship's Engineer — dropped Void token creation.
+        # Sami, Ship's Engineer `{2}{R}{W}` 2/4 Legendary Creature.
+        # Real oracle: "At the beginning of your end step, if you
+        # control two or more tapped creatures, create a tapped 2/2
+        # colorless Robot artifact creature token."
+        make_creature(
             "Sami, Ship's Engineer", "{2}{R}{W}", 2, 4,
             legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalOnTappedCreatures(
+                        effect=CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Robot"],
+                            count=1, tapped=True,
+                        ),
+                        min_count=2,
+                    ),
+                ),
+            ),
         ),
         # Station Monitor `{W}{U}` 2/2 Creature. Real oracle:
         # "Whenever you cast your second spell each turn, create a
