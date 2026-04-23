@@ -352,8 +352,20 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     from mtg_bot.turn import fire_landfall_triggers
 
     p = state.player_by_id(player_id)
-    card = next(c for c in p.hand if c.id == card_id)
-    p.hand.remove(card)
+    # Source may be hand (normal play) or exile (impulse-cast lands).
+    card = next((c for c in p.hand if c.id == card_id), None)
+    if card is not None:
+        p.hand.remove(card)
+    else:
+        card = next(
+            (c for c in p.exile if c.id == card_id), None
+        )
+        if card is None:  # pragma: no cover - defensive; legal_actions gates
+            raise ValueError(
+                f"land {card_id} not playable by P{player_id}"
+            )
+        p.exile.remove(card)
+        card.playable_from_exile_this_turn = False
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
     # "Enters tapped" covers Planets + most non-basic utility lands.

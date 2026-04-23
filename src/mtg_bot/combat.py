@@ -52,7 +52,15 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     from mtg_bot.turn import tap_permanent, should_fire_trigger
 
     for oid in attacker_ids:
-        obj = next(o for o in state.battlefield if o.id == oid)
+        obj = next(
+            (o for o in state.battlefield if o.id == oid), None
+        )
+        if obj is None:
+            # A prior attacker's trigger may have removed this one
+            # (e.g., a sacrifice effect chained from becomes_tapped).
+            # Skip silently — we still respect the agent's intent for
+            # the remaining attackers.
+            continue
         obj.attacking = True
         # Vigilance: attacking doesn't tap
         if "vigilance" not in effective_keywords(state, obj):
