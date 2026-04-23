@@ -112,6 +112,7 @@ from mtg_bot.effects.generic import (
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
+    SacrificeNLandsYouControl,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SelfMill,

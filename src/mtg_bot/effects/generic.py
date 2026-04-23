@@ -3067,6 +3067,64 @@ class UntapTargetLand(Effect):
 
 
 @dataclass(frozen=True)
+class SacrificeNLandsYouControl(Effect):
+    """Sacrifice ``count`` lands the effect's controller controls.
+
+    Matches Lotus Field's "When this land enters, sacrifice two lands."
+    Excludes the source (the ETB trigger is on the entering land
+    itself, which is already on the battlefield at trigger time;
+    oracle allows sac'ing the source in principle, but the engine
+    never models that as a desirable choice).
+
+    Simplification: the agent's choose_sacrifice picks; if the agent
+    is None we pick the first ``count`` legal lands. If fewer than
+    ``count`` legal lands exist, sacrifices all available.
+    """
+
+    count: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        source_id = source.id if source is not None else -1
+        p = state.player_by_id(controller_id)
+        remaining = self.count
+        while remaining > 0:
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == controller_id
+                and o.printing.is_land
+                and o.id != source_id
+            ]
+            if not options:
+                break
+            chosen = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, controller_id, [o.id for o in options]
+                )
+                chosen = next(
+                    (o for o in options if o.id == pick_id), options[0]
+                )
+            state.log.append(
+                f"P{controller_id} sacrifices {chosen.printing.name} "
+                f"(Lotus Field ETB)"
+            )
+            _sacrifice(state, chosen)
+            remaining -= 1
+
+    def describe(self) -> str:
+        if self.count == 1:
+            return "sacrifice a land"
+        return f"sacrifice {self.count} lands"
+
+
+
+@dataclass(frozen=True)
 class ExileAllGraveyards(Effect):
     """Scavenger Grounds: `{2}, {T}, Sacrifice a Desert: Exile all
     graveyards.` Every card in every player's graveyard is moved to

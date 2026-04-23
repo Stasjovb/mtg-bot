@@ -29,6 +29,7 @@ from mtg_bot.effects import (
     GrantLifeToEachOpponent,
     PutBasicLandFromHandOntoBattlefieldTapped,
     ReturnTargetLandFromGraveyardToHand,
+    SacrificeNLandsYouControl,
     UntapTargetLand,
     Sequence,
     AddManaToPool,

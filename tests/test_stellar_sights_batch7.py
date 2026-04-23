@@ -1,0 +1,176 @@
+"""Tests for Stellar Sights batch 7: Lotus Field + Plaza of Heroes.
+
+Nesting Grounds stays as a stand-in — its "move a counter from A to B"
+ability needs dual-target (two permanents picked per activation)
+which the engine doesn't model yet.
+"""
+
+from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
+from mtg_bot.agents import Agent
+from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards.base import make_creature
+from mtg_bot.effects import SacrificeNLandsYouControl
+from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.turn import Step
+
+
+class _PickFirstAgent(Agent):
+    def choose_target(self, state, player_id, legal_targets):
+        return legal_targets[0] if legal_targets else None
+
+    def choose_sacrifice(self, state, player_id, legal_ids):
+        return legal_ids[0] if legal_ids else None
+
+
+def _new_state():
+    state = GameState()
+    state.players.append(Player(id=0, agent=_PickFirstAgent()))
+    state.players.append(Player(id=1, agent=_PickFirstAgent()))
+    state.active_player_idx = 0
+    state.priority_player_idx = 0
+    state.step = Step.PRECOMBAT_MAIN
+    return state
+
+
+def _put(state, printing, owner_id=0):
+    obj = state.new_object(printing, owner_id, Zone.BATTLEFIELD)
+    state.battlefield.append(obj)
+    return obj
+
+
+# -----------------------
+# SacrificeNLandsYouControl primitive
+# -----------------------
+
+
+def test_sacrifice_n_lands_sacs_two_and_excludes_source():
+    state = _new_state()
+    source = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    for _ in range(3):
+        _put(state, BASIC_LANDS["Mountain"])
+    state.resolving_source = source
+    try:
+        SacrificeNLandsYouControl(count=2).resolve(state, 0, ())
+    finally:
+        state.resolving_source = None
+    # Two Mountains gone; source survives.
+    remaining_mountains = [
+        o for o in state.battlefield
+        if o.printing.name == "Mountain"
+    ]
+    assert len(remaining_mountains) == 1
+    assert source in state.battlefield
+
+
+def test_sacrifice_n_lands_handles_fewer_available_than_count():
+    """If the controller has only 1 land besides the source, sac all
+    of them and stop — don't raise."""
+    state = _new_state()
+    source = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    _put(state, BASIC_LANDS["Mountain"])
+    state.resolving_source = source
+    try:
+        SacrificeNLandsYouControl(count=3).resolve(state, 0, ())
+    finally:
+        state.resolving_source = None
+    assert not any(
+        o.printing.name == "Mountain" for o in state.battlefield
+    )
+
+
+def test_sacrifice_n_lands_describe():
+    assert SacrificeNLandsYouControl(count=1).describe() == "sacrifice a land"
+    assert "2 lands" in SacrificeNLandsYouControl(count=2).describe()
+
+
+# -----------------------
+# Lotus Field — ETB + tap for mana
+# -----------------------
+
+
+def test_lotus_field_metadata():
+    p = STELLAR_SIGHTS_LANDS["Lotus Field"]
+    assert "hexproof" in p.keywords
+    assert p.enters_tapped is True
+    assert len(p.triggered_abilities) == 1
+    assert p.triggered_abilities[0].trigger == "etb"
+    assert len(p.activated_abilities) == 1
+
+
+def test_lotus_field_etb_sacrifices_two_lands():
+    from mtg_bot.actions import put_into_battlefield
+
+    state = _new_state()
+    # Stage Lotus Field in hand and have the player play it via
+    # put_into_battlefield to fire the ETB trigger.
+    for _ in range(3):
+        _put(state, BASIC_LANDS["Mountain"])
+    lotus = state.new_object(
+        STELLAR_SIGHTS_LANDS["Lotus Field"], 0, Zone.HAND,
+    )
+    put_into_battlefield(state, lotus, 0)
+    while state.stack:
+        resolve_top_of_stack(state)
+    # Two Mountains sacrificed; Lotus Field survives.
+    remaining_mountains = [
+        o for o in state.battlefield if o.printing.name == "Mountain"
+    ]
+    assert len(remaining_mountains) == 1
+    assert lotus in state.battlefield
+
+
+def test_lotus_field_taps_for_three_any_mana():
+    state = _new_state()
+    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    apply_action(
+        state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
+    )
+    pool = state.players[0].mana_pool
+    assert len(pool) == 3
+    assert all(c.color == "any" for c in pool)
+
+
+# -----------------------
+# Plaza of Heroes — flagship ability
+# -----------------------
+
+
+def test_plaza_of_heroes_metadata():
+    p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    assert "Legendary" in p.supertypes
+    assert len(p.activated_abilities) == 1
+    ability = p.activated_abilities[0]
+    assert ability.cost.sacrifice_self is True
+
+
+def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
+    state = _new_state()
+    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    # Mana for {3}.
+    for _ in range(3):
+        _put(state, BASIC_LANDS["Mountain"])
+    bear = _put(state, make_creature("Test Bear", "{1}{G}", 2, 2))
+    apply_action(
+        state, 0, ActivateAbility(source_id=plaza.id, ability_index=0),
+    )
+    while state.stack:
+        resolve_top_of_stack(state)
+    assert plaza not in state.battlefield
+    assert "hexproof" in bear.temp_keywords
+    assert "indestructible" in bear.temp_keywords
+
+
+# -----------------------
+# Progress marker
+# -----------------------
+
+
+def test_two_more_restored_no_longer_stand_ins():
+    import pathlib
+    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
+        encoding="utf-8"
+    )
+    for name in ("Lotus Field", "Plaza of Heroes"):
+        assert f'"{name}": make_colorless_land(' not in src, (
+            f"{name} still a colorless-land stand-in"
+        )

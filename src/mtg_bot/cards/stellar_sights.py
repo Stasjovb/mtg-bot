@@ -340,8 +340,30 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Lotus Field": make_colorless_land(  # dropped ETB-sac-two-lands + tap-for-3-any.
+    # Lotus Field: Hexproof. Enters tapped. When it enters, sacrifice
+    # two lands. {T}: Add three mana of any one color.
+    #
+    # Simplification: oracle's "three of any ONE color" becomes three
+    # coins tagged "any" (each is a wildcard satisfying any colored
+    # requirement). Strictly more flexible than oracle — a small
+    # upside for the player — but correct for non-hybrid costs.
+    "Lotus Field": make_utility_land(
         "Lotus Field",
+        keywords=frozenset({"hexproof"}),
+        enters_tapped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="etb",
+                effect=SacrificeNLandsYouControl(count=2),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 3),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     # Lumbering Falls: enters tapped, {T}: G or U, {2}{G}{U}: → 3/3
     # G/U Elemental hexproof UEOT.
@@ -469,8 +491,38 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Plaza of Heroes": make_colorless_land(  # dropped legendary-tribal + pay-2-any.
-        "Plaza of Heroes",
+    # Plaza of Heroes: {T}: Add {C}. {T}: Add one mana of any color
+    # (spend only for a legendary spell). {T}: Add one mana of any
+    # color among legendary permanents you control. {3},{T}, Exile
+    # this land: Target legendary creature gains hexproof and
+    # indestructible UEOT.
+    #
+    # Simplification: the two mana abilities with spend restrictions
+    # ("only for legendary spells" + "among legendary permanents you
+    # control") are dropped — both would need spend_restriction
+    # plumbing tied to card characteristics and legendary-permanent
+    # tracking. The flagship activated ability (grant hexproof +
+    # indestructible UEOT) is restored, but without the "target
+    # LEGENDARY creature" filter — targets any creature. Exile-self
+    # is modeled as sacrifice-self (close enough; only matters if an
+    # effect cares about Plaza being in the graveyard vs. exile).
+    "Plaza of Heroes": make_utility_land(
+        "Plaza of Heroes", legendary=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=PumpTargetCreatureUntilEOT(
+                    granted_keywords=frozenset(
+                        {"hexproof", "indestructible"}
+                    ),
+                ),
+            ),
+        ),
     ),
     # Power Depot `Artifact Land`. Oracle: "This land enters tapped.
     # {T}: Add {C}. {T}: Add one mana of any color. Spend this mana
