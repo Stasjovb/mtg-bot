@@ -76,6 +76,7 @@ from mtg_bot.effects import (
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     ExileAllCreaturesAndSpacecraft,
     PumpTargetOtherArtifactYouControlUEOT,
+    ReturnTargetArtifactCardFromYourGraveyardToHand,
     ZeroPointBalladEffect,
     ModalChooseOne,
     FocusFireEffect,
@@ -319,11 +320,14 @@ def make_creature(
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
+    subtypes: tuple[str, ...] = (),
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
-    type_line = f"{prefix}{artifact_word}Creature"
-    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    subtype_suffix = f" — {' '.join(subtypes)}" if subtypes else ""
+    type_line = f"{prefix}{artifact_word}Creature{subtype_suffix}"
+    supertypes, card_types, parsed_subtypes = _parse_type_line(type_line)
+    subtypes = parsed_subtypes
     return CardPrinting(
         name=name,
         mana_cost_str=cost,
@@ -1407,16 +1411,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # All-Fates Stalker: {3}{W} 2/3. ETB exile target creature
-        # until Stalker leaves. Ships with Warp {1}{W}. Dropped the
-        # "non-Assassin" filter (subtype-based targeting not modeled).
+        # All-Fates Stalker: {3}{W} 2/3 Drix Assassin. ETB exile target
+        # non-Assassin creature until Stalker leaves. Warp {1}{W}.
         make_creature(
             "All-Fates Stalker", "{3}{W}", 2, 3,
             warp="{1}{W}",
+            subtypes=("Drix", "Assassin"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=ExileTargetCreatureUntilSourceLeaves(),
+                    effect=ExileTargetCreatureUntilSourceLeaves(
+                        excluded_subtypes=frozenset({"Assassin"}),
+                    ),
                 ),
             ),
         ),
@@ -3108,9 +3114,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 you_control_only=True,
             ),
         ),
-        make_instant(  # Scour for Scrap — simplified to plain draw 1.
+        # Scour for Scrap `{3}{U}` Instant — "Choose one or both":
+        #   • Search your library for an artifact card, reveal it, put it
+        #     into your hand, then shuffle.
+        #   • Return target artifact card from your graveyard to your hand.
+        # Simplification: modeled as "choose one" (not both) via
+        # ModalChooseOne; dropping the "or both" clause.
+        make_instant(
             "Scour for Scrap", "{3}{U}",
-            effect=DrawCards(amount=1),
+            effect=ModalChooseOne(modes=(
+                SearchLibraryForCard(
+                    filter_name="artifact", may_fail=True,
+                ),
+                ReturnTargetArtifactCardFromYourGraveyardToHand(),
+            )),
         ),
         # Sorceries — remaining ones shipped as minimal approximations.
         # Zero Point Ballad `{X}{B}` — full effect: destroy creatures

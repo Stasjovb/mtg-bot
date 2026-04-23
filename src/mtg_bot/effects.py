@@ -605,6 +605,55 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
+    """Target artifact card from your graveyard goes to your hand.
+
+    Matches Scour for Scrap's second mode. Uses a dedicated target kind
+    ``graveyard_artifact`` so the multi-zone target pool is distinct
+    from battlefield targets.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_artifact", c.id)
+            for c in p.graveyard
+            if c.printing.is_artifact
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_artifact":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand"
+        )
+
+    def describe(self) -> str:
+        return "return target artifact card from your graveyard to your hand"
+
+
+@dataclass(frozen=True)
 class ReturnCreatureFromYourGraveyardToHand(Effect):
     """Target creature card from your graveyard goes to your hand.
 
@@ -1313,6 +1362,8 @@ class SearchLibraryForCard(Effect):
                 printing.is_creature
                 and printing.mana_cost.total <= self.max_mv
             )
+        if fn == "artifact":
+            return printing.is_artifact
         return False
 
     def resolve(
@@ -1567,10 +1618,21 @@ class ModalChooseOne(Effect):
     modes: tuple[Effect, ...]
 
     def requires_target(self) -> bool:
-        # Optimistic: expose as targeted if ANY mode is, so the caller
-        # surfaces a legal-targets menu at cast time (modes are typically
-        # 2 — all or none require targets in practice for EoE).
-        return any(m.requires_target() for m in self.modes)
+        # Castability gate: the spell should be castable as long as ANY
+        # mode is playable. If at least one mode is untargeted, the
+        # player can always pick that mode — so don't gate on targets.
+        # Only require a target when every mode needs one.
+        return all(m.requires_target() for m in self.modes)
+
+    def target_count_range(self) -> tuple[int, int]:
+        any_targeted = any(m.requires_target() for m in self.modes)
+        if not any_targeted:
+            return (0, 0)
+        all_targeted = all(m.requires_target() for m in self.modes)
+        # min_t=0 for mixed modes (you might pick the untargeted mode);
+        # min_t=1 when every mode needs a target. max_t=1 — we don't
+        # model multi-target modes yet.
+        return (1 if all_targeted else 0, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -1888,11 +1950,17 @@ class DestroyTargetArtifact(Effect):
 class ExileTargetCreatureUntilSourceLeaves(Effect):
     """Exile any target creature until the source leaves the battlefield.
 
-    Matches All-Fates Stalker's ETB (simplified: drops the "non-Assassin"
-    filter since we don't track creature subtypes at target time).
-    Uses the Oblivion-Ring-style exiled_by_source bookkeeping so the
-    exiled creature returns when the source leaves play.
+    Matches All-Fates Stalker's ETB. Uses the Oblivion-Ring-style
+    ``exiled_by_source`` bookkeeping so the exiled creature returns when
+    the source leaves play.
+
+    ``excluded_subtypes`` filters out creatures whose printed subtypes
+    overlap with any member (e.g., ``frozenset({"Assassin"})`` for
+    All-Fates Stalker's "non-Assassin creature" clause). Empty = no
+    subtype restriction.
     """
+
+    excluded_subtypes: frozenset[str] = frozenset()
 
     def requires_target(self) -> bool:
         return True
@@ -1904,6 +1972,10 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            and not (
+                self.excluded_subtypes
+                and any(s in self.excluded_subtypes for s in o.printing.subtypes)
+            )
         ]
 
     def resolve(
