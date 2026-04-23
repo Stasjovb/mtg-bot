@@ -964,6 +964,22 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Xu-Ifit, Osteoharmonist: {1}{B}{B} 2/3 Legendary. Activated
+        # tap+sorcery-speed reanimate — simplified (oracle says the
+        # returned creature becomes a Skeleton with no abilities; we just
+        # return it as-is since "has no abilities" suppression is not
+        # modeled yet).
+        make_creature(
+            "Xu-Ifit, Osteoharmonist", "{1}{B}{B}", 2, 3,
+            legendary=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
         # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
         # your end step, if [void active], you draw a card and lose 1 life."
         # We model artifact-ness as a plain creature (same shortcut as Edge

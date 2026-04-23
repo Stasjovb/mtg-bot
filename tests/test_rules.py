@@ -3778,6 +3778,28 @@ def test_seedship_broodtender_etb_and_reanimate():
     assert gone in state.battlefield
 
 
+def test_xu_ifit_activated_reanimate():
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    ghost = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD
+    )
+    state.players[0].graveyard.append(ghost)
+    xu = state.new_object(
+        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(xu)
+    assert "Legendary" in xu.printing.supertypes
+    act = xu.printing.activated_abilities[0]
+    assert act.cost.tap_self is True
+    assert act.sorcery_speed is True
+    state.resolving_source = xu
+    act.effect.resolve(state, 0, (("graveyard_creature", ghost.id),))
+    assert ghost in state.battlefield
+
+
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
     from mtg_bot.cards import EOE_CREATURES
