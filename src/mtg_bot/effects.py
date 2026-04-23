@@ -1149,7 +1149,7 @@ class DestroyTargetCreature(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import destroy
 
         if not targets:
             return
@@ -1162,7 +1162,7 @@ class DestroyTargetCreature(Effect):
         if obj is None:
             return
         state.log.append(f"{obj.printing.name} is destroyed")
-        move_off_battlefield(state, obj, destination="graveyard")
+        destroy(state, obj)
 
     def describe(self) -> str:
         return "destroy target creature"
@@ -1188,7 +1188,7 @@ class DestroyTargetArtifact(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import destroy
 
         if not targets:
             return
@@ -1201,7 +1201,7 @@ class DestroyTargetArtifact(Effect):
         if obj is None or not obj.printing.is_artifact:
             return
         state.log.append(f"{obj.printing.name} is destroyed (artifact)")
-        move_off_battlefield(state, obj, destination="graveyard")
+        destroy(state, obj)
 
     def describe(self) -> str:
         return "destroy target artifact"
@@ -1399,8 +1399,10 @@ class DestroyTargetArtifactOrTappedCreature(Effect):
             or (obj.printing.is_creature and obj.tapped)
         ):
             return
+        from mtg_bot.turn import destroy
+
         state.log.append(f"{obj.printing.name} is destroyed")
-        move_off_battlefield(state, obj, destination="graveyard")
+        destroy(state, obj)
 
     def describe(self) -> str:
         return "destroy target artifact or tapped creature"
@@ -1475,7 +1477,7 @@ class DepressurizeEffect(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import effective_power
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import destroy
 
         if not targets:
             return
@@ -1495,7 +1497,7 @@ class DepressurizeEffect(Effect):
         # "Then if that creature's power is 0 or less, destroy it."
         if effective_power(state, obj) <= 0:
             state.log.append(f"{obj.printing.name} is destroyed (depressurized)")
-            move_off_battlefield(state, obj, destination="graveyard")
+            destroy(state, obj)
 
     def describe(self) -> str:
         return (
@@ -1540,7 +1542,7 @@ class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import destroy
 
         if not targets:
             return
@@ -1555,7 +1557,7 @@ class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
         if not self._is_legal(state, obj):
             return
         state.log.append(f"{obj.printing.name} is destroyed")
-        move_off_battlefield(state, obj, destination="graveyard")
+        destroy(state, obj)
 
     def describe(self) -> str:
         return (
@@ -1664,7 +1666,7 @@ class DestroyTargetNonlandPermanentWithLanderForController(Effect):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.cards import TOKEN_PRINTINGS
         from mtg_bot.game import Zone
-        from mtg_bot.turn import move_off_battlefield
+        from mtg_bot.turn import destroy
 
         if not targets:
             return
@@ -1678,7 +1680,8 @@ class DestroyTargetNonlandPermanentWithLanderForController(Effect):
             return
         former_controller = obj.controller_id
         state.log.append(f"{obj.printing.name} is destroyed")
-        move_off_battlefield(state, obj, destination="graveyard")
+        if not destroy(state, obj):
+            return  # indestructible: no Lander consolation
         lander = state.new_object(
             TOKEN_PRINTINGS["Lander"],
             owner_id=former_controller,

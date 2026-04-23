@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from mtg_bot.game import GameState, Zone, effective_toughness, is_creature_now
+from mtg_bot.game import (
+    GameState, Zone, effective_keywords, effective_toughness, is_creature_now,
+)
 
 
 class Step(Enum):
@@ -76,6 +78,10 @@ def move_off_battlefield(
     If the object was a creature (or a stationed Spacecraft) and
     ``destination`` is ``"graveyard"``, its "when this creature dies"
     triggered abilities fire after the zone change.
+
+    Note: Indestructible is NOT checked here — the caller (destroy effect
+    or SBA) is responsible for that gate. Exile bypasses indestructible
+    normally.
     """
     if obj not in state.battlefield:
         return
@@ -108,6 +114,26 @@ def move_off_battlefield(
     # Fire "when this creature dies" triggers if applicable.
     if destination == "graveyard" and was_creature:
         _fire_dies_triggers(state, obj)
+
+
+def destroy(state: GameState, obj: "GameObject") -> bool:
+    """Attempt to destroy ``obj``. Respects indestructible — the source is
+    unaffected and True is returned only if the permanent actually moved
+    to the graveyard.
+
+    This is the entry point for EFFECT-based "destroy target X" clauses.
+    State-based-action lethal damage uses its own indestructible gate in
+    state_based_actions; sacrifice ignores indestructible entirely (it
+    calls move_off_battlefield directly).
+    """
+    kws = effective_keywords(state, obj)
+    if "indestructible" in kws:
+        state.log.append(
+            f"{obj.printing.name} is indestructible — destroy fizzles"
+        )
+        return False
+    move_off_battlefield(state, obj, destination="graveyard")
+    return True
 
 
 def tap_permanent(state: GameState, obj: "GameObject") -> None:
@@ -297,7 +323,14 @@ def state_based_actions(state: GameState) -> bool:
         if not is_creature_now(obj):
             continue
         tough = effective_toughness(state, obj)
-        if tough <= 0 or obj.damage >= tough or obj.marked_lethal:
+        kws = effective_keywords(state, obj)
+        # Indestructible: lethal damage and "destroy" effects don't kill it,
+        # but toughness <= 0 still does (state-based action, rule 704.5f).
+        if tough <= 0:
+            destroyed.append(obj)
+        elif "indestructible" in kws:
+            continue
+        elif obj.damage >= tough or obj.marked_lethal:
             destroyed.append(obj)
 
     for obj in destroyed:

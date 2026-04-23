@@ -1628,6 +1628,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DestroyTargetArtifact(),
             )),
         ),
+        # Reroute Systems — modal instant. Simplifications: first mode
+        # says "target artifact or creature" (we restrict to creature),
+        # second mode says "target tapped creature" (we drop the tapped
+        # restriction). Both still resolve via the creature target kind.
+        make_instant(
+            "Reroute Systems", "{W}",
+            effect=ModalChooseOne(modes=(
+                PumpTargetCreatureUntilEOT(
+                    granted_keywords=frozenset({"indestructible"}),
+                ),
+                DealDamageToTargetCreature(amount=2),
+            )),
+        ),
         # Mental Modulation — tap target artifact or creature, then draw a
         # card. Skips the "costs {1} less during your turn" rider (cost
         # modification during casting isn't modeled yet).

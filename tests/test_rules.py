@@ -4637,6 +4637,104 @@ def test_simplified_spacecraft_loads_and_stations():
         assert stationed_kw in c.stationed_keywords
 
 
+def test_indestructible_creature_survives_destroy_effect():
+    from mtg_bot.effects import DestroyTargetCreature, PumpTargetCreatureUntilEOT
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    # Grant indestructible UEOT.
+    PumpTargetCreatureUntilEOT(
+        granted_keywords=frozenset({"indestructible"})
+    ).resolve(state, 0, (("creature", bear.id),))
+    # Cast Vote Out (destroy target creature).
+    DestroyTargetCreature().resolve(state, 0, (("creature", bear.id),))
+    assert bear in state.battlefield
+
+
+def test_indestructible_creature_survives_lethal_combat_damage():
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
+    from mtg_bot.turn import state_based_actions
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 2/2
+    state.battlefield.append(bear)
+    PumpTargetCreatureUntilEOT(
+        granted_keywords=frozenset({"indestructible"})
+    ).resolve(state, 0, (("creature", bear.id),))
+    bear.damage = 99  # far in excess of toughness
+    state_based_actions(state)
+    assert bear in state.battlefield
+
+
+def test_indestructible_still_dies_to_negative_toughness():
+    """Per 704.5f, indestructible creatures still die to -toughness."""
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
+    from mtg_bot.turn import state_based_actions
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )  # 2/2
+    state.battlefield.append(bear)
+    # Grant indestructible.
+    PumpTargetCreatureUntilEOT(
+        granted_keywords=frozenset({"indestructible"})
+    ).resolve(state, 0, (("creature", bear.id),))
+    # Drop toughness to -1 via temp debuff.
+    bear.temp_toughness_bonus = -5
+    state_based_actions(state)
+    assert bear not in state.battlefield
+
+
+def test_emergency_eject_fizzles_against_indestructible_no_lander():
+    from mtg_bot.effects import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+        PumpTargetCreatureUntilEOT,
+    )
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    PumpTargetCreatureUntilEOT(
+        granted_keywords=frozenset({"indestructible"})
+    ).resolve(state, 0, (("creature", bear.id),))
+    DestroyTargetNonlandPermanentWithLanderForController().resolve(
+        state, 0, (("permanent", bear.id),)
+    )
+    assert bear in state.battlefield
+    landers = [o for o in state.battlefield if o.printing.name == "Lander"]
+    assert landers == []
+
+
+def test_reroute_systems_indestructible_mode():
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+
+    class PickIndestructible(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 0
+    state.players[0].agent = PickIndestructible(rng=random.Random(0))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    EOE_SPELLS["Reroute Systems"].spell_effect.resolve(
+        state, 0, (("creature", bear.id),)
+    )
+    from mtg_bot.game import effective_keywords
+    assert "indestructible" in effective_keywords(state, bear)
+
+
 def test_dockworker_drone_etb_counter_and_dies_transfer():
     from mtg_bot.cards import EOE_CREATURES
 
