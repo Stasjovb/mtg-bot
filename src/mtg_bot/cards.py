@@ -1381,6 +1381,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
+        # Gigastorm Titan: {4}{U} 4/4 vanilla Elemental. Simplified: the
+        # real card has "this spell costs {3} less to cast if you've cast
+        # another spell this turn" — dropped (cost modification not
+        # modeled).
+        make_creature(
+            "Gigastorm Titan", "{4}{U}", 4, 4,
+        ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
         # drops the "creatures your opponents control get -3/-0 until your
         # next turn" ETB since "until your next turn" pump durations
