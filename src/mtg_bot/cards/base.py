@@ -168,6 +168,8 @@ from mtg_bot.effects import (
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
+    SearchLibraryForGreenCreatureWithMVAtMostX,
+    TakeExtraTurnAfterThisOne,
     SelfcraftMechanETBEffect,
     TannukEnsignLandfallEffect,
     Sequence,
@@ -440,6 +442,18 @@ class CardPrinting:
     # aren't rewritten, and already-animated manlands keep their
     # temp_is_creature state (no layers yet).
     nonbasic_lands_are_mountains: bool = False
+    # Zone-change replacement: when this card would be put into a
+    # graveyard from ANY zone the engine currently models, instead it
+    # is shuffled into its owner's library. Consumed by
+    # actions._send_to_graveyard_or_library at the spell-resolve,
+    # spell-countered, and failed-cast graveyard sites. Matches
+    # Nexus of Fate's "from anywhere" clause and Green Sun's Zenith's
+    # self-shuffle rider (GSZ's oracle is effectively the same
+    # replacement after its tutor effect resolves). Simplification:
+    # discard-from-hand and mill-from-library graveyard paths aren't
+    # hooked (those aren't hit by any currently-modeled card that
+    # targets Nexus / GSZ specifically).
+    shuffles_into_library_instead_of_graveyard: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -641,6 +655,7 @@ def make_instant(
     cost_reductions: tuple[CostReduction, ...] = (),
     kicker: str | None = None,
     additional_cost_choose_your_creature: bool = False,
+    shuffles_into_library_instead_of_graveyard: bool = False,
 ) -> CardPrinting:
     type_line = "Instant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -659,6 +674,9 @@ def make_instant(
         additional_cost_choose_your_creature=(
             additional_cost_choose_your_creature
         ),
+        shuffles_into_library_instead_of_graveyard=(
+            shuffles_into_library_instead_of_graveyard
+        ),
     )
 
 
@@ -666,6 +684,7 @@ def make_sorcery(
     name: str, cost: str, effect: Effect,
     cost_reductions: tuple[CostReduction, ...] = (),
     additional_cost_sacrifice_creature_or_artifact: bool = False,
+    shuffles_into_library_instead_of_graveyard: bool = False,
 ) -> CardPrinting:
     type_line = "Sorcery"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -681,6 +700,9 @@ def make_sorcery(
         cost_reductions=tuple(cost_reductions),
         additional_cost_sacrifice_creature_or_artifact=(
             additional_cost_sacrifice_creature_or_artifact
+        ),
+        shuffles_into_library_instead_of_graveyard=(
+            shuffles_into_library_instead_of_graveyard
         ),
     )
 

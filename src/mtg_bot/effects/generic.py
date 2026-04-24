@@ -4522,6 +4522,95 @@ class ExileTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TakeExtraTurnAfterThisOne(Effect):
+    """"Take an extra turn after this one."
+
+    Appends the controller to ``state.extra_turn_queue``; the sim loop
+    in simulate.simulate_game consumes the queue between turns. Matches
+    Nexus of Fate's extra-turn clause.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        state.extra_turn_queue.append(controller_id)
+        state.log.append(
+            f"P{controller_id} is scheduled to take an extra turn"
+        )
+
+    def describe(self) -> str:
+        return "take an extra turn after this one"
+
+
+
+@dataclass(frozen=True)
+class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
+    """Matches Green Sun's Zenith: "Search your library for a green
+    creature card with mana value X or less, put it onto the battlefield,
+    then shuffle." X is read from ``state.resolving_x_value``.
+
+    Green creature: printing has "G" in ``mana_cost.colors``. Mana value
+    uses ``mana_cost.total`` (includes the green pip). Declining to
+    fetch is legal (matches the "search ... may fail" convention).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import random as _random
+        from mtg_bot.actions import put_into_battlefield
+
+        x = state.resolving_x_value
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.library
+            if c.printing.is_creature
+            and "G" in c.printing.mana_cost.colors
+            and c.printing.mana_cost.total <= x
+        ]
+        if not options:
+            state.log.append(
+                f"P{controller_id} searches for a green creature with "
+                f"MV ≤ {x} — none found"
+            )
+            return
+        chosen_id = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        if chosen_id is None:
+            state.log.append(
+                f"P{controller_id} declines to fetch from Green Sun's Zenith"
+            )
+            # Still shuffle per oracle.
+            rng = _random.Random(
+                hash(("gsz_shuffle", state.turn_number, controller_id))
+            )
+            rng.shuffle(p.library)
+            return
+        card = next((c for c in options if c.id == chosen_id), options[0])
+        p.library.remove(card)
+        state.log.append(
+            f"P{controller_id} fetches {card.printing.name} onto the battlefield"
+        )
+        put_into_battlefield(state, card, controller_id)
+        rng = _random.Random(
+            hash(("gsz_shuffle", state.turn_number, controller_id))
+        )
+        rng.shuffle(p.library)
+
+    def describe(self) -> str:
+        return (
+            "search your library for a green creature card with mana "
+            "value X or less, put it onto the battlefield, then shuffle"
+        )
+
+
+
+@dataclass(frozen=True)
 class GainControlOfTargetSliverPermanently(Effect):
     """"Gain control of target Sliver. (This effect lasts indefinitely.)"
 

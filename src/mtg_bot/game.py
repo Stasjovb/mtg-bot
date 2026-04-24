@@ -606,6 +606,12 @@ class GameState:
     # (direct damage spells, pingers, infect from non-combat sources)
     # is unaffected.
     prevent_combat_damage_this_turn: bool = False
+    # FIFO queue of player ids scheduled to take an extra turn after
+    # the current one wraps up. Populated by TakeExtraTurnAfterThisOne
+    # (Nexus of Fate). Consumed by simulate.simulate_game between
+    # turns: if the queue is non-empty, the next turn's active player
+    # is the head of the queue instead of the natural next alive player.
+    extra_turn_queue: list[int] = field(default_factory=list)
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]

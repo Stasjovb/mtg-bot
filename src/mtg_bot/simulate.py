@@ -217,6 +217,35 @@ def run_step(state: GameState, step: Step) -> None:
         clear_combat_state(state)
 
 
+def _advance_to_next_active_player(state: GameState) -> None:
+    """Pick the next turn's active player.
+
+    If ``state.extra_turn_queue`` has a still-alive player, they go
+    next. Otherwise fall back to the natural next-alive rotation.
+    Exposed as a top-level helper so the extra-turn branches are
+    directly unit-testable.
+    """
+    queued_next_player = None
+    while state.extra_turn_queue:
+        candidate_id = state.extra_turn_queue.pop(0)
+        candidate = next(
+            (p for p in state.players if p.id == candidate_id), None,
+        )
+        if candidate is not None and not candidate.has_lost:
+            queued_next_player = candidate_id
+            break
+    if queued_next_player is not None:
+        state.active_player_idx = next(
+            i for i, p in enumerate(state.players)
+            if p.id == queued_next_player
+        )
+        state.log.append(f"P{queued_next_player} takes an extra turn")
+    else:
+        state.active_player_idx = _next_alive(
+            state, (state.active_player_idx + 1) % len(state.players)
+        )
+
+
 def run_turn(state: GameState) -> None:
     for step in STEP_ORDER:
         run_step(state, step)
@@ -254,9 +283,7 @@ def simulate_game(
         if state.is_over():
             break
         state.turn_number += 1
-        state.active_player_idx = _next_alive(
-            state, (state.active_player_idx + 1) % len(state.players)
-        )
+        _advance_to_next_active_player(state)
 
     if not state.is_over():
         state.is_draw = True

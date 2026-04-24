@@ -13,23 +13,21 @@ per-card (or per-mechanic-family where cards share new plumbing).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
     CardPrinting,
     CounterTargetSpell,
     CreateToken,
-    Effect,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     GainControlOfTargetSliverPermanently,
     ModalChooseOne,
     OptionalPutLandFromHandOntoBattlefield,
     PreventAllCombatDamageThisTurn,
     SearchLibraryForCard,
+    SearchLibraryForGreenCreatureWithMVAtMostX,
+    TakeExtraTurnAfterThisOne,
     TriggeredAbility,
-    make_aura,  # noqa: F401  (used once oracle work lands)
     make_creature,
     make_enchantment,
     make_equipment,
@@ -38,25 +36,6 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-
-
-@dataclass(frozen=True)
-class _SpgNoOp(Effect):
-    """Spell-effect placeholder for stand-in Special Guests spells.
-
-    Real oracle text lives in follow-up per-card commits. Keeping the
-    placeholder local to this module so it never leaks into the shared
-    effects package — once every SPG spell has a real effect this
-    class can be deleted.
-    """
-
-    name: str
-
-    def describe(self) -> str:
-        return f"(stand-in no-op for {self.name})"
-
-    def resolve(self, state, controller_id, targets=()):  # noqa: D401
-        state.log.append(f"{self.name} resolves (no-op stand-in)")
 
 
 # Edge of Eternities Special Guests (10 cards, Scryfall ``set:spg
@@ -97,11 +76,17 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Robe of Stars", "{1}{W}",
     ),
     # Nexus of Fate {5}{U}{U}: take an extra turn after this one. If it
-    # would be put into a graveyard from anywhere, shuffle it into its
-    # owner's library instead. dropped extra-turn queueing + zone-change
-    # replacement effect.
+    # would be put into a graveyard from anywhere, reveal Nexus and
+    # shuffle it into its owner's library instead. The extra-turn
+    # clause uses TakeExtraTurnAfterThisOne (pushes the caster onto
+    # state.extra_turn_queue, consumed by simulate.simulate_game).
+    # The shuffle-instead-of-graveyard clause is the flag-driven
+    # replacement in actions._send_to_graveyard_or_library; it covers
+    # the spell-resolve, countered, and aura-fizzle paths. Discard-
+    # from-hand and mill paths aren't hooked — documented on the flag.
     "Nexus of Fate": make_instant(
-        "Nexus of Fate", "{5}{U}{U}", _SpgNoOp("Nexus of Fate"),
+        "Nexus of Fate", "{5}{U}{U}", TakeExtraTurnAfterThisOne(),
+        shuffles_into_library_instead_of_graveyard=True,
     ),
     # Paradox Haze {2}{U}: Aura — enchant player. Enchanted player gets
     # an additional upkeep step after the first. Per user decision this
@@ -147,11 +132,17 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         ),
     ),
     # Green Sun's Zenith {X}{G}: search library for a green creature
-    # with mana value ≤ X, put it onto the battlefield, shuffle. Shuffle
-    # GSZ into its owner's library. dropped X-cost tutor with color
-    # filter + self-shuffle zone-change replacement.
+    # card with mana value X or less, put it onto the battlefield,
+    # shuffle. Shuffle GSZ into its owner's library.
+    # The tutor reads X from state.resolving_x_value via
+    # SearchLibraryForGreenCreatureWithMVAtMostX; the self-shuffle
+    # reuses the same ``shuffles_into_library_instead_of_graveyard``
+    # flag as Nexus — after the spell's effect resolves, the card is
+    # routed to the library instead of the graveyard.
     "Green Sun's Zenith": make_sorcery(
-        "Green Sun's Zenith", "{X}{G}", _SpgNoOp("Green Sun's Zenith"),
+        "Green Sun's Zenith", "{X}{G}",
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        shuffles_into_library_instead_of_graveyard=True,
     ),
     # Sliver Overlord {W}{U}{B}{R}{G} 7/7 Legendary Sliver Mutant:
     #   • {3}: Search your library for a Sliver card, reveal it, put

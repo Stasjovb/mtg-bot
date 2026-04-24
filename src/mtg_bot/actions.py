@@ -1267,6 +1267,34 @@ def _declare_blockers(
     declare_blockers(state, validated)
 
 
+def _send_to_graveyard_or_library(state: GameState, card) -> None:
+    """Route a non-permanent spell (or failed-cost / countered card) to
+    its owner's graveyard — unless the card's printing has
+    ``shuffles_into_library_instead_of_graveyard`` set, in which case
+    it's shuffled into the owner's library instead.
+
+    Nexus of Fate + Green Sun's Zenith both use this redirect. Shuffle
+    is deterministic (turn + card.id seed) to stay reproducible.
+    """
+    import random as _random
+
+    owner = state.player_by_id(card.owner_id)
+    if card.printing.shuffles_into_library_instead_of_graveyard:
+        card.zone = Zone.LIBRARY
+        owner.library.append(card)
+        rng = _random.Random(
+            hash(("zone_shuffle", state.turn_number, card.id))
+        )
+        rng.shuffle(owner.library)
+        state.log.append(
+            f"{card.printing.name} is shuffled into P{card.owner_id}'s "
+            f"library instead of graveyard"
+        )
+        return
+    card.zone = Zone.GRAVEYARD
+    owner.graveyard.append(card)
+
+
 def resolve_top_of_stack(state: GameState) -> None:
     item = state.stack.pop()
 
@@ -1274,9 +1302,7 @@ def resolve_top_of_stack(state: GameState) -> None:
     # graveyard (permanents and non-permanents alike) per rule 701.5a.
     if item.countered:
         state.log.append(f"{item.source.printing.name} is countered")
-        card = item.source
-        card.zone = Zone.GRAVEYARD
-        state.player_by_id(card.owner_id).graveyard.append(card)
+        _send_to_graveyard_or_library(state, item.source)
         return
 
     # Triggered-ability resolution
@@ -1335,8 +1361,7 @@ def resolve_top_of_stack(state: GameState) -> None:
                     state.log.append(
                         f"{card.printing.name} fizzles (no legal enchant target)"
                     )
-                    card.zone = Zone.GRAVEYARD
-                    state.player_by_id(card.owner_id).graveyard.append(card)
+                    _send_to_graveyard_or_library(state, card)
                     return
                 card.attached_to = target_obj.id
                 state.log.append(
@@ -1355,9 +1380,10 @@ def resolve_top_of_stack(state: GameState) -> None:
                 card.printing.spell_effect.resolve(
                     state, item.controller_id, item.targets
                 )
-            # Non-permanent spells go to their owner's graveyard.
-            card.zone = Zone.GRAVEYARD
-            state.player_by_id(card.owner_id).graveyard.append(card)
+            # Non-permanent spells go to their owner's graveyard —
+            # unless a zone-change replacement routes them elsewhere
+            # (Nexus of Fate + Green Sun's Zenith shuffle back in).
+            _send_to_graveyard_or_library(state, card)
             return
         raise ValueError(f"don't know how to resolve {card.printing.name}")
     finally:

@@ -78,25 +78,6 @@ def test_special_guests_is_included_in_all_printings():
         assert name in pool
 
 
-def test_stand_in_no_op_describes_and_resolves():
-    """Exercise the placeholder spell-effect used by stand-in SPG spells.
-
-    As per-card restorations ship, entries are removed from this list.
-    Once this list is empty the ``_SpgNoOp`` class can be deleted.
-    """
-    from types import SimpleNamespace
-
-    still_stand_ins = ("Nexus of Fate", "Green Sun's Zenith")
-    for name in still_stand_ins:
-        eff = SPECIAL_GUESTS_EOE[name].spell_effect
-        assert eff is not None
-        assert name in eff.describe()
-        log: list[str] = []
-        fake_state = SimpleNamespace(log=log)
-        eff.resolve(fake_state, controller_id=0, targets=())
-        assert any(name in line for line in log)
-
-
 def test_no_name_collisions_with_other_registries():
     from mtg_bot.cards import (
         BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, PLANET_LANDS,
