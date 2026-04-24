@@ -111,8 +111,31 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Contested War Zone": make_colorless_land(  # dropped attackers-get-+1/+0 + gain-control.
+    # Contested War Zone: {T}: Add {C}. {1},{T}: Attacking creatures
+    # get +1/+0 until end of turn. Whenever a creature deals combat
+    # damage to you, that creature's controller gains control of this
+    # land.
+    "Contested War Zone": make_utility_land(
         "Contested War Zone",
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="creature_deals_combat_damage_to_you",
+                effect=ChangeControllerToCombatDamageSource(),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=PumpCreaturesYouControlUntilEOT(
+                    power_bonus=1, toughness_bonus=0,
+                    attacking_only=True,
+                ),
+            ),
+        ),
     ),
     # Creeping Tar Pit: enters tapped, {T}: U or B, {1}{U}{B}: → 3/2
     # U/B Elemental UEOT. "It can't be blocked this turn."
@@ -655,8 +678,25 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Sunken Citadel": make_colorless_land(  # dropped cave-discount-tap-for-2.
-        "Sunken Citadel", subtypes_str="Cave",
+    # Sunken Citadel: Enters tapped. As it enters, choose a color.
+    # {T}: Add one mana of the chosen color. {T}: Add two mana of the
+    # chosen color — spend only to activate land abilities.
+    #
+    # Simplifications: the "choose a color on ETB" and per-object
+    # color storage aren't modeled — Citadel taps for one "any"-color
+    # coin (strictly more flexible than oracle's locked-in color).
+    # The second "add two mana, spend only for land abilities" ability
+    # is dropped — its spend restriction would need new cost-payment
+    # plumbing tagged for land-activations.
+    "Sunken Citadel": make_utility_land(
+        "Sunken Citadel", subtypes_str="Cave", enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     "Swarmyard": make_colorless_land(  # dropped regenerate-Rats/Spiders/etc.
         "Swarmyard",

@@ -526,6 +526,11 @@ class GameState:
     # resolution. Used by effects like Starwinder's "may draw that
     # many cards" that need to know the damage amount.
     resolving_combat_damage_amount: int = 0
+    # Controller id of the creature dealing combat damage in a
+    # currently-firing combat-damage-to-you trigger. None outside such
+    # resolution. Used by Contested War Zone's "that creature's
+    # controller gains control of this land".
+    resolving_combat_damage_source_controller_id: Optional[int] = None
     # Number of +1/+1 counters being added during a resolving
     # counters-added observer trigger (Terrasymbiosis: "draw that many
     # cards"). 0 outside such resolution.

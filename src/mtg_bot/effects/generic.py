@@ -1322,6 +1322,40 @@ class ControlTargetOpponentNextTurn(Effect):
 
 
 @dataclass(frozen=True)
+class ChangeControllerToCombatDamageSource(Effect):
+    """Contested War Zone: "Whenever a creature deals combat damage to
+    you, that creature's controller gains control of this land."
+
+    Reads ``state.resolving_combat_damage_source_controller_id`` set
+    by _fire_combat_damage_to_player_triggers and mutates
+    ``source.controller_id`` to that value. Permanent continuous
+    effect (not UEOT); the new controller keeps the land until
+    another control-change effect overrides it.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        new_cid = state.resolving_combat_damage_source_controller_id
+        if new_cid is None or new_cid == source.controller_id:
+            return
+        old_cid = source.controller_id
+        source.controller_id = new_cid
+        state.log.append(
+            f"P{new_cid} gains control of {source.printing.name} "
+            f"(was P{old_cid})"
+        )
+
+    def describe(self) -> str:
+        return "that creature's controller gains control of this land"
+
+
+
+@dataclass(frozen=True)
 class IfGainedLifeThisTurnUntapSelf(Effect):
     """Ragost, Deft Gastronaut's beginning-of-each-end-step rider:
     "If you gained life this turn, untap Ragost."
@@ -2119,12 +2153,19 @@ class PumpCreaturesYouControlUntilEOT(Effect):
 
     ``exclude_source=True`` models "other creatures you control" — reads
     ``state.resolving_source`` to skip the triggering permanent.
+
+    ``attacking_only=True`` narrows the scope to attacking creatures
+    regardless of controller — "Attacking creatures get +1/+0 until
+    end of turn" (Contested War Zone). Attackers are always the
+    active player's, so in practice this picks up your own attackers
+    during your turn.
     """
 
     power_bonus: int = 0
     toughness_bonus: int = 0
     granted_keywords: frozenset[str] = frozenset()
     exclude_source: bool = False
+    attacking_only: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -2133,10 +2174,14 @@ class PumpCreaturesYouControlUntilEOT(Effect):
         source = state.resolving_source if self.exclude_source else None
         count = 0
         for obj in state.battlefield:
-            if obj.controller_id != controller_id:
-                continue
-            if not obj.printing.is_creature:
-                continue
+            if self.attacking_only:
+                if not obj.attacking:
+                    continue
+            else:
+                if obj.controller_id != controller_id:
+                    continue
+                if not obj.printing.is_creature:
+                    continue
             if source is not None and obj is source:
                 continue
             obj.temp_power_bonus += self.power_bonus
@@ -2144,16 +2189,24 @@ class PumpCreaturesYouControlUntilEOT(Effect):
             if self.granted_keywords:
                 obj.temp_keywords = obj.temp_keywords | self.granted_keywords
             count += 1
-        scope = "other creatures" if self.exclude_source else "creatures"
+        if self.attacking_only:
+            scope = "attacking creatures"
+        elif self.exclude_source:
+            scope = "other creatures"
+        else:
+            scope = "creatures"
         state.log.append(
             f"P{controller_id}'s {scope} ({count}) get "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
         )
 
     def describe(self) -> str:
-        scope = "other creatures you control" if self.exclude_source else (
-            "creatures you control"
-        )
+        if self.attacking_only:
+            scope = "attacking creatures"
+        elif self.exclude_source:
+            scope = "other creatures you control"
+        else:
+            scope = "creatures you control"
         return (
             f"{scope} get "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"

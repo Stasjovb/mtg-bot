@@ -511,6 +511,36 @@ def _fire_combat_damage_to_player_triggers(
                     state.resolving_source = None
                     state.resolving_combat_damage_amount = 0
 
+        # Observer: "whenever a creature deals combat damage to you" —
+        # fires on permanents the hit player controls. Used by
+        # Contested War Zone's "that creature's controller gains
+        # control of this land".
+        attacker_controller_id = source.controller_id
+        for obs in list(state.battlefield):
+            if obs.controller_id != target_player:
+                continue
+            for i, ability in enumerate(obs.printing.triggered_abilities):
+                if ability.trigger != "creature_deals_combat_damage_to_you":
+                    continue
+                if not should_fire_trigger(state, obs.id, i, ability):
+                    continue
+                state.log.append(
+                    f"{obs.printing.name}'s combat-damage-to-you trigger "
+                    f"fires (P{target_player} was hit by "
+                    f"{source.printing.name})"
+                )
+                state.resolving_source = obs
+                state.resolving_combat_damage_amount = amount
+                state.resolving_combat_damage_source_controller_id = (
+                    attacker_controller_id
+                )
+                try:
+                    ability.effect.resolve(state, obs.controller_id, ())
+                finally:
+                    state.resolving_source = None
+                    state.resolving_combat_damage_amount = 0
+                    state.resolving_combat_damage_source_controller_id = None
+
 
 def clear_combat_state(state: GameState) -> None:
     # Process "sacrifice at end of combat" schedules (Kavaron Harrier

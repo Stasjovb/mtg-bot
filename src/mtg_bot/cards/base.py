@@ -22,6 +22,7 @@ from mtg_bot.effects import (
     DealDamageToControllerAndAddMana,
     BecomeLandCreatureUEOT,
     BecomesCopyOfTargetLand,
+    ChangeControllerToCombatDamageSource,
     CopyTargetInstantOrSorceryYouControl,
     CreateTokenCopyOfTargetCreatureYouControl,
     DestroyTargetLand,

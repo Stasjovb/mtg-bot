@@ -405,6 +405,9 @@ class TriggeredAbility:
                 "Whenever a creature you control deals combat damage "
                 "to a player"
             ),
+            "creature_deals_combat_damage_to_you": (
+                "Whenever a creature deals combat damage to you"
+            ),
             "another_creature_you_control_dies_or_exiled": (
                 "Whenever another creature you control dies or is put "
                 "into exile"

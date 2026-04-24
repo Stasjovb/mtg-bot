@@ -30,6 +30,7 @@ from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     BecomeLandCreatureUEOT,
     BecomesCopyOfTargetLand,
+    ChangeControllerToCombatDamageSource,
     ControlTargetOpponentNextTurn,
     CopyTargetInstantOrSorceryYouControl,
     CounterTargetSpell,
