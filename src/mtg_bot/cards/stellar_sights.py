@@ -29,8 +29,39 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Blast Zone": make_colorless_land(  # dropped enters-with-counters + sac-mass-destroy.
+    # Blast Zone: enters with a charge counter. {T}: Add {C}. {X}{X},
+    # {T}: Put X charge counters on this land. {3},{T},Sacrifice this
+    # land: Destroy each nonland permanent with mana value equal to
+    # the number of charge counters on this land.
+    "Blast Zone": make_utility_land(
         "Blast Zone",
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="etb",
+                effect=PutChargeCountersOnSelf(amount=1),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{X}{X}"),
+                    mana_str="{X}{X}",
+                    tap_self=True,
+                ),
+                effect=PutChargeCountersOnSelf(amount_from_x=True),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"),
+                    mana_str="{3}",
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=(
+                    DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters()
+                ),
+            ),
+        ),
     ),
     # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact
     # creature with flying UEOT. Also: {1}, {T}: +1/+1 UEOT to target
@@ -244,8 +275,26 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Gemstone Caverns": make_colorless_land(  # dropped opening-hand luck-counter + any-color.
+    # Gemstone Caverns: legendary. If in opening hand and you're not
+    # the starting player, may begin the game with this on the
+    # battlefield with a luck counter (+exile a card from hand). {T}:
+    # Add {C}; if it has a luck counter, instead add one mana of any
+    # color.
+    #
+    # Simplification: the opening-hand alt-ETB requires per-game
+    # opening-hand reveal infrastructure we don't model. Caverns is
+    # treated as if it ALWAYS has a luck counter — taps for one
+    # "any"-color coin, like Reflecting Pool. Strictly an upside for
+    # the player (oracle's untriggered case is colorless-only).
+    "Gemstone Caverns": make_utility_land(
         "Gemstone Caverns", legendary=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     # Grove of the Burnwillows: `{T}: Add {C}. {T}: Add {R} or {G}.
     # Each opponent gains 1 life.` Modeled as produces={R,G} + a

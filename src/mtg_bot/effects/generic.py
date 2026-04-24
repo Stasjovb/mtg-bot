@@ -3724,6 +3724,92 @@ class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class PutChargeCountersOnSelf(Effect):
+    """Put N charge counters on the resolving source.
+
+    ``amount`` is the fixed count when ``amount_from_x`` is False.
+    When ``amount_from_x`` is True, reads ``state.resolving_x_value``
+    instead — used by Blast Zone's "{X}{X}, {T}: Put X charge counters
+    on this land".
+
+    Untargeted; the source is whatever's currently resolving
+    (``state.resolving_source``). Used both as an ETB effect (entering
+    with N charge counters) and as an activated-ability payload.
+    """
+
+    amount: int = 1
+    amount_from_x: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        n = state.resolving_x_value if self.amount_from_x else self.amount
+        if n <= 0:
+            return
+        source.charge_counters += n
+        state.log.append(
+            f"{source.printing.name} gets {n} charge counter"
+            f"{'s' if n != 1 else ''} (now {source.charge_counters})"
+        )
+
+    def describe(self) -> str:
+        if self.amount_from_x:
+            return "put X charge counters on this permanent"
+        return (
+            f"put {self.amount} charge counter"
+            f"{'s' if self.amount != 1 else ''} on this permanent"
+        )
+
+
+
+@dataclass(frozen=True)
+class DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters(Effect):
+    """Blast Zone payoff: "Destroy each nonland permanent with mana
+    value equal to the number of charge counters on this land."
+
+    Reads ``state.resolving_source.charge_counters`` (snapshotted at
+    resolution time). Tokens count too — they have a printed mana
+    value of 0 and are destroyed when the source has 0 charge
+    counters (rare edge case but oracle-compliant).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        target_mv = source.charge_counters
+        # Snapshot the list — destroying mutates state.battlefield.
+        for obj in list(state.battlefield):
+            if obj.printing.is_land:
+                continue
+            if obj.printing.mana_cost.total != target_mv:
+                continue
+            if "indestructible" in obj.printing.keywords:
+                continue
+            state.log.append(
+                f"{obj.printing.name} is destroyed by Blast Zone "
+                f"(MV={target_mv})"
+            )
+            move_off_battlefield(state, obj, destination="graveyard")
+
+    def describe(self) -> str:
+        return (
+            "destroy each nonland permanent with mana value equal to "
+            "the number of charge counters on this land"
+        )
+
+
+
+@dataclass(frozen=True)
 class DestroyTargetArtifactOrTappedCreature(Effect):
     """Destroy target artifact, or tapped creature.
 

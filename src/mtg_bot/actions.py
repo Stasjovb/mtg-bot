@@ -799,9 +799,23 @@ def _activate_ability(
 
     # Pay mana first (auto-tap lands). Dominion Bracelet's granted
     # ability reduces its generic cost by the equipped creature's
-    # effective power.
+    # effective power. For abilities with an X in the cost (Blast
+    # Zone's {X}{X}: put X charge counters on this land), ask the
+    # agent for X, fold X*x_pips into generic, and stash the chosen
+    # X on the StackItem so the resolving effect can read it via
+    # state.resolving_x_value.
+    ability_x_value = 0
     if ability.cost.mana is not None:
         mana = _effective_ability_mana_cost(state, source, ability)
+        if mana.x_pips > 0:
+            ability_x_value = _choose_and_apply_x(
+                state, player_id, source, mana,
+            )
+            mana = ManaCost(
+                generic=mana.generic + mana.x_pips * ability_x_value,
+                colored=mana.colored,
+                x_pips=0,
+            )
         auto_tap_for_cost(state, player_id, mana)
 
     # Tap-self (if cost requires it).
@@ -1039,6 +1053,7 @@ def _activate_ability(
             controller_id=player_id,
             ability=ability,
             targets=targets,
+            x_value=ability_x_value,
         )
     )
     state.log.append(
