@@ -27,6 +27,7 @@ from mtg_bot.effects import (
     CreateTokenCopyOfTargetCreatureYouControl,
     DestroyTargetLand,
     ExileAllGraveyards,
+    ExileTargetAttackingCreatureUntilEndStep,
     GrantLifeToEachOpponent,
     PutBasicLandFromHandOntoBattlefieldTapped,
     ReturnTargetLandFromGraveyardToHand,

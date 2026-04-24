@@ -476,8 +476,22 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Mystifying Maze": make_colorless_land(  # dropped exile-attacker-return-EoT activated.
+    # Mystifying Maze: {T}: Add {C}. {4},{T}: Exile target attacking
+    # creature an opponent controls. At the beginning of the next end
+    # step, that player returns it to the battlefield under its
+    # owner's control tapped.
+    "Mystifying Maze": make_utility_land(
         "Mystifying Maze",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{4}"),
+                    mana_str="{4}",
+                    tap_self=True,
+                ),
+                effect=ExileTargetAttackingCreatureUntilEndStep(),
+            ),
+        ),
     ),
     # Needle Spires: enters tapped, {T}: R or W, {2}{R}{W}: → 2/1
     # R/W Elemental double strike UEOT.

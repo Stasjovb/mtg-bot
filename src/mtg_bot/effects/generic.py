@@ -728,6 +728,122 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnExiledPermanentToOwnerTapped(Effect):
+    """Return a specific exiled card (``exile_card_id``) to the
+    battlefield under its owner's control, tapped.
+
+    Unlike the targeted-by-agent return effects, this one stores the
+    exact card id at construction time. Intended for scheduled delayed
+    triggers where the card was already selected at schedule time (see
+    ExileTargetAttackingCreatureUntilEndStep / Mystifying Maze).
+    """
+
+    exile_card_id: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        owner = None
+        card = None
+        for p in state.players:
+            for c in p.exile:
+                if c.id == self.exile_card_id:
+                    owner = p
+                    card = c
+                    break
+            if card is not None:
+                break
+        if card is None or owner is None:
+            return
+        owner.exile.remove(card)
+        put_into_battlefield(state, card, owner.id)
+        card.tapped = True
+        state.log.append(
+            f"{card.printing.name} returns from exile to P{owner.id}'s "
+            f"battlefield tapped"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"return exiled card #{self.exile_card_id} to its owner's "
+            f"battlefield tapped"
+        )
+
+
+
+@dataclass(frozen=True)
+class ExileTargetAttackingCreatureUntilEndStep(Effect):
+    """Mystifying Maze: "Exile target attacking creature an opponent
+    controls. At the beginning of the next end step, that player
+    returns it to the battlefield under its owner's control tapped."
+
+    On resolve: exiles the chosen creature (without the
+    Oblivion-Ring-style ``exiled_by_source`` marker so the creature
+    stays in exile even if Mystifying Maze later leaves the
+    battlefield), then schedules a delayed end-step trigger that
+    resolves a ReturnExiledPermanentToOwnerTapped for that card.
+
+    The delayed trigger's ``controller_id`` is the CURRENT active
+    player — Maze's activation is instant-speed on an opponent's
+    combat, so "next end step" is the active player's own end step.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.attacking
+            and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        _, tid = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == tid), None,
+        )
+        if target is None:
+            return
+        state.log.append(
+            f"{target.printing.name} is exiled until end of turn"
+        )
+        move_off_battlefield(state, target, destination="exile")
+        state.delayed_triggers.append(
+            {
+                "fire_at_turn": state.turn_number,
+                "controller_id": state.active_player().id,
+                "effect": ReturnExiledPermanentToOwnerTapped(
+                    exile_card_id=target.id,
+                ),
+            }
+        )
+
+    def describe(self) -> str:
+        return (
+            "exile target attacking creature an opponent controls; its "
+            "controller returns it to the battlefield under its "
+            "owner's control tapped at the beginning of the next end "
+            "step"
+        )
+
+
+
+@dataclass(frozen=True)
 class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
     """Target artifact card from your graveyard goes to your hand.
 

@@ -721,45 +721,82 @@ def run_beginning_of_combat_triggers(state: GameState) -> None:
 def run_delayed_end_step_triggers(state: GameState) -> None:
     """Fire any delayed triggers scheduled for this end step.
 
-    Scheduled by effects like CreateLanderAndScheduleSacrificeNextEndStep
-    (Kav Landseeker). Entries are data dicts so the state stays
-    pickle-friendly. Currently supported actions: "sacrifice" — sacrifice
-    the target object if it's still on the battlefield.
+    Two entry shapes are supported:
+
+    1. Hardcoded string-``action`` entries (legacy): currently
+       ``"sacrifice"`` (Kav Landseeker's scheduled sac) and
+       ``"remove_charge_counters"`` (Systems Override's 10-counter
+       reset). Each specifies a ``target_id`` pointing to a battlefield
+       permanent.
+
+    2. Arbitrary ``effect`` entries: the entry carries an Effect
+       instance, resolved with optional ``source_id`` (sets
+       ``state.resolving_source`` during resolution). Used by
+       Mystifying Maze's "return the exiled creature at the next end
+       step tapped" scheduling. Effect instances are frozen dataclasses
+       so the state stays pickle-friendly.
+
+    Both shapes require ``fire_at_turn`` to match the current turn
+    number and ``controller_id`` to match the active player.
     """
     ap_id = state.active_player().id
     remaining: list[dict] = []
     for entry in state.delayed_triggers:
-        if (
+        fires_now = (
             entry["fire_at_turn"] == state.turn_number
             and entry["controller_id"] == ap_id
-        ):
-            target = next(
-                (o for o in state.battlefield
-                 if o.id == entry["target_id"]),
-                None,
-            )
-            if target is not None and entry["action"] == "sacrifice":
-                state.log.append(
-                    f"delayed trigger: P{ap_id} sacrifices "
-                    f"{target.printing.name}"
-                )
-                sacrifice(state, target)
-            elif (
-                target is not None
-                and entry["action"] == "remove_charge_counters"
-            ):
-                amount = entry.get("amount", 1)
-                target.charge_counters = max(
-                    0, target.charge_counters - amount
-                )
-                state.log.append(
-                    f"delayed trigger: remove {amount} charge counters "
-                    f"from {target.printing.name} "
-                    f"(now {target.charge_counters})"
-                )
-            # Even if target is gone, we're done with this entry.
-        else:
+        )
+        if not fires_now:
             remaining.append(entry)
+            continue
+
+        if "effect" in entry:
+            effect = entry["effect"]
+            source_id = entry.get("source_id")
+            source = (
+                next(
+                    (o for o in state.battlefield if o.id == source_id),
+                    None,
+                )
+                if source_id is not None else None
+            )
+            prior = state.resolving_source
+            state.resolving_source = source
+            try:
+                effect.resolve(state, entry["controller_id"], ())
+            finally:
+                state.resolving_source = prior
+            state.log.append(
+                f"delayed effect fires: {effect.describe()}"
+            )
+            continue
+
+        # Legacy string-action path.
+        target = next(
+            (o for o in state.battlefield
+             if o.id == entry["target_id"]),
+            None,
+        )
+        if target is not None and entry["action"] == "sacrifice":
+            state.log.append(
+                f"delayed trigger: P{ap_id} sacrifices "
+                f"{target.printing.name}"
+            )
+            sacrifice(state, target)
+        elif (
+            target is not None
+            and entry["action"] == "remove_charge_counters"
+        ):
+            amount = entry.get("amount", 1)
+            target.charge_counters = max(
+                0, target.charge_counters - amount
+            )
+            state.log.append(
+                f"delayed trigger: remove {amount} charge counters "
+                f"from {target.printing.name} "
+                f"(now {target.charge_counters})"
+            )
+        # Even if target is gone, we're done with this entry.
     state.delayed_triggers = remaining
 
 
