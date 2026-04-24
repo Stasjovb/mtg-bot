@@ -533,6 +533,31 @@ class ManaCoin:
     spend_restriction: Optional[str] = None
 
 
+class LogBuffer(list[str]):
+    """A list[str] with a global silent-mode switch.
+
+    ``append(msg)`` early-returns when ``enabled`` is False. All other
+    list operations behave exactly like a normal ``list``. The engine
+    appends to ``state.log`` from hundreds of sites; turning this
+    buffer off lets search/rollout code skip those string allocations
+    without touching any call site.
+
+    Reads still work — tests that inspect log contents continue to
+    pass while the buffer is enabled (the default).
+    """
+
+    enabled: bool = True
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.enabled = True
+
+    def append(self, msg: str) -> None:  # type: ignore[override]
+        if not self.enabled:
+            return
+        list.append(self, msg)
+
+
 @dataclass
 class GameState:
     players: list[Player] = field(default_factory=list)
@@ -543,7 +568,7 @@ class GameState:
     turn_number: int = 1
     step: Optional["Step"] = None
     next_object_id: int = 0
-    log: list[str] = field(default_factory=list)
+    log: LogBuffer = field(default_factory=LogBuffer)
     winner_id: Optional[int] = None
     is_draw: bool = False
     # EoE "Void" turn-state flags. Both are reset on cleanup (end of turn).
