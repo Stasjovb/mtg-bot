@@ -11,24 +11,27 @@ MCTS — visits track how much confidence we have, which empirically
 outperforms picking the highest-value child (prefers robustness
 over lucky-eval).
 
-Design notes for later waves:
+Injectable pieces:
 
-- ``_rollout`` currently just calls the evaluator at the leaf. Swap
-  for a hybrid (evaluator + random rollout) when a learned evaluator
-  is in place.
-- Transposition tables deferred — they pay off when the search tree
-  has many transpositions, which is noise-level for MTG's branching
-  factor. Revisit after the real-engine adapter is running.
+- ``evaluator``        — state → scalar value at leaves.
+- ``expansion_policy`` — controls when/what to expand (full
+  enumeration by default; swap in progressive widening or a
+  prior-driven policy for large action spaces).
+- ``budget_factory``   — time or node cap per ``choose()`` call.
+
+Selection (UCB1) and backprop are still hardcoded here; extract to
+their own policies if and when we need alternates (PUCT, RAVE, etc.).
 """
 
 from __future__ import annotations
 
 import math
 import random
-from typing import Optional
+from typing import Iterator, Optional
 
 from mtg_bot.search.budget import Budget
 from mtg_bot.search.evaluator import Evaluator
+from mtg_bot.search.expansion import ExpansionPolicy, FullEnumeration
 from mtg_bot.search.protocol import (
     CHANCE_PLAYER, Decision, GameState, PlayerID,
 )
@@ -44,17 +47,22 @@ class _Node:
     perspective of the *parent's* active player, which is the player
     who chose to come here — matches UCB1's expected interpretation.
 
-    Implemented as a plain class (not ``@dataclass``) because
-    CPython 3.13's specializing interpreter had a reproducible bug
-    against the dataclass-mutation pattern in our backprop hot loop
-    (intermittent ``NameError``/``AttributeError`` crashes). Plain
-    class instances with ``__dict__`` attribute access avoid the
+    ``pending_decisions`` is a lazy iterator of decisions that haven't
+    been expanded yet at this node. The iterator is built by the
+    ``ExpansionPolicy`` and may be truncated — progressive widening
+    only pulls it when the policy says a new child is warranted.
+
+    Implemented as a plain ``__slots__`` class (not ``@dataclass``)
+    because CPython 3.13's specializing interpreter had a
+    reproducible bug against the dataclass-mutation pattern in our
+    backprop hot loop (intermittent ``NameError``/``AttributeError``
+    crashes). Plain class instances with fixed slots avoid the
     specializer's buggy fast path.
     """
 
     __slots__ = (
         "state", "parent", "decision", "children",
-        "untried_decisions", "visits", "total_value",
+        "pending_decisions", "visits", "total_value",
     )
 
     def __init__(
@@ -62,20 +70,18 @@ class _Node:
         state: GameState,
         parent: Optional["_Node"] = None,
         decision: Optional[Decision] = None,
-        untried_decisions: Optional[list[Decision]] = None,
+        pending_decisions: Optional[Iterator[Decision]] = None,
     ) -> None:
         self.state = state
         self.parent = parent
         self.decision = decision
         self.children: list["_Node"] = []
-        self.untried_decisions: list[Decision] = (
-            list(untried_decisions) if untried_decisions is not None else []
+        self.pending_decisions: Iterator[Decision] = (
+            pending_decisions if pending_decisions is not None
+            else iter(())
         )
         self.visits: int = 0
         self.total_value: float = 0.0
-
-    def is_fully_expanded(self) -> bool:
-        return not self.untried_decisions
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
@@ -92,7 +98,7 @@ class _Node:
 
 
 class MCTS(SearchStrategy):
-    """Budget-bounded MCTS with UCB1 selection + evaluator-at-leaf.
+    """Budget-bounded MCTS with pluggable expansion.
 
     Call ``choose(state, player_id)`` once per decision. A fresh tree
     is built each call — we don't reuse across decisions yet (would
@@ -105,38 +111,50 @@ class MCTS(SearchStrategy):
         budget_factory,
         rng: random.Random | None = None,
         exploration_c: float = math.sqrt(2),
+        expansion_policy: Optional[ExpansionPolicy] = None,
     ) -> None:
         """
-        ``evaluator`` is called at every leaf expansion to score the
-        state from each player's perspective (via their winner-or-
-        draw result at terminals, otherwise via the evaluator's
-        non-terminal heuristic).
+        ``evaluator`` scores leaves from ``player_id``'s perspective
+        (in ``[-1, 1]``; terminals short-circuit to ±1/0).
 
         ``budget_factory`` is a zero-arg callable that returns a new
-        ``Budget`` — one per ``choose`` call. Keeping it a factory
-        (rather than a single Budget) lets the same MCTS instance be
-        reused across many decisions without manually resetting.
+        ``Budget`` — one per ``choose`` call.
 
-        ``exploration_c`` is UCB1's exploration constant. ``sqrt(2)``
-        is the theoretical default for values in ``[-1, 1]``; the
-        user's plan defaulted to 1.4 which is essentially the same
-        thing rounded. Tune per game in later waves.
+        ``exploration_c`` is UCB1's exploration constant. ``√2`` is
+        the theoretical default for values in ``[-1, 1]``.
+
+        ``expansion_policy`` controls tree growth. Defaults to
+        ``FullEnumeration`` — preserves classic MCTS behavior.
+        Swap in ``ProgressiveWidening`` (optionally with a prior)
+        for large action spaces.
         """
         self.evaluator = evaluator
         self.budget_factory = budget_factory
         self.rng = rng or random.Random()
         self.exploration_c = exploration_c
+        self.expansion_policy: ExpansionPolicy = (
+            expansion_policy if expansion_policy is not None
+            else FullEnumeration()
+        )
 
     def choose(
         self, state: GameState, player_id: PlayerID
     ) -> Decision:
+        # Forced-move shortcut: if there's exactly one legal decision,
+        # take it. Computed eagerly up front because it's cheap and
+        # lets us skip the whole tree build for trivial priority
+        # moments (MTG has lots of these — "only PassPriority legal"
+        # is the common case during upkeep/draw/combat).
+        legal = list(state.legal_decisions())
+        if len(legal) == 1:
+            return legal[0]
+
         root = _Node(
             state=state.clone(),
-            untried_decisions=list(state.legal_decisions()),
+            pending_decisions=self.expansion_policy.make_decision_iterator(
+                state
+            ),
         )
-        if len(root.untried_decisions) == 1:
-            # Forced move — skip the search entirely.
-            return root.untried_decisions[0]
 
         budget = self.budget_factory()
         budget.start()
@@ -149,7 +167,7 @@ class MCTS(SearchStrategy):
         if not root.children:
             # Budget too small to expand even once. Fall back to a
             # random legal decision so the caller still gets an answer.
-            return self.rng.choice(state.legal_decisions())
+            return self.rng.choice(legal)
         # Standard MCTS final-move policy: pick the most-visited child.
         best = max(root.children, key=lambda n: n.visits)
         return best.decision
@@ -161,12 +179,12 @@ class MCTS(SearchStrategy):
     def _select_and_expand(self, root: _Node) -> _Node:
         """Walk down the tree until we find a node to score.
 
-        - At fully-expanded non-terminal real-player nodes, pick the
-          UCB1-best child and descend.
         - At chance nodes, sample an outcome by its probability and
           descend (creating a new child if needed).
-        - At non-fully-expanded nodes, expand one untried decision
-          and return the new child.
+        - At real-player nodes, ask the ``ExpansionPolicy`` whether
+          to add a new child. If yes and the pending-iterator has
+          more decisions, expand and return the new child.
+        - Otherwise, descend into the UCB1-best existing child.
         - At terminals, return as-is.
         """
         node = root
@@ -174,35 +192,59 @@ class MCTS(SearchStrategy):
             if node.state.active_player() == CHANCE_PLAYER:
                 node = self._descend_chance(node)
                 continue
-            if not node.is_fully_expanded():
-                return self._expand_one(node)
-            # Fully expanded real-player node: UCB1 descent.
+
+            expanded = self._try_expand(node)
+            if expanded is not None:
+                return expanded
+
+            if not node.children:
+                # No children to descend into and policy refused to
+                # expand — dead end. Return this node as the leaf
+                # so evaluation still happens. (Shouldn't arise
+                # under FullEnumeration; a badly-tuned
+                # ProgressiveWidening could get here if it caps
+                # children at 0.)
+                return node
+            # Fully widened (per policy) — UCB1 descent.
             node = max(
                 node.children,
                 key=lambda c: c.ucb1(node.visits, self.exploration_c),
             )
         return node
 
-    def _expand_one(self, node: _Node) -> _Node:
-        """Create a new child for one untried decision and return it."""
-        decision = node.untried_decisions.pop()
-        child_state = node.state.clone()
+    def _try_expand(self, node: _Node) -> Optional[_Node]:
+        """If the policy permits and the pending iterator has more,
+        expand a new child and return it. Otherwise return None."""
+        if not self.expansion_policy.should_expand(node):
+            return None
+        try:
+            decision = next(node.pending_decisions)
+        except StopIteration:
+            return None
+        return self._make_child(node, decision)
+
+    def _make_child(self, parent: _Node, decision: Decision) -> _Node:
+        """Build and attach a new child for ``decision`` at
+        ``parent``. The child's pending-decisions iterator is
+        freshly built from the expansion policy."""
+        child_state = parent.state.clone()
         child_state.apply(decision)
+        pending = (
+            self.expansion_policy.make_decision_iterator(child_state)
+            if not child_state.is_terminal() else iter(())
+        )
         child = _Node(
             state=child_state,
-            parent=node,
+            parent=parent,
             decision=decision,
-            untried_decisions=(
-                list(child_state.legal_decisions())
-                if not child_state.is_terminal() else []
-            ),
+            pending_decisions=pending,
         )
-        node.children.append(child)
+        parent.children.append(child)
         return child
 
     def _descend_chance(self, node: _Node) -> _Node:
         """Sample a chance outcome, either picking the existing
-        child for that outcome or creating it."""
+        child for that outcome or creating one."""
         outcomes = node.state.chance_outcomes()
         decisions = [d for d, _ in outcomes]
         weights = [w for _, w in outcomes]
@@ -211,19 +253,7 @@ class MCTS(SearchStrategy):
             if child.decision == decision:
                 return child
         # First time we sampled this outcome — create the child.
-        child_state = node.state.clone()
-        child_state.apply(decision)
-        child = _Node(
-            state=child_state,
-            parent=node,
-            decision=decision,
-            untried_decisions=(
-                list(child_state.legal_decisions())
-                if not child_state.is_terminal() else []
-            ),
-        )
-        node.children.append(child)
-        return child
+        return self._make_child(node, decision)
 
     def _evaluate_leaf(
         self, leaf: _Node, root_player: PlayerID

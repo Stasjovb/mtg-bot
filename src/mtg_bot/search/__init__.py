@@ -16,6 +16,9 @@ Module map:
 - ``strategy``   — ``SearchStrategy`` ABC + ``RandomChoice`` baseline.
 - ``mcts``       — ``MCTS`` implementation with UCB1 selection, chance-
                    node sampling, and evaluator-at-leaf.
+- ``expansion``  — ``ExpansionPolicy`` ABC + ``FullEnumeration`` (classic)
+                   and ``ProgressiveWidening`` (budget-aware) — pluggable
+                   into MCTS for tunable tree growth.
 - ``harness``    — Agent-vs-agent match runner + win-rate stats.
 - ``toys.*``     — Tiny self-contained ``GameState`` implementations
                    (tic-tac-toe, TTT-with-chance) used to exercise
@@ -40,6 +43,11 @@ from mtg_bot.search.evaluator import (
     Evaluator,
     RandomRolloutEvaluator,
 )
+from mtg_bot.search.expansion import (
+    ExpansionPolicy,
+    FullEnumeration,
+    ProgressiveWidening,
+)
 from mtg_bot.search.harness import MatchResult, play_one_game, run_match
 from mtg_bot.search.mcts import MCTS
 from mtg_bot.search.protocol import (
@@ -57,11 +65,14 @@ __all__ = [
     "Decision",
     "DefaultTacticalAgent",
     "Evaluator",
+    "ExpansionPolicy",
+    "FullEnumeration",
     "GameState",
     "MCTS",
     "MatchResult",
     "MtgGameStateAdapter",
     "PlayerID",
+    "ProgressiveWidening",
     "RandomChoice",
     "RandomRolloutEvaluator",
     "SearchStrategy",
