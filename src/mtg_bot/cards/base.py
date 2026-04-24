@@ -70,6 +70,7 @@ from mtg_bot.effects import (
     TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
     SeedshipImpactEffect,
+    MovePlusOneCounterBetweenPermanentsYouControl,
     MoveSelfCountersToTargetCreatureYouControl,
     UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,

@@ -87,6 +87,7 @@ from mtg_bot.effects.generic import (
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     MillTargetPlayer,
+    MovePlusOneCounterBetweenPermanentsYouControl,
     MoveSelfCountersToTargetCreatureYouControl,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,

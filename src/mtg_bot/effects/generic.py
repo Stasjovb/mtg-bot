@@ -3631,6 +3631,78 @@ class MoveSelfCountersToTargetCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class MovePlusOneCounterBetweenPermanentsYouControl(Effect):
+    """Nesting Grounds: "Move a counter from target permanent you
+    control onto a second target permanent."
+
+    Dual-target effect: targets[0] is the donor, targets[1] is the
+    recipient. Both must be permanents the controller controls.
+
+    Simplification: oracle says "a counter" (any type — +1/+1,
+    charge, loyalty, stun, etc.). This implementation moves exactly
+    one +1/+1 counter. If the donor has none, the ability fizzles.
+    Charge/loyalty/stun counter movement isn't modeled — those
+    counter types are tied to specific permanent types (Spacecraft,
+    planeswalker, tapped creatures) where the recipient might not
+    be a valid holder anyway.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if len(targets) < 2:
+            return
+        (_, donor_id), (_, recipient_id) = targets[0], targets[1]
+        if donor_id == recipient_id:
+            return
+        donor = next(
+            (o for o in state.battlefield if o.id == donor_id), None
+        )
+        recipient = next(
+            (o for o in state.battlefield if o.id == recipient_id), None
+        )
+        if donor is None or recipient is None:
+            return
+        if donor.plus_one_counters <= 0:
+            state.log.append(
+                f"Nesting Grounds fizzles — "
+                f"{donor.printing.name} has no +1/+1 counters"
+            )
+            return
+        from mtg_bot.game import add_plus_one_counters
+
+        donor.plus_one_counters -= 1
+        add_plus_one_counters(state, recipient, 1)
+        state.log.append(
+            f"+1/+1 counter moved from {donor.printing.name} "
+            f"(now {donor.plus_one_counters}) to {recipient.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "move a +1/+1 counter from target permanent you control "
+            "onto a second target permanent"
+        )
+
+
+
+@dataclass(frozen=True)
 class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
     """Put a +1/+1 counter on this creature for each OTHER creature and/or
     artifact you control.

@@ -572,8 +572,30 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Nesting Grounds": make_colorless_land(  # dropped move-a-counter-from-X-to-Y activated.
+    # Nesting Grounds: {T}: Add {C}. {1},{T}: Move a counter from
+    # target permanent you control onto a second target permanent.
+    # Activate only as a sorcery.
+    #
+    # Simplification: oracle allows "a counter" of any type; this
+    # implementation moves exactly one +1/+1 counter. Other counter
+    # types (charge, loyalty, stun) stay on their original permanent
+    # — their recipient constraints (Spacecraft for charge, PW for
+    # loyalty, tapped creature for stun) would need per-type
+    # filtering. +1/+1 counters are by far the common case in the
+    # EoE pool.
+    "Nesting Grounds": make_utility_land(
         "Nesting Grounds",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=MovePlusOneCounterBetweenPermanentsYouControl(),
+                sorcery_speed=True,
+            ),
+        ),
     ),
     # Petrified Field: `{T}: Add {C}. {T}, Sacrifice this land:
     # Return target land card from your graveyard to your hand.`

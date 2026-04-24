@@ -887,6 +887,9 @@ def _activate_ability(
     # When the cost sacrifices the source, exclude the source from
     # legal targets — Strip Mine, Petrified Field, etc. can't target
     # themselves because they're sacrificed as part of cost.
+    # Supports multi-target via Effect.target_count_range() → (min, max)
+    # (Nesting Grounds's "from target permanent you control onto a
+    # second target permanent" picks two targets per activation).
     targets: tuple[tuple[str, int], ...] = ()
     if ability.effect.requires_target():
         state.resolving_source = source
@@ -896,14 +899,27 @@ def _activate_ability(
             state.resolving_source = None
         if ability.cost.sacrifice_self:
             legal = [t for t in legal if t[1] != source.id]
+        _, max_t = ability.effect.target_count_range()
+        if max_t <= 0:
+            max_t = 1  # back-compat with older requires_target-only effects
         if legal:
             p = state.player_by_id(player_id)
-            if p.agent is not None:
-                chosen = p.agent.choose_target(state, player_id, legal)
-                if chosen is not None:
-                    targets = (chosen,)
-            else:
-                targets = (legal[0],)
+            chosen_list: list[tuple[str, int]] = []
+            remaining = list(legal)
+            for _ in range(max_t):
+                if not remaining:
+                    break
+                if p.agent is not None:
+                    pick = p.agent.choose_target(
+                        state, player_id, remaining,
+                    )
+                else:
+                    pick = remaining[0]
+                if pick is None or pick not in remaining:
+                    break
+                chosen_list.append(pick)
+                remaining.remove(pick)
+            targets = tuple(chosen_list)
 
     # "Sacrifice another ..." paid BEFORE sacrifice-self so the source
     # stays on the battlefield and is excluded from the option set.
