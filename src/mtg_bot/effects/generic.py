@@ -2367,6 +2367,8 @@ class SearchLibraryForCard(Effect):
             return printing.is_artifact
         if fn == "spacecraft":
             return printing.is_spacecraft
+        if fn == "sliver":
+            return "Sliver" in printing.subtypes
         return False
 
     def resolve(
@@ -4516,6 +4518,64 @@ class ExileTargetCreature(Effect):
 
     def describe(self) -> str:
         return "exile target creature"
+
+
+
+@dataclass(frozen=True)
+class GainControlOfTargetSliverPermanently(Effect):
+    """"Gain control of target Sliver. (This effect lasts indefinitely.)"
+
+    Matches Sliver Overlord's second activated ability. Unlike temporary
+    steal effects (Mutinous Massacre, Control-target-opponent), this
+    one reassigns controller_id without scheduling a revert — it is
+    not reset at cleanup. The Sliver becomes permanently the
+    activator's.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and "Sliver" in o.printing.subtypes
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if "Sliver" not in obj.printing.subtypes:
+            return
+        if obj.controller_id == controller_id:
+            # Already yours — no change, but log for visibility.
+            state.log.append(
+                f"P{controller_id} targets own Sliver "
+                f"{obj.printing.name} — no change"
+            )
+            return
+        obj.controller_id = controller_id
+        # Permanent gain of control: do NOT set temp_original_controller_id.
+        state.log.append(
+            f"P{controller_id} permanently gains control of "
+            f"{obj.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return "gain control of target Sliver (indefinitely)"
 
 
 

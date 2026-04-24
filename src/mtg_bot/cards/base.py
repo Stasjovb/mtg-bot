@@ -89,6 +89,7 @@ from mtg_bot.effects import (
     ExileEachOpponentsGraveyard,
     ExileTargetCreature,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
+    GainControlOfTargetSliverPermanently,
     GainLife,
     IfGainedLifeThisTurnUntapSelf,
     LoseLife,

@@ -16,14 +16,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
     CardPrinting,
     CounterTargetSpell,
     CreateToken,
     Effect,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
+    GainControlOfTargetSliverPermanently,
     ModalChooseOne,
     OptionalPutLandFromHandOntoBattlefield,
     PreventAllCombatDamageThisTurn,
+    SearchLibraryForCard,
     TriggeredAbility,
     make_aura,  # noqa: F401  (used once oracle work lands)
     make_creature,
@@ -31,6 +35,7 @@ from mtg_bot.cards.base import (
     make_equipment,
     make_instant,
     make_sorcery,
+    parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
@@ -149,11 +154,30 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Green Sun's Zenith", "{X}{G}", _SpgNoOp("Green Sun's Zenith"),
     ),
     # Sliver Overlord {W}{U}{B}{R}{G} 7/7 Legendary Sliver Mutant:
-    # {3}: tutor a Sliver to hand. All Slivers have "{3}: Gain control
-    # of target Sliver." dropped Sliver subtype search filter + granted
-    # activated ability to all Slivers.
+    #   • {3}: Search your library for a Sliver card, reveal it, put
+    #     it into your hand, then shuffle.
+    #   • {3}: Gain control of target Sliver. (Indefinitely.)
+    # The tutor uses SearchLibraryForCard with the new "sliver" filter
+    # (matches any card with the Sliver subtype). The control-grab is
+    # GainControlOfTargetSliverPermanently — reassigns controller_id
+    # without scheduling a revert, unlike the existing
+    # until-end-of-turn steal effects.
     "Sliver Overlord": make_creature(
         "Sliver Overlord", "{W}{U}{B}{R}{G}", 7, 7,
         subtypes=("Sliver", "Mutant"), legendary=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"), mana_str="{3}",
+                ),
+                effect=SearchLibraryForCard(filter_name="sliver"),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{3}"), mana_str="{3}",
+                ),
+                effect=GainControlOfTargetSliverPermanently(),
+            ),
+        ),
     ),
 }
