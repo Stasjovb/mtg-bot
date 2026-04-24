@@ -17,7 +17,11 @@ from dataclasses import dataclass
 
 from mtg_bot.cards.base import (
     CardPrinting,
+    CounterTargetSpell,
+    CreateToken,
     Effect,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
+    ModalChooseOne,
     make_aura,  # noqa: F401  (used once oracle work lands)
     make_creature,
     make_enchantment,
@@ -25,6 +29,7 @@ from mtg_bot.cards.base import (
     make_instant,
     make_sorcery,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
 @dataclass(frozen=True)
@@ -51,12 +56,20 @@ class _SpgNoOp(Effect):
 # X`` comments mirror the EOE_CREATURES / STELLAR_SIGHTS_LANDS tracking
 # convention so restoration progress is greppable.
 SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
-    # Warping Wail {1}{C}: Modal — exile basic / counter tribal spell /
-    # destroy creature toughness ≤ 2 / create 1/1 Eldrazi Scion.
-    # dropped modal effect (ModalChooseOne wiring + ExileTargetBasicLand
-    # + destroy-by-toughness filter + Scion token with sac-for-{C}).
+    # Warping Wail {1}{C}: Choose one —
+    #   • Exile target creature with power or toughness 1 or less.
+    #   • Counter target sorcery spell.
+    #   • Create a 1/1 colorless Eldrazi Scion creature token with
+    #     "Sacrifice this token: Add {C}."
+    # Full oracle via ModalChooseOne; the Scion token lives in
+    # TOKEN_PRINTINGS and carries the sac-for-{C} mana ability.
     "Warping Wail": make_instant(
-        "Warping Wail", "{1}{C}", _SpgNoOp("Warping Wail"),
+        "Warping Wail", "{1}{C}",
+        ModalChooseOne(modes=(
+            ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1),
+            CounterTargetSpell(filter_types=frozenset({"Sorcery"})),
+            CreateToken(token_printing=TOKEN_PRINTINGS["Eldrazi Scion"]),
+        )),
     ),
     # Deafening Silence {W}: each player can cast no more than one
     # noncreature spell each turn. dropped per-player noncreature-spell

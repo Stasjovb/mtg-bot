@@ -80,6 +80,7 @@ from mtg_bot.effects.generic import (
     ExileTargetAttackingCreatureUntilEndStep,
     ExileTargetCreature,
     ExileTargetCreatureUntilSourceLeaves,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
     GainLife,
     GrantLifeToEachOpponent,
     IfGainedLifeThisTurnUntapSelf,

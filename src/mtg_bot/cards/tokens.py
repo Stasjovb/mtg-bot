@@ -66,6 +66,22 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Sliver": make_token_creature(
         "Sliver", 1, 1, subtypes=("Sliver",),
     ),
+    # 1/1 colorless Eldrazi Scion creature token with "Sacrifice this
+    # token: Add {C}." Created by Warping Wail's third mode. The sac-
+    # for-{C} ability is a mana ability (bypasses the stack) just like
+    # Lander's tap/sac ramp — modeled via is_mana_ability=True so the
+    # spell-cast mana pipeline can consume the produced {C} before
+    # passing priority.
+    "Eldrazi Scion": make_token_creature(
+        "Eldrazi Scion", 1, 1, subtypes=("Eldrazi", "Scion"),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(sacrifice_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    ),
     # Munitions: colorless artifact token created by Weapons Manufacturing.
     # "When this token leaves the battlefield, it deals 2 damage to any
     # target." Modeled via a leaves-battlefield trigger on the token.

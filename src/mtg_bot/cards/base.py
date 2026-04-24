@@ -88,6 +88,7 @@ from mtg_bot.effects import (
     Effect,
     ExileEachOpponentsGraveyard,
     ExileTargetCreature,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
     GainLife,
     IfGainedLifeThisTurnUntapSelf,
     LoseLife,

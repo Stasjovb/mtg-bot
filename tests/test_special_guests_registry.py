@@ -81,17 +81,13 @@ def test_special_guests_is_included_in_all_printings():
 def test_stand_in_no_op_describes_and_resolves():
     """Exercise the placeholder spell-effect used by stand-in SPG spells.
 
-    Each stand-in instant/sorcery (Warping Wail, Nexus of Fate, Darkness,
-    Green Sun's Zenith) carries a ``_SpgNoOp`` ``spell_effect``. Per-card
-    restoration commits replace these with real oracle effects; until
-    then we at least guarantee the no-op describes itself and logs on
-    resolve so coverage doesn't regress.
+    As per-card restorations ship, entries are removed from this list.
+    Once this list is empty the ``_SpgNoOp`` class can be deleted.
     """
     from types import SimpleNamespace
 
-    for name in (
-        "Warping Wail", "Nexus of Fate", "Darkness", "Green Sun's Zenith",
-    ):
+    still_stand_ins = ("Nexus of Fate", "Darkness", "Green Sun's Zenith")
+    for name in still_stand_ins:
         eff = SPECIAL_GUESTS_EOE[name].spell_effect
         assert eff is not None
         assert name in eff.describe()

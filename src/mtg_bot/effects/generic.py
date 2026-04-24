@@ -4520,6 +4520,78 @@ class ExileTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class ExileTargetCreatureWithPowerOrToughnessAtMost(Effect):
+    """Exile target creature whose effective power OR effective toughness
+    is at most ``max_value``.
+
+    Matches Warping Wail mode 1 (Scryfall-updated oracle): "Exile target
+    creature with power or toughness 1 or less." Uses effective_* so
+    temp buffs and static anthems are respected at targeting and
+    resolution.
+    """
+
+    max_value: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import effective_power, effective_toughness
+
+        out: list[Target] = []
+        for o in state.battlefield:
+            if not o.printing.is_creature:
+                continue
+            if (
+                effective_power(state, o) <= self.max_value
+                or effective_toughness(state, o) <= self.max_value
+            ):
+                out.append(("creature", o.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power, effective_toughness
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # Re-check the condition at resolution — a pump between cast and
+        # resolve could make the target no longer legal (e.g., Giant
+        # Growth ended the "power or toughness ≤ 1" clause).
+        if not (
+            effective_power(state, obj) <= self.max_value
+            or effective_toughness(state, obj) <= self.max_value
+        ):
+            state.log.append(
+                f"{obj.printing.name} no longer has power or toughness "
+                f"≤ {self.max_value} — exile fizzles"
+            )
+            return
+        state.log.append(f"{obj.printing.name} is exiled")
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            f"exile target creature with power or toughness "
+            f"{self.max_value} or less"
+        )
+
+
+
+@dataclass(frozen=True)
 class DestroyTargetNonlandPermanentWithLanderForController(Effect):
     """Destroy target nonland permanent. Its (former) controller creates a
     Lander token.
