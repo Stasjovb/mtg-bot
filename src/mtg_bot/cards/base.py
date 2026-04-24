@@ -430,6 +430,15 @@ class CardPrinting:
     # aren't proposed once the caster's
     # Player.noncreature_spells_cast_this_turn is already ≥ 1.
     restricts_noncreature_spells_to_one_per_turn: bool = False
+    # Type-change flag: while any permanent with this flag is on the
+    # battlefield, every nonbasic land's mana-production colors are
+    # overridden to {R} and its activated abilities are suppressed —
+    # the Magus of the Moon "Nonbasic lands are Mountains" static.
+    # Consumed by game.effective_land_produces and
+    # game.effective_activated_abilities. Simplification: subtypes
+    # aren't rewritten, and already-animated manlands keep their
+    # temp_is_creature state (no layers yet).
+    nonbasic_lands_are_mountains: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -522,6 +531,7 @@ def make_creature(
     dynamic_pt_formula: str | None = None,
     is_token_doubler: bool = False,
     devour_land_multiplier: int = 0,
+    nonbasic_lands_are_mountains: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -562,6 +572,7 @@ def make_creature(
         dynamic_pt_formula=dynamic_pt_formula,
         is_token_doubler=is_token_doubler,
         devour_land_multiplier=devour_land_multiplier,
+        nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
     )
 
 

@@ -262,6 +262,35 @@ def effective_subtypes(
     return tuple(subtypes)
 
 
+def magus_of_the_moon_active(state: "GameState") -> bool:
+    """True when any permanent on the battlefield has the
+    ``nonbasic_lands_are_mountains`` flag. Used by
+    effective_land_produces and effective_activated_abilities to
+    collapse nonbasic lands to vanilla Mountains.
+    """
+    return any(
+        o.printing.nonbasic_lands_are_mountains for o in state.battlefield
+    )
+
+
+def effective_land_produces(
+    state: "GameState", land_obj: "GameObject"
+) -> frozenset[str]:
+    """Return the effective colors a land taps for, applying the
+    Magus-of-the-Moon rewrite.
+
+    Nonbasic lands under Magus produce {R} only; basic lands and any
+    lands when Magus isn't active use their printed ``produces`` set
+    unchanged.
+    """
+    if (
+        not land_obj.printing.is_basic_land
+        and magus_of_the_moon_active(state)
+    ):
+        return frozenset({"R"})
+    return land_obj.printing.produces
+
+
 def effective_activated_abilities(
     state: "GameState", obj: "GameObject"
 ) -> tuple:
@@ -271,10 +300,21 @@ def effective_activated_abilities(
     - Ragost: artifacts you control gain {2}, {T}, Sac: gain 3 life.
     - The Dominion Bracelet: the equipped creature gains the
       control-opponent-next-turn activated ability.
+
+    Magus of the Moon: nonbasic lands lose their activated abilities
+    entirely (their {T}: Add {R} tap is handled via
+    ``effective_land_produces``, not as an activated ability).
     """
     from mtg_bot.cards import (
         DOMINION_BRACELET_GRANTED_ABILITY, RAGOST_FOOD_GRANTED_ABILITY,
     )
+
+    # Magus: nonbasic land abilities suppressed while in play.
+    if (
+        obj.printing.is_land and not obj.printing.is_basic_land
+        and magus_of_the_moon_active(state)
+    ):
+        return ()
 
     base = list(obj.printing.activated_abilities)
     if obj.printing.is_artifact:

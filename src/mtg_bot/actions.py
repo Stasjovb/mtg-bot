@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mtg_bot.cards import ManaCost
-from mtg_bot.game import GameObject, GameState, StackItem, Zone
+from mtg_bot.game import (
+    GameObject, GameState, StackItem, Zone, effective_land_produces,
+)
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,8 @@ def can_pay_cost(
             continue
         matching = [
             l for l in lands
-            if color in l.printing.produces and l.id not in used_lands
+            if color in effective_land_produces(state, l)
+            and l.id not in used_lands
         ]
         if len(matching) < need:
             return False
@@ -302,7 +305,8 @@ def auto_tap_for_cost(
             continue
         matching = [
             l for l in lands
-            if color in l.printing.produces and l.id not in used_lands
+            if color in effective_land_produces(state, l)
+            and l.id not in used_lands
         ]
         for l in matching[:need]:
             used_lands.add(l.id)

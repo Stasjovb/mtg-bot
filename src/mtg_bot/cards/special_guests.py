@@ -115,10 +115,17 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Darkness", "{B}", PreventAllCombatDamageThisTurn(),
     ),
     # Magus of the Moon {2}{R} 2/2 Human Wizard: nonbasic lands are
-    # Mountains. dropped static nonbasic→Mountain type-rewriting
-    # replacement effect on land mana-ability resolution.
+    # Mountains. Enforced via the ``nonbasic_lands_are_mountains``
+    # static flag — game.effective_land_produces collapses every
+    # nonbasic land's mana colors to {R} and
+    # game.effective_activated_abilities suppresses nonbasic-land
+    # activated abilities while Magus is on the battlefield.
+    # Simplifications: subtypes aren't rewritten (the land still
+    # reports its printed Type—Cave/etc.), and already-animated
+    # manlands keep their temp_is_creature state (no layers system).
     "Magus of the Moon": make_creature(
         "Magus of the Moon", "{2}{R}", 2, 2, subtypes=("Human", "Wizard"),
+        nonbasic_lands_are_mountains=True,
     ),
     # Burgeoning {G}: whenever an opponent plays a land, you may put a
     # land card from your hand onto the battlefield. Trigger fires only
