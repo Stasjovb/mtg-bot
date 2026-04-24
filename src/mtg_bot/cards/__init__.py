@@ -7,6 +7,7 @@ back-compat. Internal layout (submodules):
                        pre-built granted-ability constants.
 - ``lands``          — Basic lands, Planet lands, Utility lands, Shock lands.
 - ``stellar_sights`` — EoE Stellar Sights bonus-sheet reprints (set ``eos``).
+- ``special_guests`` — EoE Special Guests subset (set ``spg``, 10 cards).
 - ``synthetic``      — Stage-1 invented vanilla creatures.
 - ``tokens``         — Token printings created by effects (Lander, Robot,
                        Drone, Sliver, Munitions).
@@ -58,6 +59,7 @@ from mtg_bot.cards.registry import (
     all_printings,
     build_mono_color_deck,
 )
+from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
 from mtg_bot.cards.synthetic import SYNTHETIC_CREATURES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS

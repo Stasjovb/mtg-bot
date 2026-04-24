@@ -15,6 +15,7 @@ from mtg_bot.cards.eoe_spells import EOE_SPELLS
 from mtg_bot.cards.lands import (
     BASIC_LANDS, PLANET_LANDS, SHOCK_LANDS, UTILITY_LANDS,
 )
+from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
 from mtg_bot.cards.synthetic import SYNTHETIC_CREATURES
 
@@ -42,6 +43,7 @@ def all_printings() -> dict[str, CardPrinting]:
         **UTILITY_LANDS,
         **PLANET_LANDS,
         **STELLAR_SIGHTS_LANDS,
+        **SPECIAL_GUESTS_EOE,
         **NONLAND_POOL,
     }
 
