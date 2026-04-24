@@ -20,15 +20,22 @@ Module map:
 - ``toys.*``     — Tiny self-contained ``GameState`` implementations
                    (tic-tac-toe, TTT-with-chance) used to exercise
                    search on known-good games.
+- ``tactical``   — ``DefaultTacticalAgent``: deterministic policy
+                   used by the real-engine adapter for mid-resolution
+                   + combat callbacks.
+- ``engine_adapter`` — ``MtgGameStateAdapter``: wraps a real
+                   ``mtg_bot.game.GameState`` to implement the
+                   search ``GameState`` protocol.
 
-Nothing in this subpackage imports from ``mtg_bot.game`` or any other
-MTG engine module. Once the scaffold is validated, a real-engine
-adapter will live alongside these modules.
+Search code (protocol, evaluator, strategy, mcts, harness, toys)
+remains ignorant of MTG — only ``engine_adapter`` and ``tactical``
+import from the engine side.
 """
 
 from __future__ import annotations
 
 from mtg_bot.search.budget import Budget
+from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.evaluator import (
     Evaluator,
     RandomRolloutEvaluator,
@@ -42,15 +49,18 @@ from mtg_bot.search.protocol import (
     PlayerID,
 )
 from mtg_bot.search.strategy import RandomChoice, SearchStrategy
+from mtg_bot.search.tactical import DefaultTacticalAgent
 
 __all__ = [
     "Budget",
     "CHANCE_PLAYER",
     "Decision",
+    "DefaultTacticalAgent",
     "Evaluator",
     "GameState",
     "MCTS",
     "MatchResult",
+    "MtgGameStateAdapter",
     "PlayerID",
     "RandomChoice",
     "RandomRolloutEvaluator",
