@@ -3631,6 +3631,66 @@ class MoveSelfCountersToTargetCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class RegenerateTargetCreature(Effect):
+    """"Regenerate target creature" — sets ``regeneration_shield``
+    on the target. The next time this turn state-based actions would
+    destroy the creature from lethal damage (or a destroy effect;
+    NOT from toughness <= 0), the destruction is replaced by:
+    remove all damage, tap the creature, remove it from combat.
+    The shield is consumed on use and cleared at cleanup if unused.
+
+    ``allowed_subtypes``: when non-empty, restricts legal targets to
+    creatures whose printed subtypes overlap with the set. Matches
+    Swarmyard's "target Rat, Spider, Squirrel, Insect, or Snake."
+    Empty tuple = any creature (not used by current cards).
+    """
+
+    allowed_subtypes: frozenset[str] = frozenset()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and (
+                not self.allowed_subtypes
+                or any(
+                    s in self.allowed_subtypes for s in o.printing.subtypes
+                )
+            )
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        _, tid = targets[0]
+        obj = next(
+            (o for o in state.battlefield if o.id == tid), None
+        )
+        if obj is None:
+            return
+        obj.regeneration_shield = True
+        state.log.append(
+            f"{obj.printing.name} gains a regeneration shield"
+        )
+
+    def describe(self) -> str:
+        if self.allowed_subtypes:
+            subs = ", ".join(sorted(self.allowed_subtypes))
+            return f"regenerate target {subs}"
+        return "regenerate target creature"
+
+
+
+@dataclass(frozen=True)
 class MovePlusOneCounterBetweenPermanentsYouControl(Effect):
     """Nesting Grounds: "Move a counter from target permanent you
     control onto a second target permanent."

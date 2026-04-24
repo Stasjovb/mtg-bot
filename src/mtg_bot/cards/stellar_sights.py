@@ -249,8 +249,36 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         "Echoing Deeps", subtypes_str="Cave",
         optional_copy_land_from_graveyard=True,
     ),
-    "Eldrazi Temple": make_colorless_land(  # dropped tap-for-2-when-casting-Eldrazi.
+    # Eldrazi Temple: {T}: Add {C}. {T}: Add {2}. Spend this mana
+    # only to cast colorless Eldrazi spells or activate abilities of
+    # colorless Eldrazi.
+    #
+    # Gameplay-moot in our EoE pool — no Eldrazi cards exist — but
+    # the machinery is modeled faithfully: the second mana ability
+    # produces two coins tagged "colorless_eldrazi", which
+    # _coin_satisfies_context accepts for "colorless_eldrazi_spell"
+    # (set in _cast_spell when the spell is an Eldrazi with no
+    # colored pips) and "colorless_eldrazi_ability" (set in
+    # _activate_ability when the source is a colorless-Eldrazi
+    # permanent). With no Eldrazi in-pool the coins effectively sit
+    # in the mana pool until cleanup.
+    "Eldrazi Temple": make_utility_land(
         "Eldrazi Temple",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("C", 2),),
+                    spend_restriction="colorless_eldrazi",
+                ),
+                is_mana_ability=True,
+            ),
+        ),
     ),
     # Endless Sands: {T}: Add {C}. {3},{T}: Exile target creature you
     # control. {3},{T}, Sacrifice this land: Return each card exiled
@@ -794,8 +822,30 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Swarmyard": make_colorless_land(  # dropped regenerate-Rats/Spiders/etc.
+    # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Rat, Spider,
+    # Squirrel, Insect, or Snake.
+    #
+    # Gameplay-moot in our EoE pool — no printed creatures have any of
+    # the five allowed subtypes — but the regenerate machinery is now
+    # fully wired (GameObject.regeneration_shield + SBA check in
+    # state_based_actions + UEOT cleanup). The ability's target
+    # filter lists the subtype constraint so legal_moves honors it.
+    "Swarmyard": make_utility_land(
         "Swarmyard",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=RegenerateTargetCreature(
+                    allowed_subtypes=frozenset({
+                        "Rat", "Spider", "Squirrel", "Insect", "Snake",
+                    }),
+                ),
+            ),
+        ),
     ),
     # Terrain Generator: `{T}: Add {C}. {2}, {T}: You may put a basic
     # land card from your hand onto the battlefield tapped.`

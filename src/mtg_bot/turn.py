@@ -901,6 +901,8 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_unblockable = False
         obj.temp_base_pt_override = None
         obj.temp_is_creature = False
+        # Regenerate shield: unconsumed shields wear off at cleanup.
+        obj.regeneration_shield = False
         # Revert "gain control until end of turn" effects.
         if obj.temp_original_controller_id is not None:
             obj.controller_id = obj.temp_original_controller_id
@@ -988,6 +990,28 @@ def state_based_actions(state: GameState) -> bool:
             destroyed.append(obj)
 
     for obj in destroyed:
+        # Regenerate (Swarmyard et al.): if the creature has a
+        # regeneration shield, the destruction is replaced — remove
+        # all damage, tap, remove from combat, consume the shield.
+        # Rule 701.15: toughness-based destruction (tough <= 0) is
+        # NOT regeneratable; only lethal-damage / marked_lethal /
+        # "destroy" paths are. Our SBA path here lumps those together;
+        # we gate on not-zero-toughness to match the rule.
+        tough = effective_toughness(state, obj)
+        if obj.regeneration_shield and tough > 0:
+            obj.damage = 0
+            obj.marked_lethal = False
+            obj.tapped = True
+            obj.attacking = False
+            obj.blocking = None
+            obj.blocked_by = []
+            obj.regeneration_shield = False
+            state.log.append(
+                f"{obj.printing.name} regenerates "
+                "(tapped, damage cleared)"
+            )
+            changed = True
+            continue
         # Log before moving (move_off_battlefield logs for tokens too).
         if not obj.printing.is_token:
             state.log.append(f"{obj.printing.name} destroyed (lethal damage)")

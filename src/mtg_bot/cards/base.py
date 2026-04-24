@@ -72,6 +72,7 @@ from mtg_bot.effects import (
     SeedshipImpactEffect,
     MovePlusOneCounterBetweenPermanentsYouControl,
     MoveSelfCountersToTargetCreatureYouControl,
+    RegenerateTargetCreature,
     UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutChargeCountersOnSelf,

@@ -104,6 +104,12 @@ class GameObject:
     # kept so a second copy activation can re-derive "retained own
     # abilities" (Thespian's Stage: "except it has this ability").
     original_printing: Optional["CardPrinting"] = None
+    # Regenerate shield: "The next time this creature would be
+    # destroyed this turn, instead remove all damage from it, tap it,
+    # and remove it from combat." Set by RegenerateTargetCreature;
+    # consumed by state_based_actions when destruction is averted;
+    # cleared at cleanup if unconsumed (regeneration is UEOT).
+    regeneration_shield: bool = False
 
 
 def is_void_active(state: GameState) -> bool:

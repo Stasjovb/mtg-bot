@@ -100,12 +100,23 @@ def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
     payment for ``spell_kind``. Known spell_kind values:
       - "spell" (default): only unrestricted coins.
       - "artifact_spell": unrestricted or "artifact_spell"-tagged.
+      - "colorless_eldrazi_spell": unrestricted or
+        "colorless_eldrazi"-tagged (Eldrazi Temple's second mana
+        ability). Set when casting a spell that is a colorless
+        Eldrazi (``"Eldrazi" in subtypes`` and no colored pips).
+      - "colorless_eldrazi_ability": unrestricted or
+        "colorless_eldrazi"-tagged. Set when activating an ability
+        on a colorless-Eldrazi permanent.
       - "activated_ability": unrestricted only (for now — future
         "artifact_activation" tag would go here).
     """
     if coin.spend_restriction is None:
         return True
     if spell_kind == "artifact_spell" and coin.spend_restriction == "artifact_spell":
+        return True
+    if spell_kind in (
+        "colorless_eldrazi_spell", "colorless_eldrazi_ability"
+    ) and coin.spend_restriction == "colorless_eldrazi":
         return True
     return False
 
@@ -554,6 +565,14 @@ def _cast_spell(
     spell_kind = (
         "artifact_spell" if card.printing.is_artifact else "spell"
     )
+    # Eldrazi Temple's second mana ability produces coins usable only
+    # for colorless-Eldrazi costs. Detect colorless-Eldrazi casts here
+    # ("Eldrazi" in subtypes + no colored pips in the printed cost).
+    if (
+        "Eldrazi" in card.printing.subtypes
+        and not card.printing.mana_cost.colored
+    ):
+        spell_kind = "colorless_eldrazi_spell"
     auto_tap_for_cost(state, player_id, cost, spell_kind=spell_kind)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
@@ -873,7 +892,17 @@ def _activate_ability(
                 colored=mana.colored,
                 x_pips=0,
             )
-        auto_tap_for_cost(state, player_id, mana)
+        # Eldrazi Temple's second mana ability lets the colorless
+        # Eldrazi owner pay for activations on their Eldrazi.
+        ability_spell_kind = "spell"
+        if (
+            "Eldrazi" in source.printing.subtypes
+            and not source.printing.mana_cost.colored
+        ):
+            ability_spell_kind = "colorless_eldrazi_ability"
+        auto_tap_for_cost(
+            state, player_id, mana, spell_kind=ability_spell_kind,
+        )
 
     # Tap-self (if cost requires it).
     if ability.cost.tap_self:

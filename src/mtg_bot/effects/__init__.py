@@ -109,6 +109,7 @@ from mtg_bot.effects.generic import (
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutPoisonCountersOnTargetPlayer,
     PutStunCounterOnTappedCreature,
+    RegenerateTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnExiledPermanentToOwnerTapped,
