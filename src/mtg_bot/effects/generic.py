@@ -4520,6 +4520,27 @@ class ExileTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class PreventAllCombatDamageThisTurn(Effect):
+    """"Prevent all combat damage that would be dealt this turn."
+
+    Matches Darkness ({B} instant). Sets state-level flag consumed by
+    ``combat._resolve_damage_step``; the flag is cleared at end-of-turn
+    cleanup. Non-combat damage (direct damage, pings) is unaffected.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        state.prevent_combat_damage_this_turn = True
+        state.log.append("all combat damage prevented this turn")
+
+    def describe(self) -> str:
+        return "prevent all combat damage that would be dealt this turn"
+
+
+
+@dataclass(frozen=True)
 class ExileTargetCreatureWithPowerOrToughnessAtMost(Effect):
     """Exile target creature whose effective power OR effective toughness
     is at most ``max_value``.

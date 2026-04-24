@@ -96,6 +96,7 @@ from mtg_bot.effects import (
     PumpCreaturesYouControlUntilEOT,
     PutPlusOneCounterOnOpponentsCreature,
     PumpSelfUntilEOT,
+    PreventAllCombatDamageThisTurn,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,

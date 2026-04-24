@@ -92,6 +92,7 @@ from mtg_bot.effects.generic import (
     MoveSelfCountersToTargetCreatureYouControl,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
+    PreventAllCombatDamageThisTurn,
     PumpTargetCreatureUntilEOT,
     PumpTargetOtherArtifactYouControlUEOT,
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,

@@ -244,6 +244,13 @@ def _resolve_damage_step(
     state: GameState, defending_player_id: int, *, first_strike_step: bool
 ) -> None:
     """Build and apply the damage events for one combat damage step."""
+    # Darkness: "prevent all combat damage that would be dealt this
+    # turn." Skip the entire damage pass — we still proceed through the
+    # step so combat-damage-to-player triggers that key on actual
+    # damage simply don't fire (no damage events to pair them with).
+    if state.prevent_combat_damage_this_turn:
+        state.log.append("combat damage prevented this turn (Darkness)")
+        return
     # Event tuple layout:
     # (kind, target_id, amount, source_id, source_keywords, source_controller_id)
     damage_events_typed: list[

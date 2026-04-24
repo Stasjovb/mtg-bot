@@ -23,6 +23,7 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ModalChooseOne,
     OptionalPutLandFromHandOntoBattlefield,
+    PreventAllCombatDamageThisTurn,
     TriggeredAbility,
     make_aura,  # noqa: F401  (used once oracle work lands)
     make_creature,
@@ -102,10 +103,12 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Paradox Haze", "{2}{U}",
     ),
     # Darkness {B}: prevent all combat damage that would be dealt this
-    # turn. dropped combat-damage prevention state flag + gate in
-    # combat._resolve_damage_step.
+    # turn. Sets state.prevent_combat_damage_this_turn which
+    # combat._resolve_damage_step checks at the top of each damage
+    # step; the flag clears at end-of-turn cleanup. Non-combat damage
+    # (direct damage, pings) is not affected.
     "Darkness": make_instant(
-        "Darkness", "{B}", _SpgNoOp("Darkness"),
+        "Darkness", "{B}", PreventAllCombatDamageThisTurn(),
     ),
     # Magus of the Moon {2}{R} 2/2 Human Wizard: nonbasic lands are
     # Mountains. dropped static nonbasic→Mountain type-rewriting

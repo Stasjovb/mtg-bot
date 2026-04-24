@@ -86,7 +86,7 @@ def test_stand_in_no_op_describes_and_resolves():
     """
     from types import SimpleNamespace
 
-    still_stand_ins = ("Nexus of Fate", "Darkness", "Green Sun's Zenith")
+    still_stand_ins = ("Nexus of Fate", "Green Sun's Zenith")
     for name in still_stand_ins:
         eff = SPECIAL_GUESTS_EOE[name].spell_effect
         assert eff is not None

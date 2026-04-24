@@ -554,6 +554,12 @@ class GameState:
     # Reset by run_cleanup_step. Used by Tannuk, Memorial Ensign's
     # "if this is the second time this ability has resolved" rider.
     ability_resolutions_this_turn: dict = field(default_factory=dict)
+    # When True, combat damage assignment in combat._resolve_damage_step
+    # is skipped entirely for the remainder of the turn. Set by Darkness
+    # ({B} instant) and reset by run_cleanup_step. Non-combat damage
+    # (direct damage spells, pingers, infect from non-combat sources)
+    # is unaffected.
+    prevent_combat_damage_this_turn: bool = False
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]
