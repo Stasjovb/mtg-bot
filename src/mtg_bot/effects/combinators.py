@@ -91,6 +91,54 @@ class OptionalPutCreatureFromHandOntoBattlefield(Effect):
 
 
 @dataclass(frozen=True)
+class OptionalPutLandFromHandOntoBattlefield(Effect):
+    """"You may put a land card from your hand onto the battlefield."
+
+    Matches Burgeoning's trigger effect. The land enters untapped
+    (Burgeoning doesn't say "tapped") and fires landfall triggers via
+    ``fire_landfall_triggers`` — "enters the battlefield" isn't the
+    same event as "plays a land" so Burgeoning-put lands don't re-fire
+    opponent-plays-land chains. Declining is legal.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_landfall_triggers
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.hand if c.printing.is_land]
+        if not options:
+            return
+        chosen_id = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        if chosen_id is None:
+            return
+        card = next((c for c in options if c.id == chosen_id), None)
+        if card is None:
+            return
+        p.hand.remove(card)
+        card.zone = Zone.BATTLEFIELD
+        card.controller_id = controller_id
+        card.tapped = bool(card.printing.enters_tapped)
+        state.battlefield.append(card)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} from hand "
+            f"onto the battlefield"
+        )
+        fire_landfall_triggers(state, card)
+
+    def describe(self) -> str:
+        return "you may put a land card from your hand onto the battlefield"
+
+
+
+@dataclass(frozen=True)
 class OptionalSacArtifactForEffect(Effect):
     """"You may sacrifice an artifact. If you do, [inner_effect]."
 

@@ -22,6 +22,8 @@ from mtg_bot.cards.base import (
     Effect,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ModalChooseOne,
+    OptionalPutLandFromHandOntoBattlefield,
+    TriggeredAbility,
     make_aura,  # noqa: F401  (used once oracle work lands)
     make_creature,
     make_enchantment,
@@ -112,10 +114,18 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Magus of the Moon", "{2}{R}", 2, 2, subtypes=("Human", "Wizard"),
     ),
     # Burgeoning {G}: whenever an opponent plays a land, you may put a
-    # land card from your hand onto the battlefield. dropped
-    # opponent_plays_land trigger registration + PutLandFromHand effect.
+    # land card from your hand onto the battlefield. Trigger fires only
+    # on the land-drop action (actions.play_land), not on any other
+    # "enters the battlefield" event — Burgeoning-put lands fire
+    # landfall but don't re-fire the opponent-plays-land chain.
     "Burgeoning": make_enchantment(
         "Burgeoning", "{G}",
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="opponent_plays_land",
+                effect=OptionalPutLandFromHandOntoBattlefield(),
+            ),
+        ),
     ),
     # Green Sun's Zenith {X}{G}: search library for a green creature
     # with mana value ≤ X, put it onto the battlefield, shuffle. Shuffle

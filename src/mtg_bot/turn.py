@@ -593,6 +593,38 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
                     state.resolving_source = None
 
 
+def fire_opponent_plays_land_triggers(
+    state: GameState, land_controller_id: int,
+) -> None:
+    """Fire "Whenever an opponent plays a land" triggers on every
+    non-controller's permanents.
+
+    Called from ``actions.play_land`` only (NOT from effects that
+    merely put a land onto the battlefield — "plays a land" is the
+    land-drop action per 305.1). For each opposing player we scan
+    their permanents and resolve every matching trigger under that
+    opponent's control (so Burgeoning's "you may put a land from your
+    hand onto the battlefield" targets the enchantment's controller).
+    """
+    for p in state.players:
+        if p.id == land_controller_id:
+            continue
+        for obj in list(state.battlefield):
+            if obj.controller_id != p.id:
+                continue
+            for ability in obj.printing.triggered_abilities:
+                if ability.trigger != "opponent_plays_land":
+                    continue
+                state.log.append(
+                    f"{obj.printing.name}'s opponent-plays-land trigger fires"
+                )
+                state.resolving_source = obj
+                try:
+                    ability.effect.resolve(state, p.id, ())
+                finally:
+                    state.resolving_source = None
+
+
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
     """Run "dies" triggered abilities on ``dead``, then fire any
     "creature_you_control_with_counter_dies" triggers on other permanents

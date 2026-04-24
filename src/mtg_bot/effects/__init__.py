@@ -144,6 +144,7 @@ from mtg_bot.effects.combinators import (
     ConditionalOnTappedCreatures,
     ModalChooseOne,
     OptionalPutCreatureFromHandOntoBattlefield,
+    OptionalPutLandFromHandOntoBattlefield,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OptionalSacArtifactForEffect,

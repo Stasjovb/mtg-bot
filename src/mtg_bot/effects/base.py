@@ -416,6 +416,7 @@ class TriggeredAbility:
                 "Whenever you put one or more +1/+1 counters on a "
                 "creature you control"
             ),
+            "opponent_plays_land": "Whenever an opponent plays a land",
         }.get(self.trigger, self.trigger)
         head = f"{prefix}, {self.effect.describe()}."
         if self.requires_void:

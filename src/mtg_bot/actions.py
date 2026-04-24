@@ -410,6 +410,11 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
     fire_landfall_triggers(state, card)
+    # "Whenever an opponent plays a land" triggers (Burgeoning) —
+    # specifically the land-drop action, not any ETB. Fires under each
+    # opposing permanent-controller.
+    from mtg_bot.turn import fire_opponent_plays_land_triggers
+    fire_opponent_plays_land_triggers(state, player_id)
     # Fire "whenever you play a land or cast a spell" triggers (The
     # Endstone). The spell-cast path fires the same from _cast_spell.
     _fire_cast_or_play_triggers(state, player_id)
