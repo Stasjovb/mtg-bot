@@ -64,6 +64,12 @@ def setup_game(
     agents: list[Agent], colors: list[str], seed: Optional[int] = None
 ) -> GameState:
     state = GameState()
+    # Seed the canonical game RNG off the caller's seed so every
+    # engine-level shuffle / random choice is reproducible across
+    # processes. The local ``rng`` below stays scoped to setup —
+    # deck-build + initial shuffle — to keep that work deterministic
+    # even if future engine work draws from state.rng during setup.
+    state.rng.seed(seed)
     rng = random.Random(seed)
     for i, (agent, color) in enumerate(zip(agents, colors)):
         p = _build_player(state, i, color, agent, rng.randint(0, 10**9))

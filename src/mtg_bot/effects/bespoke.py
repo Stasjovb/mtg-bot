@@ -107,7 +107,6 @@ class FamishedWorldsireETBEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _random
         from mtg_bot.game import Zone, effective_power
         from mtg_bot.turn import fire_landfall_triggers
 
@@ -134,11 +133,7 @@ class FamishedWorldsireETBEffect(Effect):
             fire_landfall_triggers(state, land)
         # Shuffle what's left (rest goes back where it was, then the
         # whole library is shuffled per oracle).
-        rng = _random.Random(
-            hash(("famished_shuffle", state.turn_number, controller_id,
-                  len(p.library)))
-        )
-        rng.shuffle(p.library)
+        state.rng.shuffle(p.library)
 
     def describe(self) -> str:
         return (
@@ -699,7 +694,6 @@ class WeftwalkingETBEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _rng
         from mtg_bot.game import Zone
         from mtg_bot.turn import draw_card
 
@@ -717,9 +711,7 @@ class WeftwalkingETBEffect(Effect):
             moved += 1
         p.graveyard.clear()
         # Shuffle.
-        seed = hash(("weftwalking", state.turn_number, controller_id, moved))
-        rng = _rng.Random(seed)
-        rng.shuffle(p.library)
+        state.rng.shuffle(p.library)
         state.log.append(
             f"Weftwalking: P{controller_id} shuffles {moved} cards into "
             f"library and draws 7"
@@ -1464,7 +1456,6 @@ class ConsultTheStarChartsEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _random
         from mtg_bot.game import Zone
 
         p = state.player_by_id(controller_id)
@@ -1507,11 +1498,7 @@ class ConsultTheStarChartsEffect(Effect):
         # Bottom the rest in random order.
         for card in remaining:
             p.library.remove(card)
-        rng = _random.Random(
-            hash(("consult", state.turn_number, controller_id,
-                  len(p.library)))
-        )
-        rng.shuffle(remaining)
+        state.rng.shuffle(remaining)
         p.library.extend(remaining)
         state.log.append(
             f"Consult the Star Charts: put {len(remaining)} cards on "

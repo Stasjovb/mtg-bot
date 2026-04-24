@@ -1727,7 +1727,6 @@ class LookAtTopNRevealOrCounter(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _random
         from mtg_bot.game import Zone
 
         p = state.player_by_id(controller_id)
@@ -1772,11 +1771,7 @@ class LookAtTopNRevealOrCounter(Effect):
         ]
         for c in remaining_examined:
             p.library.remove(c)
-        rng = _random.Random(
-            hash(("look_top_n", state.turn_number, controller_id,
-                  len(p.library)))
-        )
-        rng.shuffle(remaining_examined)
+        state.rng.shuffle(remaining_examined)
         p.library.extend(remaining_examined)
 
     def describe(self) -> str:
@@ -2375,7 +2370,6 @@ class SearchLibraryForCard(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _random
         from mtg_bot.game import Zone
 
         p = state.player_by_id(controller_id)
@@ -2405,12 +2399,7 @@ class SearchLibraryForCard(Effect):
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to hand"
         )
-        # Shuffle (deterministic: seed by turn & player to remain
-        # reproducible across test runs).
-        rng = _random.Random(
-            hash(("shuffle", state.turn_number, controller_id, card.id))
-        )
-        rng.shuffle(p.library)
+        state.rng.shuffle(p.library)
 
     def describe(self) -> str:
         return (
@@ -4602,7 +4591,6 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        import random as _random
         from mtg_bot.actions import put_into_battlefield
 
         x = state.resolving_x_value
@@ -4629,10 +4617,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
                 f"P{controller_id} declines to fetch from Green Sun's Zenith"
             )
             # Still shuffle per oracle.
-            rng = _random.Random(
-                hash(("gsz_shuffle", state.turn_number, controller_id))
-            )
-            rng.shuffle(p.library)
+            state.rng.shuffle(p.library)
             return
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
@@ -4640,10 +4625,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
             f"P{controller_id} fetches {card.printing.name} onto the battlefield"
         )
         put_into_battlefield(state, card, controller_id)
-        rng = _random.Random(
-            hash(("gsz_shuffle", state.turn_number, controller_id))
-        )
-        rng.shuffle(p.library)
+        state.rng.shuffle(p.library)
 
     def describe(self) -> str:
         return (

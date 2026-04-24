@@ -819,12 +819,7 @@ def _apply_ward_check(
                     f"(hand empty, can't discard)"
                 )
                 return True
-            import random as _rng
-            rng = _rng.Random(
-                hash(("ward_discard", state.turn_number, caster_id,
-                      len(p.hand)))
-            )
-            card = rng.choice(p.hand)
+            card = state.rng.choice(p.hand)
             p.hand.remove(card)
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
@@ -1274,18 +1269,14 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     it's shuffled into the owner's library instead.
 
     Nexus of Fate + Green Sun's Zenith both use this redirect. Shuffle
-    is deterministic (turn + card.id seed) to stay reproducible.
+    draws from ``state.rng`` so the run is reproducible from the
+    caller-supplied seed.
     """
-    import random as _random
-
     owner = state.player_by_id(card.owner_id)
     if card.printing.shuffles_into_library_instead_of_graveyard:
         card.zone = Zone.LIBRARY
         owner.library.append(card)
-        rng = _random.Random(
-            hash(("zone_shuffle", state.turn_number, card.id))
-        )
-        rng.shuffle(owner.library)
+        state.rng.shuffle(owner.library)
         state.log.append(
             f"{card.printing.name} is shuffled into P{card.owner_id}'s "
             f"library instead of graveyard"

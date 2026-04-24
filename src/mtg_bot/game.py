@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
@@ -569,6 +570,12 @@ class GameState:
     step: Optional["Step"] = None
     next_object_id: int = 0
     log: LogBuffer = field(default_factory=LogBuffer)
+    # Canonical game-wide RNG. Engine sites that need randomness (library
+    # shuffles from Nexus, tutor shuffles, ward random-discard, etc.) pull
+    # from ``state.rng`` so a run is reproducible from a single seed and
+    # so search can fork a clone's RNG cleanly. ``simulate.setup_game``
+    # seeds this from the caller-supplied seed.
+    rng: random.Random = field(default_factory=random.Random)
     winner_id: Optional[int] = None
     is_draw: bool = False
     # EoE "Void" turn-state flags. Both are reset on cleanup (end of turn).
