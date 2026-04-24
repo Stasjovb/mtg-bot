@@ -964,6 +964,7 @@ def run_cleanup_step(state: GameState) -> None:
     # Reset per-player spell counters for "your Nth spell" triggers.
     for p in state.players:
         p.spells_cast_this_turn = 0
+        p.noncreature_spells_cast_this_turn = 0
         p.attacked_with_spacecraft_this_turn = False
         p.life_gained_this_turn = 0
         # Revert Dominion Bracelet agent override (applied at untap).

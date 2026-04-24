@@ -423,6 +423,13 @@ class CardPrinting:
     # doubled. Matches Loading Zone. Multiple doublers stack
     # multiplicatively via add_plus_one_counters().
     is_counter_doubler: bool = False
+    # Spell-cast restriction: when any permanent with this flag is on
+    # the battlefield (regardless of controller), each player may cast
+    # at most one noncreature spell per turn. Matches Deafening Silence.
+    # Enforced by legal.legal_actions — noncreature CastSpell actions
+    # aren't proposed once the caster's
+    # Player.noncreature_spells_cast_this_turn is already ≥ 1.
+    restricts_noncreature_spells_to_one_per_turn: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -829,6 +836,7 @@ def make_enchantment(
     legendary: bool = False,
     is_counter_doubler: bool = False,
     is_token_doubler: bool = False,
+    restricts_noncreature_spells_to_one_per_turn: bool = False,
     warp: str | None = None,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
@@ -851,6 +859,9 @@ def make_enchantment(
         activated_abilities=tuple(activated_abilities),
         is_counter_doubler=is_counter_doubler,
         is_token_doubler=is_token_doubler,
+        restricts_noncreature_spells_to_one_per_turn=(
+            restricts_noncreature_spells_to_one_per_turn
+        ),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
     )

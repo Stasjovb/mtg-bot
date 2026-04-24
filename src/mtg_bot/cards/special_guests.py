@@ -74,11 +74,15 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
             CreateToken(token_printing=TOKEN_PRINTINGS["Eldrazi Scion"]),
         )),
     ),
-    # Deafening Silence {W}: each player can cast no more than one
-    # noncreature spell each turn. dropped per-player noncreature-spell
-    # cast-restriction static effect.
+    # Deafening Silence {W}: each player can't cast more than one
+    # noncreature spell each turn. Enforced via the
+    # ``restricts_noncreature_spells_to_one_per_turn`` static flag on
+    # CardPrinting — legal.legal_actions post-filters CastSpell so
+    # additional noncreature casts aren't proposed once the caster's
+    # Player.noncreature_spells_cast_this_turn is already ≥ 1.
     "Deafening Silence": make_enchantment(
         "Deafening Silence", "{W}",
+        restricts_noncreature_spells_to_one_per_turn=True,
     ),
     # Robe of Stars {1}{W}: Equipment. Equipped creature has phasing;
     # {2},{T}: phase out equipped creature; Equip {3}. dropped phasing

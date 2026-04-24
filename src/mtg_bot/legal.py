@@ -406,4 +406,40 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     ActivateStation(spacecraft_id=ship.id, crew_id=crew.id)
                 )
 
+    # Deafening Silence gate: post-filter CastSpell actions so
+    # noncreature casts beyond the per-turn limit of 1 are removed
+    # when any permanent with the restriction is on the battlefield.
+    # Kept as a post-filter because CastSpell is proposed from many
+    # sites (hand, warp-exile, impulse-exile, cast-from-library) and
+    # touching every site would risk drift.
+    if any(
+        o.printing.restricts_noncreature_spells_to_one_per_turn
+        for o in state.battlefield
+    ):
+        p = state.player_by_id(player_id)
+        if p.noncreature_spells_cast_this_turn >= 1:
+            filtered: list[Action] = []
+            for action in actions:
+                if isinstance(action, CastSpell):
+                    card = _find_card_by_id(state, player_id, action.card_id)
+                    if card is not None and not card.printing.is_creature:
+                        continue
+                filtered.append(action)
+            actions = filtered
+
     return actions
+
+
+def _find_card_by_id(state: GameState, player_id: int, card_id: int):
+    """Look up a card by id across zones where CastSpell can source
+    from: hand, exile (warp / impulse), and library (cast-from-top).
+    Returns None if not found — defensive; CastSpell proposals should
+    always reference a card the caster can see."""
+    p = state.player_by_id(player_id)
+    for zone in (p.hand, p.exile):
+        for c in zone:
+            if c.id == card_id:
+                return c
+    if p.library and p.library[0].id == card_id:
+        return p.library[0]
+    return None

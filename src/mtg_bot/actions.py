@@ -693,6 +693,11 @@ def _cast_spell(
 
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
+    # Track noncreature-spell casts for the Deafening Silence
+    # restriction ("each player can't cast more than one noncreature
+    # spell each turn").
+    if not card.printing.is_creature:
+        p.noncreature_spells_cast_this_turn += 1
     if p.spells_cast_this_turn == 2:
         _fire_second_spell_triggers(state, player_id)
     # Fire "whenever you play a land or cast a spell" triggers — both
