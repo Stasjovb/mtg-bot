@@ -695,3 +695,193 @@ class GameState:
             o for o in self.battlefield
             if o.controller_id == player_id and o.printing.is_land
         ]
+
+    def clone(self) -> "GameState":
+        """Return an independent deep copy of this state, suitable for
+        search rollouts.
+
+        Semantics vs. ``copy.deepcopy(state)``:
+
+        - CardPrinting refs are shared (frozen dataclasses with no
+          mutable state). Same for frozensets and tuples of primitives.
+        - All GameObjects are deep-copied. A ``{old_id: new_obj}`` map
+          drives cross-reference rewiring so ``state.stack``'s StackItem
+          sources and ``state.resolving_source`` point at the cloned
+          objects.
+        - Every zone list (battlefield + each player's library / hand /
+          graveyard / exile / mana_pool) is a fresh list containing the
+          cloned GameObjects.
+        - ``state.log`` is a fresh empty ``LogBuffer`` with the same
+          ``enabled`` flag — search rollouts don't need log history.
+        - ``state.rng`` is a fresh ``random.Random`` seeded from the
+          original's state, so the clone advances independently but
+          deterministically.
+        - ``Player.agent`` is **not** cloned — agents are decision-
+          policy objects, not game state, and cloning them would both
+          be wasteful and break mutable-agent contracts (RandomAgent's
+          RNG, scheduled agent overrides). Search callers that need
+          to vary the policy per rollout should swap the agent ref
+          on the clone after calling ``.clone()``.
+
+        GameObject integer id references (``attached_to``,
+        ``exiled_by_source``, ``temp_original_controller_id``) carry
+        integer ids — those stay valid without remapping because the
+        new objects keep the same id.
+        """
+        # Build the id->new_obj map by deep-copying every GameObject
+        # referenced anywhere in the state. We walk zones in a fixed
+        # order and copy each object exactly once.
+        id_map: dict[int, GameObject] = {}
+
+        def clone_obj(o: GameObject) -> GameObject:
+            existing = id_map.get(o.id)
+            if existing is not None:
+                return existing
+            new = GameObject(
+                id=o.id,
+                printing=o.printing,
+                owner_id=o.owner_id,
+                controller_id=o.controller_id,
+                zone=o.zone,
+                tapped=o.tapped,
+                damage=o.damage,
+                summoning_sick=o.summoning_sick,
+                attacking=o.attacking,
+                blocking=o.blocking,
+                blocked_by=list(o.blocked_by),
+                marked_lethal=o.marked_lethal,
+                plus_one_counters=o.plus_one_counters,
+                temp_unblockable=o.temp_unblockable,
+                temp_is_creature=o.temp_is_creature,
+                playable_from_exile_this_turn=o.playable_from_exile_this_turn,
+                temp_base_pt_override=o.temp_base_pt_override,
+                cast_via_warp=o.cast_via_warp,
+                warped=o.warped,
+                charge_counters=o.charge_counters,
+                stun_counters=o.stun_counters,
+                temp_power_bonus=o.temp_power_bonus,
+                temp_toughness_bonus=o.temp_toughness_bonus,
+                temp_keywords=o.temp_keywords,
+                attached_to=o.attached_to,
+                exiled_by_source=o.exiled_by_source,
+                temp_original_controller_id=o.temp_original_controller_id,
+                loyalty_counters=o.loyalty_counters,
+                original_printing=o.original_printing,
+                regeneration_shield=o.regeneration_shield,
+                phased_out=o.phased_out,
+            )
+            id_map[o.id] = new
+            return new
+
+        # Clone players (and every zone list on each player).
+        new_players: list[Player] = []
+        for p in self.players:
+            np = Player(
+                id=p.id,
+                life=p.life,
+                starting_life=p.starting_life,
+                poison_counters=p.poison_counters,
+                library=[clone_obj(o) for o in p.library],
+                hand=[clone_obj(o) for o in p.hand],
+                graveyard=[clone_obj(o) for o in p.graveyard],
+                exile=[clone_obj(o) for o in p.exile],
+                lands_played_this_turn=p.lands_played_this_turn,
+                spells_cast_this_turn=p.spells_cast_this_turn,
+                noncreature_spells_cast_this_turn=(
+                    p.noncreature_spells_cast_this_turn
+                ),
+                attacked_with_spacecraft_this_turn=(
+                    p.attacked_with_spacecraft_this_turn
+                ),
+                has_lost=p.has_lost,
+                lost_reason=p.lost_reason,
+                # Agent is shared — not game state.
+                agent=p.agent,
+                mana_pool=[
+                    ManaCoin(
+                        color=coin.color,
+                        spend_restriction=coin.spend_restriction,
+                    )
+                    for coin in p.mana_pool
+                ],
+                life_gained_this_turn=p.life_gained_this_turn,
+                scheduled_agent_override=p.scheduled_agent_override,
+                scheduled_agent_override_by=p.scheduled_agent_override_by,
+                agent_override_saved=p.agent_override_saved,
+            )
+            new_players.append(np)
+
+        new_battlefield = [clone_obj(o) for o in self.battlefield]
+
+        # Stack items must point at the cloned GameObject for their source.
+        new_stack: list[StackItem] = []
+        for item in self.stack:
+            new_stack.append(StackItem(
+                source=clone_obj(item.source),
+                controller_id=item.controller_id,
+                ability=item.ability,
+                targets=item.targets,
+                countered=item.countered,
+                x_value=item.x_value,
+                kicked=item.kicked,
+                additional_cost_choice_id=item.additional_cost_choice_id,
+            ))
+
+        new_log = LogBuffer()
+        new_log.enabled = self.log.enabled
+
+        new_rng = random.Random()
+        new_rng.setstate(self.rng.getstate())
+
+        new_resolving_source = (
+            clone_obj(self.resolving_source)
+            if self.resolving_source is not None else None
+        )
+
+        new_state = GameState(
+            players=new_players,
+            battlefield=new_battlefield,
+            stack=new_stack,
+            active_player_idx=self.active_player_idx,
+            priority_player_idx=self.priority_player_idx,
+            turn_number=self.turn_number,
+            step=self.step,
+            next_object_id=self.next_object_id,
+            log=new_log,
+            rng=new_rng,
+            winner_id=self.winner_id,
+            is_draw=self.is_draw,
+            permanent_left_battlefield_this_turn=(
+                self.permanent_left_battlefield_this_turn
+            ),
+            spell_warped_this_turn=self.spell_warped_this_turn,
+            once_per_turn_fired=set(self.once_per_turn_fired),
+            delayed_triggers=[dict(d) for d in self.delayed_triggers],
+            resolving_source=new_resolving_source,
+            resolving_x_value=self.resolving_x_value,
+            resolving_kicked=self.resolving_kicked,
+            resolving_additional_cost_choice_id=(
+                self.resolving_additional_cost_choice_id
+            ),
+            resolving_combat_damage_amount=(
+                self.resolving_combat_damage_amount
+            ),
+            resolving_combat_damage_source_controller_id=(
+                self.resolving_combat_damage_source_controller_id
+            ),
+            resolving_counter_amount=self.resolving_counter_amount,
+            pending_end_of_combat_sacrifices=list(
+                self.pending_end_of_combat_sacrifices
+            ),
+            players_who_created_tokens_this_turn=set(
+                self.players_who_created_tokens_this_turn
+            ),
+            ability_resolutions_this_turn=dict(
+                self.ability_resolutions_this_turn
+            ),
+            prevent_combat_damage_this_turn=(
+                self.prevent_combat_damage_this_turn
+            ),
+            extra_turn_queue=list(self.extra_turn_queue),
+        )
+        return new_state
