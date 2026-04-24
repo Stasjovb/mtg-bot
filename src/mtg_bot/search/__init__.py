@@ -29,6 +29,9 @@ Module map:
 - ``engine_adapter`` — ``MtgGameStateAdapter``: wraps a real
                    ``mtg_bot.game.GameState`` to implement the
                    search ``GameState`` protocol.
+- ``combat_decisions`` — ``AttackerDecision`` / ``BlockerDecision``
+                   search-side decision types for factored combat
+                   when the adapter is opt-in for combat exposure.
 
 Search code (protocol, evaluator, strategy, mcts, harness, toys)
 remains ignorant of MTG — only ``engine_adapter`` and ``tactical``
@@ -38,6 +41,9 @@ import from the engine side.
 from __future__ import annotations
 
 from mtg_bot.search.budget import Budget
+from mtg_bot.search.combat_decisions import (
+    AttackerDecision, BlockerDecision,
+)
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.evaluator import (
     Evaluator,
@@ -60,6 +66,8 @@ from mtg_bot.search.strategy import RandomChoice, SearchStrategy
 from mtg_bot.search.tactical import DefaultTacticalAgent
 
 __all__ = [
+    "AttackerDecision",
+    "BlockerDecision",
     "Budget",
     "CHANCE_PLAYER",
     "Decision",
