@@ -356,6 +356,14 @@ class CardPrinting:
     # When True, this card always enters the battlefield tapped
     # (Planet-style utility lands and other "enters tapped" permanents).
     enters_tapped: bool = False
+    # Echoing Deeps: "You may have this land enter tapped as a copy of
+    # any land card in a graveyard, except it's a Cave in addition to
+    # its other types." When True, _play_land offers the controller's
+    # agent a graveyard-land target. If they pick one, the played
+    # land's printing is replaced with a Cave-injected copy of the
+    # target and it enters tapped. If they decline (or no legal
+    # target exists), the land enters per its normal rules.
+    optional_copy_land_from_graveyard: bool = False
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches
     # Embrace Oblivion's "As an additional cost to cast this spell,
@@ -938,6 +946,7 @@ def make_utility_land(
     activated_abilities: tuple = (),
     enters_tapped: bool = False,
     keywords: "frozenset[str] | set[str] | tuple[str, ...]" = (),
+    optional_copy_land_from_graveyard: bool = False,
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -959,6 +968,7 @@ def make_utility_land(
         activated_abilities=tuple(activated_abilities),
         enters_tapped=enters_tapped,
         keywords=frozenset(keywords),
+        optional_copy_land_from_graveyard=optional_copy_land_from_graveyard,
     )
 
 

@@ -235,8 +235,19 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    "Echoing Deeps": make_colorless_land(  # dropped ETB choose-to-become-copy.
+    # Echoing Deeps: {T}: Add {C}. "You may have this land enter
+    # tapped as a copy of any land card in a graveyard, except it's a
+    # Cave in addition to its other types."
+    #
+    # Implementation: the optional_copy_land_from_graveyard flag
+    # triggers a controller-agent prompt in _play_land. If they pick
+    # a target graveyard land, the card's printing is replaced with a
+    # Cave-injected copy of that printing and it enters tapped.
+    # Decline (or no graveyard lands exist) → enters normally as a
+    # Cave colorless land.
+    "Echoing Deeps": make_utility_land(
         "Echoing Deeps", subtypes_str="Cave",
+        optional_copy_land_from_graveyard=True,
     ),
     "Eldrazi Temple": make_colorless_land(  # dropped tap-for-2-when-casting-Eldrazi.
         "Eldrazi Temple",

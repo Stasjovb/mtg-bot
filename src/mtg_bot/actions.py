@@ -390,6 +390,11 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
                 f"P{player_id} declines shock life — "
                 f"{card.printing.name} enters tapped"
             )
+    # Echoing Deeps: "You may have this land enter tapped as a copy of
+    # any land card in a graveyard, except it's a Cave in addition to
+    # its other types." Agent target-selection over graveyard lands.
+    if card.printing.optional_copy_land_from_graveyard and p.agent is not None:
+        _offer_echoing_deeps_copy(state, player_id, card)
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
@@ -397,6 +402,58 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     # Fire "whenever you play a land or cast a spell" triggers (The
     # Endstone). The spell-cast path fires the same from _cast_spell.
     _fire_cast_or_play_triggers(state, player_id)
+
+
+def _offer_echoing_deeps_copy(
+    state: GameState, player_id: int, card: "GameObject",
+) -> None:
+    """Ask the controller's agent whether to have ``card`` enter as a
+    copy of any land card in any graveyard, with "Cave" injected.
+
+    Agent hook: reuses ``choose_target`` with kind
+    ``"graveyard_land_card"``. Returning None (or no legal targets)
+    declines — ``card`` enters normally.
+
+    On accept, ``card.printing`` is replaced with a fresh CardPrinting
+    derived from the target's, with "Cave" added to its subtypes if
+    absent. The card enters tapped.
+    """
+    import dataclasses as _dc
+
+    candidates: list[tuple[str, int]] = [
+        ("graveyard_land_card", c.id)
+        for pp in state.players
+        for c in pp.graveyard
+        if c.printing.is_land
+    ]
+    if not candidates:
+        return
+    p = state.player_by_id(player_id)
+    chosen = p.agent.choose_target(state, player_id, candidates)
+    if chosen is None:
+        return
+    kind, target_id = chosen
+    if kind != "graveyard_land_card":
+        return
+    target = None
+    for pp in state.players:
+        for c in pp.graveyard:
+            if c.id == target_id:
+                target = c
+                break
+        if target is not None:
+            break
+    if target is None:
+        return
+    subtypes = tuple(target.printing.subtypes)
+    if "Cave" not in subtypes:
+        subtypes = subtypes + ("Cave",)
+    card.printing = _dc.replace(target.printing, subtypes=subtypes)
+    card.tapped = True
+    state.log.append(
+        f"Echoing Deeps enters as a copy of {target.printing.name} "
+        f"(Cave added), tapped"
+    )
 
 
 def _cast_spell(
