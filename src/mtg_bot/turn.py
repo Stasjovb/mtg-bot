@@ -45,6 +45,13 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    # Phasing: "until its controller's next turn." At the start of the
+    # phased creature's controller's untap step, phase it (and anything
+    # attached to it) back in. Matches Robe of Stars' Astral Projection.
+    for obj in state.battlefield:
+        if obj.phased_out and obj.controller_id == ap.id:
+            obj.phased_out = False
+            state.log.append(f"{obj.printing.name} phases in")
     # Dominion Bracelet: if this player's next turn was scheduled for
     # an agent override, install it now (saving the original so
     # cleanup can revert).

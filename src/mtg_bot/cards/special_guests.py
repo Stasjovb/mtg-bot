@@ -16,6 +16,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    AttachToTargetCreatureYouControl,
     CardPrinting,
     CounterTargetSpell,
     CreateToken,
@@ -23,6 +24,7 @@ from mtg_bot.cards.base import (
     GainControlOfTargetSliverPermanently,
     ModalChooseOne,
     OptionalPutLandFromHandOntoBattlefield,
+    PhaseOutEquippedCreature,
     PreventAllCombatDamageThisTurn,
     SearchLibraryForCard,
     SearchLibraryForGreenCreatureWithMVAtMostX,
@@ -68,12 +70,36 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Deafening Silence", "{W}",
         restricts_noncreature_spells_to_one_per_turn=True,
     ),
-    # Robe of Stars {1}{W}: Equipment. Equipped creature has phasing;
-    # {2},{T}: phase out equipped creature; Equip {3}. dropped phasing
-    # subsystem (phased flag, phase-in-on-untap, skip-untap, attachment
-    # handling) and phase-out activated ability.
+    # Robe of Stars {1}{W}: Artifact — Equipment.
+    #   Equipped creature gets +0/+3.
+    #   Astral Projection — {1}{W}: Equipped creature phases out.
+    #   Equip {1}
+    # The +0/+3 uses the equipment_bonuses machinery already in play.
+    # Phasing uses the new GameObject.phased_out flag — cleared at the
+    # controller's next untap step (turn.run_untap_step). Combat
+    # damage skips phased creatures; triggers/anthems/targeting
+    # don't yet hide them — documented simplification.
+    # Equip activation isn't modeled in this engine (the Equip cost is
+    # a known limitation shared with other EoE Equipment); Robe enters
+    # attached via the same "ETB attach-to-target-creature" pattern
+    # used elsewhere.
     "Robe of Stars": make_equipment(
         "Robe of Stars", "{1}{W}",
+        power_bonus=0, toughness_bonus=3,
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="etb",
+                effect=AttachToTargetCreatureYouControl(),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}{W}"), mana_str="{1}{W}",
+                ),
+                effect=PhaseOutEquippedCreature(),
+            ),
+        ),
     ),
     # Nexus of Fate {5}{U}{U}: take an extra turn after this one. If it
     # would be put into a graveyard from anywhere, reveal Nexus and

@@ -110,6 +110,14 @@ class GameObject:
     # consumed by state_based_actions when destruction is averted;
     # cleared at cleanup if unconsumed (regeneration is UEOT).
     regeneration_shield: bool = False
+    # Phasing — "treat it and anything attached to it as though they
+    # don't exist until its controller's next turn." While True, this
+    # object is skipped in combat damage assignment. Set by
+    # PhaseOutEquippedCreature (Robe of Stars) and cleared at the
+    # start of its controller's untap step. Simplification: only
+    # combat-damage resolution filters phased objects — triggers,
+    # anthems, and legal_actions targeting don't (yet) hide them.
+    phased_out: bool = False
 
 
 def is_void_active(state: GameState) -> bool:

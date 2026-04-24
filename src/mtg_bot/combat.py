@@ -260,6 +260,9 @@ def _resolve_damage_step(
     for attacker in state.battlefield:
         if not attacker.attacking:
             continue
+        if attacker.phased_out:
+            # Phased-out creatures don't exist for combat purposes.
+            continue
         attacker_kws = effective_keywords(state, attacker)
         if not _deals_in_step(attacker_kws, first_strike_step=first_strike_step):
             # Attacker doesn't deal damage in this step; blockers of this

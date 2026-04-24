@@ -4522,6 +4522,49 @@ class ExileTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class PhaseOutEquippedCreature(Effect):
+    """"Equipped creature phases out." — Robe of Stars' Astral Projection.
+
+    Reads the Equipment source from ``state.resolving_source`` and
+    phases out whatever creature it's attached to. Treat the creature
+    (and anything attached to it) as though they don't exist until its
+    controller's next turn — simplified here to filtering out of
+    combat damage only; triggers/anthems/targeting still see phased
+    objects in this engine's current scope.
+
+    If the Equipment isn't attached to anything, the ability silently
+    does nothing.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None or source.attached_to is None:
+            return
+        creature = next(
+            (o for o in state.battlefield if o.id == source.attached_to),
+            None,
+        )
+        if creature is None:
+            return
+        creature.phased_out = True
+        # Remove it from ongoing combat so the filter in
+        # _resolve_damage_step is redundant-but-safe.
+        creature.attacking = False
+        creature.blocking = None
+        creature.blocked_by = []
+        state.log.append(
+            f"{creature.printing.name} phases out (Astral Projection)"
+        )
+
+    def describe(self) -> str:
+        return "equipped creature phases out"
+
+
+
+@dataclass(frozen=True)
 class TakeExtraTurnAfterThisOne(Effect):
     """"Take an extra turn after this one."
 
