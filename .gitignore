@@ -36,3 +36,10 @@ Thumbs.db
 # Local env
 .env
 .env.local
+
+# Scryfall card image cache (regenerate via scripts/fetch_card_images.py)
+data/card_images/
+
+# Throwaway UI screenshots (regenerate via scripts/screenshot_ui.py)
+ui_screenshots/
+src/mtg_bot/static/screenshots/

@@ -11,153 +11,59 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
+from uuid import uuid4
 
-from flask import Flask, abort, render_template_string, request
+from flask import Flask, abort, jsonify, render_template, request, send_file
 
+from mtg_bot.art import (
+    DEFAULT_CACHE_ROOT,
+    DEFAULT_CARD_DATA,
+    SIZES,
+    CardIndex,
+    Fetcher,
+    fetch_image,
+    http_fetcher,
+)
 from mtg_bot.cards import COLORS
+from mtg_bot.recommend import recommend_from_snapshot
 from mtg_bot.serialize import serialize_state
 from mtg_bot.simulate import simulate_game
 
 
-_BASE_STYLE = """
-body { font-family: -apple-system, Segoe UI, sans-serif; margin: 1.5em;
-       background: #1a1a2e; color: #eee; }
-h1 { margin: 0 0 0.5em; }
-h2 { margin: 0 0 0.3em; font-size: 1.1em; }
-h3 { margin: 1em 0 0.4em; }
-a { color: #9cf; }
-form { background: #222; padding: 1em; border-radius: 6px; margin-bottom: 1em;
-       display: flex; flex-wrap: wrap; gap: 0.8em; align-items: center; }
-form label { display: inline-flex; align-items: center; gap: 0.3em; }
-form input, form select { background: #111; color: #eee; border: 1px solid #444;
-                          padding: 0.3em 0.5em; border-radius: 3px; }
-form button { background: #446; color: #eee; border: none; padding: 0.4em 1em;
-              border-radius: 3px; cursor: pointer; }
-form button:hover { background: #558; }
-.player { border: 2px solid #333; padding: 0.8em; margin-bottom: 0.8em;
-          border-radius: 6px; }
-.player.lost { border-color: #a44; opacity: 0.85; }
-.player.winner { border-color: #4a4; }
-.life { font-size: 1.8em; font-weight: bold; display: inline-block;
-        min-width: 1.8em; text-align: center; }
-.life.low { color: #f66; }
-.life.high { color: #6f6; }
-.cards { display: flex; flex-wrap: wrap; gap: 0.3em; margin: 0.3em 0; }
-.card { background: #333; padding: 0.25em 0.5em; border-radius: 3px;
-        font-size: 0.85em; white-space: nowrap; }
-.card.tapped { opacity: 0.55; }
-.card.land { background: #2a3544; }
-.card.creature { background: #2a4432; }
-.card.token { font-style: italic; border: 1px dashed #777; }
-.card .pt { color: #fc8; font-weight: bold; }
-.card .dmg { color: #f77; }
-.card .counters { color: #ff9; font-weight: bold; }
-.card .kw { color: #9df; font-style: italic; font-size: 0.85em; margin-left: 0.3em; }
-.card .warp { color: #f9f; font-size: 0.8em; margin-left: 0.3em; }
-.card.warped { border: 1px dashed #f9f; }
-.card .ab { color: #fd9; font-size: 0.8em; display: block; margin-top: 0.1em; max-width: 18em; white-space: normal; }
-.result { padding: 0.8em 1em; border-radius: 6px; margin-bottom: 1em;
-          font-size: 1.15em; background: #2a2a4e; }
-.result.winner { border-left: 4px solid #6f6; }
-.result.draw { border-left: 4px solid #aaa; }
-.log { background: #111; padding: 0.8em; border-radius: 4px;
-       max-height: 380px; overflow-y: auto; font-family: ui-monospace, monospace;
-       font-size: 0.85em; }
-.log .entry { padding: 1px 0; }
-.meta { color: #999; font-size: 0.85em; }
-"""
+_GAME_CACHE_MAX = 20
 
-_PAGE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>MTG Bot — Game Viewer</title>
-<style>{{ style }}</style>
-</head>
-<body>
-<h1>MTG Bot — Game Viewer</h1>
-<form action="/play" method="get">
-  <label>Seed <input type="number" name="seed" value="{{ seed }}" /></label>
-  <label>P0 color
-    <select name="c1">
-      {% for c in colors %}<option value="{{ c }}" {% if c == c1 %}selected{% endif %}>{{ c }}</option>{% endfor %}
-    </select>
-  </label>
-  <label>P1 color
-    <select name="c2">
-      {% for c in colors %}<option value="{{ c }}" {% if c == c2 %}selected{% endif %}>{{ c }}</option>{% endfor %}
-    </select>
-  </label>
-  <label>Max turns <input type="number" name="max_turns" value="{{ max_turns }}" /></label>
-  <button type="submit">Run game</button>
-</form>
 
-{% if data %}
-  <div class="result {% if data.is_draw %}draw{% elif data.winner_id is not none %}winner{% endif %}">
-    {% if data.is_draw %}Result: DRAW
-    {% elif data.winner_id is not none %}Result: Player {{ data.winner_id }} wins
-    {% else %}Game did not finish
-    {% endif %}
-    <span class="meta">— after {{ data.turn_number }} turn(s), {{ data.log | length }} log events</span>
-  </div>
+class GameCache:
+    """In-memory LRU cache of snapshot streams produced by /api/play.
 
-  {% for p in data.players %}
-    <div class="player {% if p.has_lost %}lost{% elif data.winner_id == p.id %}winner{% endif %}">
-      <h2>Player {{ p.id }}
-        {% if p.has_lost %}<span class="meta">— lost: {{ p.lost_reason }}</span>
-        {% elif data.winner_id == p.id %}<span class="meta">— winner</span>
-        {% endif %}
-      </h2>
-      <span class="life {% if p.life <= 5 %}low{% elif p.life >= 15 %}high{% endif %}">{{ p.life }}</span>
-      <span class="meta">life • library {{ p.library_size }} • graveyard {{ p.graveyard_size }} • hand {{ p.hand_size }}</span>
-      {% if p.exile %}
-        <div><strong>Exile ({{ p.exile | length }}):</strong></div>
-        <div class="cards">
-          {% for c in p.exile %}
-            <span class="card {% if c.warped %}warped{% endif %}">{{ c.name }}{% if c.warped %}<span class="warp">warped</span>{% endif %}</span>
-          {% endfor %}
-        </div>
-      {% endif %}
-      {% if p.hand %}
-        <div><strong>Hand:</strong></div>
-        <div class="cards">
-          {% for c in p.hand %}
-            <span class="card">{{ c.name }}{% if c.mana_cost %} {{ c.mana_cost }}{% endif %}{% if c.warp_cost %}<span class="warp">warp {{ c.warp_cost }}</span>{% endif %}{% if c.power is not none %} <span class="pt">{{ c.power }}/{{ c.toughness }}</span>{% endif %}{% if c.keywords %}<span class="kw">{{ c.keywords | join(', ') }}</span>{% endif %}{% for ab in c.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}</span>
-          {% endfor %}
-        </div>
-      {% endif %}
-      {% if p.battlefield %}
-        <div><strong>Battlefield:</strong></div>
-        <div class="cards">
-          {% for o in p.battlefield %}
-            <span class="card {% if o.tapped %}tapped{% endif %} {% if o.is_token %}token{% endif %} {% if o.is_land %}land{% elif o.is_creature %}creature{% endif %}">
-              {{ o.name }}{% if o.is_creature %} <span class="pt">{{ o.effective_power }}/{{ o.effective_toughness }}</span>{% if o.plus_one_counters %} <span class="counters">+{{ o.plus_one_counters }}</span>{% endif %}{% if o.damage %} <span class="dmg">[{{ o.damage }}]</span>{% endif %}{% endif %}{% if o.keywords %}<span class="kw">{{ o.keywords | join(', ') }}</span>{% endif %}{% for ab in o.abilities %}<span class="ab">{{ ab }}</span>{% endfor %}
-            </span>
-          {% endfor %}
-        </div>
-      {% endif %}
-    </div>
-  {% endfor %}
+    Keys are opaque game ids (hex UUIDs); values are the list of serialized
+    snapshot dicts captured during simulation. Oldest entries are evicted when
+    the cache exceeds ``max_entries``. Not threadsafe — Flask dev server is
+    single-request, and prod can add a lock if this ever matters.
+    """
 
-  {% if data.stack %}
-    <h3>Stack ({{ data.stack | length }})</h3>
-    <div class="cards">
-      {% for item in data.stack %}<span class="card">{{ item.name }} (P{{ item.controller_id }}){% if item.is_ability %} — {{ item.ability_description }}{% endif %}</span>{% endfor %}
-    </div>
-  {% endif %}
+    def __init__(self, max_entries: int = _GAME_CACHE_MAX) -> None:
+        self._games: "OrderedDict[str, list[dict[str, Any]]]" = OrderedDict()
+        self._max = max_entries
 
-  <h3>Game Log</h3>
-  <div class="log">
-    {% for entry in data.log %}<div class="entry">{{ entry }}</div>{% endfor %}
-  </div>
-{% else %}
-  <p class="meta">Pick a seed and colors, then run a game.</p>
-{% endif %}
-</body>
-</html>
-"""
+    def store(self, game_id: str, snapshots: list[dict[str, Any]]) -> None:
+        self._games[game_id] = snapshots
+        self._games.move_to_end(game_id)
+        while len(self._games) > self._max:
+            self._games.popitem(last=False)
+
+    def get(self, game_id: str) -> Optional[list[dict[str, Any]]]:
+        snapshots = self._games.get(game_id)
+        if snapshots is not None:
+            self._games.move_to_end(game_id)
+        return snapshots
+
+    def __len__(self) -> int:
+        return len(self._games)
 
 
 def _parse_int_arg(name: str, default: int) -> int:
@@ -170,47 +76,178 @@ def _parse_int_arg(name: str, default: int) -> int:
         abort(400, description=f"{name} must be an integer")
 
 
-def create_app() -> Flask:
+def _validate_play_args() -> tuple[int, int, str, str]:
+    seed = _parse_int_arg("seed", 0)
+    max_turns = _parse_int_arg("max_turns", 300)
+    c1 = request.args.get("c1", "G")
+    c2 = request.args.get("c2", "R")
+    if c1 not in COLORS:
+        abort(400, description=f"c1 must be one of {list(COLORS)}")
+    if c2 not in COLORS:
+        abort(400, description=f"c2 must be one of {list(COLORS)}")
+    if max_turns < 1:
+        abort(400, description="max_turns must be >= 1")
+    return seed, max_turns, c1, c2
+
+
+def _enrich_snapshot(snap: dict[str, Any], name_to_id: dict[str, str]) -> dict[str, Any]:
+    """Annotate every card dict in the snapshot with its Scryfall id so the
+    client can build /card_image URLs without an extra round-trip. Unknown
+    names (tokens not in the EoE dump, synthetic test cards) map to None."""
+
+    def tag(card: dict[str, Any]) -> None:
+        card["scryfall_id"] = name_to_id.get(card["name"])
+
+    for p in snap["players"]:
+        for c in p["hand"]:
+            tag(c)
+        for c in p["exile"]:
+            tag(c)
+        for o in p["battlefield"]:
+            tag(o)
+    for item in snap["stack"]:
+        tag(item)
+    return snap
+
+
+def create_app(
+    *,
+    card_index: Optional[CardIndex] = None,
+    image_root: Path = DEFAULT_CACHE_ROOT,
+    image_fetcher: Optional[Fetcher] = None,
+    game_cache: Optional[GameCache] = None,
+) -> Flask:
+    """Build the Flask app.
+
+    All injectables default to production wiring (real Scryfall data, real
+    network fetcher, fresh cache). Tests pass fakes.
+    """
     app = Flask(__name__)
+    index = card_index if card_index is not None else CardIndex.load(DEFAULT_CARD_DATA)
+    fetcher = image_fetcher if image_fetcher is not None else http_fetcher
+    cache = game_cache if game_cache is not None else GameCache()
+    name_to_id = {name: card["id"] for name, card in index.by_name.items()}
 
     @app.route("/")
-    def index():
-        return render_template_string(
-            _PAGE_HTML,
-            style=_BASE_STYLE,
-            colors=list(COLORS),
-            seed=0,
-            c1="G",
-            c2="R",
-            max_turns=300,
-            data=None,
-        )
+    def home():
+        return render_template("index.html")
 
-    @app.route("/play")
-    def play():
-        seed = _parse_int_arg("seed", 0)
-        max_turns = _parse_int_arg("max_turns", 300)
-        c1 = request.args.get("c1", "G")
-        c2 = request.args.get("c2", "R")
-        if c1 not in COLORS:
-            abort(400, description=f"c1 must be one of {list(COLORS)}")
-        if c2 not in COLORS:
-            abort(400, description=f"c2 must be one of {list(COLORS)}")
-        if max_turns < 1:
-            abort(400, description="max_turns must be >= 1")
+    # ------------------------------------------------------------------
+    # JSON API. Consumed by static/app.js.
+    # ------------------------------------------------------------------
 
-        state = simulate_game(colors=[c1, c2], seed=seed, max_turns=max_turns)
-        data = serialize_state(state)
-        return render_template_string(
-            _PAGE_HTML,
-            style=_BASE_STYLE,
-            colors=list(COLORS),
-            seed=seed,
-            c1=c1,
-            c2=c2,
-            max_turns=max_turns,
-            data=data,
+    @app.route("/api/play")
+    def api_play():
+        seed, max_turns, c1, c2 = _validate_play_args()
+        granularity = request.args.get("granularity", "step")
+        if granularity not in ("step", "priority"):
+            abort(400, description="granularity must be 'step' or 'priority'")
+        snapshots: list[dict[str, Any]] = []
+        # Track log length across snapshots so each one can carry the entries
+        # that appeared since the previous snapshot — useful for highlighting
+        # "events this step" in the UI's log panel.
+        log_offset = [0]
+
+        def capture(state):
+            snap = _enrich_snapshot(serialize_state(state), name_to_id)
+            snap["log_since_last"] = list(snap["log"][log_offset[0]:])
+            log_offset[0] = len(snap["log"])
+            snapshots.append(snap)
+
+        state = simulate_game(
+            colors=[c1, c2], seed=seed, max_turns=max_turns,
+            on_snapshot=capture,
+            snapshot_granularity=granularity,
         )
+        game_id = uuid4().hex
+        cache.store(game_id, snapshots)
+        return jsonify({
+            "game_id": game_id,
+            "snapshot_count": len(snapshots),
+            "turn_number": state.turn_number,
+            "winner_id": state.winner_id,
+            "is_draw": state.is_draw,
+            "seed": seed,
+            "colors": [c1, c2],
+            "granularity": granularity,
+        })
+
+    @app.route("/api/snapshot/<game_id>/<int:idx>")
+    def api_snapshot(game_id: str, idx: int):
+        snapshots = cache.get(game_id)
+        if snapshots is None:
+            abort(404, description="unknown game_id")
+        if idx < 0 or idx >= len(snapshots):
+            abort(404, description=f"snapshot idx out of range (0..{len(snapshots) - 1})")
+        return jsonify(snapshots[idx])
+
+    @app.route("/api/recommend/<game_id>/<int:idx>")
+    def api_recommend(game_id: str, idx: int):
+        """Return the top-N engine recommendations for a specific snapshot.
+
+        Contract: see ``recommend_from_snapshot`` in mtg_bot/recommend.py.
+        Stubbed until the real evaluator ships; the UI can be built against
+        this endpoint's stable response shape.
+        """
+        snapshots = cache.get(game_id)
+        if snapshots is None:
+            abort(404, description="unknown game_id")
+        if idx < 0 or idx >= len(snapshots):
+            abort(404, description=f"snapshot idx out of range (0..{len(snapshots) - 1})")
+        n_raw = request.args.get("n", "3")
+        try:
+            n = int(n_raw)
+        except ValueError:
+            abort(400, description="n must be an integer")
+        if n < 1 or n > 50:
+            abort(400, description="n must be between 1 and 50")
+        result = recommend_from_snapshot(snapshots[idx], n=n)
+        result["snapshot_idx"] = idx
+        return jsonify(result)
+
+    @app.route("/api/snapshots_index/<game_id>")
+    def api_snapshots_index(game_id: str):
+        """Compact index of every snapshot's turn + step, for fast step/turn
+        navigation in the scrubber without fetching each snapshot's full
+        payload. Returned as a parallel array so the client can index by
+        snapshot idx directly."""
+        snapshots = cache.get(game_id)
+        if snapshots is None:
+            abort(404, description="unknown game_id")
+        return jsonify([
+            {"turn_number": s["turn_number"], "step": s["step"]}
+            for s in snapshots
+        ])
+
+    @app.route("/api/card/<scryfall_id>")
+    def api_card(scryfall_id: str):
+        card = index.by_id.get(scryfall_id)
+        if card is None:
+            abort(404, description="unknown card id")
+        return jsonify({
+            "id": card["id"],
+            "name": card["name"],
+            "mana_cost": card.get("mana_cost"),
+            "type_line": card.get("type_line"),
+            "oracle_text": card.get("oracle_text"),
+            "power": card.get("power"),
+            "toughness": card.get("toughness"),
+            "colors": card.get("colors", []),
+            "image_sizes": sorted((card.get("image_uris") or {}).keys()),
+        })
+
+    @app.route("/card_image/<scryfall_id>/<size>")
+    def card_image(scryfall_id: str, size: str):
+        if size not in SIZES:
+            abort(400, description=f"size must be one of {list(SIZES)}")
+        card = index.by_id.get(scryfall_id)
+        if card is None:
+            abort(404, description="unknown card id")
+        try:
+            path = fetch_image(card, size, root=image_root, fetcher=fetcher)
+        except LookupError:
+            abort(404, description=f"card has no {size} image")
+        return send_file(path, mimetype="image/jpeg")
 
     return app
 

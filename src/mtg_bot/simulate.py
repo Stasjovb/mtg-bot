@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import random
-from typing import Optional
+from typing import Callable, Literal, Optional
+
+SnapshotCallback = Callable[["GameState"], None]
+SnapshotGranularity = Literal["step", "priority"]
 
 from mtg_bot.actions import (
     DeclareAttackers,
@@ -85,8 +88,17 @@ def setup_game(
     return state
 
 
-def priority_loop(state: GameState) -> None:
-    """Run the priority loop until all alive players pass with empty stack."""
+def priority_loop(
+    state: GameState,
+    on_snapshot: Optional[SnapshotCallback] = None,
+) -> None:
+    """Run the priority loop until all alive players pass with empty stack.
+
+    When ``on_snapshot`` is provided, it fires after each applied (non-pass)
+    action and around each stack resolution (once just before the top of the
+    stack is resolved, once just after), giving the UI a chance to render
+    spells mid-flight instead of only seeing drained end-of-step state.
+    """
     alive_count = lambda: sum(1 for p in state.players if not p.has_lost)
     pass_count = 0
     priority_idx = _next_alive(state, state.active_player_idx)
@@ -109,8 +121,15 @@ def priority_loop(state: GameState) -> None:
             pass_count += 1
             if pass_count >= alive_count():
                 if state.stack:
+                    # Snapshot the stack populated state before resolution —
+                    # this is the "you can see the Counterspell targeting a
+                    # Lightning Bolt" moment.
+                    if on_snapshot is not None:
+                        on_snapshot(state)
                     resolve_top_of_stack(state)
                     state_based_actions(state)
+                    if on_snapshot is not None:
+                        on_snapshot(state)
                     if state.is_over():
                         return
                     pass_count = 0
@@ -124,13 +143,21 @@ def priority_loop(state: GameState) -> None:
         else:
             apply_action(state, p.id, action)
             state_based_actions(state)
+            if on_snapshot is not None:
+                on_snapshot(state)
             if state.is_over():
                 return
             pass_count = 0
             priority_idx = _next_alive(state, state.active_player_idx)
 
 
-def run_step(state: GameState, step: Step) -> None:
+def run_step(
+    state: GameState,
+    step: Step,
+    priority_on_snapshot: Optional[SnapshotCallback] = None,
+) -> None:
+    """Run one step of a turn. ``priority_on_snapshot`` (if provided) is
+    forwarded to the priority loop for fine-grained mid-stack snapshots."""
     state.step = step
 
     if step == Step.UNTAP:
@@ -215,7 +242,7 @@ def run_step(state: GameState, step: Step) -> None:
             return
 
     if step in STEPS_WITH_PRIORITY:
-        priority_loop(state)
+        priority_loop(state, on_snapshot=priority_on_snapshot)
         if state.is_over():
             return
 
@@ -252,9 +279,18 @@ def _advance_to_next_active_player(state: GameState) -> None:
         )
 
 
-def run_turn(state: GameState) -> None:
+def run_turn(
+    state: GameState,
+    on_snapshot: Optional[SnapshotCallback] = None,
+    priority_on_snapshot: Optional[SnapshotCallback] = None,
+) -> None:
+    """Run one turn. ``on_snapshot`` (if set) fires after each step.
+    ``priority_on_snapshot`` (if set) fires additionally at priority
+    boundaries inside each step's priority loop."""
     for step in STEP_ORDER:
-        run_step(state, step)
+        run_step(state, step, priority_on_snapshot=priority_on_snapshot)
+        if on_snapshot is not None:
+            on_snapshot(state)
         if state.is_over():
             return
 
@@ -265,7 +301,34 @@ def simulate_game(
     seed: Optional[int] = None,
     max_turns: int = 150,
     verbose: bool = False,
+    on_snapshot: Optional[SnapshotCallback] = None,
+    snapshot_granularity: SnapshotGranularity = "step",
 ) -> GameState:
+    """Run a full game.
+
+    When ``on_snapshot`` is provided it is called with the current ``GameState``
+    once after setup, after each step inside every turn, and once at game end.
+
+    ``snapshot_granularity`` controls whether extra snapshots also fire during
+    each step's priority loop:
+
+    - ``"step"`` (default): only end-of-step snapshots. ~150-200 per game.
+    - ``"priority"``: additionally after every action applied and around every
+      stack resolution. Much finer (~1000-2000 per game). The stack is
+      typically populated in these snapshots, so the UI can render spells
+      mid-resolution instead of only the drained end-of-step state.
+
+    The callback receives a live reference — callers that want a persistable
+    snapshot should serialize inside the callback.
+    """
+    if snapshot_granularity not in ("step", "priority"):
+        raise ValueError(
+            f"snapshot_granularity must be 'step' or 'priority', "
+            f"got {snapshot_granularity!r}"
+        )
+    priority_on_snapshot = (
+        on_snapshot if snapshot_granularity == "priority" else None
+    )
     if colors is None:
         colors = ["G", "R"]
     if agents is None:
@@ -278,6 +341,8 @@ def simulate_game(
         raise ValueError("agents and colors must have same length")
 
     state = setup_game(agents, colors, seed=seed)
+    if on_snapshot is not None:
+        on_snapshot(state)
     while not state.is_over() and state.turn_number <= max_turns:
         if verbose:
             print(
@@ -285,7 +350,11 @@ def simulate_game(
                 f"(life: {[p.life for p in state.players]}, "
                 f"bf: {len(state.battlefield)}) ---"
             )
-        run_turn(state)
+        run_turn(
+            state,
+            on_snapshot=on_snapshot,
+            priority_on_snapshot=priority_on_snapshot,
+        )
         if state.is_over():
             break
         state.turn_number += 1
@@ -294,4 +363,6 @@ def simulate_game(
     if not state.is_over():
         state.is_draw = True
         state.log.append(f"draw: reached max {max_turns} turns")
+    if on_snapshot is not None:
+        on_snapshot(state)
     return state

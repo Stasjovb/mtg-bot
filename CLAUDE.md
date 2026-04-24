@@ -18,11 +18,23 @@
 
 - Virtual env is at `.venv/`. Use `.venv/Scripts/python.exe` on Windows / `.venv/bin/python` on macOS-Linux.
 - Run tests: `.venv/Scripts/python.exe -m pytest`
+  (Python 3.13 + coverage.py can intermittently segfault deep in the simulation
+  sweep tests. The crash is not reproducible in isolation and no local code
+  change fixes it. If pytest exits with an access violation, run
+  `.venv/Scripts/python.exe scripts/run_tests.py` — it retries on segfault.)
+- Run browser-driven E2E tests (opt-in, skipped by default):
+  `MTG_BOT_E2E=1 .venv/Scripts/python.exe -m pytest tests/test_e2e.py`
+  First time only: `.venv/Scripts/python.exe -m pip install playwright`
+  then `.venv/Scripts/python.exe -m playwright install chromium`.
 - Run a game: `.venv/Scripts/python.exe -m mtg_bot`
 - Run the UI (localhost): `.venv/Scripts/python.exe -m mtg_bot.ui`
 - Run the UI over Tailscale (reachable from phone/laptop on the tailnet):
   `powershell -ExecutionPolicy Bypass -File scripts\serve.ps1`
   First-time firewall rule setup needs an elevated PowerShell.
+- Warm the card-image cache (optional, for nicer first-load):
+  `.venv/Scripts/python.exe scripts/fetch_card_images.py`
+- Ad-hoc screenshot the live UI:
+  `.venv/Scripts/python.exe scripts/screenshot_ui.py --url http://127.0.0.1:5002 --out ui.png`
 
 ## Scope reminders
 

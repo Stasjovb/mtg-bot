@@ -29,7 +29,15 @@ addopts = "--cov=mtg_bot --cov-report=term-missing --cov-fail-under=95"
 
 [tool.coverage.run]
 source = ["mtg_bot"]
-branch = true
+# Branch coverage is disabled because it forces coverage.py to use
+# sys.settrace / sys.monitoring in trace mode, which triggers a Windows
+# access-violation crash under Python 3.13 during the simulation sweep
+# tests (deep call chain through state_based_actions + _static_bonuses).
+# With branch=false, coverage.py uses PEP 669 sys.monitoring in sysmon
+# mode — faster and crash-free. Re-enable once coverage gains branch
+# support under sysmon.
+branch = false
+core = "sysmon"
 
 [tool.coverage.report]
 show_missing = true

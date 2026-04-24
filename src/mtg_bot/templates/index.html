@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MTG Bot &mdash; Game Viewer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+
+<header class="top-bar">
+  <h1 class="brand">MTG Bot</h1>
+  <form id="play-form" class="play-form" autocomplete="off">
+    <label>Seed <input type="number" name="seed" value="0"></label>
+    <label>P0 color
+      <select name="c1">
+        <option value="W">White</option>
+        <option value="U">Blue</option>
+        <option value="B">Black</option>
+        <option value="R" selected>Red</option>
+        <option value="G">Green</option>
+      </select>
+    </label>
+    <label>P1 color
+      <select name="c2">
+        <option value="W">White</option>
+        <option value="U">Blue</option>
+        <option value="B">Black</option>
+        <option value="R">Red</option>
+        <option value="G" selected>Green</option>
+      </select>
+    </label>
+    <label>Max turns <input type="number" name="max_turns" value="200" min="1"></label>
+    <label>Detail
+      <select name="granularity">
+        <option value="step" selected>per step</option>
+        <option value="priority">per priority pass</option>
+      </select>
+    </label>
+    <button type="submit">Run game</button>
+  </form>
+  <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>
+</header>
+
+<div id="scrubber" class="scrubber hidden" aria-label="Snapshot scrubber">
+  <div class="scrubber-controls">
+    <button type="button" id="btn-first"     title="First snapshot (Home)">&laquo;</button>
+    <button type="button" id="btn-prev-turn" title="Previous turn (Shift+Left)">&#8676;T</button>
+    <button type="button" id="btn-prev-step" title="Previous step (Alt+Left)">&#8676;S</button>
+    <button type="button" id="btn-prev"      title="Previous snapshot (Left)">&lsaquo;</button>
+    <button type="button" id="btn-play"      title="Play (Space)">&#9654;</button>
+    <button type="button" id="btn-next"      title="Next snapshot (Right)">&rsaquo;</button>
+    <button type="button" id="btn-next-step" title="Next step (Alt+Right)">S&#8677;</button>
+    <button type="button" id="btn-next-turn" title="Next turn (Shift+Right)">T&#8677;</button>
+    <button type="button" id="btn-last"      title="Last snapshot (End)">&raquo;</button>
+  </div>
+  <input type="range" id="scrub-slider" min="0" max="0" value="0" step="1" aria-label="Snapshot slider">
+  <div class="scrubber-readout">
+    <span id="scrub-label">&mdash;</span>
+    <span id="scrub-counter" class="muted">0 / 0</span>
+  </div>
+  <button type="button" id="btn-engine" class="engine-toggle"
+          title="Toggle engine recommendations panel">Engine</button>
+</div>
+
+<main id="board" class="board hidden" aria-label="Game board">
+  <section class="player-row opponent" id="row-p1"></section>
+  <section class="stack-row" id="row-stack" aria-label="Stack"></section>
+  <section class="player-row you" id="row-p0"></section>
+</main>
+
+<aside class="right-col" aria-label="Side panel">
+  <section id="engine-panel" class="engine-panel hidden"
+           aria-label="Engine recommendations">
+    <h2>Engine</h2>
+    <div class="engine-meta">
+      <span id="engine-player"></span>
+      <span id="engine-name" class="muted"></span>
+    </div>
+    <ol id="engine-recs" class="engine-recs"></ol>
+  </section>
+  <aside id="log-panel" class="log-panel hidden" aria-label="Game log">
+    <h2>Log</h2>
+    <div id="log-body" class="log-body"></div>
+  </aside>
+</aside>
+
+<svg id="combat-overlay" class="combat-overlay" aria-hidden="true">
+  <defs>
+    <marker id="arrow-head-attack" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ff9852"/>
+    </marker>
+    <marker id="arrow-head-block" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#6fa8ff"/>
+    </marker>
+  </defs>
+</svg>
+
+<div id="card-preview" class="card-preview" hidden aria-hidden="true"></div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

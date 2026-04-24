@@ -20,6 +20,34 @@ from mtg_bot.game import (
 )
 
 
+def _attachment(state: GameState, obj: GameObject) -> dict[str, Any] | None:
+    """Return ``{id, name}`` for the permanent this Equipment/Aura is attached
+    to, or None if unattached."""
+    if obj.attached_to is None:
+        return None
+    for other in state.battlefield:
+        if other.id == obj.attached_to:
+            return {"id": other.id, "name": other.printing.name}
+    return None
+
+
+def _attacking_defender(state: GameState, obj: GameObject) -> dict[str, Any] | None:
+    """For an attacking creature, return ``{kind, id, name}`` identifying the
+    opponent it's swinging at. None if not attacking. The engine currently
+    always routes attacks at the next living opponent in turn order; this
+    helper mirrors that rule so the UI can render an unambiguous arrow."""
+    if not obj.attacking:
+        return None
+    start = (obj.controller_id + 1) % len(state.players)
+    idx = start
+    for _ in range(len(state.players)):
+        p = state.players[idx]
+        if not p.has_lost:
+            return {"kind": "player", "id": p.id, "name": f"Player {p.id}"}
+        idx = (idx + 1) % len(state.players)
+    return None
+
+
 def serialize_permanent(state: GameState, obj: GameObject) -> dict[str, Any]:
     p = obj.printing
     return {
@@ -36,9 +64,13 @@ def serialize_permanent(state: GameState, obj: GameObject) -> dict[str, Any]:
         "is_land": p.is_land,
         "is_token": p.is_token,
         "is_spacecraft": p.is_spacecraft,
+        "is_planeswalker": p.loyalty is not None,
         "is_stationed": is_stationed(obj),
         "station_threshold": p.station_threshold,
         "charge_counters": obj.charge_counters,
+        "loyalty_counters": obj.loyalty_counters,
+        "stun_counters": obj.stun_counters,
+        "attached_to": _attachment(state, obj),
         "keywords": sorted(effective_keywords(state, obj)),
         "abilities": [a.describe() for a in p.triggered_abilities],
         "static_abilities": [sa.describe() for sa in p.static_abilities],
@@ -47,7 +79,9 @@ def serialize_permanent(state: GameState, obj: GameObject) -> dict[str, Any]:
         "damage": obj.damage,
         "summoning_sick": obj.summoning_sick,
         "attacking": obj.attacking,
+        "attacking_defender": _attacking_defender(state, obj),
         "blocking": obj.blocking,
+        "blocked_by": list(obj.blocked_by),
         "plus_one_counters": obj.plus_one_counters,
     }
 
@@ -66,6 +100,21 @@ def serialize_hand_card(obj: GameObject) -> dict[str, Any]:
         "abilities": [a.describe() for a in p.triggered_abilities],
         "warped": obj.warped,
     }
+
+
+def _resolve_target(state: GameState, kind: str, tid: int) -> dict[str, Any]:
+    """Look up the human-readable target referenced by ``(kind, id)`` on the
+    stack. Returns ``{kind, id, name}`` where ``name`` is None if the target
+    can't be found (already left the battlefield, etc.)."""
+    if kind == "player":
+        return {"kind": kind, "id": tid, "name": f"Player {tid}"}
+    for o in state.battlefield:
+        if o.id == tid:
+            return {"kind": kind, "id": tid, "name": o.printing.name}
+    for item in state.stack:
+        if item.source.id == tid:
+            return {"kind": kind, "id": tid, "name": item.source.printing.name}
+    return {"kind": kind, "id": tid, "name": None}
 
 
 def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, Any]:
@@ -89,6 +138,11 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             "has_lost": p.has_lost,
             "lost_reason": p.lost_reason,
             "lands_played_this_turn": p.lands_played_this_turn,
+            "poison_counters": p.poison_counters,
+            "mana_pool": [
+                {"color": c.color, "spend_restriction": c.spend_restriction}
+                for c in p.mana_pool
+            ],
             "battlefield": [
                 serialize_permanent(state, o)
                 for o in state.battlefield
@@ -109,14 +163,18 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             {
                 "id": item.source.id,
                 "name": item.source.printing.name,
+                "mana_cost": item.source.printing.mana_cost_str or None,
                 "controller_id": item.controller_id,
                 "is_ability": item.ability is not None,
                 "ability_description": (
                     item.ability.describe() if item.ability is not None else None
                 ),
                 "targets": [
-                    {"kind": kind, "id": tid} for kind, tid in item.targets
+                    _resolve_target(state, kind, tid) for kind, tid in item.targets
                 ],
+                "x_value": item.x_value,
+                "kicked": item.kicked,
+                "countered": item.countered,
             }
             for item in state.stack
         ],

@@ -3,8 +3,11 @@ import subprocess
 import pytest
 
 from mtg_bot import ui
+from mtg_bot.art import CardIndex
 from mtg_bot.ui import (
     CliArgs,
+    GameCache,
+    _enrich_snapshot,
     create_app,
     describe_urls,
     detect_tailscale_ip,
@@ -20,6 +23,56 @@ def client():
     return app.test_client()
 
 
+def _fake_index() -> CardIndex:
+    alpha = {
+        "id": "id-1",
+        "name": "Alpha",
+        "mana_cost": "{1}{U}",
+        "type_line": "Creature — Alien",
+        "oracle_text": "Flying.",
+        "power": "2",
+        "toughness": "1",
+        "colors": ["U"],
+        "image_uris": {
+            "small": "https://example.test/s/id-1.jpg",
+            "normal": "https://example.test/n/id-1.jpg",
+        },
+    }
+    beta = {"id": "id-2", "name": "Beta"}  # no image_uris
+    return CardIndex(
+        by_name={"Alpha": alpha, "Beta": beta},
+        by_id={"id-1": alpha, "id-2": beta},
+    )
+
+
+@pytest.fixture
+def fake_index():
+    return _fake_index()
+
+
+@pytest.fixture
+def fake_fetcher():
+    calls: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        return b"IMGBYTES"
+
+    fetch.calls = calls  # type: ignore[attr-defined]
+    return fetch
+
+
+@pytest.fixture
+def img_client(tmp_path, fake_index, fake_fetcher):
+    app = create_app(
+        card_index=fake_index,
+        image_root=tmp_path,
+        image_fetcher=fake_fetcher,
+    )
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
 def test_index_returns_200(client):
     resp = client.get("/")
     assert resp.status_code == 200
@@ -29,75 +82,148 @@ def test_index_has_form_and_color_options(client):
     html = client.get("/").get_data(as_text=True)
     assert "<form" in html
     for color in ["W", "U", "B", "R", "G"]:
-        # Color options appear inside <option> tags for both P0 and P1
         assert f'value="{color}"' in html
 
 
-def test_index_does_not_show_game_result(client):
+def test_index_references_static_assets(client):
     html = client.get("/").get_data(as_text=True)
-    assert "Result:" not in html
-    assert "Game Log" not in html
+    assert "app.css" in html
+    assert "app.js" in html
 
 
-def test_play_default_params_renders(client):
+def test_static_app_js_is_served(client):
+    resp = client.get("/static/app.js")
+    assert resp.status_code == 200
+    assert b"fetchJSON" in resp.data
+
+
+def test_static_app_js_ships_scrubber_code(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    # Spot-check the scrubber control surface is actually in the bundle.
+    for token in ("goTo", "startPlay", "stopPlay", "snapCache"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_js_ships_step_turn_navigation(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("findNextStepIdx", "findPrevStepIdx",
+                  "findNextTurnIdx", "findPrevTurnIdx",
+                  "btn-prev-turn", "btn-next-turn",
+                  "btn-prev-step", "btn-next-step",
+                  "snapshots_index",
+                  "ArrowLeft", "ArrowRight"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_js_ships_engine_panel_code(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("toggleEngine", "refreshEngine", "renderEngineRecs",
+                  "engine-panel", "engine-recs", "/api/recommend/"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_engine_panel(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for sel in (".engine-panel", ".engine-recs", ".engine-rec",
+                ".engine-toggle", ".right-col"):
+        assert sel in css, f"missing {sel!r} in app.css"
+
+
+def test_index_html_has_engine_elements(client):
+    html = client.get("/").get_data(as_text=True)
+    for eid in ("btn-engine", "engine-panel", "engine-player",
+                "engine-name", "engine-recs"):
+        assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+
+
+def test_index_html_has_step_turn_buttons(client):
+    html = client.get("/").get_data(as_text=True)
+    for eid in ("btn-prev-turn", "btn-prev-step", "btn-next-step", "btn-next-turn"):
+        assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+
+
+def test_static_app_js_ships_tier1_renderers(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    # Mana pool + new badge renderers are wired up.
+    for token in ("manaPoolEl", "loyalty-badge", "stun-badge", "attached-to"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_tier1_elements(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for selector in (".mana-coin", ".loyalty-badge", ".stun-badge", ".attached-to"):
+        assert selector in css, f"missing {selector!r} in app.css"
+
+
+def test_static_app_js_ships_tier2_renderers(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    # Poison + stack metadata renderers + per-step log highlight.
+    for token in ("poisonEl", "x-value", "kicked", "countered", "targets",
+                  "log_since_last", "this-step"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_js_ships_stack_card_layout(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("stackItemEl", "stack-item-img", "stack-item-text",
+                  "ability-desc"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_stack_card_layout(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for selector in (".stack-item-img", ".stack-item-text",
+                     ".stack-item-name", ".stack-item .ability-desc"):
+        assert selector in css, f"missing {selector!r} in app.css"
+
+
+def test_static_app_js_ships_tier3_combat_arrows(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("drawCombatArrows", "arrow-head-attack", "arrow-head-block",
+                  "attacking_defender", "blocked_by"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_combat_arrows(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for selector in (".combat-overlay", ".combat-arrow", ".combat-arrow.block"):
+        assert selector in css, f"missing {selector!r} in app.css"
+
+
+def test_index_includes_combat_overlay_svg(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="combat-overlay"' in html
+    # Marker definitions shipped in the template.
+    assert 'id="arrow-head-attack"' in html
+    assert 'id="arrow-head-block"' in html
+
+
+def test_static_app_css_styles_tier2_elements(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for selector in (".poison-row", ".poison-count", ".stack-item .x-value",
+                     ".stack-item .kicked", ".stack-item .countered",
+                     ".stack-item .targets"):
+        assert selector in css, f"missing {selector!r} in app.css"
+
+
+def test_index_has_scrubber_elements(client):
+    html = client.get("/").get_data(as_text=True)
+    for eid in ("scrubber", "scrub-slider", "scrub-label", "scrub-counter",
+                "btn-first", "btn-prev", "btn-play", "btn-next", "btn-last"):
+        assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+
+
+def test_static_app_css_is_served(client):
+    resp = client.get("/static/app.css")
+    assert resp.status_code == 200
+    assert b".card" in resp.data
+
+
+def test_play_html_route_is_removed(client):
+    # /play was the old server-rendered page; the JS frontend consumes
+    # /api/play now, so the HTML route no longer exists.
     resp = client.get("/play")
-    assert resp.status_code == 200
-    html = resp.get_data(as_text=True)
-    assert "Result:" in html
-    assert "Game Log" in html
-    assert "Player 0" in html
-    assert "Player 1" in html
-
-
-def test_play_shows_log_entries(client):
-    html = client.get("/play?seed=0").get_data(as_text=True)
-    # Every simulated game has at least one "plays" or "casts" event
-    assert ("plays" in html) or ("casts" in html)
-
-
-def test_play_deterministic_seed(client):
-    html_a = client.get("/play?seed=42&c1=G&c2=R").get_data(as_text=True)
-    html_b = client.get("/play?seed=42&c1=G&c2=R").get_data(as_text=True)
-    # The game is determined by seed + colors; same inputs → same rendered result.
-    assert html_a == html_b
-
-
-def test_play_invalid_seed_returns_400(client):
-    resp = client.get("/play?seed=not-a-number")
-    assert resp.status_code == 400
-
-
-def test_play_invalid_max_turns_returns_400(client):
-    resp = client.get("/play?max_turns=abc")
-    assert resp.status_code == 400
-
-
-def test_play_max_turns_must_be_positive(client):
-    resp = client.get("/play?max_turns=0")
-    assert resp.status_code == 400
-
-
-def test_play_invalid_c1_returns_400(client):
-    resp = client.get("/play?c1=XX")
-    assert resp.status_code == 400
-
-
-def test_play_invalid_c2_returns_400(client):
-    resp = client.get("/play?c2=XX")
-    assert resp.status_code == 400
-
-
-def test_play_with_empty_seed_uses_default(client):
-    resp = client.get("/play?seed=")
-    assert resp.status_code == 200
-
-
-@pytest.mark.parametrize("c1,c2", [("W", "U"), ("B", "R"), ("G", "W")])
-def test_play_each_color_pair(client, c1, c2):
-    resp = client.get(f"/play?c1={c1}&c2={c2}&seed=1")
-    assert resp.status_code == 200
-    html = resp.get_data(as_text=True)
-    assert "Result:" in html
+    assert resp.status_code == 404
 
 
 # ------------------------------------------------------------------------
@@ -185,6 +311,487 @@ def test_describe_urls_all_interfaces_with_tailscale(monkeypatch):
 def test_describe_urls_all_interfaces_without_tailscale(monkeypatch):
     monkeypatch.setattr(ui, "detect_tailscale_ip", lambda: None)
     assert describe_urls("0.0.0.0", 5000) == ["http://localhost:5000"]
+
+
+# ------------------------------------------------------------------------
+# JSON API: /api/play and /api/snapshot
+# ------------------------------------------------------------------------
+
+
+def test_api_play_returns_json_game_summary(client):
+    resp = client.get("/api/play?seed=0&c1=G&c2=R&max_turns=3")
+    assert resp.status_code == 200
+    assert resp.is_json
+    body = resp.get_json()
+    assert isinstance(body["game_id"], str) and len(body["game_id"]) > 0
+    assert body["snapshot_count"] > 0
+    assert body["colors"] == ["G", "R"]
+    assert body["seed"] == 0
+    assert isinstance(body["turn_number"], int)
+
+
+def test_api_play_invalid_c1_400(client):
+    resp = client.get("/api/play?c1=ZZ")
+    assert resp.status_code == 400
+
+
+def test_api_play_invalid_c2_400(client):
+    resp = client.get("/api/play?c2=ZZ")
+    assert resp.status_code == 400
+
+
+def test_api_play_default_granularity_is_step(client):
+    body = client.get("/api/play?seed=0&max_turns=4").get_json()
+    assert body["granularity"] == "step"
+
+
+def test_api_play_granularity_priority_returns_more_snapshots(client):
+    step = client.get("/api/play?seed=0&max_turns=6&granularity=step").get_json()
+    pri  = client.get("/api/play?seed=0&max_turns=6&granularity=priority").get_json()
+    assert pri["granularity"] == "priority"
+    assert pri["snapshot_count"] > step["snapshot_count"]
+
+
+def test_api_play_invalid_granularity_400(client):
+    resp = client.get("/api/play?granularity=bogus")
+    assert resp.status_code == 400
+
+
+def test_api_play_invalid_max_turns_400(client):
+    resp = client.get("/api/play?max_turns=0")
+    assert resp.status_code == 400
+
+
+def test_api_play_invalid_seed_returns_400(client):
+    resp = client.get("/api/play?seed=not-a-number")
+    assert resp.status_code == 400
+
+
+def test_api_play_invalid_max_turns_non_integer_returns_400(client):
+    resp = client.get("/api/play?max_turns=abc")
+    assert resp.status_code == 400
+
+
+def test_api_play_empty_seed_uses_default(client):
+    resp = client.get("/api/play?seed=")
+    assert resp.status_code == 200
+
+
+def test_api_play_is_deterministic_on_seed(client):
+    a = client.get("/api/play?seed=42&c1=G&c2=R").get_json()
+    b = client.get("/api/play?seed=42&c1=G&c2=R").get_json()
+    # Different game_ids (UUIDs) but same play outcome shape.
+    assert a["turn_number"] == b["turn_number"]
+    assert a["winner_id"] == b["winner_id"]
+    assert a["is_draw"] == b["is_draw"]
+    assert a["snapshot_count"] == b["snapshot_count"]
+
+
+# ------------------------------------------------------------------------
+# API integration flows — multi-endpoint round trips
+# ------------------------------------------------------------------------
+
+
+def test_api_integration_log_partition_covers_full_log(client):
+    """Each snapshot carries log_since_last (events since the previous
+    snapshot). Concatenating those partitions across the whole stream must
+    exactly equal the final snapshot's cumulative log."""
+    play = client.get("/api/play?seed=0&max_turns=6").get_json()
+    partitions: list[str] = []
+    final_log: list[str] = []
+    for i in range(play["snapshot_count"]):
+        snap = client.get(f"/api/snapshot/{play['game_id']}/{i}").get_json()
+        assert isinstance(snap["log_since_last"], list)
+        partitions.extend(snap["log_since_last"])
+        final_log = snap["log"]
+    assert partitions == final_log
+
+
+def test_api_integration_first_snapshot_log_since_last_matches_initial_log(client):
+    """The very first snapshot fires right after setup; log_since_last should
+    equal whatever setup actions have put into the log so far (typically
+    zero entries — deck building and shuffling are silent)."""
+    play = client.get("/api/play?seed=0&max_turns=3").get_json()
+    snap0 = client.get(f"/api/snapshot/{play['game_id']}/0").get_json()
+    assert snap0["log_since_last"] == snap0["log"]
+
+
+def test_api_integration_every_snapshot_has_valid_schema(client):
+    """Play a short game, then walk every snapshot and verify invariants hold
+    across the whole stream."""
+    play = client.get("/api/play?seed=0&max_turns=8").get_json()
+    for i in range(play["snapshot_count"]):
+        snap = client.get(f"/api/snapshot/{play['game_id']}/{i}").get_json()
+        assert isinstance(snap["turn_number"], int) and snap["turn_number"] >= 1
+        assert len(snap["players"]) == 2
+        assert {p["id"] for p in snap["players"]} == {0, 1}
+        for p in snap["players"]:
+            assert isinstance(p["life"], int)
+            assert isinstance(p["hand_size"], int) and p["hand_size"] == len(p["hand"])
+            for card in p["hand"] + p["exile"]:
+                assert "name" in card and "scryfall_id" in card
+            for obj in p["battlefield"]:
+                assert "name" in obj and "scryfall_id" in obj
+        for item in snap["stack"]:
+            assert "name" in item and "scryfall_id" in item
+        # Consistency: if game is over, either winner set or draw flagged.
+        if snap["is_over"]:
+            assert snap["is_draw"] or snap["winner_id"] is not None
+
+
+def test_api_integration_multiple_games_remain_fetchable(client):
+    """Two back-to-back /api/play calls both leave fetchable snapshot streams."""
+    a = client.get("/api/play?seed=0&max_turns=5").get_json()
+    b = client.get("/api/play?seed=1&max_turns=5").get_json()
+    assert a["game_id"] != b["game_id"]
+    assert client.get(f"/api/snapshot/{a['game_id']}/0").status_code == 200
+    assert client.get(f"/api/snapshot/{b['game_id']}/0").status_code == 200
+    assert client.get(f"/api/snapshot/{a['game_id']}/{a['snapshot_count'] - 1}").status_code == 200
+    assert client.get(f"/api/snapshot/{b['game_id']}/{b['snapshot_count'] - 1}").status_code == 200
+
+
+def test_api_integration_card_image_for_real_game_card(tmp_path):
+    """End-to-end: play a real game, pick an enriched card, fetch its image,
+    then fetch again and verify the cache hit (no second network call)."""
+    calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        calls.append(url)
+        return b"FAKE_JPG_BYTES"
+
+    app = create_app(image_root=tmp_path, image_fetcher=fetcher)
+    app.config["TESTING"] = True
+    c = app.test_client()
+
+    play = c.get("/api/play?seed=0&max_turns=10").get_json()
+    # Walk snapshots until we find any card with a resolved scryfall_id.
+    real_id = None
+    for i in range(play["snapshot_count"]):
+        snap = c.get(f"/api/snapshot/{play['game_id']}/{i}").get_json()
+        for p in snap["players"]:
+            for card in p["hand"] + p["battlefield"]:
+                if card.get("scryfall_id"):
+                    real_id = card["scryfall_id"]
+                    break
+            if real_id:
+                break
+        if real_id:
+            break
+    assert real_id, "expected at least one enriched card in a real game"
+
+    # First fetch: downloads.
+    resp = c.get(f"/card_image/{real_id}/small")
+    assert resp.status_code == 200
+    assert resp.data == b"FAKE_JPG_BYTES"
+    assert len(calls) == 1
+
+    # Second fetch: served from the disk cache, fetcher NOT called again.
+    resp2 = c.get(f"/card_image/{real_id}/small")
+    assert resp2.status_code == 200
+    assert len(calls) == 1
+
+
+def test_api_integration_game_cache_eviction_returns_404(tmp_path):
+    """If an old game ages out of the LRU cache, its snapshots 404 cleanly."""
+    cache = GameCache(max_entries=2)
+    app = create_app(
+        game_cache=cache, image_root=tmp_path,
+        image_fetcher=lambda _u: b"x",
+    )
+    app.config["TESTING"] = True
+    c = app.test_client()
+
+    first = c.get("/api/play?seed=0&max_turns=3").get_json()
+    c.get("/api/play?seed=1&max_turns=3").get_json()
+    c.get("/api/play?seed=2&max_turns=3").get_json()  # evicts `first`
+    resp = c.get(f"/api/snapshot/{first['game_id']}/0")
+    assert resp.status_code == 404
+
+
+def test_api_play_enriches_cards_with_scryfall_id(client):
+    play = client.get("/api/play?seed=0&c1=G&c2=R&max_turns=6").get_json()
+    # Find a snapshot that has some cards in hand.
+    for idx in range(play["snapshot_count"]):
+        snap = client.get(f"/api/snapshot/{play['game_id']}/{idx}").get_json()
+        for p in snap["players"]:
+            for c in p["hand"]:
+                assert "scryfall_id" in c, "hand cards must carry scryfall_id"
+                # Real EoE cards resolve to a uuid-like hex id; tokens / synthetic
+                # fallbacks map to None.
+                if c["scryfall_id"] is not None:
+                    assert len(c["scryfall_id"]) == 36  # 8-4-4-4-12 uuid
+                    return  # one confirmed hit is enough
+    # If no hand was ever non-empty across the whole short game, that's the
+    # failure — the scryfall_id path never got exercised.
+    raise AssertionError("no hand cards appeared in any snapshot of the short game")
+
+
+def test_api_snapshot_roundtrip_returns_state_dict(client):
+    play = client.get("/api/play?seed=0&max_turns=3").get_json()
+    game_id = play["game_id"]
+    count = play["snapshot_count"]
+
+    # First snapshot: turn 1, players set up, no battlefield.
+    first = client.get(f"/api/snapshot/{game_id}/0").get_json()
+    assert first["turn_number"] == 1
+    assert len(first["players"]) == 2
+
+    # Last snapshot: game_over or draw flag set.
+    last = client.get(f"/api/snapshot/{game_id}/{count - 1}").get_json()
+    assert last["is_over"] or last["is_draw"]
+
+
+def test_api_snapshot_unknown_game_id_404(client):
+    resp = client.get("/api/snapshot/deadbeef/0")
+    assert resp.status_code == 404
+
+
+def test_api_snapshots_index_returns_turn_and_step_per_snapshot(client):
+    play = client.get("/api/play?seed=0&max_turns=5").get_json()
+    idx = client.get(f"/api/snapshots_index/{play['game_id']}").get_json()
+    assert isinstance(idx, list)
+    assert len(idx) == play["snapshot_count"]
+    for entry in idx:
+        assert "turn_number" in entry
+        assert "step" in entry
+    # Turn numbers never decrease.
+    turns = [e["turn_number"] for e in idx]
+    assert all(b >= a for a, b in zip(turns, turns[1:]))
+
+
+def test_api_snapshots_index_unknown_game_id_404(client):
+    assert client.get("/api/snapshots_index/deadbeef").status_code == 404
+
+
+# ------------------------------------------------------------------------
+# /api/recommend — engine-recommendation endpoint (stubbed)
+# ------------------------------------------------------------------------
+
+
+def test_api_recommend_returns_contract_shape(client):
+    play = client.get("/api/play?seed=0&max_turns=4").get_json()
+    resp = client.get(f"/api/recommend/{play['game_id']}/0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["snapshot_idx"] == 0
+    assert isinstance(body["priority_player_id"], int)
+    assert isinstance(body["recommendations"], list)
+    assert body["engine"] == "stub"
+
+
+def test_api_recommend_default_n_is_three(client):
+    play = client.get("/api/play?seed=0&max_turns=4").get_json()
+    # Find a snapshot where the priority player has a full hand so we
+    # actually have options to rank.
+    for i in range(play["snapshot_count"]):
+        body = client.get(f"/api/recommend/{play['game_id']}/{i}").get_json()
+        if len(body["recommendations"]) >= 3:
+            assert len(body["recommendations"]) == 3
+            return
+    # If we never hit 3, the contract still holds (length <= n).
+
+
+def test_api_recommend_respects_n_param(client):
+    play = client.get("/api/play?seed=0&max_turns=4").get_json()
+    body = client.get(f"/api/recommend/{play['game_id']}/0?n=1").get_json()
+    assert len(body["recommendations"]) <= 1
+
+
+def test_api_recommend_unknown_game_id_404(client):
+    assert client.get("/api/recommend/deadbeef/0").status_code == 404
+
+
+def test_api_recommend_out_of_range_idx_404(client):
+    play = client.get("/api/play?seed=0&max_turns=4").get_json()
+    resp = client.get(f"/api/recommend/{play['game_id']}/9999")
+    assert resp.status_code == 404
+
+
+def test_api_recommend_invalid_n_400(client):
+    play = client.get("/api/play?seed=0&max_turns=4").get_json()
+    assert client.get(f"/api/recommend/{play['game_id']}/0?n=abc").status_code == 400
+    assert client.get(f"/api/recommend/{play['game_id']}/0?n=0").status_code == 400
+    assert client.get(f"/api/recommend/{play['game_id']}/0?n=51").status_code == 400
+
+
+def test_api_snapshot_out_of_range_404(client):
+    play = client.get("/api/play?seed=0&max_turns=3").get_json()
+    resp = client.get(f"/api/snapshot/{play['game_id']}/9999")
+    assert resp.status_code == 404
+
+
+def test_api_snapshot_negative_idx_404(client):
+    # int converter in Flask rejects negative via URL parsing (no match).
+    play = client.get("/api/play?seed=0&max_turns=3").get_json()
+    resp = client.get(f"/api/snapshot/{play['game_id']}/-1")
+    assert resp.status_code == 404
+
+
+# ------------------------------------------------------------------------
+# _enrich_snapshot (unit)
+# ------------------------------------------------------------------------
+
+
+def test_enrich_snapshot_tags_all_zones():
+    name_to_id = {"Alpha": "sid-1", "Beta": "sid-2", "Gamma": "sid-3", "Delta": "sid-4"}
+    snap = {
+        "players": [
+            {
+                "hand": [{"name": "Alpha"}],
+                "exile": [{"name": "Beta"}],
+                "battlefield": [{"name": "Gamma"}],
+            },
+            {"hand": [], "exile": [], "battlefield": []},
+        ],
+        "stack": [{"name": "Delta"}],
+    }
+    out = _enrich_snapshot(snap, name_to_id)
+    assert out["players"][0]["hand"][0]["scryfall_id"] == "sid-1"
+    assert out["players"][0]["exile"][0]["scryfall_id"] == "sid-2"
+    assert out["players"][0]["battlefield"][0]["scryfall_id"] == "sid-3"
+    assert out["stack"][0]["scryfall_id"] == "sid-4"
+
+
+def test_enrich_snapshot_unknown_name_maps_to_none():
+    snap = {
+        "players": [{"hand": [{"name": "Mystery"}], "exile": [], "battlefield": []}],
+        "stack": [],
+    }
+    out = _enrich_snapshot(snap, {"Alpha": "sid-1"})
+    assert out["players"][0]["hand"][0]["scryfall_id"] is None
+
+
+# ------------------------------------------------------------------------
+# JSON API: /api/card
+# ------------------------------------------------------------------------
+
+
+def test_api_card_returns_metadata(fake_index, tmp_path):
+    app = create_app(card_index=fake_index, image_root=tmp_path,
+                     image_fetcher=lambda _u: b"X")
+    app.config["TESTING"] = True
+    client = app.test_client()
+    resp = client.get("/api/card/id-1")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["name"] == "Alpha"
+    assert body["mana_cost"] == "{1}{U}"
+    assert body["colors"] == ["U"]
+    assert body["image_sizes"] == ["normal", "small"]
+
+
+def test_api_card_unknown_id_404(fake_index, tmp_path):
+    app = create_app(card_index=fake_index, image_root=tmp_path,
+                     image_fetcher=lambda _u: b"X")
+    app.config["TESTING"] = True
+    client = app.test_client()
+    assert client.get("/api/card/nope").status_code == 404
+
+
+def test_api_card_missing_fields_default_to_none_or_empty(fake_index, tmp_path):
+    app = create_app(card_index=fake_index, image_root=tmp_path,
+                     image_fetcher=lambda _u: b"X")
+    app.config["TESTING"] = True
+    client = app.test_client()
+    body = client.get("/api/card/id-2").get_json()  # Beta has no image/power/colors
+    assert body["name"] == "Beta"
+    assert body["power"] is None
+    assert body["colors"] == []
+    assert body["image_sizes"] == []
+
+
+# ------------------------------------------------------------------------
+# /card_image/<scryfall_id>/<size>
+# ------------------------------------------------------------------------
+
+
+def test_card_image_downloads_and_serves_bytes(img_client, tmp_path):
+    resp = img_client.get("/card_image/id-1/small")
+    assert resp.status_code == 200
+    assert resp.data == b"IMGBYTES"
+    # File was cached on disk.
+    assert (tmp_path / "small" / "id-1.jpg").exists()
+
+
+def test_card_image_cache_hit_does_not_refetch(img_client, tmp_path):
+    # First request populates the cache.
+    img_client.get("/card_image/id-1/small")
+    # Overwrite the file so we can detect a refetch.
+    (tmp_path / "small" / "id-1.jpg").write_bytes(b"CACHED")
+    resp = img_client.get("/card_image/id-1/small")
+    assert resp.status_code == 200
+    assert resp.data == b"CACHED"
+
+
+def test_card_image_bad_size_400(img_client):
+    resp = img_client.get("/card_image/id-1/jumbo")
+    assert resp.status_code == 400
+
+
+def test_card_image_unknown_card_404(img_client):
+    resp = img_client.get("/card_image/nope/small")
+    assert resp.status_code == 404
+
+
+def test_card_image_card_has_no_image_404(img_client):
+    # Beta has no image_uris.
+    resp = img_client.get("/card_image/id-2/small")
+    assert resp.status_code == 404
+
+
+# ------------------------------------------------------------------------
+# GameCache (LRU semantics)
+# ------------------------------------------------------------------------
+
+
+def test_game_cache_stores_and_fetches():
+    cache = GameCache()
+    cache.store("a", [{"n": 1}])
+    assert cache.get("a") == [{"n": 1}]
+
+
+def test_game_cache_miss_returns_none():
+    assert GameCache().get("nope") is None
+
+
+def test_game_cache_evicts_oldest_past_max():
+    cache = GameCache(max_entries=2)
+    cache.store("a", [{"x": "A"}])
+    cache.store("b", [{"x": "B"}])
+    cache.store("c", [{"x": "C"}])
+    assert len(cache) == 2
+    assert cache.get("a") is None
+    assert cache.get("b") is not None
+    assert cache.get("c") is not None
+
+
+def test_game_cache_get_marks_as_recent():
+    cache = GameCache(max_entries=2)
+    cache.store("a", [{"x": "A"}])
+    cache.store("b", [{"x": "B"}])
+    cache.get("a")  # refresh A's recency
+    cache.store("c", [{"x": "C"}])
+    # Now B should have been evicted (oldest), not A.
+    assert cache.get("a") is not None
+    assert cache.get("b") is None
+    assert cache.get("c") is not None
+
+
+def test_game_cache_repeated_store_of_same_key_refreshes():
+    cache = GameCache(max_entries=2)
+    cache.store("a", [{"x": "A"}])
+    cache.store("b", [{"x": "B"}])
+    cache.store("a", [{"x": "A2"}])  # overwrite + promote
+    cache.store("c", [{"x": "C"}])
+    # Eviction kicks out B, not A.
+    assert cache.get("a") == [{"x": "A2"}]
+    assert cache.get("b") is None
+    assert cache.get("c") is not None
+
+
+# ------------------------------------------------------------------------
+# Back to the existing CLI + Tailscale tests
+# ------------------------------------------------------------------------
 
 
 def test_main_starts_app_with_cli_args(monkeypatch, capsys):
