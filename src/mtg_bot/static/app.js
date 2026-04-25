@@ -127,30 +127,71 @@ async function runGame() {
   setButton(false);
   try {
     const summary = await fetchJSON('/api/play?' + params.toString());
-    // Fetch the compact (turn, step) index so step/turn navigation is O(1)
-    // per click instead of N fetches.
-    const index = await fetchJSON(`/api/snapshots_index/${summary.game_id}`);
-    game = {
-      gameId: summary.game_id,
-      snapshotCount: summary.snapshot_count,
-      summary,
-      index,                   // [{turn_number, step}, ...]
-      snapCache: new Map(),
-      currentIdx: 0,
-      playing: false,
-      playTimer: null,
-    };
-    els.slider.min = 0;
-    els.slider.max = Math.max(0, summary.snapshot_count - 1);
-    els.scrubber.classList.remove('hidden');
-    els.phaseTracker.classList.remove('hidden');
-    await goTo(summary.snapshot_count - 1);  // land on the final state
+    await activateGame(summary);
   } catch (e) {
     setStatus('Error: ' + e.message, 'loss');
   } finally {
     setButton(true);
   }
 }
+
+// Load a saved replay from the server's replays_root and switch the
+// scrubber to it. ``filename`` is just the basename; the server side
+// validates path traversal. Used by the ``?replay=`` URL handler so
+// links like ``http://<host>:5002/?replay=foo.json.gz`` open the
+// viewer pre-loaded on a captured game.
+async function loadReplay(filename) {
+  stopPlay();
+  setStatus('Loading replay ' + filename + '…', 'muted');
+  setButton(false);
+  try {
+    const summary = await fetchJSON(
+      '/api/load_replay/' + encodeURIComponent(filename),
+    );
+    await activateGame(summary);
+    setStatus('Loaded replay ' + filename, 'muted');
+  } catch (e) {
+    setStatus('Replay load failed: ' + e.message, 'loss');
+  } finally {
+    setButton(true);
+  }
+}
+
+// Shared "set up the scrubber from an /api/play or /api/load_replay
+// response" path. Both endpoints return the same {game_id,
+// snapshot_count, ...} shape, so the activation work is identical.
+async function activateGame(summary) {
+  // Fetch the compact (turn, step) index so step/turn navigation is O(1)
+  // per click instead of N fetches.
+  const index = await fetchJSON(`/api/snapshots_index/${summary.game_id}`);
+  game = {
+    gameId: summary.game_id,
+    snapshotCount: summary.snapshot_count,
+    summary,
+    index,                   // [{turn_number, step}, ...]
+    snapCache: new Map(),
+    currentIdx: 0,
+    playing: false,
+    playTimer: null,
+  };
+  els.slider.min = 0;
+  els.slider.max = Math.max(0, summary.snapshot_count - 1);
+  els.scrubber.classList.remove('hidden');
+  els.phaseTracker.classList.remove('hidden');
+  await goTo(summary.snapshot_count - 1);  // land on the final state
+}
+
+// On page load: if the URL carries ``?replay=<filename>``, jump
+// straight into that replay instead of waiting for the user to
+// submit the play form. Tolerates fetch errors silently — the
+// status bar shows the failure but the form stays usable.
+(async () => {
+  const params = new URLSearchParams(window.location.search);
+  const replayName = params.get('replay');
+  if (replayName) {
+    await loadReplay(replayName);
+  }
+})();
 
 async function goTo(idx) {
   if (!game) return;
