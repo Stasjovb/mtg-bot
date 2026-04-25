@@ -13,10 +13,12 @@ Module map:
 - ``grid``      — ``grid_search`` over a list of configs, each
                    played N games against a fixed opponent factory.
                    Returns results sorted by win rate.
-- ``data_gen``  — ``generate_training_data``: play games, capture
-                   ``(features, outcome)`` pairs from both player
-                   perspectives at every non-chance decision. Save /
-                   load via compressed ``.npz``.
+- ``data_gen``  — ``generate_training_data`` (sequential) and
+                   ``generate_training_data_parallel`` (multi-process)
+                   produce the same arrays for the same ``base_seed``.
+                   Both capture ``(features, outcome)`` from both
+                   player perspectives at every non-chance decision.
+                   Save / load via compressed ``.npz``.
 - ``trainer``   — ``train_value_network``: PyTorch MSE training of
                    the ``_ValueMLP`` from nn_evaluator. CUDA when
                    available; saves the final state_dict that
@@ -36,6 +38,7 @@ from mtg_bot.training.config import (
 )
 from mtg_bot.training.data_gen import (
     generate_training_data,
+    generate_training_data_parallel,
     load_all_datasets,
     load_dataset,
     save_dataset,
@@ -53,6 +56,7 @@ __all__ = [
     "TrainingHistory",
     "auto_device",
     "generate_training_data",
+    "generate_training_data_parallel",
     "grid_search",
     "heuristic_weight_grid",
     "load_all_datasets",

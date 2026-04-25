@@ -15,13 +15,27 @@ garbage labels (outcome doesn't reflect position quality). Phase D
 typically uses PIMC + heuristic on both sides; later phases bootstrap
 by using the previously-trained NN to play the next round of games
 (the AlphaZero loop).
+
+Two driver functions:
+
+- ``generate_training_data`` runs games sequentially. Used by tests
+  (small N, want simple code path) and one-off uses where setup
+  overhead matters more than wall-clock parallelism.
+- ``generate_training_data_parallel`` distributes games across a
+  ``multiprocessing.Pool`` of workers. Both produce identical
+  arrays for the same ``base_seed`` because per-game seeds are
+  derived from ``game_idx``, not from worker assignment — both
+  paths call the same per-game helper. This determinism is locked
+  in by a test.
 """
 
 from __future__ import annotations
 
+import multiprocessing as mp
+import os
 import random
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -37,6 +51,13 @@ _DEFAULT_DECISION_CAP = 4000
 
 _DTYPE_FEATURES = np.float32
 _DTYPE_OUTCOMES = np.float32
+
+
+def _empty_arrays() -> tuple[np.ndarray, np.ndarray]:
+    return (
+        np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES),
+        np.zeros((0,), dtype=_DTYPE_OUTCOMES),
+    )
 
 
 def generate_training_data(
@@ -65,42 +86,147 @@ def generate_training_data(
     Deterministic in ``base_seed`` — same call produces the same
     arrays.
     """
-    feature_buf: list[np.ndarray] = []
-    outcome_buf: list[float] = []
-
-    for game_idx in range(n_games):
-        engine_seed = base_seed + game_idx
-        engine = setup_game(
-            [
-                RandomAgent(rng=random.Random(engine_seed + 1)),
-                RandomAgent(rng=random.Random(engine_seed + 2)),
-            ],
-            ["G", "R"],
-            seed=engine_seed,
+    chunks = [
+        _generate_one_game_data(
+            game_idx=i,
+            p0_factory=p0_factory, p1_factory=p1_factory,
+            base_seed=base_seed,
+            decision_cap=decision_cap, sample_every=sample_every,
         )
-        adapter = MtgGameStateAdapter(engine)
+        for i in range(n_games)
+    ]
+    return _concat_chunks(chunks)
 
-        strategies = {
-            0: p0_factory(base_seed + 100 * game_idx),
-            1: p1_factory(base_seed + 100 * game_idx + 50),
-        }
-        rng = random.Random(base_seed + 100 * game_idx + 99)
 
-        winner, samples_for_this_game = _play_one_game_recording(
-            adapter, strategies, rng, decision_cap, sample_every,
-        )
-        outcome_label = _outcome_label(winner)
-        for features_per_viewer, viewer in samples_for_this_game:
-            feature_buf.append(features_per_viewer)
-            outcome_buf.append(outcome_label[viewer])
+def generate_training_data_parallel(
+    p0_factory: StrategyFactory,
+    p1_factory: StrategyFactory,
+    n_games: int,
+    base_seed: int = 0,
+    n_workers: Optional[int] = None,
+    decision_cap: int = _DEFAULT_DECISION_CAP,
+    sample_every: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Same contract as ``generate_training_data`` but distributes
+    games across a ``multiprocessing.Pool``.
 
-    if not feature_buf:
-        return (
-            np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES),
-            np.zeros((0,), dtype=_DTYPE_OUTCOMES),
-        )
-    features = np.stack(feature_buf, axis=0).astype(_DTYPE_FEATURES)
-    outcomes = np.asarray(outcome_buf, dtype=_DTYPE_OUTCOMES)
+    Identical output to the sequential function for the same
+    ``base_seed`` — per-game seeds are derived from ``game_idx``, not
+    worker assignment, so the same game produces the same samples
+    no matter which worker plays it. ``Pool.map`` preserves input
+    order so concatenation is deterministic too.
+
+    ``n_workers`` defaults to ``cpu_count() - 2`` (leaves a few cores
+    for OS / Python main / the user's other work). Pass an explicit
+    int to override.
+
+    Caller note: factories must be picklable. Module-level functions
+    (e.g. ``random_choice_factory``) and bound methods of picklable
+    dataclasses (e.g. ``PimcConfig().build``) work; lambdas and
+    nested closures don't. The CLI builds factories the right way.
+
+    Worker spawn cost on Windows is ~1-2s per worker, paid once per
+    pool. Dominates wall clock at very small ``n_games``; amortizes
+    away past a few dozen games.
+    """
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 1) - 2)
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be >= 1, got {n_workers}")
+    if n_games == 0:
+        return _empty_arrays()
+
+    args_list = [
+        (i, p0_factory, p1_factory, base_seed, decision_cap, sample_every)
+        for i in range(n_games)
+    ]
+    # Pool() with no start method falls back to the platform default —
+    # spawn on Windows, fork on Unix. Workers persist for pool
+    # lifetime so import cost is paid once per worker.
+    with mp.Pool(processes=n_workers) as pool:
+        chunks = pool.map(_play_one_parallel_game, args_list)
+    return _concat_chunks(chunks)
+
+
+def _play_one_parallel_game(
+    args: tuple,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Top-level pickleable worker. Plays one game, returns
+    ``(features, outcomes)`` arrays for it. Lives at module top
+    level (not nested) so multiprocessing can pickle it across the
+    spawn boundary."""
+    (
+        game_idx, p0_factory, p1_factory, base_seed,
+        decision_cap, sample_every,
+    ) = args
+    return _generate_one_game_data(
+        game_idx=game_idx,
+        p0_factory=p0_factory, p1_factory=p1_factory,
+        base_seed=base_seed,
+        decision_cap=decision_cap, sample_every=sample_every,
+    )
+
+
+def _generate_one_game_data(
+    *,
+    game_idx: int,
+    p0_factory: StrategyFactory,
+    p1_factory: StrategyFactory,
+    base_seed: int,
+    decision_cap: int,
+    sample_every: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Play one game and return its ``(features, outcomes)`` arrays.
+
+    The single source of truth for per-game data extraction; both
+    sequential and parallel drivers call this so they produce
+    bit-identical results for the same ``(game_idx, base_seed,
+    factories)``.
+    """
+    engine_seed = base_seed + game_idx
+    engine = setup_game(
+        [
+            RandomAgent(rng=random.Random(engine_seed + 1)),
+            RandomAgent(rng=random.Random(engine_seed + 2)),
+        ],
+        ["G", "R"],
+        seed=engine_seed,
+    )
+    adapter = MtgGameStateAdapter(engine)
+    strategies = {
+        0: p0_factory(base_seed + 100 * game_idx),
+        1: p1_factory(base_seed + 100 * game_idx + 50),
+    }
+    rng = random.Random(base_seed + 100 * game_idx + 99)
+    winner, samples = _play_one_game_recording(
+        adapter, strategies, rng, decision_cap, sample_every,
+    )
+    if not samples:
+        return _empty_arrays()
+    outcome_label = _outcome_label(winner)
+    features = np.stack(
+        [f for f, _ in samples], axis=0,
+    ).astype(_DTYPE_FEATURES)
+    outcomes = np.asarray(
+        [outcome_label[v] for _, v in samples], dtype=_DTYPE_OUTCOMES,
+    )
+    return features, outcomes
+
+
+def _concat_chunks(
+    chunks: list[tuple[np.ndarray, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Concat per-game ``(features, outcomes)`` chunks into the final
+    arrays. Skips empty chunks (zero-decision games hit the cap)."""
+    nonempty = [c for c in chunks if c[0].size > 0]
+    if not nonempty:
+        return _empty_arrays()
+    features = np.concatenate(
+        [c[0] for c in nonempty], axis=0,
+    ).astype(_DTYPE_FEATURES)
+    outcomes = np.concatenate(
+        [c[1] for c in nonempty], axis=0,
+    ).astype(_DTYPE_OUTCOMES)
     return features, outcomes
 
 

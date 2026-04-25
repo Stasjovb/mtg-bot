@@ -30,8 +30,13 @@ _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+import os  # noqa: E402
+
 from mtg_bot.training import (  # noqa: E402
-    PimcConfig, generate_training_data, save_dataset,
+    PimcConfig,
+    generate_training_data,
+    generate_training_data_parallel,
+    save_dataset,
 )
 
 
@@ -61,26 +66,49 @@ def main() -> None:
         "--output", type=Path, required=True,
         help="Output .npz path. Parent dirs are created.",
     )
+    parser.add_argument(
+        "--n-workers", type=int, default=None,
+        help=(
+            "Worker processes for parallel data gen. Default: "
+            f"cpu_count - 2 (~{max(1, (os.cpu_count() or 1) - 2)} on "
+            "this machine). Pass 1 to use the sequential code path "
+            "(no spawn overhead — faster for very small n_games)."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     config = PimcConfig(samples=args.samples, inner_nodes=args.nodes)
-    factory = lambda seed, _c=config: _c.build(seed)
+    # PimcConfig.build is a bound method of a frozen dataclass —
+    # picklable, so it crosses the multiprocessing spawn boundary
+    # cleanly. Lambdas would NOT (no qualified name).
+    factory = config.build
+
+    n_workers = args.n_workers
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 1) - 2)
 
     print(
         f"# generate_training_data: {args.n_games} games "
         f"(samples={args.samples}, nodes={args.nodes}, "
-        f"sample_every={args.sample_every}, seed={args.seed})"
+        f"sample_every={args.sample_every}, seed={args.seed}, "
+        f"n_workers={n_workers})"
     )
     started = time.perf_counter()
-    features, outcomes = generate_training_data(
-        p0_factory=factory,
-        p1_factory=factory,
-        n_games=args.n_games,
-        base_seed=args.seed,
-        sample_every=args.sample_every,
-    )
+    if n_workers == 1:
+        features, outcomes = generate_training_data(
+            p0_factory=factory, p1_factory=factory,
+            n_games=args.n_games, base_seed=args.seed,
+            sample_every=args.sample_every,
+        )
+    else:
+        features, outcomes = generate_training_data_parallel(
+            p0_factory=factory, p1_factory=factory,
+            n_games=args.n_games, base_seed=args.seed,
+            n_workers=n_workers,
+            sample_every=args.sample_every,
+        )
     elapsed = time.perf_counter() - started
 
     save_dataset(features, outcomes, args.output)

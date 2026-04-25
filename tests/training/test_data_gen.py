@@ -189,3 +189,98 @@ def test_runs_with_tiny_pimc_on_real_engine():
     assert features.shape[0] > 0
     assert np.all(np.isfinite(features))
     assert np.all(np.isin(outcomes, [-1.0, 0.0, 1.0]))
+
+
+# ---------- generate_training_data_parallel ---------------------------------
+
+
+from mtg_bot.training import generate_training_data_parallel  # noqa: E402
+
+
+def test_parallel_result_equals_sequential_result():
+    """The headline determinism guarantee: parallel produces the
+    exact same arrays as sequential for the same base_seed. Per-game
+    seeds are derived from game_idx (not worker assignment), and
+    Pool.map preserves input order, so results MUST be bit-identical.
+
+    If this ever fails: investigate before declaring "good enough."
+    Non-deterministic data-gen makes tuning runs uncomparable across
+    hardware / worker counts."""
+    seq_f, seq_o = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3, base_seed=42,
+    )
+    par_f, par_o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3, base_seed=42, n_workers=2,
+    )
+    np.testing.assert_array_equal(seq_f, par_f)
+    np.testing.assert_array_equal(seq_o, par_o)
+
+
+def test_parallel_zero_games_returns_empty():
+    f, o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=0, n_workers=2,
+    )
+    assert f.shape == (0, FEATURE_DIM)
+    assert o.shape == (0,)
+
+
+def test_parallel_n_workers_validation():
+    import pytest
+    with pytest.raises(ValueError, match="n_workers must be >= 1"):
+        generate_training_data_parallel(
+            p0_factory=random_choice_factory,
+            p1_factory=random_choice_factory,
+            n_games=2, n_workers=0,
+        )
+
+
+def test_parallel_default_n_workers_path():
+    """When n_workers=None, the default-derivation path runs without
+    error. We pass n_games=0 so we don't actually spawn — the default
+    n_workers value is only meaningful relative to cpu_count and we
+    don't want this test to depend on the test machine's core count.
+    Real-run coverage of the default path comes from the
+    test_parallel_with_pimc_config_factory test below (which uses
+    explicit n_workers=2)."""
+    f, o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=0, n_workers=None,
+    )
+    assert f.shape == (0, FEATURE_DIM)
+
+
+def test_parallel_invariants_on_real_arrays():
+    """Same invariants the sequential version satisfies: balanced
+    outcomes, in-range labels, correct shapes."""
+    f, o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=11, n_workers=2,
+    )
+    assert f.shape[1] == FEATURE_DIM
+    assert f.shape[0] == o.shape[0]
+    assert np.all(np.isin(o, [-1.0, 0.0, 1.0]))
+    # P0 and P1 perspective labels cancel (every +1 paired with -1).
+    assert o.sum() == 0.0
+
+
+def test_parallel_with_pimc_config_factory():
+    """The intended real-world pattern: pass a PimcConfig.build
+    bound method as the factory. Bound methods of frozen dataclasses
+    are picklable so they cross the spawn boundary cleanly."""
+    config = PimcConfig(samples=1, inner_nodes=4)
+    f, o = generate_training_data_parallel(
+        p0_factory=config.build,
+        p1_factory=config.build,
+        n_games=2, base_seed=0, n_workers=2,
+    )
+    assert f.shape[1] == FEATURE_DIM
+    assert f.shape[0] > 0
+    assert np.all(np.isfinite(f))
