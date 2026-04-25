@@ -689,7 +689,12 @@ def test_api_recommend_returns_contract_shape(client):
     assert body["snapshot_idx"] == 0
     assert isinstance(body["priority_player_id"], int)
     assert isinstance(body["recommendations"], list)
-    assert body["engine"] == "stub"
+    # The play endpoint now captures engine state clones, so the
+    # recommend endpoint serves the PIMC-driven path. The legacy
+    # "stub" engine is still reachable when a caller pre-populates
+    # the cache without engine states (covered separately in
+    # test_recommend.py).
+    assert body["engine"] == "pimc"
 
 
 def test_api_recommend_default_n_is_three(client):
@@ -864,7 +869,9 @@ def test_card_image_card_has_no_image_404(img_client):
 def test_game_cache_stores_and_fetches():
     cache = GameCache()
     cache.store("a", [{"n": 1}])
-    assert cache.get("a") == [{"n": 1}]
+    game = cache.get("a")
+    assert game.snapshots == [{"n": 1}]
+    assert game.engine_states == [None]  # default when not provided
 
 
 def test_game_cache_miss_returns_none():
@@ -901,9 +908,34 @@ def test_game_cache_repeated_store_of_same_key_refreshes():
     cache.store("a", [{"x": "A2"}])  # overwrite + promote
     cache.store("c", [{"x": "C"}])
     # Eviction kicks out B, not A.
-    assert cache.get("a") == [{"x": "A2"}]
+    assert cache.get("a").snapshots == [{"x": "A2"}]
     assert cache.get("b") is None
     assert cache.get("c") is not None
+
+
+def test_game_cache_stores_paired_engine_states():
+    """When the caller passes engine_states alongside snapshots, both
+    survive the round-trip and stay positionally aligned."""
+    cache = GameCache()
+    cache.store(
+        "a",
+        snapshots=[{"i": 0}, {"i": 1}],
+        engine_states=["state-0", "state-1"],
+    )
+    game = cache.get("a")
+    assert game.snapshots == [{"i": 0}, {"i": 1}]
+    assert game.engine_states == ["state-0", "state-1"]
+
+
+def test_game_cache_rejects_mismatched_lengths():
+    import pytest
+    cache = GameCache()
+    with pytest.raises(ValueError, match="length"):
+        cache.store(
+            "a",
+            snapshots=[{"i": 0}, {"i": 1}],
+            engine_states=["just-one"],
+        )
 
 
 # ------------------------------------------------------------------------

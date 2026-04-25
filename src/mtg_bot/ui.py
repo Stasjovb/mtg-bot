@@ -29,7 +29,8 @@ from mtg_bot.art import (
     http_fetcher,
 )
 from mtg_bot.cards import COLORS
-from mtg_bot.recommend import recommend_from_snapshot
+from mtg_bot.game import GameState
+from mtg_bot.recommend import recommend_from_snapshot, recommend_from_state
 from mtg_bot.serialize import serialize_state
 from mtg_bot.simulate import simulate_game
 
@@ -37,30 +38,64 @@ from mtg_bot.simulate import simulate_game
 _GAME_CACHE_MAX = 20
 
 
-class GameCache:
-    """In-memory LRU cache of snapshot streams produced by /api/play.
+@dataclass
+class CachedGame:
+    """One simulated game: the serialized snapshots the UI renders, plus
+    a parallel list of engine-state clones for the engine-recommendation
+    panel to call PIMC against.
 
-    Keys are opaque game ids (hex UUIDs); values are the list of serialized
-    snapshot dicts captured during simulation. Oldest entries are evicted when
-    the cache exceeds ``max_entries``. Not threadsafe — Flask dev server is
-    single-request, and prod can add a lock if this ever matters.
+    ``engine_states[i]`` is a clone of the engine state taken at the
+    same moment as ``snapshots[i]``. Either list may contain ``None``
+    entries — a snapshot whose state wasn't captured falls back to the
+    serialize-only recommend path. ``len(snapshots) == len(engine_states)``
+    is an invariant; constructors that don't capture states should pass
+    ``[None] * len(snapshots)``.
+    """
+
+    snapshots: list[dict[str, Any]]
+    engine_states: list[Optional[GameState]]
+
+
+class GameCache:
+    """In-memory LRU cache of simulated games produced by /api/play.
+
+    Keys are opaque game ids (hex UUIDs); values are ``CachedGame``
+    instances bundling the serialized snapshots and (optionally) the
+    engine-state clones at each snapshot. Oldest entries are evicted
+    when the cache exceeds ``max_entries``. Not threadsafe — Flask dev
+    server is single-request, and prod can add a lock if this ever
+    matters.
     """
 
     def __init__(self, max_entries: int = _GAME_CACHE_MAX) -> None:
-        self._games: "OrderedDict[str, list[dict[str, Any]]]" = OrderedDict()
+        self._games: "OrderedDict[str, CachedGame]" = OrderedDict()
         self._max = max_entries
 
-    def store(self, game_id: str, snapshots: list[dict[str, Any]]) -> None:
-        self._games[game_id] = snapshots
+    def store(
+        self,
+        game_id: str,
+        snapshots: list[dict[str, Any]],
+        engine_states: Optional[list[Optional[GameState]]] = None,
+    ) -> None:
+        if engine_states is None:
+            engine_states = [None] * len(snapshots)
+        if len(engine_states) != len(snapshots):
+            raise ValueError(
+                f"engine_states length {len(engine_states)} != "
+                f"snapshots length {len(snapshots)}"
+            )
+        self._games[game_id] = CachedGame(
+            snapshots=snapshots, engine_states=engine_states
+        )
         self._games.move_to_end(game_id)
         while len(self._games) > self._max:
             self._games.popitem(last=False)
 
-    def get(self, game_id: str) -> Optional[list[dict[str, Any]]]:
-        snapshots = self._games.get(game_id)
-        if snapshots is not None:
+    def get(self, game_id: str) -> Optional[CachedGame]:
+        game = self._games.get(game_id)
+        if game is not None:
             self._games.move_to_end(game_id)
-        return snapshots
+        return game
 
     def __len__(self) -> int:
         return len(self._games)
@@ -148,6 +183,7 @@ def create_app(
         if reveal not in ("all", "p0", "p1", "none"):
             abort(400, description="reveal must be 'all', 'p0', 'p1', or 'none'")
         snapshots: list[dict[str, Any]] = []
+        engine_states: list[Optional[GameState]] = []
         # Track log length across snapshots so each one can carry the entries
         # that appeared since the previous snapshot — useful for highlighting
         # "events this step" in the UI's log panel.
@@ -173,6 +209,12 @@ def create_app(
             snap["log_since_last"] = list(snap["log"][log_offset[0]:])
             log_offset[0] = len(snap["log"])
             snapshots.append(snap)
+            # Clone the engine state so the engine-recommendation panel
+            # can run PIMC against the exact moment the snapshot was
+            # taken. The clone is independent of the live state, so the
+            # ongoing simulation can mutate freely without corrupting
+            # the recommendation surface.
+            engine_states.append(state.clone())
 
         state = simulate_game(
             colors=[c1, c2], seed=seed, max_turns=max_turns,
@@ -180,7 +222,7 @@ def create_app(
             snapshot_granularity=granularity,
         )
         game_id = uuid4().hex
-        cache.store(game_id, snapshots)
+        cache.store(game_id, snapshots, engine_states)
         return jsonify({
             "game_id": game_id,
             "snapshot_count": len(snapshots),
@@ -195,26 +237,29 @@ def create_app(
 
     @app.route("/api/snapshot/<game_id>/<int:idx>")
     def api_snapshot(game_id: str, idx: int):
-        snapshots = cache.get(game_id)
-        if snapshots is None:
+        game = cache.get(game_id)
+        if game is None:
             abort(404, description="unknown game_id")
-        if idx < 0 or idx >= len(snapshots):
-            abort(404, description=f"snapshot idx out of range (0..{len(snapshots) - 1})")
-        return jsonify(snapshots[idx])
+        if idx < 0 or idx >= len(game.snapshots):
+            abort(404, description=f"snapshot idx out of range (0..{len(game.snapshots) - 1})")
+        return jsonify(game.snapshots[idx])
 
     @app.route("/api/recommend/<game_id>/<int:idx>")
     def api_recommend(game_id: str, idx: int):
         """Return the top-N engine recommendations for a specific snapshot.
 
-        Contract: see ``recommend_from_snapshot`` in mtg_bot/recommend.py.
-        Stubbed until the real evaluator ships; the UI can be built against
-        this endpoint's stable response shape.
+        Calls PIMC-driven ``recommend_from_state`` when the engine state
+        for this snapshot was captured (the standard /api/play path).
+        Falls back to ``recommend_from_snapshot`` (the stub) when only
+        the serialized snapshot is available — keeps the endpoint
+        callable for callers that pre-populated the cache without
+        engine states (legacy tests, future sources).
         """
-        snapshots = cache.get(game_id)
-        if snapshots is None:
+        game = cache.get(game_id)
+        if game is None:
             abort(404, description="unknown game_id")
-        if idx < 0 or idx >= len(snapshots):
-            abort(404, description=f"snapshot idx out of range (0..{len(snapshots) - 1})")
+        if idx < 0 or idx >= len(game.snapshots):
+            abort(404, description=f"snapshot idx out of range (0..{len(game.snapshots) - 1})")
         n_raw = request.args.get("n", "3")
         try:
             n = int(n_raw)
@@ -222,7 +267,13 @@ def create_app(
             abort(400, description="n must be an integer")
         if n < 1 or n > 50:
             abort(400, description="n must be between 1 and 50")
-        result = recommend_from_snapshot(snapshots[idx], n=n)
+        engine_state = game.engine_states[idx]
+        if engine_state is not None:
+            result = recommend_from_state(
+                engine_state, name_to_id=name_to_id, n=n,
+            )
+        else:
+            result = recommend_from_snapshot(game.snapshots[idx], n=n)
         result["snapshot_idx"] = idx
         return jsonify(result)
 
@@ -232,12 +283,12 @@ def create_app(
         navigation in the scrubber without fetching each snapshot's full
         payload. Returned as a parallel array so the client can index by
         snapshot idx directly."""
-        snapshots = cache.get(game_id)
-        if snapshots is None:
+        game = cache.get(game_id)
+        if game is None:
             abort(404, description="unknown game_id")
         return jsonify([
             {"turn_number": s["turn_number"], "step": s["step"]}
-            for s in snapshots
+            for s in game.snapshots
         ])
 
     @app.route("/api/card/<scryfall_id>")

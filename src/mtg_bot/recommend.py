@@ -1,21 +1,32 @@
 """Action-recommendation API contract.
 
-Consumed by the UI's "engine recommendations" panel. Exposes a single function
-(``recommend_from_snapshot``) that returns the top-N moves the engine would
-suggest at a given game state, each with a score. This file only ships a
-**stub** implementation — it reads the serialized snapshot, enumerates
-plausible actions, and gives every one a score of 0.0. The real evaluator
-is being built in a separate workstream and is expected to replace the
-scoring loop while preserving the output shape.
+Consumed by the UI's "engine recommendations" panel. Two entry points:
 
-The contract (see ``Recommendation`` and ``RecommendationResult`` below)
-is the interface the frontend depends on. Anything outside this module can
-change freely — anything in the returned dict is a promise.
+- ``recommend_from_state(engine_state, *, name_to_id, n)`` — the real
+  PIMC-driven path. Wraps the engine state in an MtgGameStateAdapter,
+  runs PIMC with a small budget, ranks decisions by aggregated visit
+  count, and returns them as Recommendation dicts. Sets
+  ``engine = "pimc"`` in the result.
+- ``recommend_from_snapshot(snap, n)`` — fallback stub for callers that
+  only have a serialized snapshot (legacy tests, external consumers).
+  Enumerates obvious options at sorcery timing with score 0.0 and
+  ``engine = "stub"``.
+
+The frontend renders against the response shape — it's the same in both
+paths. Score is the decision's share of total root visits in the PIMC
+case, 0.0 in the stub case.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import random
+from typing import Any, Optional
+
+from mtg_bot.actions import (
+    Action, ActivateAbility, ActivateStation, CastSpell,
+    DeclareAttackers, DeclareBlockers, PassPriority, PlayLand,
+)
+from mtg_bot.game import GameObject, GameState, Zone
 
 # ------------------------------------------------------------------------
 # Output schema. Frozen: the UI renders against these field names.
@@ -133,3 +144,232 @@ def _finalize(
         "engine": "stub",
         "engine_version": "0.0.1",
     }
+
+
+# ------------------------------------------------------------------------
+# PIMC-driven recommender. Real engine path.
+# ------------------------------------------------------------------------
+
+# Per-recommendation-call PIMC budget. Conservative defaults so the
+# UI feels responsive (~hundreds of ms on a recent CPU). Tune from
+# real numbers when we have them; exposed as module-level constants
+# so a future caller can swap them per-request without changing the
+# function signature.
+_PIMC_SAMPLES = 4
+_PIMC_INNER_BUDGET_NODES = 200
+_PIMC_RNG_SEED = 0  # deterministic recommendations for the same snapshot
+
+_RECOMMEND_ENGINE_NAME = "pimc"
+_RECOMMEND_ENGINE_VERSION = "0.1.0"
+
+
+def recommend_from_state(
+    engine_state: GameState,
+    *,
+    name_to_id: Optional[dict[str, str]] = None,
+    n: int = 3,
+) -> dict[str, Any]:
+    """Real engine recommender.
+
+    Wraps ``engine_state`` in an ``MtgGameStateAdapter``, runs PIMC
+    with a small budget, ranks legal decisions by aggregated visit
+    count, and returns the top-N as Recommendation dicts. Score is
+    each decision's share of total root visits — so the visible
+    numbers always sum to 1.0 across the returned list (modulo the
+    top-N truncation).
+
+    ``name_to_id`` maps card names to Scryfall ids for image rendering;
+    pass the same dict the UI builds at startup. None disables image
+    annotations (every recommendation gets ``scryfall_id = None``).
+
+    Returns the empty-recommendations result when the game is over,
+    matching the stub's behavior.
+    """
+    # Imported lazily because mtg_bot.search transitively pulls in a
+    # large slice of the engine; recommend.py itself is imported by
+    # ui.py at startup, and we don't want to drag the search stack
+    # into modules that only call recommend_from_snapshot.
+    from mtg_bot.search.budget import Budget
+    from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+    from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
+    from mtg_bot.search.mcts import MCTS
+    from mtg_bot.search.pimc import PIMC
+
+    if engine_state.is_over():
+        return _finalize_engine(
+            recs=[],
+            priority_player_id=engine_state.priority_player_idx,
+        )
+
+    adapter = MtgGameStateAdapter(engine_state.clone())
+    if adapter.is_terminal():
+        return _finalize_engine(
+            recs=[],
+            priority_player_id=engine_state.priority_player_idx,
+        )
+
+    viewer_id = adapter.active_player()
+
+    def _make_inner() -> MCTS:
+        return MCTS(
+            evaluator=MtgHeuristicEvaluator(),
+            budget_factory=lambda: Budget(
+                max_nodes=_PIMC_INNER_BUDGET_NODES
+            ),
+            rng=random.Random(_PIMC_RNG_SEED),
+        )
+
+    pimc = PIMC(
+        inner_factory=_make_inner,
+        samples=_PIMC_SAMPLES,
+        rng=random.Random(_PIMC_RNG_SEED),
+    )
+    visits = pimc.choose_with_visits(adapter, viewer_id)
+    total = sum(visits.values()) or 1  # avoid div-by-zero on edge cases
+
+    recs: list[dict[str, Any]] = []
+    for decision, count in sorted(
+        visits.items(), key=lambda kv: kv[1], reverse=True,
+    ):
+        rec = _decision_to_rec(
+            decision, engine_state, name_to_id or {},
+        )
+        if rec is None:
+            continue
+        rec["score"] = count / total
+        recs.append(rec)
+
+    return _finalize_engine(recs[:n], priority_player_id=viewer_id)
+
+
+def _finalize_engine(
+    recs: list[dict[str, Any]], priority_player_id: int,
+) -> dict[str, Any]:
+    return {
+        "priority_player_id": priority_player_id,
+        "recommendations": recs,
+        "engine": _RECOMMEND_ENGINE_NAME,
+        "engine_version": _RECOMMEND_ENGINE_VERSION,
+    }
+
+
+def _decision_to_rec(
+    decision: Action,
+    state: GameState,
+    name_to_id: dict[str, str],
+) -> Optional[dict[str, Any]]:
+    """Translate one search-side ``Action`` into the Recommendation
+    dict shape the UI expects. Returns None if the action type isn't
+    one we know how to label — the caller filters those out so an
+    unrecognized action never reaches the UI in mid-broken form.
+    """
+    if isinstance(decision, PassPriority):
+        return _rec(
+            label="Pass priority", action_type="PassPriority",
+            source_id=None, source_name=None,
+            scryfall_id=None, detail=None,
+        )
+    if isinstance(decision, PlayLand):
+        card = _find_card_by_id(state, decision.card_id)
+        name = card.printing.name if card else f"#{decision.card_id}"
+        return _rec(
+            label=f"Play {name}", action_type="PlayLand",
+            source_id=decision.card_id, source_name=name,
+            scryfall_id=name_to_id.get(name), detail=None,
+        )
+    if isinstance(decision, CastSpell):
+        card = _find_card_by_id(state, decision.card_id)
+        name = card.printing.name if card else f"#{decision.card_id}"
+        bits: list[str] = []
+        if card and card.printing.mana_cost is not None:
+            bits.append(str(card.printing.mana_cost))
+        if decision.use_warp:
+            bits.append("warp")
+        if decision.kicked:
+            bits.append("kicker")
+        detail = " · ".join(bits) if bits else None
+        return _rec(
+            label=f"Cast {name}", action_type="CastSpell",
+            source_id=decision.card_id, source_name=name,
+            scryfall_id=name_to_id.get(name), detail=detail,
+        )
+    if isinstance(decision, ActivateAbility):
+        card = _find_card_by_id(state, decision.source_id)
+        name = card.printing.name if card else f"#{decision.source_id}"
+        return _rec(
+            label=f"Activate ability of {name}",
+            action_type="ActivateAbility",
+            source_id=decision.source_id, source_name=name,
+            scryfall_id=name_to_id.get(name),
+            detail=f"ability {decision.ability_index}",
+        )
+    if isinstance(decision, ActivateStation):
+        ship = _find_card_by_id(state, decision.spacecraft_id)
+        crew = _find_card_by_id(state, decision.crew_id)
+        ship_name = ship.printing.name if ship else f"#{decision.spacecraft_id}"
+        crew_name = crew.printing.name if crew else f"#{decision.crew_id}"
+        return _rec(
+            label=f"Station {crew_name} on {ship_name}",
+            action_type="ActivateStation",
+            source_id=decision.spacecraft_id, source_name=ship_name,
+            scryfall_id=name_to_id.get(ship_name),
+            detail=f"crew: {crew_name}",
+        )
+    if isinstance(decision, DeclareAttackers):
+        count = len(decision.attacker_ids)
+        return _rec(
+            label=(
+                "Attack with no creatures" if count == 0
+                else f"Attack with {count} creature{'s' if count != 1 else ''}"
+            ),
+            action_type="DeclareAttackers",
+            source_id=None, source_name=None,
+            scryfall_id=None, detail=None,
+        )
+    if isinstance(decision, DeclareBlockers):
+        count = len(decision.assignments)
+        return _rec(
+            label=(
+                "Don't block" if count == 0
+                else f"Assign {count} blocker{'s' if count != 1 else ''}"
+            ),
+            action_type="DeclareBlockers",
+            source_id=None, source_name=None,
+            scryfall_id=None, detail=None,
+        )
+    return None
+
+
+def _rec(
+    *, label: str, action_type: str, source_id: Optional[int],
+    source_name: Optional[str], scryfall_id: Optional[str],
+    detail: Optional[str],
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "score": 0.0,  # caller overwrites
+        "action_type": action_type,
+        "source_id": source_id,
+        "source_name": source_name,
+        "scryfall_id": scryfall_id,
+        "detail": detail,
+    }
+
+
+def _find_card_by_id(
+    state: GameState, card_id: int,
+) -> Optional[GameObject]:
+    """Look up a GameObject by id across every zone the action types
+    we care about reference (hand for cast/play, battlefield for
+    activated abilities and stations). Walks zones in order; returns
+    the first match. None if the id isn't on the board (shouldn't
+    arise for legal decisions, but fail soft so the UI never crashes
+    on a stale recommendation)."""
+    for o in state.battlefield:
+        if o.id == card_id:
+            return o
+    for p in state.players:
+        for o in p.hand:
+            if o.id == card_id:
+                return o
+    return None
