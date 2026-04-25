@@ -91,6 +91,30 @@ class PIMC(SearchStrategy):
     def choose(
         self, state: GameState, player_id: PlayerID
     ) -> Decision:
+        visits = self.choose_with_visits(state, player_id)
+        if not visits:
+            # Every sub-search bottomed out (likely budget too small).
+            # Fall back to a legal default rather than raising.
+            return list(state.legal_decisions())[0]
+        return max(visits.items(), key=lambda kv: kv[1])[0]
+
+    def choose_with_visits(
+        self, state: GameState, player_id: PlayerID
+    ) -> dict[Decision, int]:
+        """Run PIMC and return aggregated visit counts per decision,
+        summed across all K sub-searches.
+
+        Used by the recommendation panel to produce a ranked list of
+        actions with relative scores (each decision's share of total
+        visits is its score). ``choose()`` is just the argmax wrapper
+        around this. Returns an empty dict only if every sub-search
+        bottomed out — callers should fall back to a legal default.
+
+        Forced-move shortcut: when only one legal decision exists,
+        returns ``{decision: 1}`` without spinning up sub-searches.
+        The synthetic count is a placeholder so callers' aggregation
+        logic doesn't need a special case.
+        """
         if not isinstance(state, MtgGameStateAdapter):
             raise TypeError(
                 "PIMC requires an MtgGameStateAdapter (state must wrap "
@@ -101,7 +125,7 @@ class PIMC(SearchStrategy):
         # up K sub-searches when there's only one legal action.
         legal = list(state.legal_decisions())
         if len(legal) == 1:
-            return legal[0]
+            return {legal[0]: 1}
 
         engine_state = state.engine_state
         visit_totals: dict[Decision, int] = {}
@@ -120,12 +144,7 @@ class PIMC(SearchStrategy):
                 visit_totals[decision] = (
                     visit_totals.get(decision, 0) + visits
                 )
-
-        if not visit_totals:
-            # Every sub-search bottomed out (likely budget too small).
-            # Fall back to a legal default rather than raising.
-            return legal[0]
-        return max(visit_totals.items(), key=lambda kv: kv[1])[0]
+        return visit_totals
 
     @staticmethod
     def _wrap_like(

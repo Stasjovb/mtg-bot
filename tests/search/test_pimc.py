@@ -133,6 +133,45 @@ def test_pimc_k_equals_1_returns_inner_argmax():
 # ---------- K>1: aggregation across worlds ----------------------------------
 
 
+def test_pimc_choose_with_visits_returns_aggregated_dict():
+    """choose_with_visits should expose the per-decision visit totals
+    summed across all K sub-searches (rather than collapsing to the
+    single argmax that choose() returns). The recommendation panel
+    relies on this to rank and score multiple options."""
+    adapter = _fresh_adapter()
+    while len(adapter.legal_decisions()) == 1 and not adapter.is_terminal():
+        adapter.apply(adapter.legal_decisions()[0])
+    if adapter.is_terminal():
+        return
+    legal = adapter.legal_decisions()
+    a, b = legal[0], legal[1]
+
+    def factory():
+        return _ScriptedInner([{a: 5, b: 7}])
+
+    pimc = PIMC(
+        inner_factory=factory,
+        samples=3,
+        rng=random.Random(0),
+    )
+    visits = pimc.choose_with_visits(adapter, adapter.active_player())
+    # 3 sub-searches × {a:5, b:7} = {a:15, b:21}.
+    assert visits[a] == 15
+    assert visits[b] == 21
+
+
+def test_pimc_choose_with_visits_forced_move_returns_singleton():
+    adapter = _fresh_adapter()
+    # Fresh state at UPKEEP — only PassPriority is legal.
+    assert len(adapter.legal_decisions()) == 1
+    inner = _ScriptedInner([])
+    pimc = PIMC(inner_factory=lambda: inner, samples=4)
+    visits = pimc.choose_with_visits(adapter, adapter.active_player())
+    only = adapter.legal_decisions()[0]
+    assert visits == {only: 1}
+    assert inner.calls == []  # forced-move skipped sub-searches
+
+
 def test_pimc_aggregates_visit_counts_across_worlds():
     adapter = _fresh_adapter()
     while len(adapter.legal_decisions()) == 1 and not adapter.is_terminal():
