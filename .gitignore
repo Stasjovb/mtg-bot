@@ -59,3 +59,8 @@ trained_weights/
 # Captured per-game replays (gzipped JSON), written by data gen with
 # --save-replays-to. Regenerable; can be huge for long training runs.
 replays/
+
+# 17lands public data + parsed deck cache. The raw CSVs are 100s of
+# MB; the parsed deck JSON is much smaller but still derived data.
+# Regenerable via scripts/fetch_17lands_data.py.
+data/17lands/
