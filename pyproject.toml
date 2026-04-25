@@ -7,15 +7,18 @@ dependencies = [
     "flask>=3.0",
     "numpy>=1.26",
     # CPU-only torch is enough for Phase C scaffolding (network
-    # architecture + load/save + single-state inference). Phase D
-    # upgrades to a CUDA wheel for training on the GPU; install
-    # that explicitly via:
+    # architecture + load/save + single-state inference). For
+    # training on a Blackwell GPU (RTX 50-series, sm_120), install
+    # the CUDA 12.8 wheel explicitly:
     #   pip install --upgrade torch --index-url \
-    #     https://download.pytorch.org/whl/cu126
-    # (or whatever Blackwell-compatible CUDA channel ships at the
-    # time). The pyproject dep stays plain so `pip install -e .`
-    # doesn't pull a 3GB CUDA wheel for someone who only wants to
-    # run the engine + UI.
+    #     https://download.pytorch.org/whl/cu128
+    # cu126 and earlier wheels were built for sm_50..sm_90 only —
+    # they fail at runtime on Blackwell with "no kernel image is
+    # available for execution on the device." If a future PyTorch
+    # release adds Blackwell support to a different channel, swap
+    # the URL accordingly. The pyproject dep stays plain so
+    # `pip install -e .` doesn't pull a 3GB CUDA wheel for someone
+    # who only wants to run the engine + UI.
     "torch>=2.0",
 ]
 
