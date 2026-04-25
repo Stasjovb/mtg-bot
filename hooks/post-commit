@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Post-commit hook: log clone perf on main commits.
+
+Runs ``scripts/bench_clone.py`` after each commit on the ``main``
+branch (no-op on feature branches), parses the per-call clone time,
+appends a row to ``.perf_history.log`` (gitignored), and prints the
+new measurement plus the delta vs the previous logged commit.
+
+Purely informational. Never blocks a commit — if the bench fails
+or can't find the venv, the hook prints a message to stderr and
+exits 0 so the commit still succeeds.
+
+Setup (one-time per clone):
+
+    git config core.hooksPath hooks
+
+This points git at the version-controlled ``hooks/`` directory
+instead of the per-clone ``.git/hooks/``.
+
+Output lives in ``.perf_history.log`` (gitignored). Each line is::
+
+    <short-sha>\t<clone_us>\t<commit-message>
+
+so a quick ``tail .perf_history.log`` shows the last several
+commits' perf numbers in context.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HISTORY_LOG = REPO_ROOT / ".perf_history.log"
+BENCH_SCRIPT = REPO_ROOT / "scripts" / "bench_clone.py"
+
+
+def _git(*args: str) -> str:
+    return subprocess.check_output(
+        ["git", *args], text=True, cwd=REPO_ROOT,
+    ).strip()
+
+
+def _find_venv_python() -> str | None:
+    for candidate in (".venv/Scripts/python.exe", ".venv/bin/python"):
+        path = REPO_ROOT / candidate
+        if path.exists():
+            return str(path)
+    return None
+
+
+def main() -> None:
+    if _git("rev-parse", "--abbrev-ref", "HEAD") != "main":
+        return  # silently no-op on feature branches
+
+    python = _find_venv_python()
+    if python is None:
+        print("[perf hook] no .venv python found; skipping bench",
+              file=sys.stderr)
+        return
+
+    if not BENCH_SCRIPT.exists():
+        print(f"[perf hook] {BENCH_SCRIPT} missing; skipping",
+              file=sys.stderr)
+        return
+
+    proc = subprocess.run(
+        [python, str(BENCH_SCRIPT)],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    if proc.returncode != 0:
+        print(f"[perf hook] bench failed:\n{proc.stderr}", file=sys.stderr)
+        return
+
+    # Parse the "clone():   XXX.Yms for N calls (YY.Yus each)" line.
+    match = re.search(r"clone\(\):.*\(([\d.]+)us each\)", proc.stdout)
+    if match is None:
+        print(f"[perf hook] couldn't parse bench output:\n{proc.stdout}",
+              file=sys.stderr)
+        return
+    clone_us = float(match.group(1))
+
+    sha = _git("rev-parse", "--short", "HEAD")
+    msg = _git("log", "-1", "--format=%s")
+
+    # Read previous entry for the diff before appending the new one.
+    prev_us: float | None = None
+    if HISTORY_LOG.exists():
+        try:
+            last_line = HISTORY_LOG.read_text(encoding="utf-8").strip(
+            ).splitlines()[-1]
+            prev_us = float(last_line.split("\t")[1])
+        except (IndexError, ValueError):
+            pass
+
+    with HISTORY_LOG.open("a", encoding="utf-8") as f:
+        f.write(f"{sha}\t{clone_us}\t{msg}\n")
+
+    print(f"[perf hook] clone: {clone_us:.1f}us")
+    if prev_us is not None:
+        delta_pct = (clone_us - prev_us) / prev_us * 100
+        sign = "+" if delta_pct >= 0 else ""
+        print(
+            f"[perf hook] vs prev ({prev_us:.1f}us): {sign}{delta_pct:.1f}%"
+        )
+    else:
+        print("[perf hook] (first measurement; no previous to compare)")
+
+
+if __name__ == "__main__":
+    main()

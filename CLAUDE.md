@@ -11,6 +11,19 @@
 - **Tests must pass before every commit.** Run the full test suite; if anything fails, fix it before committing.
 - **Do not merge to `main` yourself.** Push the branch for review and wait for the user to approve. Only after explicit approval, merge into `main`.
 
+## Perf monitoring (informational)
+
+- One-time per clone: `git config core.hooksPath hooks`. This points
+  git at the version-controlled `hooks/` directory.
+- After every commit on `main`, `hooks/post-commit` runs `scripts/bench_clone.py`
+  and appends the per-call clone time to `.perf_history.log` (gitignored). It
+  also prints the new measurement and the % delta vs the previous logged commit.
+- Feature-branch commits are silently skipped (no bench, no log entry).
+- Never blocks: if the bench fails or the venv is missing, the hook prints
+  to stderr and exits 0 so the commit still succeeds.
+- Read the log with `tail .perf_history.log` to see the last several commits'
+  perf numbers in context.
+
 ## Testing
 
 - Use `pytest`. Tests live under `tests/`.
