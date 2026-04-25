@@ -2,6 +2,9 @@
 
 ## Development workflow
 
+- **All work happens in a git worktree, not in the main checkout.** The main checkout at `mtg-bot/` stays on `main` and is treated as read-only context for cross-branch comparison. Create a worktree per feature with:
+  `git worktree add ../mtg-bot-worktrees/<branch-name> -b feature/<branch-name> main`
+  Worktrees live in the sibling directory `mtg-bot-worktrees/`. Remove them after merge with `git worktree remove ../mtg-bot-worktrees/<branch-name>`.
 - **Every new feature must be developed on its own branch off `main`.** Do not commit feature work directly to `main`.
 - Branch naming: `feature/<short-name>` (e.g. `feature/flying-keyword`, `feature/etb-triggers`).
 - **Commit as you go.** Each unit of work is its own commit on the feature branch. Do not batch everything into one monster commit.
