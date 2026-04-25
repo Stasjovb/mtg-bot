@@ -44,6 +44,7 @@ from mtg_bot.search.budget import Budget
 from mtg_bot.search.combat_decisions import (
     AttackerDecision, BlockerDecision,
 )
+from mtg_bot.search.determinize import determinize, viewer_knows
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.resolution_channel import ResolutionChannelAgent
 from mtg_bot.search.resolution_decisions import (
@@ -118,8 +119,10 @@ __all__ = [
     "SearchStrategy",
     "attack_aggressive_prior",
     "block_biggest_attacker_first_prior",
+    "determinize",
     "mtg_default_prior",
     "play_one_game",
     "priority_action_prior",
     "run_match",
+    "viewer_knows",
 ]
