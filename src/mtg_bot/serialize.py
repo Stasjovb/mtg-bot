@@ -35,16 +35,18 @@ def _attacking_defender(state: GameState, obj: GameObject) -> dict[str, Any] | N
     """For an attacking creature, return ``{kind, id, name}`` identifying the
     opponent it's swinging at. None if not attacking. The engine currently
     always routes attacks at the next living opponent in turn order; this
-    helper mirrors that rule so the UI can render an unambiguous arrow."""
+    helper mirrors that rule so the UI can render an unambiguous arrow.
+
+    Excludes the attacker's own controller, so once the only opponent has
+    taken lethal damage the arrow disappears instead of wrapping back to
+    point at the controller."""
     if not obj.attacking:
         return None
-    start = (obj.controller_id + 1) % len(state.players)
-    idx = start
-    for _ in range(len(state.players)):
-        p = state.players[idx]
+    n = len(state.players)
+    for offset in range(1, n):
+        p = state.players[(obj.controller_id + offset) % n]
         if not p.has_lost:
             return {"kind": "player", "id": p.id, "name": f"Player {p.id}"}
-        idx = (idx + 1) % len(state.players)
     return None
 
 

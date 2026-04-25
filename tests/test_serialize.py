@@ -307,6 +307,18 @@ def test_serialize_permanent_attacking_defender_skips_dead_opponent():
     assert d["attacking_defender"] == {"kind": "player", "id": 2, "name": "Player 2"}
 
 
+def test_serialize_permanent_attacking_defender_none_when_only_opponent_dead():
+    """In a 2-player game, once the only opponent has taken lethal damage the
+    arrow must not wrap around to point back at the attacker's controller."""
+    state = _fresh_state()
+    state.players[1].has_lost = True
+    attacker = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
+    attacker.attacking = True
+    state.battlefield.append(attacker)
+    d = serialize_permanent(state, attacker)
+    assert d["attacking_defender"] is None
+
+
 def test_serialize_stack_targets_unknown_id_is_nameless():
     state = _fresh_state()
     spell = state.new_object(SYNTHETIC_CREATURES["Sapling"], owner_id=0, zone=Zone.STACK)
