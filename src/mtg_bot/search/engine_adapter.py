@@ -63,6 +63,14 @@ from mtg_bot.search.combat_decisions import (
     AttackerDecision, BlockerDecision,
 )
 from mtg_bot.search.protocol import Decision, PlayerID
+from mtg_bot.search.resolution_channel import (
+    KIND_DISCARD, KIND_MODE, KIND_SACRIFICE, KIND_TARGET,
+    ResolutionChannelAgent, _ResolutionPause,
+)
+from mtg_bot.search.resolution_decisions import (
+    ResolutionDiscardDecision, ResolutionModeDecision,
+    ResolutionSacrificeDecision, ResolutionTargetDecision,
+)
 from mtg_bot.search.tactical import DefaultTacticalAgent
 from mtg_bot.simulate import _advance_to_next_active_player, _next_alive
 from mtg_bot.turn import (
@@ -87,6 +95,16 @@ _COMBAT_ATTACKERS = "attackers"
 _COMBAT_BLOCKERS = "blockers"
 
 
+# Maps the ``_ResolutionPause.kind`` value to the search-side
+# decision class the adapter expects when search answers that pause.
+_RESOLUTION_KIND_TO_DECISION_CLASS = {
+    KIND_TARGET: ResolutionTargetDecision,
+    KIND_DISCARD: ResolutionDiscardDecision,
+    KIND_MODE: ResolutionModeDecision,
+    KIND_SACRIFICE: ResolutionSacrificeDecision,
+}
+
+
 class MtgGameStateAdapter:
     """Wrap a real-engine ``GameState`` so MCTS (and friends) can
     drive it through the ``mtg_bot.search.protocol.GameState``
@@ -104,11 +122,24 @@ class MtgGameStateAdapter:
         engine_state: EngineGameState,
         tactical_agent: Optional[Agent] = None,
         expose_combat_decisions: bool = False,
+        expose_resolution_decisions: bool = False,
     ) -> None:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
+        self._expose_resolution = expose_resolution_decisions
+        # Agent installation. With resolution exposure we need the
+        # ``ResolutionChannelAgent`` to intercept callbacks; non-
+        # exposed callbacks fall through to the tactical policy.
+        if self._expose_resolution:
+            self._channel_agent: Optional[ResolutionChannelAgent] = (
+                ResolutionChannelAgent(fallback=self._tactical)
+            )
+            primary_agent = self._channel_agent
+        else:
+            self._channel_agent = None
+            primary_agent = self._tactical
         for p in self._state.players:
-            p.agent = self._tactical
+            p.agent = primary_agent
         # Consecutive priority passes since the last non-pass or
         # stack resolution. Lives on the adapter (not the engine
         # state) because this is search-loop bookkeeping rather than
@@ -129,6 +160,18 @@ class MtgGameStateAdapter:
         self._pending_blockers: list[int] = []
         self._chosen_blocks: dict[int, int] = {}
         self._combat_defender_id: Optional[PlayerID] = None
+        # Resolution-pause state. When a priority action's resolution
+        # raises ``_ResolutionPause``, the adapter rolls back to a
+        # snapshot taken before the action and surfaces the decision
+        # to search. ``_pre_action_clone`` is the snapshot;
+        # ``_pending_replay_decision`` is the priority action being
+        # replayed with growing resolution-queue answers.
+        self._resolution_paused = False
+        self._resolution_kind: Optional[str] = None
+        self._resolution_player: Optional[PlayerID] = None
+        self._resolution_options: tuple = ()
+        self._pre_action_clone: Optional[EngineGameState] = None
+        self._pending_replay_decision: Optional[Decision] = None
         # Drive forward until we either hit a terminal state or a
         # priority moment where the caller must decide.
         self._advance_to_next_decision()
@@ -141,11 +184,21 @@ class MtgGameStateAdapter:
         c = MtgGameStateAdapter.__new__(MtgGameStateAdapter)
         c._state = self._state.clone()
         c._tactical = self._tactical
-        # Agents are shared refs in GameState.clone; restate for
-        # clarity and so a custom tactical passed to the original
-        # still applies to the clone.
+        c._expose_resolution = self._expose_resolution
+        # Resolution-channel agent is per-adapter-instance so each
+        # clone has its own replay queue. Snapshot/restore preserves
+        # queue state from the source.
+        if self._expose_resolution and self._channel_agent is not None:
+            c._channel_agent = ResolutionChannelAgent(
+                fallback=self._tactical,
+            )
+            c._channel_agent.restore(self._channel_agent.snapshot())
+            primary_agent = c._channel_agent
+        else:
+            c._channel_agent = None
+            primary_agent = self._tactical
         for p in c._state.players:
-            p.agent = c._tactical
+            p.agent = primary_agent
         c._pass_count = self._pass_count
         c._step_entered = self._step_entered
         c._expose_combat = self._expose_combat
@@ -155,9 +208,24 @@ class MtgGameStateAdapter:
         c._pending_blockers = list(self._pending_blockers)
         c._chosen_blocks = dict(self._chosen_blocks)
         c._combat_defender_id = self._combat_defender_id
+        # Resolution-pause state.
+        c._resolution_paused = self._resolution_paused
+        c._resolution_kind = self._resolution_kind
+        c._resolution_player = self._resolution_player
+        c._resolution_options = self._resolution_options
+        c._pre_action_clone = (
+            self._pre_action_clone.clone()
+            if self._pre_action_clone is not None else None
+        )
+        c._pending_replay_decision = self._pending_replay_decision
         return c
 
     def active_player(self) -> PlayerID:
+        # During mid-resolution pauses, it's the player the engine
+        # callback was asking — not whoever held engine priority.
+        if self._resolution_paused:
+            assert self._resolution_player is not None
+            return self._resolution_player
         # During factored combat, the decision-maker isn't whoever
         # holds engine priority — it's the active player (for
         # attacker decisions) or the defender (for blocker decisions).
@@ -171,6 +239,8 @@ class MtgGameStateAdapter:
     def legal_decisions(self) -> list[Decision]:
         if self._state.is_over():
             return []
+        if self._resolution_paused:
+            return self._resolution_legal_decisions()
         if self._combat_phase == _COMBAT_ATTACKERS:
             # One pending attacker at a time; each can attack or not.
             next_id = self._pending_attackers[0]
@@ -194,6 +264,24 @@ class MtgGameStateAdapter:
             return options
         return list(legal_actions(self._state, self.active_player()))
 
+    def _resolution_legal_decisions(self) -> list[Decision]:
+        """Materialize resolution-pause options as search-side
+        decision objects. Each option becomes one ``Resolution*``
+        instance."""
+        kind = self._resolution_kind
+        opts = self._resolution_options
+        if kind == KIND_TARGET:
+            return [ResolutionTargetDecision(target=t) for t in opts]
+        if kind == KIND_DISCARD:
+            return [ResolutionDiscardDecision(card_id=cid) for cid in opts]
+        if kind == KIND_MODE:
+            return [ResolutionModeDecision(mode_index=i) for i in opts]
+        if kind == KIND_SACRIFICE:
+            return [
+                ResolutionSacrificeDecision(object_id=oid) for oid in opts
+            ]
+        raise RuntimeError(f"unknown resolution kind: {kind!r}")
+
     def chance_outcomes(self) -> list[tuple[Decision, float]]:
         # V1: no chance nodes. Determinization is a later wave.
         return []
@@ -210,6 +298,13 @@ class MtgGameStateAdapter:
     def apply(self, decision: Decision) -> None:
         if self._state.is_over():
             raise ValueError("apply() called on terminal state")
+
+        # Resolution-pause answer routing — consume a Resolution*
+        # decision, push to the channel agent's replay queue, rollback
+        # state, and retry the saved priority action.
+        if self._resolution_paused:
+            self._apply_resolution_decision(decision)
+            return
 
         # Combat sub-decisions are routed before the generic Action
         # type-check because they're search-side types, not engine
@@ -230,7 +325,20 @@ class MtgGameStateAdapter:
                 f"{decision!r}"
             )
 
-        pid = self.active_player()
+        # With resolution exposure, wrap the priority action in a
+        # pause-catch + replay harness. Without, just run it — no
+        # snapshot, no replay.
+        if self._expose_resolution:
+            self._run_priority_action_with_resolution_capture(decision)
+        else:
+            self._run_priority_action(decision)
+            self._advance_to_next_decision()
+
+    def _run_priority_action(self, decision: Decision) -> None:
+        """The original priority-action body, extracted so it can be
+        invoked from multiple call sites (normal path and replay
+        from resolution rollback)."""
+        pid = self._state.priority_player_idx
 
         if isinstance(decision, PassPriority):
             self._pass_count += 1
@@ -270,7 +378,92 @@ class MtgGameStateAdapter:
                 self._state, self._state.active_player_idx
             )
 
-        self._advance_to_next_decision()
+    # ---------------------------------------------------------------
+    # Resolution decision handling
+    # ---------------------------------------------------------------
+
+    def _run_priority_action_with_resolution_capture(
+        self, decision: Decision,
+    ) -> None:
+        """Save a pre-action snapshot, run the priority action, and
+        catch any ``_ResolutionPause``. On pause, rollback state and
+        store the pending decision for replay."""
+        assert self._channel_agent is not None
+        # Snapshot the full engine state BEFORE the action. On pause
+        # we roll back to this clone (re-cloning each time so the
+        # snapshot itself stays pristine for subsequent pauses).
+        self._pre_action_clone = self._state.clone()
+        self._pending_replay_decision = decision
+        self._channel_agent.reset_queue()
+        self._attempt_priority_action()
+
+    def _rollback_to_snapshot(self) -> None:
+        """Restore ``self._state`` from ``self._pre_action_clone``
+        and re-install the per-adapter channel agent on the
+        rolled-back players.
+
+        The snapshot carries whatever agent was installed at the
+        time it was taken — typically the original adapter's channel
+        agent. After cloning the adapter, the clone has its OWN
+        channel agent but the snapshot still points at the original.
+        Re-installing agents here keeps each adapter's resolution
+        queue isolated from its siblings.
+        """
+        assert self._pre_action_clone is not None
+        assert self._channel_agent is not None
+        self._state = self._pre_action_clone.clone()
+        for p in self._state.players:
+            p.agent = self._channel_agent
+
+    def _attempt_priority_action(self) -> None:
+        """Try the current pending priority action. Handles pause,
+        success (advances to next decision), and cleanup."""
+        assert self._pending_replay_decision is not None
+        assert self._channel_agent is not None
+        try:
+            self._run_priority_action(self._pending_replay_decision)
+            if not self._state.is_over():
+                self._advance_to_next_decision()
+        except _ResolutionPause as pause:
+            # Engine asked for a callback we don't have in the queue.
+            # Rollback to the pre-action snapshot and expose the
+            # decision to search. Keep the snapshot around for the
+            # next replay attempt.
+            self._rollback_to_snapshot()
+            self._channel_agent.rewind()
+            self._resolution_paused = True
+            self._resolution_kind = pause.kind
+            self._resolution_player = pause.player_id
+            self._resolution_options = pause.options
+            return
+        # Success — discard the snapshot and replay state.
+        self._pre_action_clone = None
+        self._pending_replay_decision = None
+
+    def _apply_resolution_decision(self, decision: Decision) -> None:
+        """Caller supplied an answer to the currently-paused
+        resolution callback. Push it to the replay queue and retry."""
+        assert self._channel_agent is not None
+        expected_type = _RESOLUTION_KIND_TO_DECISION_CLASS[
+            self._resolution_kind
+        ]
+        if not isinstance(decision, expected_type):
+            raise TypeError(
+                f"Resolution pause expects {expected_type.__name__} "
+                f"for a {self._resolution_kind} callback; got "
+                f"{type(decision).__name__}: {decision!r}"
+            )
+        self._channel_agent.push_answer(decision)
+        # Clear pause metadata; state will be reset by the retry.
+        self._resolution_paused = False
+        self._resolution_kind = None
+        self._resolution_player = None
+        self._resolution_options = ()
+        # Rollback and replay. ``_attempt_priority_action`` handles
+        # the outcome (next pause or successful completion).
+        self._rollback_to_snapshot()
+        self._channel_agent.rewind()
+        self._attempt_priority_action()
 
     # ---------------------------------------------------------------
     # Combat decision handling
