@@ -284,3 +284,141 @@ def test_parallel_with_pimc_config_factory():
     assert f.shape[1] == FEATURE_DIM
     assert f.shape[0] > 0
     assert np.all(np.isfinite(f))
+
+
+# ---------- deck_pool path --------------------------------------------------
+
+
+import pytest  # noqa: E402
+
+from mtg_bot.cards import build_mono_color_deck  # noqa: E402
+from mtg_bot.decks import Deck  # noqa: E402
+from mtg_bot.training.data_gen import _sample_decks_for_game  # noqa: E402
+
+
+def _two_player_pool() -> list[Deck]:
+    """A small pool of distinct mono-color synthetic decks. Cheap
+    to build; uses cards we know are in our printing registry."""
+    return [
+        Deck(draft_id="g_deck", build_index=0,
+             cards=build_mono_color_deck("G", seed=1)),
+        Deck(draft_id="r_deck", build_index=0,
+             cards=build_mono_color_deck("R", seed=2)),
+        Deck(draft_id="w_deck", build_index=0,
+             cards=build_mono_color_deck("W", seed=3)),
+    ]
+
+
+def test_sample_decks_picks_two_distinct_decks_when_pool_has_multiple():
+    pool = _two_player_pool()
+    a, b = _sample_decks_for_game(pool, game_idx=0, base_seed=42)
+    assert a is not b
+    assert a in pool and b in pool
+
+
+def test_sample_decks_is_deterministic():
+    pool = _two_player_pool()
+    a1, b1 = _sample_decks_for_game(pool, game_idx=5, base_seed=42)
+    a2, b2 = _sample_decks_for_game(pool, game_idx=5, base_seed=42)
+    assert a1 is a2 and b1 is b2
+
+
+def test_sample_decks_varies_with_game_idx():
+    """Different game_idx should usually give different deck pairs."""
+    pool = _two_player_pool()
+    a0, b0 = _sample_decks_for_game(pool, game_idx=0, base_seed=42)
+    saw_different = False
+    for game_idx in range(1, 10):
+        a, b = _sample_decks_for_game(
+            pool, game_idx=game_idx, base_seed=42,
+        )
+        if (a, b) != (a0, b0):
+            saw_different = True
+            break
+    assert saw_different
+
+
+def test_sample_decks_single_deck_pool_mirrors():
+    """Pool with just one deck → both seats get the same deck (mirror)."""
+    pool = [
+        Deck(draft_id="only", build_index=0,
+             cards=build_mono_color_deck("G", seed=0)),
+    ]
+    a, b = _sample_decks_for_game(pool, game_idx=0, base_seed=0)
+    assert a is b
+
+
+def test_sample_decks_empty_pool_raises():
+    with pytest.raises(ValueError, match="empty"):
+        _sample_decks_for_game([], game_idx=0, base_seed=0)
+
+
+def test_generate_training_data_uses_deck_pool():
+    """Smoke: sequential data gen with a deck pool produces well-
+    shaped arrays + balanced outcomes."""
+    pool = _two_player_pool()
+    features, outcomes = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=2, base_seed=42, deck_pool=pool,
+    )
+    assert features.shape[1] == FEATURE_DIM
+    assert features.shape[0] > 0
+    assert outcomes.sum() == 0.0
+
+
+def test_deck_pool_path_parallel_equals_sequential():
+    """Strong invariant: parallel and sequential paths produce
+    identical arrays for the same deck_pool + base_seed. Per-game
+    seeds for deck sampling derive from base_seed + game_idx (not
+    worker assignment)."""
+    pool = _two_player_pool()
+    seq_f, seq_o = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3, base_seed=42, deck_pool=pool,
+    )
+    par_f, par_o = generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=3, base_seed=42, n_workers=2, deck_pool=pool,
+    )
+    np.testing.assert_array_equal(seq_f, par_f)
+    np.testing.assert_array_equal(seq_o, par_o)
+
+
+def test_deck_pool_none_falls_back_to_mono_color():
+    """deck_pool=None preserves the existing mono-color path —
+    regression guard for the existing pipeline."""
+    f1, o1 = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=1, base_seed=42, deck_pool=None,
+    )
+    f2, o2 = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=1, base_seed=42,
+    )
+    np.testing.assert_array_equal(f1, f2)
+    np.testing.assert_array_equal(o1, o2)
+
+
+def test_deck_pool_with_short_decks_works():
+    """Real Limited decks are 40 cards, not 60. Verify the engine
+    accepts them via the deck_pool path."""
+    short_deck = (
+        ["Forest"] * 17
+        + build_mono_color_deck("G", seed=0)[:23]
+    )
+    pool = [
+        Deck(draft_id="a", build_index=0, cards=short_deck),
+        Deck(draft_id="b", build_index=0, cards=short_deck),
+    ]
+    f, o = generate_training_data(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=1, base_seed=0, deck_pool=pool,
+    )
+    assert f.shape[1] == FEATURE_DIM
+    assert f.shape[0] > 0

@@ -47,6 +47,7 @@ from typing import Iterable, Optional
 import numpy as np
 
 from mtg_bot.agents import RandomAgent
+from mtg_bot.decks import Deck
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
@@ -121,6 +122,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _sample_decks_for_game(
+    deck_pool: list[Deck], game_idx: int, base_seed: int,
+) -> tuple[Deck, Deck]:
+    """Deterministically pick 2 decks (one per seat) from the pool
+    for game ``game_idx``. Uses a per-game RNG seeded from
+    ``base_seed`` + a fixed offset so the choice is reproducible
+    AND independent of ``game_idx``'s usage in strategy/engine seeds.
+
+    Single-deck pool degenerates into a mirror match (same deck on
+    both seats) — explicit so callers know it's not an error. Empty
+    pool raises.
+    """
+    if not deck_pool:
+        raise ValueError("deck_pool is empty")
+    rng = random.Random(base_seed + 100 * game_idx + 12345)
+    if len(deck_pool) >= 2:
+        a, b = rng.sample(range(len(deck_pool)), 2)
+    else:
+        a = b = 0
+    return deck_pool[a], deck_pool[b]
+
+
 def generate_training_data(
     p0_factory: StrategyFactory,
     p1_factory: StrategyFactory,
@@ -129,6 +152,7 @@ def generate_training_data(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     sample_every: int = 1,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Play ``n_games`` and return ``(features, outcomes)`` arrays.
 
@@ -155,6 +179,7 @@ def generate_training_data(
             base_seed=base_seed,
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
+            deck_pool=deck_pool,
         )
         for i in range(n_games)
     ]
@@ -170,6 +195,7 @@ def generate_training_data_parallel(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     sample_every: int = 1,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``.
@@ -203,7 +229,7 @@ def generate_training_data_parallel(
     args_list = [
         (
             i, p0_factory, p1_factory, base_seed,
-            decision_cap, sample_every, replay_config,
+            decision_cap, sample_every, replay_config, deck_pool,
         )
         for i in range(n_games)
     ]
@@ -224,7 +250,7 @@ def _play_one_parallel_game(
     spawn boundary."""
     (
         game_idx, p0_factory, p1_factory, base_seed,
-        decision_cap, sample_every, replay_config,
+        decision_cap, sample_every, replay_config, deck_pool,
     ) = args
     return _generate_one_game_data(
         game_idx=game_idx,
@@ -232,6 +258,7 @@ def _play_one_parallel_game(
         base_seed=base_seed,
         decision_cap=decision_cap, sample_every=sample_every,
         replay_config=replay_config,
+        deck_pool=deck_pool,
     )
 
 
@@ -244,6 +271,7 @@ def _generate_one_game_data(
     decision_cap: int,
     sample_every: int,
     replay_config: Optional[ReplayCaptureConfig] = None,
+    deck_pool: Optional[list[Deck]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Play one game and return its ``(features, outcomes)`` arrays.
 
@@ -252,6 +280,11 @@ def _generate_one_game_data(
     bit-identical results for the same ``(game_idx, base_seed,
     factories)``.
 
+    When ``deck_pool`` is provided, two distinct decks are sampled
+    from the pool deterministically (per-game seed) and used as the
+    seats' libraries. When ``deck_pool`` is None, falls back to the
+    legacy mono-color synthetic decks (G vs R) for backward compat.
+
     When ``replay_config`` is set and ``should_capture(game_idx)``
     returns True, also writes a per-game replay file to disk before
     returning. The annotators (heuristic + optional NN eval) are
@@ -259,14 +292,27 @@ def _generate_one_game_data(
     once per captured game (a few ms; negligible vs game length).
     """
     engine_seed = base_seed + game_idx
-    engine = setup_game(
-        [
-            RandomAgent(rng=random.Random(engine_seed + 1)),
-            RandomAgent(rng=random.Random(engine_seed + 2)),
-        ],
-        ["G", "R"],
-        seed=engine_seed,
-    )
+    if deck_pool is not None:
+        deck_p0, deck_p1 = _sample_decks_for_game(
+            deck_pool, game_idx, base_seed,
+        )
+        engine = setup_game(
+            [
+                RandomAgent(rng=random.Random(engine_seed + 1)),
+                RandomAgent(rng=random.Random(engine_seed + 2)),
+            ],
+            decks=[deck_p0.cards, deck_p1.cards],
+            seed=engine_seed,
+        )
+    else:
+        engine = setup_game(
+            [
+                RandomAgent(rng=random.Random(engine_seed + 1)),
+                RandomAgent(rng=random.Random(engine_seed + 2)),
+            ],
+            ["G", "R"],
+            seed=engine_seed,
+        )
     adapter = MtgGameStateAdapter(engine)
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),

@@ -32,6 +32,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 
 import os  # noqa: E402
 
+from mtg_bot.decks import decks_from_json  # noqa: E402
 from mtg_bot.training import (  # noqa: E402
     PimcConfig,
     Registry,
@@ -115,6 +116,17 @@ def main() -> None:
         "--replay-prefix", default="game",
         help="Prefix on replay filenames (default 'game').",
     )
+    parser.add_argument(
+        "--deck-pool", type=Path, default=None,
+        help=(
+            "Path to a 17lands deck-pool JSON (output of "
+            "scripts/fetch_17lands_data.py). When set, each game "
+            "samples 2 distinct decks from the pool deterministically "
+            "(per-game seed), instead of using mono-color synthetic "
+            "decks. Real archetypes give the bot meaningful matchups "
+            "to learn from."
+        ),
+    )
     args = parser.parse_args()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +140,21 @@ def main() -> None:
     n_workers = args.n_workers
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 1) - 2)
+
+    deck_pool = None
+    if args.deck_pool is not None:
+        if not args.deck_pool.is_file():
+            sys.exit(f"--deck-pool {args.deck_pool} not found")
+        deck_pool = decks_from_json(args.deck_pool)
+        if not deck_pool:
+            sys.exit(
+                f"--deck-pool {args.deck_pool} loaded 0 decks (empty pool)"
+            )
+        avg_size = sum(d.card_count for d in deck_pool) / len(deck_pool)
+        print(
+            f"# loaded {len(deck_pool)} decks from {args.deck_pool} "
+            f"(avg {avg_size:.0f} cards/deck)"
+        )
 
     replay_config: ReplayCaptureConfig | None = None
     if args.save_replays_to is not None:
@@ -182,6 +209,7 @@ def main() -> None:
             n_games=args.n_games, base_seed=args.seed,
             sample_every=args.sample_every,
             replay_config=replay_config,
+            deck_pool=deck_pool,
         )
     else:
         features, outcomes = generate_training_data_parallel(
@@ -190,6 +218,7 @@ def main() -> None:
             n_workers=n_workers,
             sample_every=args.sample_every,
             replay_config=replay_config,
+            deck_pool=deck_pool,
         )
     elapsed = time.perf_counter() - started
 
