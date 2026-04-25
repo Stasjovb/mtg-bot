@@ -612,6 +612,16 @@ class ManaCoin:
     spend_restriction: Optional[str] = None
 
 
+def _clone_mana_coin(coin: ManaCoin) -> ManaCoin:
+    """Fast clone for ManaCoin — same ``__new__`` + ``__dict__`` copy
+    pattern as ``GameState.clone``'s per-object cloners. ManaCoin's
+    two fields are immutable strings, so the shared __dict__ values
+    are safe; only the dict itself is duplicated."""
+    new = ManaCoin.__new__(ManaCoin)
+    new.__dict__ = coin.__dict__.copy()
+    return new
+
+
 class LogBuffer(list[str]):
     """A list[str] with a global silent-mode switch.
 
@@ -805,6 +815,17 @@ class GameState:
         ``exiled_by_source``, ``temp_original_controller_id``) carry
         integer ids — those stay valid without remapping because the
         new objects keep the same id.
+
+        Performance: this is a search hot path (thousands of clones
+        per MCTS decision). Per-object cloning uses a shallow
+        ``object.__new__`` + ``__dict__`` copy rather than the
+        dataclass __init__ with 30+ kwargs — the latter spends
+        almost all its time in name-resolution overhead.
+        ``GameObject.blocked_by`` is the only mutable per-object
+        field; we duplicate that explicitly. Every other field is
+        either an int / bool / None / frozenset / Enum (immutable)
+        or a reference to a frozen-dataclass CardPrinting (also
+        safe to share).
         """
         # Build the id->new_obj map by deep-copying every GameObject
         # referenced anywhere in the state. We walk zones in a fixed
@@ -815,96 +836,41 @@ class GameState:
             existing = id_map.get(o.id)
             if existing is not None:
                 return existing
-            new = GameObject(
-                id=o.id,
-                printing=o.printing,
-                owner_id=o.owner_id,
-                controller_id=o.controller_id,
-                zone=o.zone,
-                tapped=o.tapped,
-                damage=o.damage,
-                summoning_sick=o.summoning_sick,
-                attacking=o.attacking,
-                blocking=o.blocking,
-                blocked_by=list(o.blocked_by),
-                marked_lethal=o.marked_lethal,
-                plus_one_counters=o.plus_one_counters,
-                temp_unblockable=o.temp_unblockable,
-                temp_is_creature=o.temp_is_creature,
-                playable_from_exile_this_turn=o.playable_from_exile_this_turn,
-                temp_base_pt_override=o.temp_base_pt_override,
-                cast_via_warp=o.cast_via_warp,
-                warped=o.warped,
-                charge_counters=o.charge_counters,
-                stun_counters=o.stun_counters,
-                temp_power_bonus=o.temp_power_bonus,
-                temp_toughness_bonus=o.temp_toughness_bonus,
-                temp_keywords=o.temp_keywords,
-                attached_to=o.attached_to,
-                exiled_by_source=o.exiled_by_source,
-                temp_original_controller_id=o.temp_original_controller_id,
-                loyalty_counters=o.loyalty_counters,
-                original_printing=o.original_printing,
-                regeneration_shield=o.regeneration_shield,
-                phased_out=o.phased_out,
-                publicly_known_to=o.publicly_known_to,
-            )
+            # Fast clone: skip __init__ entirely, copy the __dict__ in
+            # one C-level call, then duplicate the only mutable field.
+            new = GameObject.__new__(GameObject)
+            new.__dict__ = o.__dict__.copy()
+            new.blocked_by = list(o.blocked_by)
             id_map[o.id] = new
             return new
 
-        # Clone players (and every zone list on each player).
+        # Clone players (and every zone list on each player). Same
+        # __new__ + __dict__ copy trick as clone_obj — avoids the
+        # dataclass __init__'s 18+ kwarg dispatch. Agent is shared
+        # (not game state). ManaCoin is a dataclass with two
+        # immutable string fields and is never mutated post-creation
+        # in the engine, so we copy via the same fast path.
         new_players: list[Player] = []
         for p in self.players:
-            np = Player(
-                id=p.id,
-                life=p.life,
-                starting_life=p.starting_life,
-                poison_counters=p.poison_counters,
-                library=[clone_obj(o) for o in p.library],
-                hand=[clone_obj(o) for o in p.hand],
-                graveyard=[clone_obj(o) for o in p.graveyard],
-                exile=[clone_obj(o) for o in p.exile],
-                lands_played_this_turn=p.lands_played_this_turn,
-                spells_cast_this_turn=p.spells_cast_this_turn,
-                noncreature_spells_cast_this_turn=(
-                    p.noncreature_spells_cast_this_turn
-                ),
-                attacked_with_spacecraft_this_turn=(
-                    p.attacked_with_spacecraft_this_turn
-                ),
-                has_lost=p.has_lost,
-                lost_reason=p.lost_reason,
-                # Agent is shared — not game state.
-                agent=p.agent,
-                mana_pool=[
-                    ManaCoin(
-                        color=coin.color,
-                        spend_restriction=coin.spend_restriction,
-                    )
-                    for coin in p.mana_pool
-                ],
-                life_gained_this_turn=p.life_gained_this_turn,
-                scheduled_agent_override=p.scheduled_agent_override,
-                scheduled_agent_override_by=p.scheduled_agent_override_by,
-                agent_override_saved=p.agent_override_saved,
-            )
+            np = Player.__new__(Player)
+            np.__dict__ = p.__dict__.copy()
+            np.library = [clone_obj(o) for o in p.library]
+            np.hand = [clone_obj(o) for o in p.hand]
+            np.graveyard = [clone_obj(o) for o in p.graveyard]
+            np.exile = [clone_obj(o) for o in p.exile]
+            np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
         new_battlefield = [clone_obj(o) for o in self.battlefield]
 
-        # Stack items must point at the cloned GameObject for their source.
+        # Stack items must point at the cloned GameObject for their
+        # source. All other fields are immutable; share by reference.
         new_stack: list[StackItem] = []
         for item in self.stack:
-            new_stack.append(StackItem(
-                source=clone_obj(item.source),
-                controller_id=item.controller_id,
-                ability=item.ability,
-                targets=item.targets,
-                countered=item.countered,
-                x_value=item.x_value,
-                kicked=item.kicked,
-                additional_cost_choice_id=item.additional_cost_choice_id,
-            ))
+            ni = StackItem.__new__(StackItem)
+            ni.__dict__ = item.__dict__.copy()
+            ni.source = clone_obj(item.source)
+            new_stack.append(ni)
 
         new_log = LogBuffer()
         new_log.enabled = self.log.enabled
