@@ -1,15 +1,4 @@
-"""Training infrastructure — Phase A.
-
-Self-play harness, search/evaluator config dataclasses, and a grid-
-search helper. No neural-net code yet (that's Phase C); this is the
-scaffolding all later training approaches need.
-
-The point of this phase is to validate the full "play N games at
-config X, return aggregate stats" loop end-to-end with the existing
-heuristic evaluator. Once it works for tuning 3 weights, it works
-for fitting 20 weights, and it works for training a network. Doing
-the infrastructure first avoids over-engineering the eventual NN
-parts before the harness has produced any real data.
+"""Training infrastructure for the value-network learning chapter.
 
 Module map:
 
@@ -24,8 +13,18 @@ Module map:
 - ``grid``      — ``grid_search`` over a list of configs, each
                    played N games against a fixed opponent factory.
                    Returns results sorted by win rate.
+- ``data_gen``  — ``generate_training_data``: play games, capture
+                   ``(features, outcome)`` pairs from both player
+                   perspectives at every non-chance decision. Save /
+                   load via compressed ``.npz``.
+- ``trainer``   — ``train_value_network``: PyTorch MSE training of
+                   the ``_ValueMLP`` from nn_evaluator. CUDA when
+                   available; saves the final state_dict that
+                   ``NNEvaluator(weights_path=...)`` loads.
 
-CLI demo at ``scripts/tune_heuristic.py``.
+CLI demos in ``scripts/``: ``tune_heuristic.py`` (Phase A weight
+sweep), ``generate_training_data.py``, ``train_nn.py``,
+``evaluate_nn.py``.
 """
 
 from __future__ import annotations
@@ -35,15 +34,31 @@ from mtg_bot.training.config import (
     PimcConfig,
     random_choice_factory,
 )
+from mtg_bot.training.data_gen import (
+    generate_training_data,
+    load_all_datasets,
+    load_dataset,
+    save_dataset,
+)
 from mtg_bot.training.grid import grid_search, heuristic_weight_grid
 from mtg_bot.training.self_play import MatchStats, run_match
+from mtg_bot.training.trainer import (
+    TrainingHistory, auto_device, train_value_network,
+)
 
 __all__ = [
     "HeuristicConfig",
     "MatchStats",
     "PimcConfig",
+    "TrainingHistory",
+    "auto_device",
+    "generate_training_data",
     "grid_search",
     "heuristic_weight_grid",
+    "load_all_datasets",
+    "load_dataset",
     "random_choice_factory",
     "run_match",
+    "save_dataset",
+    "train_value_network",
 ]

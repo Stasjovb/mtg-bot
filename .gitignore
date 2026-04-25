@@ -50,3 +50,8 @@ package-lock.json
 
 # Per-machine perf history written by hooks/post-commit
 .perf_history.log
+
+# NN training artifacts: generated self-play data and trained weights.
+# Both regenerable via scripts/generate_training_data.py + train_nn.py.
+training_data/
+trained_weights/
