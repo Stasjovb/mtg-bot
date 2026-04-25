@@ -65,9 +65,10 @@ def determinize(
     state: GameState,
     viewer_id: int,
     rng: random.Random | None = None,
+    *,
+    in_place: bool = False,
 ) -> GameState:
-    """Return a clone of ``state`` consistent with what ``viewer_id``
-    knows.
+    """Return a state consistent with what ``viewer_id`` knows.
 
     For each player, every card in their hand or library that the
     viewer doesn't know has its ``printing`` (and ``original_printing``)
@@ -77,6 +78,16 @@ def determinize(
     ``rng`` defaults to a fresh ``random.Random()`` — pass an explicit
     one for reproducibility, or call repeatedly with different rngs to
     draw independent samples for variance reduction (PIMC).
+
+    ``in_place=False`` (default): clone the input first; the caller's
+    state is untouched. Standard for callers holding a god-view state
+    they want to preserve.
+
+    ``in_place=True``: mutate ``state`` directly. Used by PIMC, which
+    clones the source adapter (preserving its bookkeeping like
+    ``_step_entered`` and ``_pass_count``) and then determinizes the
+    cloned engine state in place — re-cloning here would be wasteful
+    and the caller has already paid for one.
 
     Soundness: the result is *under-informed*, never *misinformed*.
     Whatever the viewer truly knows is preserved; everything else is
@@ -89,10 +100,10 @@ def determinize(
     """
     if rng is None:
         rng = random.Random()
-    clone = state.clone()
-    for player in clone.players:
+    target = state if in_place else state.clone()
+    for player in target.players:
         _determinize_player(player, viewer_id, rng)
-    return clone
+    return target
 
 
 def _determinize_player(

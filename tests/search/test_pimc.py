@@ -41,16 +41,21 @@ class _ScriptedInner:
 
 class _RecordingDeterminizer:
     """Stand-in for ``determinize`` that records its inputs and
-    returns a clone of the engine state unchanged. Lets tests verify
-    that PIMC calls determinize K times with the right viewer_id and
-    independent rngs."""
+    returns the engine state unchanged. Lets tests verify that PIMC
+    calls determinize K times with the right viewer_id and independent
+    rngs.
+
+    Accepts the same keyword surface as real ``determinize`` — PIMC
+    passes ``in_place=True`` because it pre-clones the adapter."""
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
 
-    def __call__(self, engine_state, viewer_id, rng):
+    def __call__(self, engine_state, viewer_id, rng, *, in_place=False):
         self.calls.append((engine_state, viewer_id, rng))
-        return engine_state.clone()
+        # Return the input directly when in_place, mirroring real
+        # determinize()'s contract; caller already cloned.
+        return engine_state if in_place else engine_state.clone()
 
 
 # ---------- fixtures ---------------------------------------------------------
@@ -234,7 +239,12 @@ def test_pimc_calls_determinize_k_times_with_viewer_id():
     pimc.choose(adapter, player_id=0)
     assert len(determinizer.calls) == 3
     for engine_state, viewer_id, _ in determinizer.calls:
-        assert engine_state is adapter.engine_state
+        # PIMC clones the source adapter (preserving its bookkeeping)
+        # before determinizing, so the state passed to determinize is
+        # the clone's engine state — NOT the source's engine state.
+        # That's the fix for the step-reentry bug. We assert it's a
+        # different object here as a regression guard.
+        assert engine_state is not adapter.engine_state
         assert viewer_id == 0
 
 
@@ -348,6 +358,75 @@ def test_pimc_falls_back_when_all_sub_searches_return_empty():
     pick = pimc.choose(adapter, adapter.active_player())
     # Falls back to the first legal decision rather than raising.
     assert pick == legal[0]
+
+
+# ---------- regression: sub-adapter must not re-run step entry --------------
+
+
+def test_pimc_sub_adapter_does_not_re_fire_step_entry_logic():
+    """Regression: a previous version built sub-adapters with
+    ``MtgGameStateAdapter(determinized_state, ...)``, whose __init__
+    runs ``_advance_to_next_decision`` which re-runs the current step's
+    pre-priority logic — re-firing upkeep triggers, re-drawing the
+    card at DRAW step, re-firing end-of-step warp-exile, etc. The
+    fix is to clone the source adapter (which preserves
+    ``_step_entered`` and ``_pass_count``) and determinize the
+    cloned engine state in place.
+
+    Asserted at the search-input level: the sub-adapter's stack and
+    hand sizes must match the source's (minus determinization, which
+    only permutes printings, not zone counts).
+    """
+    from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+
+    adapter = _fresh_adapter(seed=77)
+    # Drive past the upkeep where triggers might fire and the draw
+    # step where a card gets drawn — find a state mid-game where the
+    # current step has non-trivial pre-priority logic that we can
+    # detect a duplicate of.
+    while len(adapter.legal_decisions()) == 1 and not adapter.is_terminal():
+        adapter.apply(adapter.legal_decisions()[0])
+    if adapter.is_terminal():
+        return
+
+    # Snapshot the source's per-player hand sizes and stack length.
+    source_hand_sizes = [
+        len(p.hand) for p in adapter.engine_state.players
+    ]
+    source_stack_len = len(adapter.engine_state.stack)
+
+    captured: list[MtgGameStateAdapter] = []
+
+    class Capturing:
+        def choose_with_visits(self, state, player_id):
+            captured.append(state)
+            legal = state.legal_decisions()
+            return {legal[0]: 1} if legal else {}
+
+    pimc = PIMC(
+        inner_factory=Capturing,
+        samples=3,
+        rng=random.Random(0),
+    )
+    pimc.choose(adapter, adapter.active_player())
+
+    for sub in captured:
+        sub_hand_sizes = [
+            len(p.hand) for p in sub.engine_state.players
+        ]
+        sub_stack_len = len(sub.engine_state.stack)
+        # Determinization only permutes printings within hidden pools;
+        # zone counts and stack length must match the source. If the
+        # sub-adapter re-ran step entry, hand sizes (extra draws) or
+        # stack length (re-fired triggers) would diverge.
+        assert sub_hand_sizes == source_hand_sizes, (
+            f"sub-adapter hand sizes {sub_hand_sizes} != source's "
+            f"{source_hand_sizes} — step-entry re-run regression"
+        )
+        assert sub_stack_len == source_stack_len, (
+            f"sub-adapter stack length {sub_stack_len} != source's "
+            f"{source_stack_len} — step-entry re-run regression"
+        )
 
 
 # ---------- end-to-end with real MCTS ---------------------------------------

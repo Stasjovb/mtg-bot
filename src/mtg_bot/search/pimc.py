@@ -127,16 +127,12 @@ class PIMC(SearchStrategy):
         if len(legal) == 1:
             return {legal[0]: 1}
 
-        engine_state = state.engine_state
         visit_totals: dict[Decision, int] = {}
         for _ in range(self.samples):
             # Independent rng per sub-search so each sub-tree is
             # reproducible from the outer seed alone.
             sub_seed = self.rng.randrange(1 << 62)
-            world = self._determinize(
-                engine_state, player_id, random.Random(sub_seed)
-            )
-            adapter = self._wrap_like(world, state)
+            adapter = self._build_sub_adapter(state, player_id, sub_seed)
             inner = self.inner_factory()
             for decision, visits in inner.choose_with_visits(
                 adapter, player_id
@@ -146,18 +142,27 @@ class PIMC(SearchStrategy):
                 )
         return visit_totals
 
-    @staticmethod
-    def _wrap_like(
-        engine_state, source: MtgGameStateAdapter
+    def _build_sub_adapter(
+        self, source: MtgGameStateAdapter, viewer_id: PlayerID, sub_seed: int,
     ) -> MtgGameStateAdapter:
-        """Build a fresh adapter around ``engine_state`` with the same
-        configuration knobs as ``source`` — combat-decision exposure
-        and resolution-decision exposure must match, otherwise the
-        sub-search would see a different decision space than the
-        caller assumed."""
-        return MtgGameStateAdapter(
-            engine_state,
-            tactical_agent=source._tactical,
-            expose_combat_decisions=source._expose_combat,
-            expose_resolution_decisions=source._expose_resolution,
+        """Make a fresh sub-search adapter for one PIMC sample.
+
+        Crucially: ``source.clone()`` (not ``MtgGameStateAdapter(...)``)
+        because the latter's ``__init__`` calls ``_advance_to_next_decision``
+        which re-runs the current step's pre-priority logic — re-firing
+        upkeep triggers, re-drawing the active player's card at DRAW,
+        re-firing beginning-of-end-step warp-exile, etc. Cloning
+        preserves the source's ``_step_entered``, ``_pass_count``, and
+        combat-phase bookkeeping so the sub-search starts from exactly
+        the state the source was at (modulo determinization).
+
+        After cloning, we determinize the cloned engine state in place
+        — re-cloning would be wasteful and the clone() already paid
+        for one.
+        """
+        sub = source.clone()
+        self._determinize(
+            sub.engine_state, viewer_id, random.Random(sub_seed),
+            in_place=True,
         )
+        return sub
