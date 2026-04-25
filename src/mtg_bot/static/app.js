@@ -37,7 +37,25 @@ const els = {
   zoneModalTitle: document.getElementById('zone-modal-title'),
   zoneModalCards: document.getElementById('zone-modal-cards'),
   zoneModalClose: document.getElementById('zone-modal-close'),
+  phaseTracker: document.getElementById('phase-tracker'),
+  phaseList: document.getElementById('phase-list'),
 };
+
+// Engine step order + display labels. Mirrors mtg_bot.turn.STEP_ORDER.
+const PHASE_STEPS = [
+  { key: 'untap',               label: 'Untap',     group: '' },
+  { key: 'upkeep',              label: 'Upkeep',    group: '' },
+  { key: 'draw',                label: 'Draw',      group: '' },
+  { key: 'precombat_main',      label: 'Main 1',    group: 'main' },
+  { key: 'beginning_of_combat', label: 'B. Combat', group: 'combat' },
+  { key: 'declare_attackers',   label: 'D. Atk',    group: 'combat' },
+  { key: 'declare_blockers',    label: 'D. Blk',    group: 'combat' },
+  { key: 'combat_damage',       label: 'Damage',    group: 'combat' },
+  { key: 'end_of_combat',       label: 'E. Combat', group: 'combat' },
+  { key: 'postcombat_main',     label: 'Main 2',    group: 'main' },
+  { key: 'end',                 label: 'End',       group: '' },
+  { key: 'cleanup',             label: 'Cleanup',   group: '' },
+];
 
 let engineOpen = false;
 
@@ -122,6 +140,7 @@ async function runGame() {
     els.slider.min = 0;
     els.slider.max = Math.max(0, summary.snapshot_count - 1);
     els.scrubber.classList.remove('hidden');
+    els.phaseTracker.classList.remove('hidden');
     await goTo(summary.snapshot_count - 1);  // land on the final state
   } catch (e) {
     setStatus('Error: ' + e.message, 'loss');
@@ -355,7 +374,26 @@ function renderSnapshot(summary, snap) {
   renderPlayer(els.rowP0, p0, snap, /* isTop */ false);
   renderStack(els.rowStack, snap);
   renderLog(els.logBody, snap);
+  renderPhaseTracker(snap);
   drawCombatArrows(snap);
+}
+
+function renderPhaseTracker(snap) {
+  const cur = snap.step;  // string or null
+  const curIdx = PHASE_STEPS.findIndex(s => s.key === cur);
+  els.phaseList.replaceChildren();
+  PHASE_STEPS.forEach((step, i) => {
+    const li = document.createElement('li');
+    li.className = 'phase-step';
+    if (step.group) li.classList.add(step.group);
+    if (curIdx >= 0) {
+      if (i === curIdx) li.classList.add('current');
+      else if (i < curIdx) li.classList.add('past');
+    }
+    li.textContent = step.label;
+    li.title = step.key;
+    els.phaseList.appendChild(li);
+  });
 }
 
 function drawCombatArrows(snap) {

@@ -115,6 +115,27 @@ def test_static_app_js_ships_step_turn_navigation(client):
         assert token in js, f"missing {token!r} in app.js"
 
 
+def test_static_app_js_ships_phase_tracker(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("renderPhaseTracker", "PHASE_STEPS",
+                  "precombat_main", "declare_attackers",
+                  "phase-tracker", "phase-step"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_phase_tracker(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for sel in (".phase-tracker", ".phase-list", ".phase-step",
+                ".phase-step.current", ".phase-step.past"):
+        assert sel in css, f"missing {sel!r} in app.css"
+
+
+def test_index_html_has_phase_tracker_dom(client):
+    html = client.get("/").get_data(as_text=True)
+    for eid in ("phase-tracker", "phase-list"):
+        assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+
+
 def test_static_app_js_ships_zone_modal(client):
     js = client.get("/static/app.js").get_data(as_text=True)
     for token in ("openZoneModal", "closeZoneModal", "zone-modal",

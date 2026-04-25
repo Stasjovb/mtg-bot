@@ -22,7 +22,7 @@
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
              font: 14px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 1fr 280px;
-       grid-template-rows: auto auto 1fr; min-height: 100vh; }
+       grid-template-rows: auto auto auto 1fr; min-height: 100vh; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
 
@@ -51,6 +51,28 @@ body { display: grid; grid-template-columns: 1fr 280px;
 
 /* ---- scrubber ---- */
 
+.phase-tracker { grid-column: 1; grid-row: 3;
+                 padding: 0.4em 0.8em; background: var(--panel);
+                 border-bottom: 1px solid var(--panel-edge);
+                 overflow-x: auto; }
+.phase-list { list-style: none; margin: 0; padding: 0;
+              display: flex; gap: 0.2em; font-size: 0.7em;
+              font-family: ui-monospace, monospace; }
+.phase-step { padding: 0.25em 0.6em;
+              background: var(--bg); color: var(--muted);
+              border: 1px solid var(--panel-edge); border-radius: 3px;
+              text-transform: uppercase; letter-spacing: 0.05em;
+              white-space: nowrap; line-height: 1.2; }
+.phase-step.past { opacity: 0.4; }
+.phase-step.current { background: var(--active-glow); color: #1c1800;
+                       border-color: var(--active-glow); font-weight: 700; }
+.phase-step.combat { border-color: #6b3a3a; }
+.phase-step.combat.current { background: #ff9852; border-color: #ff9852;
+                              color: #2a1100; }
+.phase-step.main { border-color: #3a5a3a; }
+.phase-step.main.current { background: #6abc6e; border-color: #6abc6e;
+                            color: #0c1d0c; }
+
 .scrubber { grid-column: 1 / -1; grid-row: 2;
             display: flex; align-items: center; gap: 0.8em;
             padding: 0.5em 1em; background: var(--panel);
@@ -72,7 +94,7 @@ body { display: grid; grid-template-columns: 1fr 280px;
 
 /* ---- board ---- */
 
-.board { grid-column: 1; grid-row: 3; display: grid;
+.board { grid-column: 1; grid-row: 4; display: grid;
          grid-template-rows: auto auto auto; gap: 0.5em; padding: 0.8em;
          overflow: auto; align-content: start; }
 
@@ -298,7 +320,7 @@ body { display: grid; grid-template-columns: 1fr 280px;
 
 /* Right-hand column wraps the engine-recommendations panel and the log panel
    so they can stack naturally while still living in grid column 2. */
-.right-col { grid-column: 2; grid-row: 3; background: var(--panel);
+.right-col { grid-column: 2; grid-row: 3 / span 2; background: var(--panel);
              border-left: 1px solid var(--panel-edge);
              display: flex; flex-direction: column; overflow: hidden;
              min-height: 0; }
