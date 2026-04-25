@@ -175,3 +175,56 @@ def test_mcts_final_move_policy_picks_most_visited_child():
     # verify the returned decision is among legal ones.
     chosen = mcts.choose(s, player_id=0)
     assert chosen in s.legal_decisions()
+
+
+# ---------- choose_with_visits ---------------------------------------------
+
+
+def test_choose_with_visits_returns_per_decision_visits():
+    """choose_with_visits should return a dict keyed by every expanded
+    root child's decision, with their visit counts. The argmax of the
+    returned dict must equal what choose() returns under the same rng."""
+    s = TicTacToe()
+    rng_seed = 17
+    visits = _make_mcts(nodes=120, rng_seed=rng_seed).choose_with_visits(
+        s, player_id=0,
+    )
+    # Every key is a legal decision; visit counts are positive.
+    legal = set(s.legal_decisions())
+    for d, v in visits.items():
+        assert d in legal
+        assert v > 0
+    # Total visits across root children ~= budget (small slack for the
+    # root's own visit and any forced-pass branches).
+    assert sum(visits.values()) >= 100
+
+
+def test_choose_with_visits_argmax_matches_choose_under_same_rng():
+    """choose() is defined as argmax over choose_with_visits()'s dict
+    when the dict is non-empty. Verify that contract on a non-trivial
+    state."""
+    s = TicTacToe(
+        cells=(1, None, None, None, 0, None, None, None, None),
+        to_move=0,
+    )
+    direct = _make_mcts(nodes=300, rng_seed=42).choose(s, player_id=0)
+    visits = _make_mcts(nodes=300, rng_seed=42).choose_with_visits(
+        s, player_id=0,
+    )
+    argmax = max(visits.items(), key=lambda kv: kv[1])[0]
+    assert direct == argmax
+
+
+def test_choose_with_visits_forced_move_returns_synthetic_singleton():
+    """A forced-move state should return ``{decision: 1}`` without
+    running any iterations — the count is a placeholder so callers'
+    aggregation logic doesn't need a special case."""
+    # Build a state with exactly one open cell.
+    s = TicTacToe(
+        cells=(1, 0, 1, 0, 1, 0, 0, 1, None),
+        to_move=0,
+    )
+    legal = s.legal_decisions()
+    assert len(legal) == 1
+    visits = _make_mcts(nodes=500).choose_with_visits(s, player_id=0)
+    assert visits == {legal[0]: 1}

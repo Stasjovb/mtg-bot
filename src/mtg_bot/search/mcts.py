@@ -140,6 +140,31 @@ class MCTS(SearchStrategy):
     def choose(
         self, state: GameState, player_id: PlayerID
     ) -> Decision:
+        visits = self.choose_with_visits(state, player_id)
+        if not visits:
+            # Budget too small to expand even once. Fall back to a
+            # random legal decision so the caller still gets an answer.
+            return self.rng.choice(list(state.legal_decisions()))
+        # Standard MCTS final-move policy: pick the most-visited child.
+        return max(visits.items(), key=lambda kv: kv[1])[0]
+
+    def choose_with_visits(
+        self, state: GameState, player_id: PlayerID
+    ) -> dict[Decision, int]:
+        """Run a search and return ``{decision: visit_count}`` over the
+        root's expanded children.
+
+        Used by ensemble wrappers (PIMC) that need to aggregate visits
+        across multiple independent searches before picking a final
+        move. Returns an empty dict when the budget was too small to
+        expand any child — callers should fall back to a legal default.
+
+        Forced moves (exactly one legal decision) short-circuit the
+        search and report a synthetic ``{decision: 1}``. The "1" is a
+        placeholder so caller aggregation doesn't need a special case;
+        nothing should compare a forced-move count against a real
+        search's count.
+        """
         # Forced-move shortcut: if there's exactly one legal decision,
         # take it. Computed eagerly up front because it's cheap and
         # lets us skip the whole tree build for trivial priority
@@ -147,7 +172,7 @@ class MCTS(SearchStrategy):
         # is the common case during upkeep/draw/combat).
         legal = list(state.legal_decisions())
         if len(legal) == 1:
-            return legal[0]
+            return {legal[0]: 1}
 
         root = _Node(
             state=state.clone(),
@@ -164,13 +189,7 @@ class MCTS(SearchStrategy):
             self._backprop(leaf, value, player_id)
             budget.consume_node()
 
-        if not root.children:
-            # Budget too small to expand even once. Fall back to a
-            # random legal decision so the caller still gets an answer.
-            return self.rng.choice(legal)
-        # Standard MCTS final-move policy: pick the most-visited child.
-        best = max(root.children, key=lambda n: n.visits)
-        return best.decision
+        return {c.decision: c.visits for c in root.children}
 
     # ------------------------------------------------------------------
     # Internals
