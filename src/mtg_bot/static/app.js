@@ -548,7 +548,20 @@ function handEl(p) {
   const hand = document.createElement('div');
   hand.className = 'hand';
   p.hand.forEach(c => hand.appendChild(cardEl(c, { permanent: false })));
+  // If hand_size > revealed cards, the rest are hidden from us — render
+  // face-down placeholders so the count is still visible.
+  const hidden = Math.max(0, (p.hand_size || 0) - p.hand.length);
+  for (let i = 0; i < hidden; i++) {
+    hand.appendChild(faceDownCardEl());
+  }
   return hand;
+}
+
+function faceDownCardEl() {
+  const el = document.createElement('div');
+  el.className = 'card face-down';
+  el.title = 'Face-down (opponent hand hidden)';
+  return el;
 }
 
 function rowOfCards(cards, cls, permanent) {

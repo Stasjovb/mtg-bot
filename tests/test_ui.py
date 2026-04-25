@@ -115,6 +115,24 @@ def test_static_app_js_ships_step_turn_navigation(client):
         assert token in js, f"missing {token!r} in app.js"
 
 
+def test_static_app_js_ships_face_down_card(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("faceDownCardEl", "face-down"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_face_down_card(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    assert ".card.face-down" in css
+
+
+def test_index_html_has_reveal_select(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'name="reveal"' in html
+    for opt in ("all", "p0", "p1", "none"):
+        assert f'value="{opt}"' in html
+
+
 def test_static_app_js_ships_station_badge(client):
     js = client.get("/static/app.js").get_data(as_text=True)
     for token in ("station-bar", "is_spacecraft", "station_threshold"):
@@ -371,6 +389,47 @@ def test_api_play_invalid_granularity_400(client):
 
 def test_api_play_invalid_max_turns_400(client):
     resp = client.get("/api/play?max_turns=0")
+    assert resp.status_code == 400
+
+
+# Reveal-hands toggle (--reveal=all|p0|p1|none)
+
+
+def test_api_play_default_reveal_is_all(client):
+    body = client.get("/api/play?seed=0&max_turns=4").get_json()
+    assert body["reveal"] == "all"
+
+
+def test_api_play_reveal_none_strips_both_hands(client):
+    play = client.get("/api/play?seed=0&max_turns=4&reveal=none").get_json()
+    snap = client.get(f"/api/snapshot/{play['game_id']}/0").get_json()
+    for p in snap["players"]:
+        assert p["hand"] == []
+        # hand_size still tells us how many are hidden
+        assert p["hand_size"] >= 0
+
+
+def test_api_play_reveal_p0_strips_p1_hand_only(client):
+    play = client.get("/api/play?seed=0&max_turns=4&reveal=p0").get_json()
+    snap = client.get(f"/api/snapshot/{play['game_id']}/0").get_json()
+    p0 = next(p for p in snap["players"] if p["id"] == 0)
+    p1 = next(p for p in snap["players"] if p["id"] == 1)
+    assert len(p0["hand"]) == p0["hand_size"]
+    assert p1["hand"] == []
+    assert p1["hand_size"] > 0
+
+
+def test_api_play_reveal_p1_strips_p0_hand_only(client):
+    play = client.get("/api/play?seed=0&max_turns=4&reveal=p1").get_json()
+    snap = client.get(f"/api/snapshot/{play['game_id']}/0").get_json()
+    p0 = next(p for p in snap["players"] if p["id"] == 0)
+    p1 = next(p for p in snap["players"] if p["id"] == 1)
+    assert p0["hand"] == []
+    assert len(p1["hand"]) == p1["hand_size"]
+
+
+def test_api_play_invalid_reveal_400(client):
+    resp = client.get("/api/play?reveal=both")
     assert resp.status_code == 400
 
 

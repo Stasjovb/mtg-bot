@@ -142,14 +142,32 @@ def create_app(
         granularity = request.args.get("granularity", "step")
         if granularity not in ("step", "priority"):
             abort(400, description="granularity must be 'step' or 'priority'")
+        reveal = request.args.get("reveal", "all")
+        if reveal not in ("all", "p0", "p1", "none"):
+            abort(400, description="reveal must be 'all', 'p0', 'p1', or 'none'")
         snapshots: list[dict[str, Any]] = []
         # Track log length across snapshots so each one can carry the entries
         # that appeared since the previous snapshot — useful for highlighting
         # "events this step" in the UI's log panel.
         log_offset = [0]
 
+        def _redact_hands(snap: dict[str, Any]) -> None:
+            """Strip hand contents per the ``reveal`` mode. hand_size stays so
+            the UI can render face-down placeholders for the hidden cards."""
+            if reveal == "all":
+                return
+            for p in snap["players"]:
+                hide = (
+                    reveal == "none"
+                    or (reveal == "p0" and p["id"] != 0)
+                    or (reveal == "p1" and p["id"] != 1)
+                )
+                if hide:
+                    p["hand"] = []
+
         def capture(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
+            _redact_hands(snap)
             snap["log_since_last"] = list(snap["log"][log_offset[0]:])
             log_offset[0] = len(snap["log"])
             snapshots.append(snap)
@@ -170,6 +188,7 @@ def create_app(
             "seed": seed,
             "colors": [c1, c2],
             "granularity": granularity,
+            "reveal": reveal,
         })
 
     @app.route("/api/snapshot/<game_id>/<int:idx>")
