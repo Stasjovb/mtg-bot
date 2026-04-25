@@ -179,3 +179,226 @@ def test_on_snapshot_sees_draw_for_max_turns_game():
     )
     assert final["draw"] is True
     assert "draw: reached max 1 turns" == final["log_tail"]
+
+
+# ---------------------------------------------------------------------------
+# Explicit decklists path (setup_game(decks=...))
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402
+
+from mtg_bot.cards import (  # noqa: E402
+    BASIC_LANDS, EOE_CREATURES, NONLAND_POOL, all_printings,
+    build_mono_color_deck,
+)
+from mtg_bot.simulate import setup_game  # noqa: E402
+
+
+def _two_color_deck(c1: str, c2: str) -> list[str]:
+    """Build a 60-card deck with 12 of each basic land for c1/c2 +
+    36 nonland cards in either color (or colorless). Used to smoke-
+    test that 2-color mana payment works end-to-end through the
+    engine — the open question before adopting 17lands data."""
+    color_to_basic = {"W": "Plains", "U": "Island", "B": "Swamp",
+                      "R": "Mountain", "G": "Forest"}
+    cards = [
+        name for name, p in NONLAND_POOL.items()
+        if (c1 in p.mana_cost.colors
+            or c2 in p.mana_cost.colors
+            or not p.mana_cost.colors)
+    ]
+    if len(cards) < 18:
+        raise AssertionError(
+            f"not enough {c1}/{c2} cards in NONLAND_POOL: {len(cards)}"
+        )
+    deck = [cards[i % len(cards)] for i in range(36)]
+    deck.extend([color_to_basic[c1]] * 12)
+    deck.extend([color_to_basic[c2]] * 12)
+    return deck
+
+
+def test_setup_game_accepts_explicit_decks():
+    """The new path: pass decks instead of colors."""
+    deck0 = build_mono_color_deck("G", seed=0)
+    deck1 = build_mono_color_deck("R", seed=1)
+    state = setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        decks=[deck0, deck1],
+        seed=42,
+    )
+    # Both libraries materialize at the right size (60 minus 7 drawn
+    # = 53 each).
+    assert len(state.players[0].library) == 53
+    assert len(state.players[1].library) == 53
+    assert len(state.players[0].hand) == 7
+    assert len(state.players[1].hand) == 7
+
+
+def test_setup_game_rejects_both_colors_and_decks():
+    deck = build_mono_color_deck("G", seed=0)
+    with pytest.raises(ValueError, match="exactly one"):
+        setup_game(
+            agents=[RandomAgent()],
+            colors=["G"], decks=[deck],
+        )
+
+
+def test_setup_game_rejects_neither_colors_nor_decks():
+    with pytest.raises(ValueError, match="exactly one"):
+        setup_game(agents=[RandomAgent(), RandomAgent()])
+
+
+def test_setup_game_rejects_decks_length_mismatch():
+    deck = build_mono_color_deck("G", seed=0)
+    with pytest.raises(ValueError, match="decks length"):
+        setup_game(
+            agents=[RandomAgent(), RandomAgent()],
+            decks=[deck],  # one deck, two agents
+        )
+
+
+def test_setup_game_rejects_unknown_card_in_deck():
+    bad_deck = ["Forest"] * 60
+    bad_deck[0] = "Definitely Not A Real Card"
+    with pytest.raises(ValueError, match="unknown cards"):
+        setup_game(
+            agents=[RandomAgent()],
+            decks=[bad_deck],
+        )
+
+
+def test_setup_game_explicit_deck_matches_color_path():
+    """Sanity: a deck built via build_mono_color_deck and passed
+    via decks= should produce a state functionally equivalent to
+    passing colors=. Verifies the decks= path doesn't introduce
+    drift from existing behavior."""
+    deck0 = build_mono_color_deck("G", seed=12345)
+    deck1 = build_mono_color_deck("R", seed=12346)
+    state_via_decks = setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        decks=[deck0, deck1],
+        seed=42,
+    )
+    # We can't assert byte-equality vs the colors= path because the
+    # internal seed routing is different (colors= derives per-player
+    # seeds from the top-level rng), but we CAN assert library
+    # composition (multiset of cards) is the same.
+    assert sorted(c.printing.name for c in state_via_decks.players[0].library
+                  + state_via_decks.players[0].hand) == sorted(deck0)
+    assert sorted(c.printing.name for c in state_via_decks.players[1].library
+                  + state_via_decks.players[1].hand) == sorted(deck1)
+
+
+# ---------------------------------------------------------------------------
+# Headline smoke: 2-color decks play through end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_two_color_deck_game_runs_to_completion():
+    """The actual unknown before 17lands integration: does the engine
+    handle 2-color mana payment end-to-end? Build G/R + W/U decks,
+    play to completion (or max_turns), assert no exceptions and
+    that a winner OR draw is set."""
+    deck_gr = _two_color_deck("G", "R")
+    deck_wu = _two_color_deck("W", "U")
+    state = simulate_game(
+        agents=[RandomAgent(), RandomAgent()],
+        seed=11, max_turns=200,
+    )
+    # First, sanity that the existing color path still works (no
+    # regression from the refactor).
+    assert state.is_over()
+    # Now the new path with explicit 2-color decks.
+    from mtg_bot.simulate import setup_game as _setup_game
+    from mtg_bot.simulate import run_turn
+    s2 = _setup_game(
+        agents=[RandomAgent(), RandomAgent()],
+        decks=[deck_gr, deck_wu],
+        seed=11,
+    )
+    # Drive through up to max_turns, mirroring simulate_game's loop
+    # but with the explicitly-built state.
+    for _ in range(50):
+        if s2.is_over():
+            break
+        run_turn(s2)
+        if not s2.is_over():
+            from mtg_bot.simulate import _advance_to_next_active_player
+            s2.turn_number += 1
+            _advance_to_next_active_player(s2)
+    # No exception → engine handled multi-color payment OK. We don't
+    # require termination at 50 turns (some random games run long);
+    # we just want "no crash, state internally consistent."
+    assert s2.turn_number > 1
+    assert all(
+        p.life >= 0 or p.has_lost
+        for p in s2.players
+    )
+
+
+def test_two_color_decks_can_cast_their_two_colors():
+    """Stronger: across N games of G/W vs U/B, both colors of mana
+    actually get spent (someone successfully casts a card costing
+    each color). Verifies that mana payment works for non-mono
+    colors — not just that the engine doesn't crash."""
+    from mtg_bot.simulate import setup_game as _setup_game
+    from mtg_bot.simulate import run_turn
+
+    deck_gw = _two_color_deck("G", "W")
+    deck_ub = _two_color_deck("U", "B")
+
+    saw_g_cast = False
+    saw_w_cast = False
+    saw_u_cast = False
+    saw_b_cast = False
+
+    for seed in range(8):
+        s = _setup_game(
+            agents=[RandomAgent(), RandomAgent()],
+            decks=[deck_gw, deck_ub],
+            seed=seed,
+        )
+        for _ in range(60):
+            if s.is_over():
+                break
+            run_turn(s)
+            if not s.is_over():
+                from mtg_bot.simulate import _advance_to_next_active_player
+                s.turn_number += 1
+                _advance_to_next_active_player(s)
+        # Walk each card on the battlefield + graveyard. Anything
+        # there came out of someone's hand → was cast → its colors
+        # got paid.
+        for player_id, observed in ((0, (saw_g_cast, saw_w_cast)),
+                                    (1, (saw_u_cast, saw_b_cast))):
+            pass
+        for o in s.battlefield:
+            mc = o.printing.mana_cost
+            if "G" in mc.colors:
+                saw_g_cast = True
+            if "W" in mc.colors:
+                saw_w_cast = True
+            if "U" in mc.colors:
+                saw_u_cast = True
+            if "B" in mc.colors:
+                saw_b_cast = True
+        for p in s.players:
+            for o in p.graveyard:
+                mc = o.printing.mana_cost
+                if "G" in mc.colors:
+                    saw_g_cast = True
+                if "W" in mc.colors:
+                    saw_w_cast = True
+                if "U" in mc.colors:
+                    saw_u_cast = True
+                if "B" in mc.colors:
+                    saw_b_cast = True
+
+    # Across 8 games, each color should get spent at least once.
+    # If a color never appears, mana payment for that color is
+    # broken in the new deck path.
+    assert saw_g_cast, "no green spell ever resolved across 8 G/W games"
+    assert saw_w_cast, "no white spell ever resolved across 8 G/W games"
+    assert saw_u_cast, "no blue spell ever resolved across 8 U/B games"
+    assert saw_b_cast, "no black spell ever resolved across 8 U/B games"

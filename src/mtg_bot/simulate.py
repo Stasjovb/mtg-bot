@@ -51,21 +51,71 @@ def _next_alive(state: GameState, start_idx: int) -> int:
     return start_idx
 
 
-def _build_player(
-    state: GameState, player_id: int, color: str, agent: Agent, seed: int
+def _build_player_from_names(
+    state: GameState, player_id: int, deck_names: list[str], agent: Agent,
 ) -> Player:
+    """Materialize a player with a library built from explicit card
+    names. Caller is responsible for shuffling — this just instantiates
+    one GameObject per name in the order given."""
     p = Player(id=player_id, agent=agent)
-    deck_names = build_mono_color_deck(color, seed=seed)
     printings = all_printings()
+    unknown = [name for name in deck_names if name not in printings]
+    if unknown:
+        raise ValueError(
+            f"deck for player {player_id} contains unknown cards: "
+            f"{sorted(set(unknown))}"
+        )
     for name in deck_names:
-        obj = state.new_object(printings[name], owner_id=player_id, zone=Zone.LIBRARY)
+        obj = state.new_object(
+            printings[name], owner_id=player_id, zone=Zone.LIBRARY,
+        )
         p.library.append(obj)
     return p
 
 
+def _build_player(
+    state: GameState, player_id: int, color: str, agent: Agent, seed: int
+) -> Player:
+    """Mono-color path: build a deck via ``build_mono_color_deck`` and
+    materialize. Kept around because existing tests + the default
+    ``setup_game`` color path still use it."""
+    deck_names = build_mono_color_deck(color, seed=seed)
+    return _build_player_from_names(state, player_id, deck_names, agent)
+
+
 def setup_game(
-    agents: list[Agent], colors: list[str], seed: Optional[int] = None
+    agents: list[Agent],
+    colors: Optional[list[str]] = None,
+    seed: Optional[int] = None,
+    decks: Optional[list[list[str]]] = None,
 ) -> GameState:
+    """Build a fresh game state.
+
+    Two ways to provide each player's library:
+
+    - ``colors``: pass ``["G", "R"]`` and each player gets a mono-
+      color synthetic deck via ``build_mono_color_deck``. Quick and
+      contrived; fine for tests.
+    - ``decks``: pass ``[[card_name, ...], [card_name, ...]]`` — one
+      explicit decklist per agent. Card names must all exist in
+      ``all_printings()``. This is the path the 17lands data ingestion
+      will use.
+
+    Exactly one of ``colors`` and ``decks`` must be provided.
+    """
+    if (colors is None) == (decks is None):
+        raise ValueError(
+            "exactly one of `colors` or `decks` must be provided"
+        )
+    if colors is not None and len(colors) != len(agents):
+        raise ValueError(
+            f"colors length {len(colors)} != agents length {len(agents)}"
+        )
+    if decks is not None and len(decks) != len(agents):
+        raise ValueError(
+            f"decks length {len(decks)} != agents length {len(agents)}"
+        )
+
     state = GameState()
     # Seed the canonical game RNG off the caller's seed so every
     # engine-level shuffle / random choice is reproducible across
@@ -74,9 +124,19 @@ def setup_game(
     # even if future engine work draws from state.rng during setup.
     state.rng.seed(seed)
     rng = random.Random(seed)
-    for i, (agent, color) in enumerate(zip(agents, colors)):
-        p = _build_player(state, i, color, agent, rng.randint(0, 10**9))
-        state.players.append(p)
+
+    if colors is not None:
+        for i, (agent, color) in enumerate(zip(agents, colors)):
+            p = _build_player(
+                state, i, color, agent, rng.randint(0, 10**9),
+            )
+            state.players.append(p)
+    else:
+        assert decks is not None  # narrowed above
+        for i, (agent, deck) in enumerate(zip(agents, decks)):
+            p = _build_player_from_names(state, i, list(deck), agent)
+            state.players.append(p)
+
     for p in state.players:
         rng.shuffle(p.library)
         for _ in range(7):
