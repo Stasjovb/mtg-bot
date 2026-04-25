@@ -31,8 +31,12 @@ from typing import Any
 
 from mtg_bot.agents import Agent
 from mtg_bot.search.resolution_decisions import (
-    ResolutionDiscardDecision, ResolutionModeDecision,
-    ResolutionSacrificeDecision, ResolutionTargetDecision,
+    ResolutionCardFromLibraryDecision,
+    ResolutionCardFromOpponentHandDecision,
+    ResolutionDevourLandsDecision, ResolutionDiscardDecision,
+    ResolutionModeDecision, ResolutionSacrificeDecision,
+    ResolutionShockLifeDecision, ResolutionSurveilDecision,
+    ResolutionTargetDecision, ResolutionXDecision,
 )
 from mtg_bot.search.tactical import DefaultTacticalAgent
 
@@ -43,6 +47,12 @@ KIND_TARGET = "target"
 KIND_DISCARD = "discard"
 KIND_MODE = "mode"
 KIND_SACRIFICE = "sacrifice"
+KIND_X = "x"
+KIND_SURVEIL = "surveil"
+KIND_SHOCK_LIFE = "shock_life"
+KIND_CARD_FROM_LIBRARY = "card_from_library"
+KIND_CARD_FROM_OPPONENT_HAND = "card_from_opponent_hand"
+KIND_DEVOUR_LANDS = "devour_lands"
 
 
 class _ResolutionPause(Exception):
@@ -165,6 +175,71 @@ class ResolutionChannelAgent(Agent):
         )
         return answer.object_id
 
+    def choose_x(self, state, player_id, card_name, upper_bound):
+        # Options are ``0`` through ``upper_bound`` inclusive.
+        answer = self._next_queue_entry(
+            expect=ResolutionXDecision,
+            kind=KIND_X,
+            player_id=player_id,
+            options=tuple(range(upper_bound + 1)),
+        )
+        return answer.x_value
+
+    def choose_surveil(self, state, player_id, top_card_id):
+        answer = self._next_queue_entry(
+            expect=ResolutionSurveilDecision,
+            kind=KIND_SURVEIL,
+            player_id=player_id,
+            options=(True, False),
+        )
+        return answer.mill
+
+    def choose_pay_shock_life(self, state, player_id, life_cost):
+        answer = self._next_queue_entry(
+            expect=ResolutionShockLifeDecision,
+            kind=KIND_SHOCK_LIFE,
+            player_id=player_id,
+            options=(True, False),
+        )
+        return answer.pay
+
+    def choose_card_from_library(self, state, player_id, option_ids):
+        # ``None`` is a legal answer for "decline to fetch" — thread
+        # it through as the final option so search sees decline as
+        # a real alternative.
+        options = tuple(option_ids) + (None,)
+        answer = self._next_queue_entry(
+            expect=ResolutionCardFromLibraryDecision,
+            kind=KIND_CARD_FROM_LIBRARY,
+            player_id=player_id,
+            options=options,
+        )
+        return answer.card_id
+
+    def choose_card_from_opponent_hand(
+        self, state, player_id, opponent_hand_ids,
+    ):
+        answer = self._next_queue_entry(
+            expect=ResolutionCardFromOpponentHandDecision,
+            kind=KIND_CARD_FROM_OPPONENT_HAND,
+            player_id=player_id,
+            options=tuple(opponent_hand_ids),
+        )
+        return answer.card_id
+
+    def choose_devour_lands(self, state, player_id, land_ids):
+        # V1: expose just ``()`` (devour none) and
+        # ``tuple(land_ids)`` (devour all). Intermediate subset
+        # counts and per-land factoring are future refinements.
+        options = ((), tuple(land_ids))
+        answer = self._next_queue_entry(
+            expect=ResolutionDevourLandsDecision,
+            kind=KIND_DEVOUR_LANDS,
+            player_id=player_id,
+            options=options,
+        )
+        return list(answer.land_ids)
+
     # -----------------------------------------------------------------
     # Non-exposed callbacks → tactical fallback
     # -----------------------------------------------------------------
@@ -180,38 +255,6 @@ class ResolutionChannelAgent(Agent):
     def declare_blockers(self, state, player_id, eligible, attackers):
         return self._fallback.declare_blockers(
             state, player_id, eligible, attackers,
-        )
-
-    def choose_surveil(self, state, player_id, top_card_id):
-        return self._fallback.choose_surveil(
-            state, player_id, top_card_id,
-        )
-
-    def choose_pay_shock_life(self, state, player_id, life_cost):
-        return self._fallback.choose_pay_shock_life(
-            state, player_id, life_cost,
-        )
-
-    def choose_card_from_opponent_hand(
-        self, state, player_id, opponent_hand_ids,
-    ):
-        return self._fallback.choose_card_from_opponent_hand(
-            state, player_id, opponent_hand_ids,
-        )
-
-    def choose_card_from_library(self, state, player_id, option_ids):
-        return self._fallback.choose_card_from_library(
-            state, player_id, option_ids,
-        )
-
-    def choose_x(self, state, player_id, card_name, upper_bound):
-        return self._fallback.choose_x(
-            state, player_id, card_name, upper_bound,
-        )
-
-    def choose_devour_lands(self, state, player_id, land_ids):
-        return self._fallback.choose_devour_lands(
-            state, player_id, land_ids,
         )
 
     # -----------------------------------------------------------------

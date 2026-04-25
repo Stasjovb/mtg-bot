@@ -171,17 +171,16 @@ def test_clone_preserves_resolution_pause_state():
     assert a_targets != b_targets
 
 
-def test_non_exposed_callbacks_still_work_via_tactical_fallback():
-    """With resolution exposure on, callbacks NOT in the exposed
-    set (surveil, X, shock-life, etc.) still flow through the
-    fallback tactical agent without crashing."""
+def test_shock_life_now_exposed_as_resolution_decision():
+    """Shock-land ``choose_pay_shock_life`` is one of the 10
+    resolution callbacks. With exposure on, playing a shock land
+    pauses for a search decision on whether to pay the life."""
+    from mtg_bot.actions import PlayLand
     from mtg_bot.cards import SHOCK_LANDS
+    from mtg_bot.search import ResolutionShockLifeDecision
     if not SHOCK_LANDS:
         pytest.skip("no shock lands in the pool")
 
-    # Put a shock land in P0's hand and drive to a state where
-    # they can play it. ETB triggers agent.choose_pay_shock_life
-    # which is NOT exposed.
     state = setup_game(
         [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
     )
@@ -196,7 +195,6 @@ def test_non_exposed_callbacks_still_work_via_tactical_fallback():
     )
     _drive_to_precombat_main(adapter)
 
-    from mtg_bot.actions import PlayLand
     play_action = next(
         (a for a in adapter.legal_decisions()
          if isinstance(a, PlayLand) and a.card_id == shock.id),
@@ -205,9 +203,17 @@ def test_non_exposed_callbacks_still_work_via_tactical_fallback():
     if play_action is None:
         pytest.skip("shock land not legal to play this seed")
 
-    # Should complete without the adapter pausing — tactical's
-    # choose_pay_shock_life declines to pay life, land enters tapped.
     adapter.apply(play_action)
+    # Paused on the shock-life question.
+    assert adapter._resolution_paused is True
+    assert adapter._resolution_kind == "shock_life"
+    legal = adapter.legal_decisions()
+    assert all(
+        isinstance(d, ResolutionShockLifeDecision) for d in legal
+    )
+    assert {d.pay for d in legal} == {True, False}
+    # Answer and confirm completion.
+    adapter.apply(ResolutionShockLifeDecision(pay=False))
     assert adapter._resolution_paused is False
 
 

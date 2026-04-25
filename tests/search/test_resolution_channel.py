@@ -185,27 +185,156 @@ def test_queue_type_mismatch_raises():
 
 
 # ---------------------------------------------------------------------
-# Non-exposed callbacks delegate to the fallback
+# Remaining 6 exposed callbacks (X, surveil, shock-life, library pick,
+# opponent-hand pick, devour lands) — same queue-or-pause behavior
+# as the first four.
 # ---------------------------------------------------------------------
 
-def test_choose_x_delegates_to_fallback():
-    """``choose_x`` is NOT exposed in this V1; falls through to the
-    tactical agent."""
-    fallback = DefaultTacticalAgent()
-    agent = ResolutionChannelAgent(fallback=fallback)
-    result = agent.choose_x(
-        state=None, player_id=0, card_name="test", upper_bound=7,
+def test_empty_queue_pauses_on_choose_x():
+    from mtg_bot.search.resolution_channel import KIND_X
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_x(
+            state=None, player_id=0, card_name="test", upper_bound=3,
+        )
+    assert excinfo.value.kind == KIND_X
+    # Options are every int from 0 to upper_bound inclusive.
+    assert excinfo.value.options == (0, 1, 2, 3)
+
+
+def test_queue_hit_returns_answer_on_choose_x():
+    from mtg_bot.search.resolution_decisions import ResolutionXDecision
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionXDecision(x_value=5))
+    assert agent.choose_x(None, 0, "test", upper_bound=10) == 5
+
+
+def test_empty_queue_pauses_on_choose_surveil():
+    from mtg_bot.search.resolution_channel import KIND_SURVEIL
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_surveil(None, 0, top_card_id=7)
+    assert excinfo.value.kind == KIND_SURVEIL
+    assert excinfo.value.options == (True, False)
+
+
+def test_queue_hit_returns_answer_on_choose_surveil():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionSurveilDecision,
     )
-    # Default tactical commits all available mana.
-    assert result == 7
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionSurveilDecision(mill=True))
+    assert agent.choose_surveil(None, 0, top_card_id=42) is True
 
 
-def test_choose_surveil_delegates_to_fallback():
-    fallback = DefaultTacticalAgent()
-    agent = ResolutionChannelAgent(fallback=fallback)
-    # Default tactical keeps on top (surveil=False).
-    assert agent.choose_surveil(None, 0, top_card_id=1) is False
+def test_empty_queue_pauses_on_choose_pay_shock_life():
+    from mtg_bot.search.resolution_channel import KIND_SHOCK_LIFE
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_pay_shock_life(None, 0, life_cost=2)
+    assert excinfo.value.kind == KIND_SHOCK_LIFE
+    assert excinfo.value.options == (True, False)
 
+
+def test_queue_hit_returns_answer_on_choose_pay_shock_life():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionShockLifeDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionShockLifeDecision(pay=True))
+    assert agent.choose_pay_shock_life(None, 0, life_cost=2) is True
+
+
+def test_empty_queue_pauses_on_choose_card_from_library():
+    """Library picks include ``None`` (decline) as a legal option."""
+    from mtg_bot.search.resolution_channel import KIND_CARD_FROM_LIBRARY
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_card_from_library(None, 0, option_ids=[10, 20])
+    assert excinfo.value.kind == KIND_CARD_FROM_LIBRARY
+    assert excinfo.value.options == (10, 20, None)
+
+
+def test_queue_hit_returns_answer_on_choose_card_from_library():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionCardFromLibraryDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionCardFromLibraryDecision(card_id=20))
+    assert agent.choose_card_from_library(None, 0, [10, 20]) == 20
+
+
+def test_queue_hit_returns_none_on_declined_library_pick():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionCardFromLibraryDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionCardFromLibraryDecision(card_id=None))
+    assert agent.choose_card_from_library(None, 0, [10, 20]) is None
+
+
+def test_empty_queue_pauses_on_choose_card_from_opponent_hand():
+    from mtg_bot.search.resolution_channel import (
+        KIND_CARD_FROM_OPPONENT_HAND,
+    )
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_card_from_opponent_hand(
+            None, 0, opponent_hand_ids=[101, 102],
+        )
+    assert excinfo.value.kind == KIND_CARD_FROM_OPPONENT_HAND
+    assert excinfo.value.options == (101, 102)
+
+
+def test_queue_hit_returns_answer_on_choose_card_from_opponent_hand():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionCardFromOpponentHandDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(
+        ResolutionCardFromOpponentHandDecision(card_id=102)
+    )
+    assert agent.choose_card_from_opponent_hand(None, 0, [101, 102]) == 102
+
+
+def test_empty_queue_pauses_on_choose_devour_lands():
+    """Devour: V1 exposes only ``()`` and ``tuple(land_ids)``."""
+    from mtg_bot.search.resolution_channel import KIND_DEVOUR_LANDS
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_devour_lands(None, 0, land_ids=[50, 51, 52])
+    assert excinfo.value.kind == KIND_DEVOUR_LANDS
+    assert excinfo.value.options == ((), (50, 51, 52))
+
+
+def test_queue_hit_returns_all_lands_on_devour_decision():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionDevourLandsDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(
+        ResolutionDevourLandsDecision(land_ids=(50, 51, 52))
+    )
+    result = agent.choose_devour_lands(None, 0, [50, 51, 52])
+    assert result == [50, 51, 52]
+
+
+def test_queue_hit_returns_no_lands_on_devour_decline():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionDevourLandsDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionDevourLandsDecision(land_ids=()))
+    result = agent.choose_devour_lands(None, 0, [50, 51, 52])
+    assert result == []
+
+
+# ---------------------------------------------------------------------
+# Still-delegated callbacks: combat declarations + choose_action
+# (all 10 decision callbacks are now exposed as resolution decisions,
+# but declare_attackers/blockers/choose_action go through the adapter's
+# state machines, not through this channel agent's pause mechanism).
+# ---------------------------------------------------------------------
 
 def test_declare_attackers_delegates_to_fallback():
     fallback = DefaultTacticalAgent()

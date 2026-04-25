@@ -26,17 +26,21 @@ pops the answer from the queue and the effect resolves with the
 search-chosen value. A second pause-point during the same resolution
 adds another queue entry; the third replay reaches farther; etc.
 
-Scope for this first cut — four callback types:
+Covers all 10 decision-making callbacks on ``Agent``:
 
-- ``ResolutionTargetDecision``    (← ``agent.choose_target``)
-- ``ResolutionDiscardDecision``   (← ``agent.choose_discard``)
-- ``ResolutionModeDecision``      (← ``agent.choose_mode``)
-- ``ResolutionSacrificeDecision`` (← ``agent.choose_sacrifice``)
-
-Other mid-resolution callbacks (``choose_surveil``, ``choose_x``,
-``choose_pay_shock_life``, tutor picks, etc.) still go through the
-tactical fallback. Adding them later is mechanical once the
-machinery below is in place.
+- ``ResolutionTargetDecision``             (← ``agent.choose_target``)
+- ``ResolutionDiscardDecision``            (← ``agent.choose_discard``)
+- ``ResolutionModeDecision``               (← ``agent.choose_mode``)
+- ``ResolutionSacrificeDecision``          (← ``agent.choose_sacrifice``)
+- ``ResolutionXDecision``                  (← ``agent.choose_x``)
+- ``ResolutionSurveilDecision``            (← ``agent.choose_surveil``)
+- ``ResolutionShockLifeDecision``
+                                   (← ``agent.choose_pay_shock_life``)
+- ``ResolutionCardFromLibraryDecision``
+                               (← ``agent.choose_card_from_library``)
+- ``ResolutionCardFromOpponentHandDecision``
+                         (← ``agent.choose_card_from_opponent_hand``)
+- ``ResolutionDevourLandsDecision``      (← ``agent.choose_devour_lands``)
 
 All decision types are frozen dataclasses so they're hashable (the
 search protocol's ``Decision`` contract) and cheaply comparable.
@@ -85,3 +89,66 @@ class ResolutionSacrificeDecision:
     engine supplied."""
 
     object_id: int
+
+
+@dataclass(frozen=True)
+class ResolutionXDecision:
+    """Answer to an ``agent.choose_x`` callback for X-cost spells
+    and abilities. ``x_value`` is an int in ``[0, upper_bound]``
+    where ``upper_bound`` is the caller's affordable maximum at
+    cast time."""
+
+    x_value: int
+
+
+@dataclass(frozen=True)
+class ResolutionSurveilDecision:
+    """Answer to an ``agent.choose_surveil`` callback.
+    ``mill=True`` sends the top library card to the graveyard;
+    ``mill=False`` leaves it on top."""
+
+    mill: bool
+
+
+@dataclass(frozen=True)
+class ResolutionShockLifeDecision:
+    """Answer to an ``agent.choose_pay_shock_life`` callback when
+    playing a shock land. ``pay=True`` pays the life cost and the
+    land enters untapped; ``pay=False`` enters tapped."""
+
+    pay: bool
+
+
+@dataclass(frozen=True)
+class ResolutionCardFromLibraryDecision:
+    """Answer to an ``agent.choose_card_from_library`` callback for
+    tutor-style effects. ``card_id`` is the chosen library card, or
+    ``None`` for "decline to fetch" (where the effect allows it)."""
+
+    card_id: Optional[int]
+
+
+@dataclass(frozen=True)
+class ResolutionCardFromOpponentHandDecision:
+    """Answer to an ``agent.choose_card_from_opponent_hand`` callback
+    for directed-discard effects (Thoughtseize-style) where the
+    CASTER chooses which card from the opponent's revealed hand."""
+
+    card_id: int
+
+
+@dataclass(frozen=True)
+class ResolutionDevourLandsDecision:
+    """Answer to an ``agent.choose_devour_lands`` callback (Devour
+    mechanic). ``land_ids`` is the subset of eligible lands to
+    sacrifice — empty tuple for "devour none".
+
+    V1 simplification: the adapter only surfaces two options — the
+    empty set and the full set — rather than every subset of
+    eligible lands. Subset enumeration blows up quickly (2^N) and
+    the strategic question is almost always "how many?" rather
+    than "which specific lands?" in practice. A prior/factored-
+    decision refinement can expose intermediate counts later.
+    """
+
+    land_ids: tuple[int, ...]

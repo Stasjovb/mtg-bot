@@ -64,12 +64,18 @@ from mtg_bot.search.combat_decisions import (
 )
 from mtg_bot.search.protocol import Decision, PlayerID
 from mtg_bot.search.resolution_channel import (
-    KIND_DISCARD, KIND_MODE, KIND_SACRIFICE, KIND_TARGET,
+    KIND_CARD_FROM_LIBRARY, KIND_CARD_FROM_OPPONENT_HAND,
+    KIND_DEVOUR_LANDS, KIND_DISCARD, KIND_MODE, KIND_SACRIFICE,
+    KIND_SHOCK_LIFE, KIND_SURVEIL, KIND_TARGET, KIND_X,
     ResolutionChannelAgent, _ResolutionPause,
 )
 from mtg_bot.search.resolution_decisions import (
-    ResolutionDiscardDecision, ResolutionModeDecision,
-    ResolutionSacrificeDecision, ResolutionTargetDecision,
+    ResolutionCardFromLibraryDecision,
+    ResolutionCardFromOpponentHandDecision,
+    ResolutionDevourLandsDecision, ResolutionDiscardDecision,
+    ResolutionModeDecision, ResolutionSacrificeDecision,
+    ResolutionShockLifeDecision, ResolutionSurveilDecision,
+    ResolutionTargetDecision, ResolutionXDecision,
 )
 from mtg_bot.search.tactical import DefaultTacticalAgent
 from mtg_bot.simulate import _advance_to_next_active_player, _next_alive
@@ -102,6 +108,12 @@ _RESOLUTION_KIND_TO_DECISION_CLASS = {
     KIND_DISCARD: ResolutionDiscardDecision,
     KIND_MODE: ResolutionModeDecision,
     KIND_SACRIFICE: ResolutionSacrificeDecision,
+    KIND_X: ResolutionXDecision,
+    KIND_SURVEIL: ResolutionSurveilDecision,
+    KIND_SHOCK_LIFE: ResolutionShockLifeDecision,
+    KIND_CARD_FROM_LIBRARY: ResolutionCardFromLibraryDecision,
+    KIND_CARD_FROM_OPPONENT_HAND: ResolutionCardFromOpponentHandDecision,
+    KIND_DEVOUR_LANDS: ResolutionDevourLandsDecision,
 }
 
 
@@ -279,6 +291,26 @@ class MtgGameStateAdapter:
         if kind == KIND_SACRIFICE:
             return [
                 ResolutionSacrificeDecision(object_id=oid) for oid in opts
+            ]
+        if kind == KIND_X:
+            return [ResolutionXDecision(x_value=v) for v in opts]
+        if kind == KIND_SURVEIL:
+            return [ResolutionSurveilDecision(mill=v) for v in opts]
+        if kind == KIND_SHOCK_LIFE:
+            return [ResolutionShockLifeDecision(pay=v) for v in opts]
+        if kind == KIND_CARD_FROM_LIBRARY:
+            return [
+                ResolutionCardFromLibraryDecision(card_id=cid) for cid in opts
+            ]
+        if kind == KIND_CARD_FROM_OPPONENT_HAND:
+            return [
+                ResolutionCardFromOpponentHandDecision(card_id=cid)
+                for cid in opts
+            ]
+        if kind == KIND_DEVOUR_LANDS:
+            return [
+                ResolutionDevourLandsDecision(land_ids=subset)
+                for subset in opts
             ]
         raise RuntimeError(f"unknown resolution kind: {kind!r}")
 

@@ -47,10 +47,16 @@ from mtg_bot.search.combat_decisions import (
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.resolution_channel import ResolutionChannelAgent
 from mtg_bot.search.resolution_decisions import (
+    ResolutionCardFromLibraryDecision,
+    ResolutionCardFromOpponentHandDecision,
+    ResolutionDevourLandsDecision,
     ResolutionDiscardDecision,
     ResolutionModeDecision,
     ResolutionSacrificeDecision,
+    ResolutionShockLifeDecision,
+    ResolutionSurveilDecision,
     ResolutionTargetDecision,
+    ResolutionXDecision,
 )
 from mtg_bot.search.evaluator import (
     Evaluator,
@@ -98,11 +104,17 @@ __all__ = [
     "ProgressiveWidening",
     "RandomChoice",
     "RandomRolloutEvaluator",
+    "ResolutionCardFromLibraryDecision",
+    "ResolutionCardFromOpponentHandDecision",
     "ResolutionChannelAgent",
+    "ResolutionDevourLandsDecision",
     "ResolutionDiscardDecision",
     "ResolutionModeDecision",
     "ResolutionSacrificeDecision",
+    "ResolutionShockLifeDecision",
+    "ResolutionSurveilDecision",
     "ResolutionTargetDecision",
+    "ResolutionXDecision",
     "SearchStrategy",
     "attack_aggressive_prior",
     "block_biggest_attacker_first_prior",
