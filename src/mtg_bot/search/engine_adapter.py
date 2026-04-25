@@ -787,8 +787,12 @@ class MtgGameStateAdapter:
 
     @property
     def engine_state(self) -> EngineGameState:
-        """The wrapped engine state. Tests and debug tools reach
-        through this; search code should not."""
+        """The wrapped engine state. MTG-aware search code (PIMC, the
+        determinizer) reaches through this to operate on the engine
+        directly; the rest of search should stay on the protocol
+        surface. Mutating it bypasses adapter bookkeeping (priority
+        counter, combat phase, resolution-pause snapshot) and is
+        unsupported."""
         return self._state
 
     @property
