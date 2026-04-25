@@ -148,7 +148,9 @@ async function loadReplay(filename) {
     const summary = await fetchJSON(
       '/api/load_replay/' + encodeURIComponent(filename),
     );
-    await activateGame(summary);
+    // Replays open at snapshot 0 so the reviewer can step forward
+    // through the game; live games still land on the final state.
+    await activateGame(summary, 0);
     setStatus('Loaded replay ' + filename, 'muted');
   } catch (e) {
     setStatus('Replay load failed: ' + e.message, 'loss');
@@ -160,7 +162,9 @@ async function loadReplay(filename) {
 // Shared "set up the scrubber from an /api/play or /api/load_replay
 // response" path. Both endpoints return the same {game_id,
 // snapshot_count, ...} shape, so the activation work is identical.
-async function activateGame(summary) {
+// ``startIdx`` selects the initial snapshot — defaults to the last
+// (final state) for live games; replays pass 0 to start at turn 1.
+async function activateGame(summary, startIdx) {
   // Fetch the compact (turn, step) index so step/turn navigation is O(1)
   // per click instead of N fetches.
   const index = await fetchJSON(`/api/snapshots_index/${summary.game_id}`);
@@ -178,7 +182,8 @@ async function activateGame(summary) {
   els.slider.max = Math.max(0, summary.snapshot_count - 1);
   els.scrubber.classList.remove('hidden');
   els.phaseTracker.classList.remove('hidden');
-  await goTo(summary.snapshot_count - 1);  // land on the final state
+  const target = (startIdx == null) ? summary.snapshot_count - 1 : startIdx;
+  await goTo(target);
 }
 
 // On page load: if the URL carries ``?replay=<filename>``, jump

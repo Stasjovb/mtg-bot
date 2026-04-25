@@ -64,4 +64,47 @@ describe('loadReplay()', () => {
       globalThis.loadReplay('test.json.gz'),
     ).resolves.toBeUndefined();
   });
+
+  it('opens replays at snapshot 0, not the final state', async () => {
+    // Stub activateGame so we can observe what startIdx loadReplay passes.
+    const activateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.activateGame = activateSpy;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ game_id: 'g1', snapshot_count: 50 }),
+      text: async () => '',
+    });
+    await globalThis.loadReplay('test.json.gz');
+    expect(activateSpy).toHaveBeenCalledTimes(1);
+    expect(activateSpy.mock.calls[0][1]).toBe(0);
+  });
+});
+
+describe('activateGame()', () => {
+  it('defaults to the final snapshot when startIdx is omitted (live games)', async () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+      text: async () => '',
+    });
+    await globalThis.activateGame({ game_id: 'g1', snapshot_count: 7 });
+    expect(goToSpy).toHaveBeenCalledWith(6);
+  });
+
+  it('honors an explicit startIdx (replays pass 0)', async () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+      text: async () => '',
+    });
+    await globalThis.activateGame({ game_id: 'g1', snapshot_count: 7 }, 0);
+    expect(goToSpy).toHaveBeenCalledWith(0);
+  });
 });
