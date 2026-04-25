@@ -424,6 +424,169 @@ def test_reveal_p1_hides_p0_hand_with_face_down_placeholders(page):
     assert p0_hand.locator(".card:not(.face-down)").count() == 0
 
 
+# ------------------------------------------------------------------------
+# Mobile viewport (~390x844, touch pointer)
+# ------------------------------------------------------------------------
+#
+# These tests exercise the same scrubber / replay-review flow as above but
+# at an iPhone-14-ish viewport with touch enabled. They lock down the
+# responsive CSS rules in app.css under @media (max-width: 640px) and
+# @media (hover: none) — without them, the desktop's 280px right rail and
+# 32em modal min-width overflow a 390px screen.
+
+MOBILE_VIEWPORT = {"width": 390, "height": 844}
+
+
+@pytest.fixture
+def mobile_page(browser, live_server):
+    ctx = browser.new_context(
+        viewport=MOBILE_VIEWPORT,
+        is_mobile=True,
+        has_touch=True,
+    )
+    p = ctx.new_page()
+    p.goto(live_server, wait_until="domcontentloaded")
+    yield p
+    ctx.close()
+
+
+def test_mobile_no_horizontal_overflow_on_initial_load(mobile_page):
+    overflow = mobile_page.evaluate(
+        "() => document.documentElement.scrollWidth - window.innerWidth"
+    )
+    assert overflow <= 1, (
+        f"page overflows viewport horizontally by {overflow}px on initial load"
+    )
+
+
+def test_mobile_no_horizontal_overflow_after_running_a_game(mobile_page):
+    _run_short_game(mobile_page)
+    overflow = mobile_page.evaluate(
+        "() => document.documentElement.scrollWidth - window.innerWidth"
+    )
+    assert overflow <= 1, (
+        f"page overflows viewport horizontally by {overflow}px after running a game"
+    )
+
+
+def test_mobile_scrubber_slider_fits_within_viewport(mobile_page):
+    _run_short_game(mobile_page)
+    box = mobile_page.locator("#scrub-slider").bounding_box()
+    assert box is not None
+    assert box["x"] >= 0, f"slider starts off-screen left at x={box['x']}"
+    assert box["x"] + box["width"] <= MOBILE_VIEWPORT["width"] + 1, (
+        f"slider extends past right edge: x={box['x']} w={box['width']}"
+    )
+
+
+def test_mobile_all_scrubber_buttons_remain_clickable(mobile_page):
+    """All scrubber control buttons should be visible and fit horizontally —
+    on the desktop layout they got pushed past the right edge by the
+    20em-min slider + 14em-min readout."""
+    _run_short_game(mobile_page)
+    btn_ids = [
+        "btn-first", "btn-prev-turn", "btn-prev-step", "btn-prev",
+        "btn-play", "btn-next", "btn-next-step", "btn-next-turn",
+        "btn-last",
+    ]
+    for bid in btn_ids:
+        loc = mobile_page.locator(f"#{bid}")
+        assert loc.is_visible(), f"#{bid} not visible at mobile viewport"
+        box = loc.bounding_box()
+        assert box is not None
+        assert box["x"] >= 0, f"#{bid} starts off-screen left"
+        assert box["x"] + box["width"] <= MOBILE_VIEWPORT["width"] + 1, (
+            f"#{bid} extends past the right edge"
+        )
+
+
+def test_mobile_cards_render_at_smaller_width(mobile_page):
+    """The mobile media query shrinks --card-w to 72px so cards actually
+    fit inside the player row at 390px wide."""
+    _run_short_game(mobile_page)
+    box = mobile_page.locator("#board .card").first.bounding_box()
+    assert box is not None
+    assert box["width"] <= 80, (
+        f"card is {box['width']}px wide on mobile, expected <= 80px "
+        "(media query may not be applied)"
+    )
+
+
+def test_mobile_hover_preview_stays_hidden_on_touch(mobile_page):
+    """`@media (hover: none)` should suppress #card-preview on touch
+    devices — otherwise hovering a card pops a 320px preview that
+    obscures most of a 390px screen."""
+    _run_short_game(mobile_page)
+    mobile_page.locator("#board .card").first.hover()
+    mobile_page.wait_for_timeout(200)
+    assert not mobile_page.locator("#card-preview").is_visible(), (
+        "card-preview is visible on a touch viewport — should be suppressed"
+    )
+
+
+def test_mobile_zone_modal_fits_within_viewport(mobile_page):
+    """The desktop modal had `min-width: 32em` (~512px) which overflowed a
+    390px screen. The mobile override drops the minimum so the modal
+    sits inside the viewport."""
+    _run_short_game(mobile_page, seed=0, max_turns=40)
+    idx = mobile_page.evaluate("""async () => {
+      const max = parseInt(document.getElementById('scrub-slider').max, 10);
+      for (let i = max; i >= 0; i--) {
+        let s = game.snapCache.get(i);
+        if (!s) {
+          const r = await fetch(`/api/snapshot/${game.gameId}/${i}`);
+          s = await r.json();
+          game.snapCache.set(i, s);
+        }
+        if (s.players.some(pl => pl.graveyard_size > 0)) return i;
+      }
+      return -1;
+    }""")
+    assert idx >= 0, "expected at least one snapshot with a non-empty graveyard"
+    mobile_page.evaluate(
+        "i => { const s = document.getElementById('scrub-slider');"
+        " s.value = i; s.dispatchEvent(new Event('input')); }",
+        idx,
+    )
+    mobile_page.wait_for_timeout(400)
+    mobile_page.evaluate("""() => {
+      for (const b of document.querySelectorAll('.zone-box.clickable')) {
+        if (b.textContent.includes('Graveyard')) { b.click(); return; }
+      }
+      throw new Error('no clickable graveyard zone-box found');
+    }""")
+    mobile_page.wait_for_timeout(200)
+    inner = mobile_page.locator("#zone-modal .zone-modal-inner").bounding_box()
+    assert inner is not None
+    assert inner["x"] >= 0
+    assert inner["x"] + inner["width"] <= MOBILE_VIEWPORT["width"] + 1, (
+        f"zone modal overflows viewport: "
+        f"right edge at {inner['x'] + inner['width']}px"
+    )
+
+
+def test_mobile_right_column_stacks_below_board(mobile_page):
+    """Desktop puts the engine/log rail to the right of the board (grid
+    column 2). The mobile override collapses to a single column — the
+    rail should sit vertically below the board, not beside it."""
+    _run_short_game(mobile_page)
+    # log-panel is un-hidden after a game runs, so right-col has visible
+    # content without needing to open the engine panel.
+    board = mobile_page.locator("#board").bounding_box()
+    rail = mobile_page.locator(".right-col").bounding_box()
+    assert board is not None and rail is not None
+    assert rail["y"] >= board["y"] + board["height"] - 5, (
+        f"right-col top ({rail['y']:.0f}) is not below board bottom "
+        f"({board['y'] + board['height']:.0f}) — layout did not collapse "
+        "to a single column on mobile"
+    )
+
+
+# ------------------------------------------------------------------------
+# Form-error path
+# ------------------------------------------------------------------------
+
+
 def test_server_error_surfaces_in_status_line(page):
     """Submit the form with a non-numeric seed to force /api/play to 400, and
     verify the JS error handler lands an 'Error:' in the status line with the

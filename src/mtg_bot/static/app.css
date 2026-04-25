@@ -390,3 +390,50 @@ body { display: grid; grid-template-columns: 1fr 280px;
                          display: flex; align-items: center; justify-content: center;
                          color: var(--muted); font-size: 0.85em; padding: 0.8em;
                          text-align: center; }
+
+/* ---- mobile / narrow-viewport overrides ----
+   The desktop layout is a 2-column grid (board + 280px right rail) with
+   fixed-width controls. On a phone (~390px wide) the rail squeezes the board
+   under one card, the slider's min-width pushes the readout off-screen, and
+   the modal's 32em min-width overflows. Collapse to a single column, shrink
+   cards, and let the slider and modal flex. */
+@media (max-width: 640px) {
+  :root {
+    --card-w: 72px;
+    --card-h: 100px;
+    --side-panel-w: 110px;
+  }
+  body { grid-template-columns: 1fr;
+         grid-template-rows: auto auto auto auto auto; }
+
+  .top-bar { gap: 0.6em; padding: 0.5em 0.7em; }
+  .play-form { gap: 0.4em; flex-basis: 100%; }
+  .play-form label { font-size: 0.8em; }
+  .play-form input, .play-form select { width: 4.5em; padding: 0.25em 0.4em; }
+
+  .scrubber { flex-wrap: wrap; gap: 0.4em; padding: 0.45em 0.6em; }
+  .scrubber-controls { flex-wrap: wrap; }
+  #scrub-slider { min-width: 0; flex: 1 1 100%; order: 4; }
+  .scrubber-readout { min-width: 0; flex-direction: row; gap: 0.6em;
+                      flex: 0 0 auto; }
+  .engine-toggle { flex: 0 0 auto; }
+
+  .board { grid-column: 1; grid-row: 4; overflow: visible;
+           padding: 0.5em; gap: 0.4em; }
+  .player-row { padding: 0.4em; gap: 0.4em; }
+  .side-panel { gap: 0.3em; }
+  .life { font-size: 2em; }
+
+  .right-col { grid-column: 1; grid-row: 5;
+               border-left: none; border-top: 1px solid var(--panel-edge); }
+  .engine-panel { max-height: 35vh; }
+
+  .zone-modal { padding: 0.5em; }
+  .zone-modal-inner { min-width: 0; max-width: 95vw; padding: 0.7em; }
+}
+
+/* Hover preview is meaningless and obstructive on touch devices —
+   the same card image is already inline on the board. */
+@media (hover: none) {
+  .card-preview { display: none !important; }
+}
