@@ -960,3 +960,117 @@ def test_main_starts_app_with_cli_args(monkeypatch, capsys):
     assert captured == {"host": "0.0.0.0", "port": 9999, "debug": False}
     out = capsys.readouterr().out
     assert "http://localhost:9999" in out
+
+
+# =====================================================================
+# Replay loading endpoints (/api/list_replays, /api/load_replay)
+# =====================================================================
+
+
+def _fixture_replay_dir(tmp_path):
+    """Drop a couple of valid replay files into a tmp dir for the
+    list/load endpoints to discover."""
+    from mtg_bot.replay import REPLAY_FORMAT_VERSION, Replay, save_replay
+    replays_dir = tmp_path / "replays"
+    save_replay(
+        Replay(
+            format_version=REPLAY_FORMAT_VERSION,
+            metadata={"game_idx": 0, "winner": 0},
+            snapshots=[
+                {"turn_number": 1, "step": "untap", "is_over": False,
+                 "players": [
+                     {"id": 0, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                     {"id": 1, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                 ],
+                 "stack": [], "log": []},
+            ],
+        ),
+        replays_dir / "game_seed0_idx0000.json.gz",
+    )
+    save_replay(
+        Replay(
+            format_version=REPLAY_FORMAT_VERSION,
+            metadata={"game_idx": 1, "winner": 1},
+            snapshots=[
+                {"turn_number": 1, "step": "untap", "is_over": False,
+                 "players": [
+                     {"id": 0, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                     {"id": 1, "life": 20, "hand": [], "graveyard": [],
+                      "exile": [], "battlefield": []},
+                 ],
+                 "stack": [], "log": []},
+            ],
+        ),
+        replays_dir / "game_seed0_idx0001.json.gz",
+    )
+    return replays_dir
+
+
+def _replay_client(tmp_path, fake_index):
+    """Test client wired to a replay-aware app with the fixture dir."""
+    replays_dir = _fixture_replay_dir(tmp_path)
+    app = create_app(card_index=fake_index, replays_root=replays_dir)
+    app.config["TESTING"] = True
+    return app.test_client(), replays_dir
+
+
+def test_list_replays_returns_filenames_in_order(tmp_path, fake_index):
+    client, replays_dir = _replay_client(tmp_path, fake_index)
+    body = client.get("/api/list_replays").get_json()
+    assert body["replays"] == [
+        "game_seed0_idx0000.json.gz",
+        "game_seed0_idx0001.json.gz",
+    ]
+    assert body["root"] == str(replays_dir.resolve())
+
+
+def test_list_replays_empty_when_no_dir(tmp_path, fake_index):
+    """If replays_root doesn't exist, the endpoint should return
+    {replays: []} rather than 404 — easier on the UI."""
+    nonexistent = tmp_path / "nope"
+    app = create_app(card_index=fake_index, replays_root=nonexistent)
+    app.config["TESTING"] = True
+    body = app.test_client().get("/api/list_replays").get_json()
+    assert body["replays"] == []
+
+
+def test_load_replay_creates_game_in_cache(tmp_path, fake_index):
+    client, _ = _replay_client(tmp_path, fake_index)
+    resp = client.get("/api/load_replay/game_seed0_idx0000.json.gz")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "game_id" in body
+    assert body["snapshot_count"] == 1
+    assert body["metadata"]["game_idx"] == 0
+    # Subsequent /api/snapshot/<game_id>/0 works (replay went into cache).
+    snap = client.get(
+        f"/api/snapshot/{body['game_id']}/0",
+    ).get_json()
+    assert snap["turn_number"] == 1
+
+
+def test_load_replay_rejects_nonexistent_file(tmp_path, fake_index):
+    client, _ = _replay_client(tmp_path, fake_index)
+    resp = client.get("/api/load_replay/nope.json.gz")
+    assert resp.status_code == 404
+
+
+def test_load_replay_rejects_path_traversal(tmp_path, fake_index):
+    client, _ = _replay_client(tmp_path, fake_index)
+    # Forward slash, backslash, and leading-dot path components all
+    # blocked at the validation layer.
+    for bad in ("../escape.json.gz", "..\\escape.json.gz",
+                ".hidden.json.gz"):
+        resp = client.get(f"/api/load_replay/{bad}")
+        assert resp.status_code == 400, (
+            f"expected 400 for {bad!r}, got {resp.status_code}"
+        )
+
+
+def test_load_replay_rejects_wrong_extension(tmp_path, fake_index):
+    client, _ = _replay_client(tmp_path, fake_index)
+    resp = client.get("/api/load_replay/foo.txt")
+    assert resp.status_code == 400

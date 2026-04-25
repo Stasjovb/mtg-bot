@@ -1,0 +1,87 @@
+"""Replayable game-snapshot recordings — file format + load/save.
+
+A ``Replay`` is metadata + a list of serialized snapshot dicts (the
+same shape ``serialize_state`` produces). Saved as gzipped JSON
+(typical compressed file: ~100 KB to ~1 MB depending on game length).
+
+Snapshots are LOSSY by design — they contain everything visible
+about each game moment (life, hand contents, battlefield, stack,
+log) but NOT the engine-side bookkeeping (RNG state, priority pass
+count, mid-resolution-pause state) needed to resume computation.
+You can SCRUB through a replay, you can't run new MCTS searches
+from it. Documented limitation; engine-state serialization is
+deferred to a future PR if/when we need replay-time recommendations.
+
+Optional snapshot annotations (added by ``ReplayRecorder``):
+
+- ``heuristic_eval``: ``{p0: float, p1: float}`` — the heuristic
+  evaluator's score from each player's perspective. Always cheap.
+- ``nn_eval``: ``{p0: float, p1: float}`` — same but from a
+  trained NN. Present only when capture was annotated with
+  ``--annotate-with-nn-version``.
+
+Format-version field is stamped into the file so future format
+changes can detect old replays and either migrate or refuse.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+# Bump if the format changes incompatibly. Old readers that don't
+# recognize the version should refuse rather than silently mis-parse.
+REPLAY_FORMAT_VERSION: int = 1
+
+
+@dataclass
+class Replay:
+    """One captured game.
+
+    ``metadata`` is freeform — typical keys: ``game_idx``,
+    ``base_seed``, ``p0_config``, ``p1_config``, ``winner``,
+    ``n_decisions``, ``captured_at``, ``annotated_with_nn_version``.
+    """
+
+    format_version: int = REPLAY_FORMAT_VERSION
+    metadata: dict[str, Any] = field(default_factory=dict)
+    snapshots: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Replay":
+        version = d.get("format_version")
+        if version != REPLAY_FORMAT_VERSION:
+            raise ValueError(
+                f"replay format version {version!r} is not supported "
+                f"(this build reads v{REPLAY_FORMAT_VERSION}). The file "
+                f"was written by a different version of the codebase."
+            )
+        return cls(
+            format_version=version,
+            metadata=dict(d.get("metadata", {})),
+            snapshots=list(d.get("snapshots", [])),
+        )
+
+
+def save_replay(replay: Replay, path: Path) -> None:
+    """Write replay as gzipped JSON. Parent directories are created
+    if missing."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(replay.to_dict()).encode("utf-8")
+    with gzip.open(path, "wb") as f:
+        f.write(payload)
+
+
+def load_replay(path: Path) -> Replay:
+    """Read a gzipped-JSON replay file written by ``save_replay``."""
+    path = Path(path)
+    with gzip.open(path, "rb") as f:
+        data = json.loads(f.read().decode("utf-8"))
+    return Replay.from_dict(data)

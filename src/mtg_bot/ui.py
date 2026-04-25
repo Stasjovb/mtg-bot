@@ -153,17 +153,24 @@ def create_app(
     image_root: Path = DEFAULT_CACHE_ROOT,
     image_fetcher: Optional[Fetcher] = None,
     game_cache: Optional[GameCache] = None,
+    replays_root: Optional[Path] = None,
 ) -> Flask:
     """Build the Flask app.
 
     All injectables default to production wiring (real Scryfall data, real
     network fetcher, fresh cache). Tests pass fakes.
+
+    ``replays_root`` is the directory ``/api/list_replays`` and
+    ``/api/load_replay/<filename>`` read from. Defaults to ``replays/``
+    relative to the cwd. Filenames must not contain path-traversal
+    components (``..``, absolute paths) — both endpoints reject them.
     """
     app = Flask(__name__)
     index = card_index if card_index is not None else CardIndex.load(DEFAULT_CARD_DATA)
     fetcher = image_fetcher if image_fetcher is not None else http_fetcher
     cache = game_cache if game_cache is not None else GameCache()
     name_to_id = {name: card["id"] for name, card in index.by_name.items()}
+    replays_dir = (replays_root or Path("replays")).resolve()
 
     @app.route("/")
     def home():
@@ -276,6 +283,68 @@ def create_app(
             result = recommend_from_snapshot(game.snapshots[idx], n=n)
         result["snapshot_idx"] = idx
         return jsonify(result)
+
+    @app.route("/api/list_replays")
+    def api_list_replays():
+        """Return the .json.gz files available in ``replays_root``.
+
+        The UI calls this to populate a "load replay" picker. Path
+        traversal isn't a risk here (we only return basenames), but
+        we do require the file to be inside ``replays_root`` when
+        loading."""
+        if not replays_dir.is_dir():
+            return jsonify({"replays": []})
+        files = sorted(p.name for p in replays_dir.glob("*.json.gz"))
+        return jsonify({"replays": files, "root": str(replays_dir)})
+
+    @app.route("/api/load_replay/<path:filename>")
+    def api_load_replay(filename: str):
+        """Load a saved replay file into the cache and return a
+        game_id the existing scrubber UI can use.
+
+        The replay's snapshots fill the ``snapshots`` list; engine
+        states are all None (replays don't carry engine state, by
+        design — see ``mtg_bot/replay.py``). The recommend endpoint
+        falls back to its stub when engine_state is None.
+
+        Filename validation: must end in .json.gz, must not contain
+        path components, must resolve inside ``replays_root``.
+        """
+        from mtg_bot.replay import load_replay
+
+        # Reject any path-traversal component before we even touch
+        # the filesystem. Filename should be a single path component.
+        if "/" in filename or "\\" in filename or filename.startswith("."):
+            abort(400, description="invalid replay filename")
+        if not filename.endswith(".json.gz"):
+            abort(400, description="replay filename must end in .json.gz")
+        target = (replays_dir / filename).resolve()
+        # Confirm the resolved path still lives inside replays_dir
+        # (defense in depth against odd OS path semantics).
+        try:
+            target.relative_to(replays_dir)
+        except ValueError:
+            abort(400, description="replay path outside replays_root")
+        if not target.is_file():
+            abort(404, description=f"replay not found: {filename}")
+
+        replay = load_replay(target)
+        # The stored snapshots may not have been enriched with
+        # scryfall_ids — replay capture writes raw serialize_state
+        # output. Enrich on load so the scrubber can render images.
+        snapshots = [
+            _enrich_snapshot(dict(s), name_to_id)
+            for s in replay.snapshots
+        ]
+        engine_states = [None] * len(snapshots)
+        game_id = uuid4().hex
+        cache.store(game_id, snapshots, engine_states)
+        return jsonify({
+            "game_id": game_id,
+            "snapshot_count": len(snapshots),
+            "metadata": replay.metadata,
+            "source_filename": filename,
+        })
 
     @app.route("/api/snapshots_index/<game_id>")
     def api_snapshots_index(game_id: str):

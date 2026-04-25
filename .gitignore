@@ -55,3 +55,7 @@ package-lock.json
 # Both regenerable via scripts/generate_training_data.py + train_nn.py.
 training_data/
 trained_weights/
+
+# Captured per-game replays (gzipped JSON), written by data gen with
+# --save-replays-to. Regenerable; can be huge for long training runs.
+replays/

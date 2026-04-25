@@ -31,10 +31,17 @@ Module map:
                    evaluate_nn.py (eval by version, write result
                    back), and tournament.py (round-robin between
                    recent versions).
+- ``replay_capture`` — ``ReplayRecorder`` accumulates serialized
+                   snapshots through a game, optionally annotated
+                   with eval values per snapshot (heuristic_eval
+                   always; nn_eval when a registered version is
+                   passed). Wired into data gen via
+                   ``ReplayCaptureConfig`` for per-game disk-write
+                   alongside training-data arrays.
 
 CLI demos in ``scripts/``: ``tune_heuristic.py`` (Phase A weight
 sweep), ``generate_training_data.py``, ``train_nn.py``,
-``evaluate_nn.py``, ``tournament.py``.
+``evaluate_nn.py``, ``tournament.py``, ``inspect_replay.py``.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from mtg_bot.training.config import (
     random_choice_factory,
 )
 from mtg_bot.training.data_gen import (
+    ReplayCaptureConfig,
     generate_training_data,
     generate_training_data_parallel,
     load_all_datasets,
@@ -53,6 +61,11 @@ from mtg_bot.training.data_gen import (
 )
 from mtg_bot.training.grid import grid_search, heuristic_weight_grid
 from mtg_bot.training.registry import ModelMetadata, Registry
+from mtg_bot.training.replay_capture import (
+    ReplayRecorder,
+    heuristic_eval_annotator,
+    nn_eval_annotator,
+)
 from mtg_bot.training.self_play import MatchStats, run_match
 from mtg_bot.training.trainer import (
     TrainingHistory, auto_device, train_value_network,
@@ -64,14 +77,18 @@ __all__ = [
     "ModelMetadata",
     "PimcConfig",
     "Registry",
+    "ReplayCaptureConfig",
+    "ReplayRecorder",
     "TrainingHistory",
     "auto_device",
     "generate_training_data",
     "generate_training_data_parallel",
     "grid_search",
+    "heuristic_eval_annotator",
     "heuristic_weight_grid",
     "load_all_datasets",
     "load_dataset",
+    "nn_eval_annotator",
     "random_choice_factory",
     "run_match",
     "save_dataset",

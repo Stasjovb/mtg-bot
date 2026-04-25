@@ -27,6 +27,11 @@ Two driver functions:
   derived from ``game_idx``, not from worker assignment — both
   paths call the same per-game helper. This determinism is locked
   in by a test.
+
+Optional replay capture: pass a ``ReplayCaptureConfig`` to either
+driver to write a per-game replay file alongside the training-data
+arrays. Useful for debugging engine gaps — see
+``mtg_bot.training.replay_capture``.
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import random
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -41,16 +48,66 @@ import numpy as np
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.features import FEATURE_DIM, extract_features
+from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training.config import StrategyFactory
+from mtg_bot.training.replay_capture import (
+    ReplayRecorder, heuristic_eval_annotator, nn_eval_annotator,
+)
 
 
 _DEFAULT_DECISION_CAP = 4000
 
 _DTYPE_FEATURES = np.float32
 _DTYPE_OUTCOMES = np.float32
+
+
+@dataclass(frozen=True)
+class ReplayCaptureConfig:
+    """Picklable config for capturing replays during data gen.
+
+    ``save_dir``: where to write replay files (one .json.gz per
+    captured game).
+    ``capture_every``: capture every Nth game starting at
+    game_idx 0 (so capture_every=10 captures games 0, 10, 20, ...).
+    Default 1 = capture all games.
+    ``nn_weights_path``: optional path to NN weights — when set,
+    each snapshot also gets an ``nn_eval`` annotation alongside the
+    always-on ``heuristic_eval``.
+    ``nn_version_label``: optional human-readable label (typically
+    a registry version like "v3") stored in each ``nn_eval`` so
+    consumers know which network produced the scores.
+    ``filename_prefix``: prepended to each replay filename. Useful
+    for tagging a batch of replays from one experiment.
+
+    Frozen + primitive types so it crosses the multiprocessing spawn
+    boundary cleanly.
+    """
+
+    save_dir: str
+    capture_every: int = 1
+    nn_weights_path: Optional[str] = None
+    nn_version_label: Optional[str] = None
+    filename_prefix: str = "game"
+
+    def should_capture(self, game_idx: int) -> bool:
+        return game_idx % self.capture_every == 0
+
+    def replay_path(self, base_seed: int, game_idx: int) -> Path:
+        return Path(self.save_dir) / (
+            f"{self.filename_prefix}_seed{base_seed}_idx{game_idx:04d}.json.gz"
+        )
+
+    def build_recorder(self) -> ReplayRecorder:
+        annotators = [heuristic_eval_annotator()]
+        if self.nn_weights_path:
+            annotators.append(nn_eval_annotator(
+                Path(self.nn_weights_path),
+                version_label=self.nn_version_label,
+            ))
+        return ReplayRecorder(annotators=annotators)
 
 
 def _empty_arrays() -> tuple[np.ndarray, np.ndarray]:
@@ -60,6 +117,10 @@ def _empty_arrays() -> tuple[np.ndarray, np.ndarray]:
     )
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def generate_training_data(
     p0_factory: StrategyFactory,
     p1_factory: StrategyFactory,
@@ -67,6 +128,7 @@ def generate_training_data(
     base_seed: int = 0,
     decision_cap: int = _DEFAULT_DECISION_CAP,
     sample_every: int = 1,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Play ``n_games`` and return ``(features, outcomes)`` arrays.
 
@@ -92,6 +154,7 @@ def generate_training_data(
             p0_factory=p0_factory, p1_factory=p1_factory,
             base_seed=base_seed,
             decision_cap=decision_cap, sample_every=sample_every,
+            replay_config=replay_config,
         )
         for i in range(n_games)
     ]
@@ -106,6 +169,7 @@ def generate_training_data_parallel(
     n_workers: Optional[int] = None,
     decision_cap: int = _DEFAULT_DECISION_CAP,
     sample_every: int = 1,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``.
@@ -137,7 +201,10 @@ def generate_training_data_parallel(
         return _empty_arrays()
 
     args_list = [
-        (i, p0_factory, p1_factory, base_seed, decision_cap, sample_every)
+        (
+            i, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config,
+        )
         for i in range(n_games)
     ]
     # Pool() with no start method falls back to the platform default —
@@ -157,13 +224,14 @@ def _play_one_parallel_game(
     spawn boundary."""
     (
         game_idx, p0_factory, p1_factory, base_seed,
-        decision_cap, sample_every,
+        decision_cap, sample_every, replay_config,
     ) = args
     return _generate_one_game_data(
         game_idx=game_idx,
         p0_factory=p0_factory, p1_factory=p1_factory,
         base_seed=base_seed,
         decision_cap=decision_cap, sample_every=sample_every,
+        replay_config=replay_config,
     )
 
 
@@ -175,6 +243,7 @@ def _generate_one_game_data(
     base_seed: int,
     decision_cap: int,
     sample_every: int,
+    replay_config: Optional[ReplayCaptureConfig] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Play one game and return its ``(features, outcomes)`` arrays.
 
@@ -182,6 +251,12 @@ def _generate_one_game_data(
     sequential and parallel drivers call this so they produce
     bit-identical results for the same ``(game_idx, base_seed,
     factories)``.
+
+    When ``replay_config`` is set and ``should_capture(game_idx)``
+    returns True, also writes a per-game replay file to disk before
+    returning. The annotators (heuristic + optional NN eval) are
+    built fresh per game in the worker — NN model load happens
+    once per captured game (a few ms; negligible vs game length).
     """
     engine_seed = base_seed + game_idx
     engine = setup_game(
@@ -198,9 +273,31 @@ def _generate_one_game_data(
         1: p1_factory(base_seed + 100 * game_idx + 50),
     }
     rng = random.Random(base_seed + 100 * game_idx + 99)
+
+    recorder: Optional[ReplayRecorder] = None
+    if replay_config is not None and replay_config.should_capture(game_idx):
+        recorder = replay_config.build_recorder()
+        # Capture the initial state too so the replay viewer's first
+        # snapshot reflects "game 0, before any actions taken."
+        recorder.record(adapter.engine_state)
+
     winner, samples = _play_one_game_recording(
         adapter, strategies, rng, decision_cap, sample_every,
+        replay_recorder=recorder,
     )
+
+    if recorder is not None and replay_config is not None:
+        replay = recorder.to_replay(metadata={
+            "game_idx": game_idx,
+            "base_seed": base_seed,
+            "engine_seed": engine_seed,
+            "winner": winner,
+            "n_decisions": len(recorder.snapshots),
+            "captured_at": _now_iso(),
+            "annotated_with_nn_version": replay_config.nn_version_label,
+        })
+        save_replay(replay, replay_config.replay_path(base_seed, game_idx))
+
     if not samples:
         return _empty_arrays()
     outcome_label = _outcome_label(winner)
@@ -246,9 +343,15 @@ def _play_one_game_recording(
     rng: random.Random,
     decision_cap: int,
     sample_every: int,
+    replay_recorder: Optional[ReplayRecorder] = None,
 ) -> tuple[PlayerID | None, list[tuple[np.ndarray, PlayerID]]]:
     """Play one game with the decision cap, recording features at
     every Nth non-chance decision from both player perspectives.
+
+    When ``replay_recorder`` is set, also captures a snapshot of the
+    engine state after each ``adapter.apply(decision)`` — both
+    chance and player decisions. The recorder's annotators (eval
+    values, etc.) run inline.
 
     Returns ``(winner_or_None, samples)`` where ``samples`` is a list
     of ``(features_array, viewer_id)`` pairs to be paired with the
@@ -274,6 +377,8 @@ def _play_one_game_recording(
                     samples.append((feats, viewer))
             decision = strategies[active].choose(adapter, active)
         adapter.apply(decision)
+        if replay_recorder is not None:
+            replay_recorder.record(adapter.engine_state)
         decision_idx += 1
     winner = adapter.winner() if adapter.is_terminal() else None
     return winner, samples
