@@ -26,6 +26,11 @@
   `MTG_BOT_E2E=1 .venv/Scripts/python.exe -m pytest tests/test_e2e.py`
   First time only: `.venv/Scripts/python.exe -m pip install playwright`
   then `.venv/Scripts/python.exe -m playwright install chromium`.
+- Run JS unit tests for the static UI bundle (Vitest + jsdom):
+  `npm test`
+  First time only: `npm install` (requires Node 18+).
+  Tests live under `tests-js/`. They load `src/mtg_bot/static/app.js`
+  into a jsdom fixture and call its globals; see `tests-js/setup.js`.
 - Run a game: `.venv/Scripts/python.exe -m mtg_bot`
 - Run the UI (localhost): `.venv/Scripts/python.exe -m mtg_bot.ui`
 - Run the UI over Tailscale (reachable from phone/laptop on the tailnet):

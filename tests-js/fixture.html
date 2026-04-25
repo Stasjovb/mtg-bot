@@ -1,0 +1,90 @@
+<!--
+  Minimal DOM fixture matching every id app.js looks up at top-level
+  (`els = { ... document.getElementById(...) }`). Loaded into jsdom by
+  `loadAppJs()` in setup.js before app.js is evaluated. If you add a new
+  getElementById in app.js, mirror the id here or els.X will be null and
+  any later .addEventListener will throw.
+-->
+<header class="top-bar">
+  <h1 class="brand">MTG Bot</h1>
+  <form id="play-form" autocomplete="off">
+    <label>Seed <input type="number" name="seed" value="0"></label>
+    <label>P0 <select name="c1"><option value="R" selected>R</option></select></label>
+    <label>P1 <select name="c2"><option value="G" selected>G</option></select></label>
+    <label>Max turns <input type="number" name="max_turns" value="200"></label>
+    <label>Detail <select name="granularity"><option value="step" selected>step</option></select></label>
+    <label>Show hands <select name="reveal"><option value="all" selected>all</option></select></label>
+    <button type="submit">Run game</button>
+  </form>
+  <div id="status" class="status muted">idle</div>
+</header>
+
+<div id="scrubber" class="scrubber hidden">
+  <div class="scrubber-controls">
+    <button type="button" id="btn-first">&laquo;</button>
+    <button type="button" id="btn-prev-turn">&#8676;T</button>
+    <button type="button" id="btn-prev-step">&#8676;S</button>
+    <button type="button" id="btn-prev">&lsaquo;</button>
+    <button type="button" id="btn-play">&#9654;</button>
+    <button type="button" id="btn-next">&rsaquo;</button>
+    <button type="button" id="btn-next-step">S&#8677;</button>
+    <button type="button" id="btn-next-turn">T&#8677;</button>
+    <button type="button" id="btn-last">&raquo;</button>
+  </div>
+  <input type="range" id="scrub-slider" min="0" max="0" value="0" step="1">
+  <div class="scrubber-readout">
+    <span id="scrub-label">&mdash;</span>
+    <span id="scrub-counter" class="muted">0 / 0</span>
+  </div>
+  <button type="button" id="btn-engine">Engine</button>
+</div>
+
+<div id="phase-tracker" class="phase-tracker hidden">
+  <ol id="phase-list" class="phase-list"></ol>
+</div>
+
+<main id="board" class="board hidden">
+  <section class="player-row opponent" id="row-p1"></section>
+  <section class="stack-row" id="row-stack"></section>
+  <section class="player-row you" id="row-p0"></section>
+</main>
+
+<aside class="right-col">
+  <section id="engine-panel" class="engine-panel hidden">
+    <h2>Engine</h2>
+    <div class="engine-meta">
+      <span id="engine-player"></span>
+      <span id="engine-name" class="muted"></span>
+    </div>
+    <ol id="engine-recs" class="engine-recs"></ol>
+  </section>
+  <aside id="log-panel" class="log-panel hidden">
+    <h2>Log</h2>
+    <div id="log-body" class="log-body"></div>
+  </aside>
+</aside>
+
+<svg id="combat-overlay" class="combat-overlay">
+  <defs>
+    <marker id="arrow-head-attack" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ff9852"/>
+    </marker>
+    <marker id="arrow-head-block" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#6fa8ff"/>
+    </marker>
+  </defs>
+</svg>
+
+<div id="card-preview" class="card-preview" hidden></div>
+
+<div id="zone-modal" class="zone-modal hidden" role="dialog" hidden>
+  <div class="zone-modal-inner">
+    <header class="zone-modal-header">
+      <span id="zone-modal-title">Zone</span>
+      <button type="button" id="zone-modal-close">&times;</button>
+    </header>
+    <div id="zone-modal-cards" class="zone-modal-cards"></div>
+  </div>
+</div>

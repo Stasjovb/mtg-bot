@@ -43,3 +43,7 @@ data/card_images/
 # Throwaway UI screenshots (regenerate via scripts/screenshot_ui.py)
 ui_screenshots/
 src/mtg_bot/static/screenshots/
+
+# Node toolchain for the JS test suite (Vitest); regenerate via `npm install`
+node_modules/
+package-lock.json

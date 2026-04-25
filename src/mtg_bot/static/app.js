@@ -57,14 +57,17 @@ const PHASE_STEPS = [
   { key: 'cleanup',             label: 'Cleanup',   group: '' },
 ];
 
-let engineOpen = false;
+// `var` (not `let`) so JS unit tests can inspect/mutate from outside the
+// script's lexical scope. No browser-runtime difference at the top level.
+var engineOpen = false;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Active game state. One of these is live at a time; running a new game
 // replaces it. snapCache memoizes fetched snapshots so scrubbing back and
-// forth doesn't re-hit the API.
-let game = null;  // { gameId, snapshotCount, summary, snapCache, currentIdx, playing, playTimer }
+// forth doesn't re-hit the API. `var` (not `let`) so JS unit tests can
+// seed window.game = {...} before invoking nav helpers.
+var game = null;  // { gameId, snapshotCount, summary, snapCache, currentIdx, playing, playTimer }
 
 const PLAY_INTERVAL_MS = 700;
 
@@ -450,7 +453,7 @@ function arrowLine(from, to, isBlock) {
 }
 
 // Arrows are positioned in viewport coords, so reposition on scroll/resize.
-let _redrawScheduled = false;
+var _redrawScheduled = false;  // var so tests can reset (see top of file)
 function _scheduleArrowRedraw() {
   if (_redrawScheduled || !game) return;
   _redrawScheduled = true;

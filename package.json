@@ -1,0 +1,13 @@
+{
+  "name": "mtg-bot-ui",
+  "private": true,
+  "description": "JS unit tests for the static MTG-bot UI bundle (src/mtg_bot/static/app.js).",
+  "scripts": {
+    "test": "vitest run --reporter=default",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "jsdom": "^25.0.0"
+  }
+}
