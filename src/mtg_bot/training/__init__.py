@@ -23,10 +23,18 @@ Module map:
                    the ``_ValueMLP`` from nn_evaluator. CUDA when
                    available; saves the final state_dict that
                    ``NNEvaluator(weights_path=...)`` loads.
+- ``registry``  — ``Registry`` + ``ModelMetadata``: versioned
+                   model checkpoints. Each trained network gets a
+                   ``v{N}/`` subdirectory under the registry root
+                   with ``weights.pt`` + a JSON metadata sidecar.
+                   Used by train_nn.py (auto-register on train),
+                   evaluate_nn.py (eval by version, write result
+                   back), and tournament.py (round-robin between
+                   recent versions).
 
 CLI demos in ``scripts/``: ``tune_heuristic.py`` (Phase A weight
 sweep), ``generate_training_data.py``, ``train_nn.py``,
-``evaluate_nn.py``.
+``evaluate_nn.py``, ``tournament.py``.
 """
 
 from __future__ import annotations
@@ -44,6 +52,7 @@ from mtg_bot.training.data_gen import (
     save_dataset,
 )
 from mtg_bot.training.grid import grid_search, heuristic_weight_grid
+from mtg_bot.training.registry import ModelMetadata, Registry
 from mtg_bot.training.self_play import MatchStats, run_match
 from mtg_bot.training.trainer import (
     TrainingHistory, auto_device, train_value_network,
@@ -52,7 +61,9 @@ from mtg_bot.training.trainer import (
 __all__ = [
     "HeuristicConfig",
     "MatchStats",
+    "ModelMetadata",
     "PimcConfig",
+    "Registry",
     "TrainingHistory",
     "auto_device",
     "generate_training_data",
