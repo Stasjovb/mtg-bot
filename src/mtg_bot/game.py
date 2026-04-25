@@ -119,6 +119,20 @@ class GameObject:
     # combat-damage resolution filters phased objects — triggers,
     # anthems, and legal_actions targeting don't (yet) hide them.
     phased_out: bool = False
+    # Reveal-tracking for hidden-information determinization. Each
+    # player id in this set has been shown this card's identity in a
+    # way that gives them perfect knowledge of where it currently is —
+    # e.g. it's their own card, it's in a public zone, or they were
+    # shown it as part of resolution (tutor reveal, look-at-hand,
+    # cast-from-exile-revealed). When the card moves into a face-down
+    # zone whose ordering becomes uncertain (library shuffle, hand
+    # mixed back into library), this is reset to ``frozenset()`` to
+    # avoid the engine making misinformed claims about what other
+    # players still know. See ``docs/HIDDEN_INFO_MODEL.md`` for the
+    # design rationale and the under-informed edge cases this
+    # representation cannot capture (multi-zone positional uncertainty,
+    # cardinality constraints).
+    publicly_known_to: frozenset[int] = field(default_factory=frozenset)
 
 
 def is_void_active(state: GameState) -> bool:
@@ -128,6 +142,55 @@ def is_void_active(state: GameState) -> bool:
         state.permanent_left_battlefield_this_turn
         or state.spell_warped_this_turn
     )
+
+
+def reveal_to(obj: GameObject, *player_ids: int) -> None:
+    """Mark ``obj`` as publicly known to each of ``player_ids``.
+
+    Idempotent. Use this whenever a card's identity is shown to a
+    specific set of players in a way that gives them perfect knowledge
+    of where the card currently is — e.g. an opponent looks at your
+    hand (reveal_to(card, looker_id)) or you tutor with a reveal step
+    and put the card into your hand publicly (reveal_to_all(state, card)).
+
+    See ``docs/HIDDEN_INFO_MODEL.md`` for the design and its caveats.
+    """
+    if not player_ids:
+        return
+    obj.publicly_known_to = obj.publicly_known_to | frozenset(player_ids)
+
+
+def reveal_to_all(state: GameState, obj: GameObject) -> None:
+    """Mark ``obj`` as publicly known to every player in ``state``.
+
+    Use at every site where a card is revealed publicly — bounce
+    (battlefield → hand), tutor-with-reveal landing in hand, casting
+    a spell from a private zone (it briefly transits the public
+    stack), etc.
+    """
+    obj.publicly_known_to = frozenset(p.id for p in state.players)
+
+
+def reset_public_knowledge(obj: GameObject) -> None:
+    """Drop everyone from ``obj.publicly_known_to``.
+
+    Call at "disturbance" sites — library shuffles, hand mixed back
+    into library, scry-then-shuffle. Conservatively forgets all
+    revealed-knowledge state; the bot becomes under-informed rather
+    than misinformed about what other players still know.
+    """
+    obj.publicly_known_to = frozenset()
+
+
+def reset_library_public_knowledge(state: GameState, player_id: int) -> None:
+    """After shuffling ``player_id``'s library, forget who knew what
+    about each card in it. Convenience wrapper around
+    ``reset_public_knowledge`` for the common "shuffle the whole
+    library" case.
+    """
+    p = state.player_by_id(player_id)
+    for card in p.library:
+        reset_public_knowledge(card)
 
 
 def is_stationed(obj: GameObject) -> bool:
@@ -769,6 +832,7 @@ class GameState:
                 original_printing=o.original_printing,
                 regeneration_shield=o.regeneration_shield,
                 phased_out=o.phased_out,
+                publicly_known_to=o.publicly_known_to,
             )
             id_map[o.id] = new
             return new
