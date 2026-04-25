@@ -108,6 +108,17 @@
 
 <div id="card-preview" class="card-preview" hidden aria-hidden="true"></div>
 
+<div id="zone-modal" class="zone-modal hidden" role="dialog" aria-modal="true"
+     aria-labelledby="zone-modal-title" hidden>
+  <div class="zone-modal-inner">
+    <header class="zone-modal-header">
+      <span id="zone-modal-title">Zone</span>
+      <button type="button" id="zone-modal-close" title="Close (Esc)">&times;</button>
+    </header>
+    <div id="zone-modal-cards" class="zone-modal-cards"></div>
+  </div>
+</div>
+
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

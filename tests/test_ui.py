@@ -115,6 +115,27 @@ def test_static_app_js_ships_step_turn_navigation(client):
         assert token in js, f"missing {token!r} in app.js"
 
 
+def test_static_app_js_ships_zone_modal(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("openZoneModal", "closeZoneModal", "zone-modal",
+                  "graveyard", "exile"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_zone_modal(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for sel in (".zone-modal", ".zone-modal-inner", ".zone-modal-cards",
+                ".zone-box.clickable"):
+        assert sel in css, f"missing {sel!r} in app.css"
+
+
+def test_index_html_has_zone_modal_dom(client):
+    html = client.get("/").get_data(as_text=True)
+    for eid in ("zone-modal", "zone-modal-title", "zone-modal-cards",
+                "zone-modal-close"):
+        assert f'id="{eid}"' in html, f"missing id={eid!r} in index.html"
+
+
 def test_static_app_js_ships_face_down_card(client):
     js = client.get("/static/app.js").get_data(as_text=True)
     for token in ("faceDownCardEl", "face-down"):
@@ -704,20 +725,23 @@ def test_api_snapshot_negative_idx_404(client):
 
 
 def test_enrich_snapshot_tags_all_zones():
-    name_to_id = {"Alpha": "sid-1", "Beta": "sid-2", "Gamma": "sid-3", "Delta": "sid-4"}
+    name_to_id = {"Alpha": "sid-1", "Beta": "sid-2", "Gamma": "sid-3",
+                  "Delta": "sid-4", "Epsilon": "sid-5"}
     snap = {
         "players": [
             {
                 "hand": [{"name": "Alpha"}],
+                "graveyard": [{"name": "Epsilon"}],
                 "exile": [{"name": "Beta"}],
                 "battlefield": [{"name": "Gamma"}],
             },
-            {"hand": [], "exile": [], "battlefield": []},
+            {"hand": [], "graveyard": [], "exile": [], "battlefield": []},
         ],
         "stack": [{"name": "Delta"}],
     }
     out = _enrich_snapshot(snap, name_to_id)
     assert out["players"][0]["hand"][0]["scryfall_id"] == "sid-1"
+    assert out["players"][0]["graveyard"][0]["scryfall_id"] == "sid-5"
     assert out["players"][0]["exile"][0]["scryfall_id"] == "sid-2"
     assert out["players"][0]["battlefield"][0]["scryfall_id"] == "sid-3"
     assert out["stack"][0]["scryfall_id"] == "sid-4"
@@ -725,7 +749,8 @@ def test_enrich_snapshot_tags_all_zones():
 
 def test_enrich_snapshot_unknown_name_maps_to_none():
     snap = {
-        "players": [{"hand": [{"name": "Mystery"}], "exile": [], "battlefield": []}],
+        "players": [{"hand": [{"name": "Mystery"}], "graveyard": [],
+                     "exile": [], "battlefield": []}],
         "stack": [],
     }
     out = _enrich_snapshot(snap, {"Alpha": "sid-1"})

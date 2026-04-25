@@ -33,6 +33,10 @@ const els = {
   enginePlayer: document.getElementById('engine-player'),
   engineName: document.getElementById('engine-name'),
   engineRecs: document.getElementById('engine-recs'),
+  zoneModal: document.getElementById('zone-modal'),
+  zoneModalTitle: document.getElementById('zone-modal-title'),
+  zoneModalCards: document.getElementById('zone-modal-cards'),
+  zoneModalClose: document.getElementById('zone-modal-close'),
 };
 
 let engineOpen = false;
@@ -61,6 +65,14 @@ els.btnEngine  .addEventListener('click', toggleEngine);
 
 // Keyboard shortcuts. Guard against firing while typing in the form.
 window.addEventListener('keydown', (ev) => {
+  // Esc always closes the zone modal first; do this before the
+  // typing-in-form guard so closing works from anywhere.
+  const zoneModal = document.getElementById('zone-modal');
+  if (ev.key === 'Escape' && zoneModal && !zoneModal.classList.contains('hidden')) {
+    ev.preventDefault();
+    closeZoneModal();
+    return;
+  }
   if (!game) return;
   const tag = (ev.target && ev.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -458,17 +470,25 @@ function sidePanel(p, snap) {
 
   const zones = document.createElement('div');
   zones.className = 'zones';
+  // Library is hidden info — don't make it clickable. Graveyard is public,
+  // and Exile is public; both open a modal listing the actual cards.
   zones.append(
     zoneBox('Hand', p.hand_size),
     zoneBox('Library', p.library_size),
-    zoneBox('Graveyard', p.graveyard_size),
+    zoneBox('Graveyard', p.graveyard_size,
+            p.graveyard_size > 0
+              ? () => openZoneModal(`Player ${p.id} — Graveyard`, p.graveyard)
+              : null),
   );
   side.appendChild(zones);
 
   if (p.exile_size > 0) {
     const row = document.createElement('div');
     row.className = 'zones';
-    row.appendChild(zoneBox('Exile', p.exile_size));
+    row.appendChild(zoneBox(
+      'Exile', p.exile_size,
+      () => openZoneModal(`Player ${p.id} — Exile`, p.exile),
+    ));
     side.appendChild(row);
   }
 
@@ -519,7 +539,7 @@ function manaPoolEl(coins) {
   return row;
 }
 
-function zoneBox(label, count) {
+function zoneBox(label, count, onClick) {
   const div = document.createElement('div');
   div.className = 'zone-box';
   const l = document.createElement('div');
@@ -529,8 +549,52 @@ function zoneBox(label, count) {
   c.className = 'zcount';
   c.textContent = count;
   div.append(l, c);
+  if (onClick) {
+    div.classList.add('clickable');
+    div.addEventListener('click', onClick);
+    div.tabIndex = 0;
+    div.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        onClick();
+      }
+    });
+  }
   return div;
 }
+
+// ------------------------------------------------------------------------
+// Zone-content modal (graveyard / exile browser)
+// ------------------------------------------------------------------------
+
+function openZoneModal(title, cards) {
+  els.zoneModalTitle.textContent = title;
+  els.zoneModalCards.replaceChildren();
+  if (!cards || cards.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'zone-modal-empty';
+    empty.textContent = '(empty)';
+    els.zoneModalCards.appendChild(empty);
+  } else {
+    cards.forEach((c) => {
+      els.zoneModalCards.appendChild(cardEl(c, { permanent: false }));
+    });
+  }
+  els.zoneModal.hidden = false;
+  els.zoneModal.classList.remove('hidden');
+}
+
+function closeZoneModal() {
+  els.zoneModal.hidden = true;
+  els.zoneModal.classList.add('hidden');
+  hidePreview();
+}
+
+els.zoneModalClose.addEventListener('click', closeZoneModal);
+els.zoneModal.addEventListener('click', (ev) => {
+  // Click on the dim backdrop (not the inner box) closes.
+  if (ev.target === els.zoneModal) closeZoneModal();
+});
 
 function battlefieldEl(p, isTop) {
   const bf = document.createElement('div');

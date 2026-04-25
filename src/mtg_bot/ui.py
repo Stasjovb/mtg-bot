@@ -101,6 +101,8 @@ def _enrich_snapshot(snap: dict[str, Any], name_to_id: dict[str, str]) -> dict[s
     for p in snap["players"]:
         for c in p["hand"]:
             tag(c)
+        for c in p["graveyard"]:
+            tag(c)
         for c in p["exile"]:
             tag(c)
         for o in p["battlefield"]:

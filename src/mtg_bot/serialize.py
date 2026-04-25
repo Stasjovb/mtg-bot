@@ -131,7 +131,7 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             "hand_size": len(p.hand),
             "hand": [serialize_hand_card(c) for c in p.hand] if reveal_hands else [],
             "library_size": len(p.library),
-            "graveyard": [c.printing.name for c in p.graveyard],
+            "graveyard": [serialize_hand_card(c) for c in p.graveyard],
             "graveyard_size": len(p.graveyard),
             "exile": [serialize_hand_card(c) for c in p.exile],
             "exile_size": len(p.exile),
