@@ -320,8 +320,10 @@ class ReturnTargetCreatureToOwnersHand(Effect):
                 f"{obj.printing.name} token ceases to exist (bounced)"
             )
             return
+        from mtg_bot.game import reveal_to_all
         obj.zone = Zone.HAND
         state.player_by_id(obj.owner_id).hand.append(obj)
+        reveal_to_all(state, obj)
         state.log.append(
             f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
         )
@@ -386,8 +388,10 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
                 f"{obj.printing.name} token ceases to exist (bounced)"
             )
             return
+        from mtg_bot.game import reveal_to_all
         obj.zone = Zone.HAND
         state.player_by_id(obj.owner_id).hand.append(obj)
+        reveal_to_all(state, obj)
         state.log.append(
             f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
         )
@@ -510,8 +514,10 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
                     f"{obj.printing.name} token ceases to exist (bounced)"
                 )
                 continue
+            from mtg_bot.game import reveal_to_all
             obj.zone = Zone.HAND
             state.player_by_id(obj.owner_id).hand.append(obj)
+            reveal_to_all(state, obj)
             state.log.append(
                 f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
             )
@@ -880,9 +886,11 @@ class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
         card = next((c for c in p.graveyard if c.id == target_id), None)
         if card is None:
             return
+        from mtg_bot.game import reveal_to_all
         p.graveyard.remove(card)
         card.zone = Zone.HAND
         p.hand.append(card)
+        reveal_to_all(state, card)
         state.log.append(
             f"{card.printing.name} returns from P{controller_id}'s "
             f"graveyard to hand"
@@ -929,9 +937,11 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
         card = next((c for c in p.graveyard if c.id == target_id), None)
         if card is None:
             return
+        from mtg_bot.game import reveal_to_all
         p.graveyard.remove(card)
         card.zone = Zone.HAND
         p.hand.append(card)
+        reveal_to_all(state, card)
         state.log.append(
             f"{card.printing.name} returns from P{controller_id}'s "
             f"graveyard to hand"
@@ -3451,9 +3461,11 @@ class ReturnTargetLandFromGraveyardToHand(Effect):
         card = next((c for c in p.graveyard if c.id == target_id), None)
         if card is None:
             return
+        from mtg_bot.game import reveal_to_all
         p.graveyard.remove(card)
         card.zone = Zone.HAND
         p.hand.append(card)
+        reveal_to_all(state, card)
         state.log.append(
             f"{card.printing.name} returns from P{controller_id}'s "
             f"graveyard to hand (Petrified Field)"
@@ -5470,6 +5482,14 @@ class TargetOpponentDiscardsCasterChoice(Effect):
         target = state.player_by_id(target_id)
         if target.has_lost:
             return
+        # The reveal step is "Target opponent reveals their hand" — the
+        # caster sees every card in target's hand, and remembers it
+        # afterward. Mark every card currently in target's hand as
+        # publicly known to the caster; whatever stays in hand after
+        # the directed discard preserves that mark.
+        from mtg_bot.game import reveal_to
+        for c in target.hand:
+            reveal_to(c, controller_id)
         # Nonland cards the target could be forced to discard.
         options = [
             c for c in target.hand if not c.printing.is_land
