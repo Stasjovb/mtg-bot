@@ -10,10 +10,18 @@ perspective:
    non-linear: small life leads matter less than large ones in
    aggregate, but linear is a fine baseline.
 2. **Board power.** Sum of (effective power + effective toughness)
-   of each player's creatures. Captures threat density. Scaled so a
-   ±20 board diff maps to ±1.0.
-3. **Card advantage.** Hand-size differential. Capped at ±7. A
-   weak signal alone but cheap and useful as a tiebreaker.
+   of each player's creatures, PLUS the printed P+T of every
+   uncountered creature spell on the stack belonging to the player
+   (those will become creatures on resolve — scoring them here
+   captures the impending board change rather than penalizing the
+   cast as "lost a card"). Scaled so a ±20 board diff maps to ±1.0.
+3. **Card advantage.** A "deployed-value" count: hand size, plus
+   permanents the player controls, plus uncountered non-creature
+   spells on the stack belonging to the player. The intent is to
+   never penalize a player for moving a card from one resource pool
+   to another (hand → battlefield via spell resolution, hand → stack
+   mid-cast). Differential capped at ±7. A weak signal alone but
+   cheap and useful as a tiebreaker.
 
 Default weights: 0.4 life / 0.4 board / 0.2 cards. Tunable via
 constructor for experimentation.
@@ -23,9 +31,17 @@ something fast to score with that beats "play the rest of the game
 out at random." The latter is unbiased but extremely slow on real
 MTG; even ten random rollouts of an opening can take seconds.
 
+The stack-aware terms exist because MCTS at low budget evaluates
+positions at depth-1, when the active player has just cast a spell:
+the spell sits on the stack, hand size is down by one, board hasn't
+changed. Without stack scoring the eval reads "card advantage went
+down → cast was bad" and PIMC systematically prefers passing. With
+stack scoring, casting-then-being-evaluated produces no net penalty
+(non-creature) or a positive board contribution (creature).
+
 Reaches through ``MtgGameStateAdapter.engine_state`` to read
-engine-side fields (life, hand, battlefield). Coupled to MTG by
-design — that's the point.
+engine-side fields (life, hand, battlefield, stack). Coupled to MTG
+by design — that's the point.
 """
 
 from __future__ import annotations
@@ -97,8 +113,10 @@ class MtgHeuristicEvaluator(Evaluator):
             (my_board - their_board) / _BOARD_NORMALIZER
         )
 
+        my_cards = self._card_count(engine, me.id)
+        their_cards = self._card_count(engine, them.id)
         card_score = _clamp(
-            (len(me.hand) - len(them.hand)) / _CARD_NORMALIZER
+            (my_cards - their_cards) / _CARD_NORMALIZER
         )
 
         return _clamp(
@@ -118,8 +136,15 @@ class MtgHeuristicEvaluator(Evaluator):
 
     @staticmethod
     def _board_power(engine: EngineGameState, player_id: PlayerID) -> int:
-        """Sum effective (power + toughness) over creatures the
-        player controls. Captures both threat and resilience."""
+        """Sum effective (power + toughness) over creatures the player
+        controls on the battlefield, plus printed (power + toughness)
+        for each uncountered creature spell on the stack belonging to
+        the player. Stack creatures use printed P+T because static
+        battlefield buffs (anthems, equipment, +1/+1 counters) don't
+        apply to the spell — they apply post-resolution. Skips
+        countered spells (they'll resolve as no-ops) and triggered/
+        activated abilities (those aren't "the player's value being
+        deployed" in the same way)."""
         total = 0
         for o in engine.battlefield:
             if o.controller_id != player_id:
@@ -127,4 +152,50 @@ class MtgHeuristicEvaluator(Evaluator):
             if not is_creature_now(o):
                 continue
             total += effective_power(engine, o) + effective_toughness(engine, o)
+        for item in engine.stack:
+            if item.countered or item.ability is not None:
+                continue
+            if item.controller_id != player_id:
+                continue
+            if not item.source.printing.is_creature:
+                continue
+            p = item.source.printing.power or 0
+            t = item.source.printing.toughness or 0
+            total += p + t
         return total
+
+    @staticmethod
+    def _card_count(engine: EngineGameState, player_id: PlayerID) -> int:
+        """The player's "deployed value" count: hand size + permanents
+        the player controls + uncountered non-creature spells on the
+        stack belonging to the player.
+
+        Counting permanents matters because casting/playing strictly
+        moves a card from hand to either the battlefield (resolved
+        spell, played land) or the stack (in-flight spell). Without
+        counting permanents, the eval reads "hand went down" and
+        penalizes any forward-moving action — including playing a land,
+        which is an unalloyed good move on most turns. With permanents
+        counted, ``hand → battlefield`` is a no-op for this term, and
+        the meaningful signal moves to the board-power and life
+        components.
+
+        Creature spells on the stack are excluded here because they're
+        scored as future board in ``_board_power`` — counting them
+        again would double-attribute their value. Countered spells and
+        triggered/activated abilities are excluded entirely (no value
+        left to attribute)."""
+        p = engine.player_by_id(player_id)
+        count = len(p.hand)
+        for o in engine.battlefield:
+            if o.controller_id == player_id and not o.phased_out:
+                count += 1
+        for item in engine.stack:
+            if item.countered or item.ability is not None:
+                continue
+            if item.controller_id != player_id:
+                continue
+            if item.source.printing.is_creature:
+                continue
+            count += 1
+        return count

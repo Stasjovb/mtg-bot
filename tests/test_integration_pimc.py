@@ -213,53 +213,44 @@ _SLOW_SKIP_REASON = (
 )
 
 
-def _make_pimc_with_rollout_eval(seed: int) -> PIMC:
-    """PIMC with RandomRolloutEvaluator (plays out to terminal) instead
-    of the heuristic evaluator. Slower per node but produces useful
-    signal at modest budgets — the heuristic evaluator scores
-    positions at depth-1 *before* the spell on the stack resolves,
-    which makes casting look like "lost a card" until the search
-    expands deep enough to see the resolution. Documented weakness;
-    fixable by scoring the stack contents too, or by always using a
-    rollout evaluator. For the integration test we sidestep it.
-    """
+def _make_pimc_with_eval(
+    seed: int, evaluator_factory, samples: int, nodes: int,
+) -> PIMC:
+    """Build a PIMC with the given evaluator factory and budget knobs.
+    Used for the slow self-play tests where we want a real-search-
+    quality budget rather than the integration default's crash-check
+    tininess."""
     def inner_factory() -> MCTS:
         return MCTS(
-            evaluator=RandomRolloutEvaluator(
-                rng=random.Random(seed + 50),
-            ),
-            budget_factory=lambda: Budget(max_nodes=30),
+            evaluator=evaluator_factory(),
+            budget_factory=lambda: Budget(max_nodes=nodes),
             rng=random.Random(seed + 100),
         )
     return PIMC(
         inner_factory=inner_factory,
-        samples=2,
+        samples=samples,
         rng=random.Random(seed + 200),
     )
 
 
-@pytest.mark.skipif(not _SLOW_ENABLED, reason=_SLOW_SKIP_REASON)
-def test_pimc_with_rollout_eval_beats_random_in_self_play_smoke():
-    """Loose win-rate floor: across N games, PIMC must win at least as
-    much as Random. Uses RandomRolloutEvaluator with samples=2 +
-    nodes=30 — small but enough for the eval to see past spell
-    resolution into the actual resulting board state.
-
-    Not a real win-rate measurement (N is too low for tight CIs);
-    this is a "PIMC actually plays MTG and beats the trivial baseline"
-    smoke. If this regresses below 50%, integration is suspect."""
-    n_games = 10
+def _self_play(
+    pimc_factory, n_games: int, base_seed: int,
+) -> tuple[int, int, int]:
+    """Play ``n_games`` of PIMC vs RandomChoice and return
+    ``(pimc_wins, random_wins, draws)``. Each game gets independent
+    seeds derived from ``base_seed``."""
     pimc_wins = 0
     random_wins = 0
     draws = 0
     for game_idx in range(n_games):
-        state = _adapter_factory(seed=1000 + game_idx)()
+        state = _adapter_factory(seed=base_seed + game_idx)()
         strategies = {
-            0: _make_pimc_with_rollout_eval(seed=1000 + game_idx),
-            1: RandomChoice(rng=random.Random(2000 + game_idx)),
+            0: pimc_factory(seed=base_seed + game_idx),
+            1: RandomChoice(rng=random.Random(base_seed + 1000 + game_idx)),
         }
         winner, _ = _play_capped_game(
-            state, strategies, rng=random.Random(3000 + game_idx),
+            state, strategies,
+            rng=random.Random(base_seed + 2000 + game_idx),
         )
         if winner == 0:
             pimc_wins += 1
@@ -267,52 +258,67 @@ def test_pimc_with_rollout_eval_beats_random_in_self_play_smoke():
             random_wins += 1
         else:
             draws += 1
+    return pimc_wins, random_wins, draws
+
+
+@pytest.mark.skipif(not _SLOW_ENABLED, reason=_SLOW_SKIP_REASON)
+def test_pimc_with_rollout_eval_beats_random_in_self_play_smoke():
+    """Loose win-rate floor: PIMC with RandomRolloutEvaluator
+    (samples=2, nodes=30) must win at least as many games as Random
+    over 10 plays. Not a tight win-rate measurement (N too low for
+    real CIs); this is a "the integration produces MTG-strong play
+    when fed an unbiased evaluator" smoke."""
+    pimc_wins, random_wins, draws = _self_play(
+        pimc_factory=lambda *, seed: _make_pimc_with_eval(
+            seed=seed,
+            evaluator_factory=lambda: RandomRolloutEvaluator(
+                rng=random.Random(seed + 50),
+            ),
+            samples=2, nodes=30,
+        ),
+        n_games=10, base_seed=1000,
+    )
     assert pimc_wins >= random_wins, (
-        f"PIMC won {pimc_wins}, Random won {random_wins}, draws {draws} "
-        f"out of {n_games} — PIMC isn't beating Random with rollout "
-        f"eval, integration is suspect."
+        f"PIMC+rollout won {pimc_wins}, Random won {random_wins}, "
+        f"draws {draws}/10 — integration suspect."
     )
 
 
 @pytest.mark.skipif(not _SLOW_ENABLED, reason=_SLOW_SKIP_REASON)
-def test_pimc_with_heuristic_eval_loses_to_random_documented_weakness():
-    """Documents the known heuristic-evaluator weakness so a future
-    fix has a regression target.
+def test_pimc_with_heuristic_eval_beats_random_in_self_play_smoke():
+    """Heuristic eval at moderate budget (samples=4, nodes=200 —
+    matching ``recommend.py`` defaults) must win at least as many
+    games as Random over 10 plays.
 
-    ``MtgHeuristicEvaluator`` scores ``(life, board, hand_size)``. At
-    depth-1 in the search tree, the active player has just cast a
-    spell — so the spell is on the stack, NOT on the battlefield, and
-    one card has left their hand. The eval reads this as "card
-    advantage went down, board didn't change → cast was bad." MCTS at
-    low budget never expands deep enough to see the spell resolve, so
-    the heuristic systematically prefers passing.
+    Earlier this test was a documented-weakness pin asserting the
+    OPPOSITE — the heuristic evaluator scored (life, board,
+    hand_size) at depth-1, so casting any spell looked like "lost a
+    card" because the stack contents weren't scored and the spell
+    hadn't resolved into board yet. PIMC systematically preferred
+    passing.
 
-    When we add a stack-aware term to the evaluator (or replace it
-    with a model that scores potential resolutions), this test should
-    flip its expectation to "PIMC beats Random" and the rollout-eval
-    test above can stay as a baseline. Until then, this test pins the
-    weakness in place."""
-    n_games = 5
-    pimc_wins = 0
-    random_wins = 0
-    for game_idx in range(n_games):
-        state = _adapter_factory(seed=2000 + game_idx)()
-        strategies = {
-            0: _make_pimc(seed=2000 + game_idx),  # heuristic eval
-            1: RandomChoice(rng=random.Random(3000 + game_idx)),
-        }
-        winner, _ = _play_capped_game(
-            state, strategies, rng=random.Random(4000 + game_idx),
-        )
-        if winner == 0:
-            pimc_wins += 1
-        elif winner == 1:
-            random_wins += 1
-    # The current weak heuristic loses badly; pin the expectation so
-    # an evaluator improvement triggers a visible test update.
-    assert pimc_wins < random_wins, (
-        f"PIMC with heuristic eval beat Random ({pimc_wins} vs "
-        f"{random_wins}) — the documented weakness may have been "
-        f"fixed; flip this test's expectation and consider deleting "
-        f"the documentation comment."
+    The fix lives in ``heuristic_evaluator.py``:
+    - Stack creature spells contribute their printed P+T to the
+      board term (impending board change).
+    - Non-creature stack spells count toward the card term (value
+      still in flight).
+    - Permanents controlled count toward the card term (so playing
+      a land doesn't read as "lost a card" — hand → battlefield is
+      a no-op for this term).
+
+    With those changes, the heuristic eval is competitive with
+    Random at the UI's recommendation budget. Regression target if
+    the eval ever stops beating Random again."""
+    pimc_wins, random_wins, draws = _self_play(
+        pimc_factory=lambda *, seed: _make_pimc_with_eval(
+            seed=seed,
+            evaluator_factory=MtgHeuristicEvaluator,
+            samples=4, nodes=200,
+        ),
+        n_games=10, base_seed=2000,
+    )
+    assert pimc_wins >= random_wins, (
+        f"PIMC+heuristic won {pimc_wins}, Random won {random_wins}, "
+        f"draws {draws}/10 — heuristic eval regressed; check the "
+        f"stack-aware scoring in heuristic_evaluator.py."
     )
