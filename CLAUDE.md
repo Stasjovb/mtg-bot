@@ -19,12 +19,15 @@
 
 ## Running things
 
-- Virtual env is at `.venv/`. Use `.venv/Scripts/python.exe` on Windows / `.venv/bin/python` on macOS-Linux.
-- Run tests: `.venv/Scripts/python.exe -m pytest`
+- Virtual env is at `.venv/` in the **main checkout** (`mtg-bot/.venv/`). Worktrees share it. Use `mtg-bot/.venv/Scripts/python.exe` on Windows / `mtg-bot/.venv/bin/python` on macOS-Linux.
+- **From a worktree, always set `PYTHONPATH=src` when invoking python**, otherwise the editable install in the shared venv resolves `mtg_bot` to the main checkout's source and your worktree changes won't be exercised. Example:
+  `PYTHONPATH=src ../../mtg-bot/.venv/Scripts/python.exe -m pytest`
+  (Or, on Windows cmd: `set PYTHONPATH=src && ...`.)
+- Run tests: `PYTHONPATH=src ../../mtg-bot/.venv/Scripts/python.exe -m pytest` from inside a worktree, or `.venv/Scripts/python.exe -m pytest` from the main checkout.
   (Python 3.13 + coverage.py can intermittently segfault deep in the simulation
   sweep tests. The crash is not reproducible in isolation and no local code
   change fixes it. If pytest exits with an access violation, run
-  `.venv/Scripts/python.exe scripts/run_tests.py` — it retries on segfault.)
+  `scripts/run_tests.py` instead — it retries on segfault.)
 - Run browser-driven E2E tests (opt-in, skipped by default):
   `MTG_BOT_E2E=1 .venv/Scripts/python.exe -m pytest tests/test_e2e.py`
   First time only: `.venv/Scripts/python.exe -m pip install playwright`
