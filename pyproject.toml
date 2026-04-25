@@ -5,6 +5,7 @@ description = "A bot that plays Magic: The Gathering and tries to win."
 requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
