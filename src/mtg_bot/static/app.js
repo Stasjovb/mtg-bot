@@ -634,6 +634,16 @@ function cardEl(c, { permanent }) {
       tag.title = 'Attached to ' + c.attached_to.name;
       el.appendChild(tag);
     }
+    if (c.is_spacecraft && c.station_threshold) {
+      const bar = document.createElement('div');
+      bar.className = 'station-bar' + (c.is_stationed ? ' stationed' : '');
+      bar.textContent = `${c.charge_counters}/${c.station_threshold}`;
+      bar.title = c.is_stationed
+        ? `Stationed (${c.charge_counters}/${c.station_threshold} charge counters)`
+        : `${c.charge_counters}/${c.station_threshold} charge counters` +
+          ` — ${c.station_threshold - c.charge_counters} more to station`;
+      el.appendChild(bar);
+    }
   }
 
   el.addEventListener('mouseenter', (ev) => showPreview(ev, c));

@@ -115,6 +115,18 @@ def test_static_app_js_ships_step_turn_navigation(client):
         assert token in js, f"missing {token!r} in app.js"
 
 
+def test_static_app_js_ships_station_badge(client):
+    js = client.get("/static/app.js").get_data(as_text=True)
+    for token in ("station-bar", "is_spacecraft", "station_threshold"):
+        assert token in js, f"missing {token!r} in app.js"
+
+
+def test_static_app_css_styles_station_bar(client):
+    css = client.get("/static/app.css").get_data(as_text=True)
+    for sel in (".station-bar", ".station-bar.stationed"):
+        assert sel in css, f"missing {sel!r} in app.css"
+
+
 def test_static_app_js_ships_engine_panel_code(client):
     js = client.get("/static/app.js").get_data(as_text=True)
     for token in ("toggleEngine", "refreshEngine", "renderEngineRecs",

@@ -205,6 +205,18 @@ body { display: grid; grid-template-columns: 1fr 280px;
                      line-height: 1.2; }
 .card.attached { outline: 1px solid var(--active-glow); outline-offset: -1px; }
 
+/* Spacecraft station progress: small bar across the top of the card showing
+   charge_counters / station_threshold. Switches to a green palette once the
+   threshold is met (the card now counts as a creature). */
+.card .station-bar { position: absolute; top: 0; left: 0; right: 0;
+                     background: rgba(74, 96, 128, 0.92); color: #e0e8f0;
+                     font: 700 0.7em/1.3 ui-monospace, monospace;
+                     padding: 1px 3px; text-align: center;
+                     letter-spacing: 0.05em;
+                     border-radius: var(--card-radius) var(--card-radius) 0 0; }
+.card .station-bar.stationed { background: rgba(120, 160, 64, 0.96);
+                                color: #18260a; }
+
 /* ---- stack row ---- */
 
 .stack-row { display: flex; align-items: flex-start; gap: 0.6em;
