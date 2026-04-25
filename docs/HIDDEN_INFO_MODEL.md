@@ -12,7 +12,41 @@ strength in self-play and makes the bot brittle in real games.
 The fix is **determinization** (PR 2): before each search, sample a possible
 world that's consistent with what the searching player actually knows, then
 search that world. To sample a consistent world we need to know, at each card,
-who has seen it. That's what this PR adds.
+who has seen it. That's what PR 1 added (the ``publicly_known_to`` field). PR 2
+ships the sampler at ``mtg_bot.search.determinize.determinize()`` — a pure root-
+level function that returns a clone of the state with each unknown card's
+``printing`` re-permuted within its owner's hand+library pool. PIMC integration
+(K samples per search call, aggregated visit counts) and the agent-side hookup
+are the next layer up.
+
+### What "viewer knows" means in PR 2
+
+The sampler's ``viewer_knows(card, viewer_id)`` predicate treats a card as
+known to the viewer when any of the following hold:
+
+- ``viewer_id`` is in ``card.publicly_known_to`` (an explicit reveal logged
+  by PR 1's instrumentation).
+- The card is in a public zone — battlefield, graveyard, exile, or stack.
+  These are derivable from zone alone; PR 1 didn't bother stamping
+  ``publicly_known_to`` on every public-zone transition.
+- The card is in the viewer's own hand. PR 1 didn't backfill ``reveal_to``
+  at draw sites, so without this rule the determinizer would re-permute
+  the viewer's own hand. Filling the gap in the sampler instead of in
+  every draw site keeps PR 1's instrumentation surface narrow.
+
+Everything else (library cards including the viewer's own, opponent hand
+cards without an explicit reveal) is treated as unknown and gets re-shuffled
+inside its owner's hidden pool.
+
+### Pooling rule
+
+Within each player, hand and library are pooled together for permutation.
+The viewer can see per-zone counts (those are public) but can't tell which
+unknown card lives in which unknown position, so swaps across the two
+hidden zones are valid. Counts are preserved trivially — the determinizer
+mutates ``printing`` / ``original_printing`` on existing ``GameObject``s and
+never moves objects between zones. Players don't share a pool: a printing
+that was in P1's hand never ends up in P0's hand.
 
 ## What we're tracking
 
