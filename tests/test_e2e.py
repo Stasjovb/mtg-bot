@@ -20,6 +20,7 @@ tests don't collide with any locally-running dev server.
 from __future__ import annotations
 
 import os
+import re
 import threading
 
 import pytest
@@ -232,9 +233,11 @@ def test_engine_panel_toggle_shows_recommendations(page):
         timeout=10_000,
     )
     assert page.locator("#engine-panel.hidden").count() == 0
-    # The stub engine names itself "stub vX.Y.Z".
+    # Engine self-identifies; the exact name has shifted as the recommender
+    # evolved (stub → pimc). Just verify a non-empty version-style label is
+    # rendered: a name containing a 'v' followed by a digit.
     name = page.locator("#engine-name").inner_text()
-    assert "stub" in name.lower()
+    assert re.search(r"v\d", name), f"engine name looks empty: {name!r}"
     # Toggling closes again.
     page.click("#btn-engine")
     page.wait_for_timeout(150)
