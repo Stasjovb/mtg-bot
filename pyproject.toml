@@ -6,6 +6,17 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0",
     "numpy>=1.26",
+    # CPU-only torch is enough for Phase C scaffolding (network
+    # architecture + load/save + single-state inference). Phase D
+    # upgrades to a CUDA wheel for training on the GPU; install
+    # that explicitly via:
+    #   pip install --upgrade torch --index-url \
+    #     https://download.pytorch.org/whl/cu126
+    # (or whatever Blackwell-compatible CUDA channel ships at the
+    # time). The pyproject dep stays plain so `pip install -e .`
+    # doesn't pull a 3GB CUDA wheel for someone who only wants to
+    # run the engine + UI.
+    "torch>=2.0",
 ]
 
 [project.optional-dependencies]

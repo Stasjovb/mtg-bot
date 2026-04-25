@@ -79,6 +79,7 @@ from mtg_bot.search.expansion import (
 from mtg_bot.search.harness import MatchResult, play_one_game, run_match
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.search.mcts import MCTS
+from mtg_bot.search.nn_evaluator import NNEvaluator
 from mtg_bot.search.pimc import PIMC
 from mtg_bot.search.mtg_priors import (
     attack_aggressive_prior,
@@ -110,6 +111,7 @@ __all__ = [
     "MatchResult",
     "MtgGameStateAdapter",
     "MtgHeuristicEvaluator",
+    "NNEvaluator",
     "PIMC",
     "PlayerID",
     "ProgressiveWidening",
