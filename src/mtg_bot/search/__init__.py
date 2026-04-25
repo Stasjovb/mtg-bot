@@ -55,7 +55,14 @@ from mtg_bot.search.expansion import (
     ProgressiveWidening,
 )
 from mtg_bot.search.harness import MatchResult, play_one_game, run_match
+from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.search.mcts import MCTS
+from mtg_bot.search.mtg_priors import (
+    attack_aggressive_prior,
+    block_biggest_attacker_first_prior,
+    mtg_default_prior,
+    priority_action_prior,
+)
 from mtg_bot.search.protocol import (
     CHANCE_PLAYER,
     Decision,
@@ -79,11 +86,16 @@ __all__ = [
     "MCTS",
     "MatchResult",
     "MtgGameStateAdapter",
+    "MtgHeuristicEvaluator",
     "PlayerID",
     "ProgressiveWidening",
     "RandomChoice",
     "RandomRolloutEvaluator",
     "SearchStrategy",
+    "attack_aggressive_prior",
+    "block_biggest_attacker_first_prior",
+    "mtg_default_prior",
     "play_one_game",
+    "priority_action_prior",
     "run_match",
 ]
