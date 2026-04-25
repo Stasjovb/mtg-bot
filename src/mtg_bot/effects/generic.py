@@ -1743,9 +1743,11 @@ class LookAtTopNRevealOrCounter(Effect):
                 (c for c in options if c.id == chosen_id), None
             )
         if revealed_card is not None:
+            from mtg_bot.game import reveal_to_all
             p.library.remove(revealed_card)
             revealed_card.zone = Zone.HAND
             p.hand.append(revealed_card)
+            reveal_to_all(state, revealed_card)
             state.log.append(
                 f"P{controller_id} reveals {revealed_card.printing.name} "
                 f"and puts it into hand"
@@ -1766,11 +1768,15 @@ class LookAtTopNRevealOrCounter(Effect):
         # Bottom the remainder in a random order. Take up to n cards off
         # the top (those we examined except the revealed one if any) and
         # shuffle them onto the bottom.
+        from mtg_bot.game import reset_public_knowledge
         remaining_examined = [
             c for c in examined if c is not revealed_card
         ]
         for c in remaining_examined:
             p.library.remove(c)
+            # Disturbance: any prior public knowledge of these cards'
+            # top-of-library positions is now stale.
+            reset_public_knowledge(c)
         state.rng.shuffle(remaining_examined)
         p.library.extend(remaining_examined)
 
@@ -2399,7 +2405,9 @@ class SearchLibraryForCard(Effect):
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to hand"
         )
-        state.rng.shuffle(p.library)
+        from mtg_bot.game import reveal_to_all, shuffle_library
+        reveal_to_all(state, card)
+        shuffle_library(state, controller_id)
 
     def describe(self) -> str:
         return (
@@ -4612,12 +4620,13 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
             chosen_id = p.agent.choose_card_from_library(
                 state, controller_id, [c.id for c in options]
             )
+        from mtg_bot.game import shuffle_library
         if chosen_id is None:
             state.log.append(
                 f"P{controller_id} declines to fetch from Green Sun's Zenith"
             )
             # Still shuffle per oracle.
-            state.rng.shuffle(p.library)
+            shuffle_library(state, controller_id)
             return
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
@@ -4625,7 +4634,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
             f"P{controller_id} fetches {card.printing.name} onto the battlefield"
         )
         put_into_battlefield(state, card, controller_id)
-        state.rng.shuffle(p.library)
+        shuffle_library(state, controller_id)
 
     def describe(self) -> str:
         return (

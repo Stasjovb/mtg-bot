@@ -193,6 +193,21 @@ def reset_library_public_knowledge(state: GameState, player_id: int) -> None:
         reset_public_knowledge(card)
 
 
+def shuffle_library(state: GameState, player_id: int) -> None:
+    """Shuffle ``player_id``'s library and reset reveal-tracking on
+    every card in it.
+
+    Always use this helper instead of calling ``state.rng.shuffle``
+    directly on a library — it keeps shuffle and knowledge-reset paired
+    so the engine can never produce a state where the determinizer
+    "remembers" a card whose position was actually scrambled.
+    """
+    p = state.player_by_id(player_id)
+    state.rng.shuffle(p.library)
+    for card in p.library:
+        reset_public_knowledge(card)
+
+
 def is_stationed(obj: GameObject) -> bool:
     """True when this Spacecraft has enough charge counters to be a creature."""
     threshold = obj.printing.station_threshold

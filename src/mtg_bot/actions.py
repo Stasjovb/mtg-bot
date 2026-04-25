@@ -1274,9 +1274,10 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     """
     owner = state.player_by_id(card.owner_id)
     if card.printing.shuffles_into_library_instead_of_graveyard:
+        from mtg_bot.game import shuffle_library
         card.zone = Zone.LIBRARY
         owner.library.append(card)
-        state.rng.shuffle(owner.library)
+        shuffle_library(state, owner.id)
         state.log.append(
             f"{card.printing.name} is shuffled into P{card.owner_id}'s "
             f"library instead of graveyard"

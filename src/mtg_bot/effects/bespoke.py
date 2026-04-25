@@ -133,7 +133,8 @@ class FamishedWorldsireETBEffect(Effect):
             fire_landfall_triggers(state, land)
         # Shuffle what's left (rest goes back where it was, then the
         # whole library is shuffled per oracle).
-        state.rng.shuffle(p.library)
+        from mtg_bot.game import shuffle_library
+        shuffle_library(state, controller_id)
 
     def describe(self) -> str:
         return (
@@ -711,7 +712,8 @@ class WeftwalkingETBEffect(Effect):
             moved += 1
         p.graveyard.clear()
         # Shuffle.
-        state.rng.shuffle(p.library)
+        from mtg_bot.game import shuffle_library
+        shuffle_library(state, controller_id)
         state.log.append(
             f"Weftwalking: P{controller_id} shuffles {moved} cards into "
             f"library and draws 7"
@@ -1487,10 +1489,15 @@ class ConsultTheStarChartsEffect(Effect):
             )
             kept_cards.append(card)
             remaining.remove(card)
+        from mtg_bot.game import reset_public_knowledge
         for card in kept_cards:
             p.library.remove(card)
             card.zone = Zone.HAND
             p.hand.append(card)
+            # Disturbance: opponent who previously knew this card's
+            # library position can no longer track which examined card
+            # went to hand vs bottom. Conservatively forget reveals.
+            reset_public_knowledge(card)
             state.log.append(
                 f"P{controller_id} puts {card.printing.name} into hand "
                 f"from Consult the Star Charts"
@@ -1498,6 +1505,7 @@ class ConsultTheStarChartsEffect(Effect):
         # Bottom the rest in random order.
         for card in remaining:
             p.library.remove(card)
+            reset_public_knowledge(card)
         state.rng.shuffle(remaining)
         p.library.extend(remaining)
         state.log.append(
