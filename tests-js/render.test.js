@@ -763,3 +763,51 @@ describe('renderLog with full game log (past + future)', () => {
     expect(entries[4].classList.contains('this-step')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------
+// renderLog warp-cast badge — "(warp)" suffix becomes a magenta WARP
+// chip + .warp class on the entry, so the alt cost mode reads at a
+// glance instead of being lost in the line text.
+// ---------------------------------------------------------------------
+
+describe('renderLog warp cast badge', () => {
+  it('replaces the "(warp)" suffix with a WARP badge and tags the entry', () => {
+    const body = document.getElementById('log-body');
+    renderLog(body, {
+      log: ['P1 casts Alpharael, Stonechosen (warp)'],
+      log_since_last: [],
+    });
+    const entry = body.querySelector('.log-entry');
+    expect(entry.classList.contains('warp')).toBe(true);
+    const badge = entry.querySelector('.warp-badge-inline');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe('WARP');
+    expect(entry.textContent).toContain('P1 casts Alpharael, Stonechosen');
+    // The literal "(warp)" string should be gone — replaced by the badge.
+    expect(entry.textContent).not.toContain('(warp)');
+  });
+
+  it('keeps trailing text after the warp marker (e.g. targets)', () => {
+    const body = document.getElementById('log-body');
+    renderLog(body, {
+      log: ['P0 casts Banishing Light (warp) targeting Bear'],
+      log_since_last: [],
+    });
+    const entry = body.querySelector('.log-entry');
+    expect(entry.classList.contains('warp')).toBe(true);
+    expect(entry.querySelector('.warp-badge-inline')).not.toBeNull();
+    expect(entry.textContent).toContain('targeting Bear');
+  });
+
+  it('leaves non-warp entries unchanged', () => {
+    const body = document.getElementById('log-body');
+    renderLog(body, {
+      log: ['P0 plays Forest', 'P1 casts Lightning Bolt'],
+      log_since_last: [],
+    });
+    body.querySelectorAll('.log-entry').forEach((e) => {
+      expect(e.classList.contains('warp')).toBe(false);
+      expect(e.querySelector('.warp-badge-inline')).toBeNull();
+    });
+  });
+});
