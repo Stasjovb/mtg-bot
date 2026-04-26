@@ -5155,8 +5155,12 @@ def test_starfield_shepherd_tutors_small_creature():
     import random
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
 
+    class PickCreatureMode(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 0  # creature_small mode
+
     state = _arena()
-    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[0].agent = PickCreatureMode(rng=random.Random(0))
     # Seed library: MV-1 creature + MV-2 creature + land.
     wisp = state.new_object(
         SYNTHETIC_CREATURES["Healing Wisp"], owner_id=0,
@@ -5185,6 +5189,80 @@ def test_starfield_shepherd_tutors_small_creature():
     assert wisp in state.players[0].hand
     assert bear in state.players[0].library
     assert land in state.players[0].library
+
+
+def test_starfield_shepherd_tutors_basic_plains():
+    """Mode 1: controller picks the basic-Plains alternative — the
+    Plains card moves from library to hand; the eligible creature
+    stays put."""
+    from mtg_bot.agents import RandomAgent
+    import random
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    class PickPlainsMode(RandomAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 1  # basic_plains mode
+
+    state = _arena()
+    state.players[0].agent = PickPlainsMode(rng=random.Random(0))
+    # Seed library: MV-1 creature + basic Plains + a non-Plains basic.
+    wisp = state.new_object(
+        SYNTHETIC_CREATURES["Healing Wisp"], owner_id=0,
+        zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(wisp)
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(plains)
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(forest)
+
+    shep = state.new_object(
+        EOE_CREATURES["Starfield Shepherd"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(shep)
+    etb = next(
+        ab for ab in shep.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = shep
+    etb.effect.resolve(state, 0)
+    assert plains in state.players[0].hand
+    assert plains not in state.players[0].library
+    assert wisp in state.players[0].library  # not picked under mode 1
+    assert forest in state.players[0].library  # not a Plains
+
+
+def test_starfield_shepherd_modal_describes_both_modes():
+    """Sanity: the ETB effect is a ModalChooseOne with two modes that
+    cover both halves of the printed oracle text — creature search and
+    basic-Plains search. ``describe()`` surfaces both for the agent's
+    mode-pick prompt; ``legal_targets`` is empty (neither mode is
+    targeted)."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import ModalChooseOne
+
+    shep = EOE_CREATURES["Starfield Shepherd"]
+    etb = next(
+        ab for ab in shep.triggered_abilities if ab.trigger == "etb"
+    )
+    assert isinstance(etb.effect, ModalChooseOne)
+    assert len(etb.effect.modes) == 2
+
+    desc = etb.effect.describe()
+    assert "creature_small" in desc
+    assert "basic_plains" in desc
+    # Mode descriptions surfaced separately for choose_mode prompts.
+    mode_descs = [m.describe() for m in etb.effect.modes]
+    assert any("creature_small" in d for d in mode_descs)
+    assert any("basic_plains" in d for d in mode_descs)
+    # Neither mode targets — ETB tutor is untargeted.
+    state = _arena()
+    assert etb.effect.legal_targets(state, 0) == []
+    assert etb.effect.requires_target() is False
 
 
 def test_search_library_no_match_logs_and_fizzles():

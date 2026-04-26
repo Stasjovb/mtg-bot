@@ -596,10 +596,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Starfield Shepherd: {3}{W}{W} 3/2 Flying. ETB tutor a basic
-        # Plains OR a creature card with MV ≤ 1 to hand. Simplified:
-        # only one mode — creature with MV ≤ 1. (Basic-Plains fetch is
-        # less useful here since we already have the dedicated
-        # SearchLibraryForBasicLandTapped for Landers.)
+        # Plains OR a creature card with MV ≤ 1 to hand. Modeled as a
+        # two-mode ModalChooseOne so the controller (agent) picks which
+        # half to fetch at resolution time. Both modes use
+        # SearchLibraryForCard (reveal → hand → shuffle), matching the
+        # printed oracle text.
         make_creature(
             "Starfield Shepherd", "{3}{W}{W}", 3, 2,
             keywords={"flying"},
@@ -607,11 +608,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=SearchLibraryForCard(
-                        filter_name="creature_small",
-                        max_mv=1,
-                        may_fail=False,
-                    ),
+                    effect=ModalChooseOne(modes=(
+                        SearchLibraryForCard(
+                            filter_name="creature_small",
+                            max_mv=1,
+                            may_fail=False,
+                        ),
+                        SearchLibraryForCard(
+                            filter_name="basic_plains",
+                            may_fail=False,
+                        ),
+                    )),
                 ),
             ),
         ),
