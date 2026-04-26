@@ -3507,6 +3507,60 @@ def test_banishing_light_exiles_then_returns_on_leave():
     assert victim.exiled_by_source is None
 
 
+def test_warp_card_exiled_by_banishing_light_is_not_castable_from_exile():
+    """Cards in exile are only castable when they got there via their
+    own warp ability (`warped=True`) or impulse-cast effects. A card
+    with a warp_cost that gets exiled by Banishing Light should NOT
+    set warped=True and should NOT appear in the owner's legal
+    cast actions."""
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.legal import legal_actions
+
+    state = _arena()
+    # Red Tiger Mechan has warp_cost {1}{R} and mana_cost {3}{R}.
+    victim = state.new_object(
+        EOE_CREATURES["Red Tiger Mechan"],
+        owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(victim)
+    bl = state.new_object(
+        EOE_CREATURES["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bl)
+    # Fire Banishing Light's ETB exile.
+    etb = next(
+        ab for ab in bl.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = bl
+    etb.effect.resolve(state, 0, (("permanent", victim.id),))
+    # Now in P1's exile, but warped flag must NOT have flipped.
+    assert victim in state.players[1].exile
+    assert victim.warped is False, (
+        "Banishing Light's exile must not set the warp-recast flag"
+    )
+    # Give P1 plenty of mana and priority; their legal actions still
+    # must not include casting the exiled victim.
+    state.priority_player_idx = 1
+    state.active_player_idx = 1
+    # 4 untapped Mountains so cost wouldn't be the limiter.
+    from mtg_bot.cards import BASIC_LANDS
+    for _ in range(4):
+        m = state.new_object(
+            BASIC_LANDS["Mountain"], owner_id=1, zone=Zone.BATTLEFIELD,
+        )
+        state.battlefield.append(m)
+    actions = legal_actions(state, 1)
+    cast_victim = [
+        a for a in actions
+        if isinstance(a, CastSpell) and a.card_id == victim.id
+    ]
+    assert cast_victim == [], (
+        f"victim is in exile without warped=True; should be uncastable, "
+        f"but got {cast_victim}"
+    )
+
+
 def test_seam_rip_rejects_big_permanents():
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves

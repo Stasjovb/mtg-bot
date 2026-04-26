@@ -566,6 +566,34 @@ describe('cardEl stack badge', () => {
 });
 
 
+describe('cardEl warp badge', () => {
+  function baseExileCard(overrides = {}) {
+    return {
+      id: 1, name: 'Red Tiger Mechan',
+      mana_cost: '{3}{R}', warp_cost: '{1}{R}',
+      type_line: 'Creature — Cat', power: 3, toughness: 3,
+      keywords: [], abilities: [],
+      warped: false, scryfall_id: 'rtm-1',
+      ...overrides,
+    };
+  }
+
+  it('renders a WARP badge for an exile card marked warped', () => {
+    const el = cardEl(baseExileCard({ warped: true }), { permanent: false });
+    const badge = el.querySelector('.warp-badge');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe('WARP');
+    expect(el.classList.contains('warped')).toBe(true);
+  });
+
+  it('omits the WARP badge when warped is false', () => {
+    const el = cardEl(baseExileCard({ warped: false }), { permanent: false });
+    expect(el.querySelector('.warp-badge')).toBeNull();
+    expect(el.classList.contains('warped')).toBe(false);
+  });
+});
+
+
 // ---------------------------------------------------------------------
 // renderLog click → rewind via firstSnapshotWithLogEntry
 // ---------------------------------------------------------------------

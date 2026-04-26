@@ -871,6 +871,23 @@ function cardEl(c, { permanent }) {
     }
   }
 
+  // Warp indicator. Only meaningful for cards in exile (a card on the
+  // battlefield/hand never has warped=true), but the badge is rendered
+  // unconditionally on the field — graveyard cards never carry it
+  // either since the flag clears when they leave exile via cast or
+  // bounce. Marks cards that were exiled by their own warp ability,
+  // which can be re-cast from exile at normal cost. Cards exiled by
+  // other means (Banishing Light) don't get this — only the engine
+  // gates re-cast on the same flag.
+  if (c.warped) {
+    el.classList.add('warped');
+    const wb = document.createElement('div');
+    wb.className = 'warp-badge';
+    wb.textContent = 'WARP';
+    wb.title = 'Warp-exiled — castable from exile at normal cost';
+    el.appendChild(wb);
+  }
+
   el.addEventListener('mouseenter', (ev) => showPreview(ev, c));
   el.addEventListener('mousemove', positionPreview);
   el.addEventListener('mouseleave', hidePreview);
