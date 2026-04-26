@@ -218,3 +218,77 @@ def test_remove_plus_one_counter_cost_picks_from_options_with_agent():
     assert other.plus_one_counters == 2
     # Some permanent gets tapped (exact one depends on target pick).
     assert any(o.tapped for o in state.battlefield)
+
+
+# ---------------------------------------------------------------
+# Starport Security: conditional `-{2}` ability cost reduction when
+# the controller controls a creature with a +1/+1 counter on it.
+# ---------------------------------------------------------------
+
+
+def test_starport_security_full_cost_without_counter_creature():
+    """Without any +1/+1-counter creature, Starport Security's ability
+    costs the full {3}{W} — needs 4 untapped Plains to pay."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+
+    state = _new_state_with_lands(num_plains=3)
+    security = state.new_object(
+        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(security)
+    # Another creature on the battlefield, but no +1/+1 counters
+    # anywhere — reduction should NOT apply.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    ability = security.printing.activated_abilities[0]
+    mana = _effective_ability_mana_cost(state, security, ability)
+    # Full cost: 3 generic + 1 white.
+    assert mana.generic == 3
+    assert dict(mana.colored).get("W") == 1
+
+
+def test_starport_security_reduced_cost_with_counter_creature():
+    """When the controller controls a creature with a +1/+1 counter,
+    the ability costs {2} less ({1}{W} instead of {3}{W})."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+
+    state = _new_state_with_lands()
+    security = state.new_object(
+        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(security)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    bear.plus_one_counters = 1
+    state.battlefield.append(bear)
+    ability = security.printing.activated_abilities[0]
+    mana = _effective_ability_mana_cost(state, security, ability)
+    # Reduced: 3 generic minus 2 = 1 generic, colored unchanged.
+    assert mana.generic == 1
+    assert dict(mana.colored).get("W") == 1
+
+
+def test_starport_security_reduction_only_counts_own_creatures():
+    """The reduction requires a creature *you control* with a +1/+1
+    counter — an opponent's counter-bearing creature does NOT trigger
+    the reduction."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+
+    state = _new_state_with_lands()
+    security = state.new_object(
+        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(security)
+    # Opponent controls a creature with a counter. Should not reduce.
+    opp_bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    opp_bear.plus_one_counters = 3
+    state.battlefield.append(opp_bear)
+    ability = security.printing.activated_abilities[0]
+    mana = _effective_ability_mana_cost(state, security, ability)
+    assert mana.generic == 3
+    assert dict(mana.colored).get("W") == 1

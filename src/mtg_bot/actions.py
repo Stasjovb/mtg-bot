@@ -1026,10 +1026,16 @@ def _effective_ability_mana_cost(
     state: GameState, source: "GameObject", ability,
 ) -> ManaCost:
     """Return the mana portion of ``ability.cost`` after applying any
-    ability-level cost reductions. Currently only The Dominion
-    Bracelet's "costs {X} less, where X is this creature's power"
-    (flag ``mana_reduced_by_source_power``). Clamps the generic
-    portion at zero.
+    ability-level cost reductions. Two reduction kinds are honored:
+
+    * The Dominion Bracelet's "costs {X} less, where X is this
+      creature's power" (flag ``mana_reduced_by_source_power``).
+    * Conditional ``CostReduction`` rules listed on
+      ``ability.cost_reductions``. Conditions are checked against the
+      source's controller / battlefield state. Currently supports
+      ``"control_creature_with_plus_one_counter"`` (Starport Security).
+
+    Clamps the generic portion at zero.
     """
     from mtg_bot.game import effective_power
 
@@ -1038,6 +1044,23 @@ def _effective_ability_mana_cost(
         return cost
     if ability.cost.mana_reduced_by_source_power:
         reduction = effective_power(state, source)
+        if reduction > 0:
+            cost = cost.reduced(reduction)
+    for rule in getattr(ability, "cost_reductions", ()):
+        reduction = 0
+        if rule.condition == "control_creature_with_plus_one_counter":
+            if any(
+                o.controller_id == source.controller_id
+                and o.printing.is_creature
+                and o.plus_one_counters > 0
+                for o in state.battlefield
+            ):
+                reduction = rule.amount
+        else:
+            state.log.append(
+                f"unknown ability cost-reduction condition "
+                f"{rule.condition!r}; treating as no reduction"
+            )
         if reduction > 0:
             cost = cost.reduced(reduction)
     return cost

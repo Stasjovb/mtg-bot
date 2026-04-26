@@ -1487,10 +1487,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Starport Security `{W}` 1/1 Artifact Creature. Activated
-        # ability `{3}{W}, {T}: Tap another target creature.`
-        # Simplification: drops the conditional "-{2} if you control a
-        # creature with a +1/+1 counter" reduction (activated-ability
-        # cost reductions aren't modeled yet).
+        # ability `{3}{W}, {T}: Tap another target creature. This
+        # ability costs {2} less to activate if you control a creature
+        # with a +1/+1 counter on it.`
         make_creature(
             "Starport Security", "{W}", 1, 1,
             artifact=True,
@@ -1498,6 +1497,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ActivatedAbility(
                     cost=cost(mana="{3}{W}", tap_self=True),
                     effect=TapAnotherTargetCreature(),
+                    cost_reductions=(
+                        CostReduction(
+                            amount=2,
+                            condition="control_creature_with_plus_one_counter",
+                        ),
+                    ),
                 ),
             ),
         ),

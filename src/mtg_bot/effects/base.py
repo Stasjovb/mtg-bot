@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mtg_bot.cards import ManaCost
+    from mtg_bot.cards import CostReduction, ManaCost
     from mtg_bot.game import GameState
 
 
@@ -222,6 +222,12 @@ class ActivatedAbility:
     effect: Effect
     sorcery_speed: bool = False
     is_mana_ability: bool = False
+    # Conditional generic-mana reductions to this ability's cost.
+    # Mirrors CardPrinting.cost_reductions but applied at activation
+    # time by actions._effective_ability_mana_cost. Matches Starport
+    # Security's "this ability costs {2} less to activate if you
+    # control a creature with a +1/+1 counter on it."
+    cost_reductions: tuple["CostReduction", ...] = ()
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"
