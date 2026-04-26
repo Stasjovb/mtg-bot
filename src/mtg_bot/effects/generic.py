@@ -2901,6 +2901,10 @@ class DestroyTargetCreature(Effect):
     """
 
     draw_if_undamaged_amount: int = 0
+    # When True, Spacecraft are also legal targets (regardless of
+    # whether they're currently animated as creatures). Matches oracle
+    # text "destroy target creature or Spacecraft" — Embrace Oblivion.
+    or_spacecraft: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -2912,6 +2916,7 @@ class DestroyTargetCreature(Effect):
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            or (self.or_spacecraft and o.printing.is_spacecraft)
         ]
 
     def resolve(
@@ -2947,7 +2952,8 @@ class DestroyTargetCreature(Effect):
             )
 
     def describe(self) -> str:
-        base = "destroy target creature"
+        suffix = " or Spacecraft" if self.or_spacecraft else ""
+        base = f"destroy target creature{suffix}"
         if self.draw_if_undamaged_amount > 0:
             return (
                 f"{base}; if it wasn't dealt damage this turn, its "

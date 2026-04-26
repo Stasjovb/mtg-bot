@@ -4634,6 +4634,44 @@ def test_embrace_oblivion_with_sac_target_casts_and_destroys():
     assert victim not in state.battlefield  # destroyed by spell
 
 
+def test_embrace_oblivion_can_target_unstationed_spacecraft():
+    """Oracle: 'Destroy target creature OR Spacecraft.' An unstationed
+    Spacecraft (not currently a creature) is a legal target via the
+    or_spacecraft branch."""
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
+
+    state = _arena()
+    spacecraft = state.new_object(
+        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    # No charge counters → not animated as a creature.
+    assert spacecraft.charge_counters == 0
+    state.battlefield.append(spacecraft)
+    legal = EOE_SPELLS["Embrace Oblivion"].spell_effect.legal_targets(
+        state, controller_id=0,
+    )
+    target_ids = {tid for _, tid in legal}
+    assert spacecraft.id in target_ids
+
+
+def test_embrace_oblivion_destroys_unstationed_spacecraft():
+    """An unstationed Spacecraft picked as the target gets destroyed."""
+    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
+
+    state = _arena()
+    spacecraft = state.new_object(
+        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(spacecraft)
+    EOE_SPELLS["Embrace Oblivion"].spell_effect.resolve(
+        state, 0, (("creature", spacecraft.id),),
+    )
+    assert spacecraft not in state.battlefield
+    assert spacecraft in state.players[1].graveyard
+
+
 def test_umbral_collar_activated_sac_another_surveil():
     from mtg_bot.actions import _activate_ability, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent

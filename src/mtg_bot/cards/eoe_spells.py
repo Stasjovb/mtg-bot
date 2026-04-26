@@ -878,13 +878,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             )),
         ),
         # Embrace Oblivion — {B} Sorcery with an additional-cost sac.
-        # Destroy target creature or Spacecraft. Our DestroyTargetCreature
-        # handles creatures; we drop the "or Spacecraft" option (a
-        # stationed Spacecraft is a creature and IS a legal target via
-        # is_creature_now, so the only loss is unstationed Spacecraft).
+        # Destroy target creature or Spacecraft (the Spacecraft branch
+        # also covers unstationed Spacecraft, which aren't currently
+        # creatures).
         make_sorcery(
             "Embrace Oblivion", "{B}",
-            effect=DestroyTargetCreature(),
+            effect=DestroyTargetCreature(or_spacecraft=True),
             additional_cost_sacrifice_creature_or_artifact=True,
         ),
         # Temporal Intervention — directed discard with a Void cost
