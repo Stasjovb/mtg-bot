@@ -1,6 +1,7 @@
 """Tests for Hemosymbic Mite's becomes-tapped pump + Mightform
 Harmonizer's double-power landfall."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -51,6 +52,7 @@ def test_hemosymbic_mite_becomes_tapped_pumps_target():
     )
     state.battlefield.append(ally)
     tap_permanent(state, mite)
+    drain_stack(state)
     # Ally gets +3/+3 UEOT. Bear base 2/2 → 5/5.
     assert effective_power(state, ally) == 5
     assert effective_toughness(state, ally) == 5

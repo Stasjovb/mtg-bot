@@ -1,6 +1,7 @@
 """Tests for Sami, Ship's Engineer — end-step tapped Robot token
 when you control 2+ tapped creatures."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
@@ -28,6 +29,7 @@ def test_sami_creates_tapped_robot_with_two_tapped_creatures():
     # Another tapped creature → 2 total.
     _put_tapped(state, SYNTHETIC_CREATURES["Wild Bear"])
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     robots = [
         o for o in state.battlefield
         if o.printing.name == "Robot" and o.controller_id == 0

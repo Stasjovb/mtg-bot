@@ -322,13 +322,16 @@ def test_elegy_acolyte_void_creates_robot():
     state.battlefield.append(acolyte)
     assert "lifelink" in acolyte.printing.keywords
 
+    from mtg_bot.actions import drain_stack
     # Void inactive → no token.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert not any(o.printing.name == "Robot" for o in state.battlefield)
 
     # Void active → Robot token joins the battlefield.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
     assert robots[0].controller_id == 0
@@ -399,6 +402,7 @@ def test_blooming_stinger_grants_deathtouch():
 def test_seedship_agrarian_tap_creates_lander():
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
+    from mtg_bot.actions import drain_stack
 
     state = _arena()
     agr = state.new_object(
@@ -406,6 +410,7 @@ def test_seedship_agrarian_tap_creates_lander():
     )
     state.battlefield.append(agr)
     tap_permanent(state, agr)
+    drain_stack(state)
     landers = [o for o in state.battlefield if o.printing.name == "Lander"]
     assert len(landers) == 1
 
@@ -580,6 +585,8 @@ def test_flight_deck_coordinator_gains_life_with_two_tapped():
 
     life_before = state.players[0].life
     run_beginning_of_end_step_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert state.players[0].life == life_before + 2
 
 
@@ -1752,9 +1759,11 @@ def test_frontline_war_rager_conditional_counter():
         EOE_CREATURES["Frontline War-Rager"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(rager)
+    from mtg_bot.actions import drain_stack
     # Only one tapped creature → no counter.
     rager.tapped = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert rager.plus_one_counters == 0
     # Add a second tapped creature.
     mate = state.new_object(
@@ -1763,6 +1772,7 @@ def test_frontline_war_rager_conditional_counter():
     mate.tapped = True
     state.battlefield.append(mate)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert rager.plus_one_counters == 1
 
 
@@ -2104,6 +2114,7 @@ def test_nanoform_sentinel_no_agent_just_taps():
 def test_nanoform_sentinel_untaps_once_per_turn():
     from mtg_bot.agents import RandomAgent
     import random
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
@@ -2120,6 +2131,7 @@ def test_nanoform_sentinel_untaps_once_per_turn():
     state.battlefield.append(tapped_ally)
     # Tap Nanoform Sentinel — should fire the trigger, untapping ally.
     tap_permanent(state, ns)
+    drain_stack(state)
     assert tapped_ally.tapped is False
 
 
@@ -2530,6 +2542,7 @@ def test_auxiliary_boosters_etb_creates_and_attaches():
 def test_hylderblade_void_reattaches_at_end_step():
     from mtg_bot.agents import RandomAgent
     import random
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
 
@@ -2545,10 +2558,12 @@ def test_hylderblade_void_reattaches_at_end_step():
     state.battlefield.append(hyl)
     # Void inactive → no re-attach.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert hyl.attached_to is None
     # Activate Void.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert hyl.attached_to == ally.id
 
 
@@ -2996,11 +3011,13 @@ def test_cryoshatter_destroys_host_when_host_becomes_tapped():
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
+    from mtg_bot.actions import drain_stack
     # Sanity: both on the battlefield, neither is in a graveyard yet.
     assert bear in state.battlefield
     assert cryo in state.battlefield
     # Tap the bear via tap_permanent — this is the trigger source.
     tap_permanent(state, bear)
+    drain_stack(state)
     # Bear was destroyed.
     assert bear not in state.battlefield
     assert bear in state.players[1].graveyard
@@ -4370,7 +4387,9 @@ def test_swarm_culler_becomes_tapped_may_sac_for_draw():
     )
     state.battlefield.append(fodder)
     hand_before = len(state.players[0].hand)
+    from mtg_bot.actions import drain_stack
     tap_permanent(state, culler)
+    drain_stack(state)
     # Fodder sacrificed, hand grew by 1 (drawn card).
     assert fodder not in state.battlefield
     assert len(state.players[0].hand) == hand_before + 1
@@ -5338,13 +5357,16 @@ def test_kavaron_skywarden_void_eot_counter():
     # Sanity: reach keyword on printing.
     assert "reach" in warden.printing.keywords
 
+    from mtg_bot.actions import drain_stack
     # Void inactive → no change.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert warden.plus_one_counters == 0
 
     # Void active → +1/+1 counter added.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert warden.plus_one_counters == 1
 
 
@@ -5361,16 +5383,19 @@ def test_voidforged_titan_fires_only_when_void_active():
     )
     state.battlefield.append(titan)
 
+    from mtg_bot.actions import drain_stack
     # Void NOT active → no draw/life change.
     hand_before = len(state.players[0].hand)
     life_before = state.players[0].life
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before
     assert state.players[0].life == life_before
 
     # Flip void active (a nonland permanent left the battlefield this turn).
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before + 1
     assert state.players[0].life == life_before - 1
 

@@ -5,6 +5,7 @@ Also exercises Inventors' Fair's restored upkeep gain-life ability
 (gated on 3+ artifacts).
 """
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, STELLAR_SIGHTS_LANDS,
@@ -72,6 +73,7 @@ def test_beginning_of_upkeep_fires_for_active_player_permanents():
     state = _new_state()
     _put(state, printing, owner_id=0)
     run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
     assert state.players[0].life == 25
 
 
@@ -160,6 +162,7 @@ def test_inventors_fair_gains_life_with_three_artifacts():
     for _ in range(3):
         _put(state, make_artifact("Scrap", "{0}"))
     run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
     assert state.players[0].life == 21
 
 
@@ -181,6 +184,7 @@ def test_hivepool_upkeep_trigger_fires_on_upkeep_step():
     state = _new_state()
     _put(state, EOE_SPELLS["Thrumming Hivepool"])
     run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
     slivers = [o for o in state.battlefield if o.printing.name == "Sliver"]
     assert len(slivers) == 2
 
@@ -218,6 +222,7 @@ def test_beginning_of_upkeep_targeted_trigger_fires_and_fizzles():
     state.players[0].agent = _PickFirstAgent()
     _put(state, printing, owner_id=0)
     run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
     # Fizzle log entry exists.
     assert any(
         "fizzles" in line for line in state.log
@@ -229,6 +234,7 @@ def test_beginning_of_upkeep_targeted_trigger_fires_and_fizzles():
     _put(state2, printing, owner_id=0)
     bear = _put(state2, make_creature("Test Bear", "{1}{G}", 2, 2))
     run_beginning_of_upkeep_triggers(state2)
+    drain_stack(state2)
     assert bear.temp_power_bonus == 1
 
 

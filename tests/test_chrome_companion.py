@@ -3,6 +3,7 @@ grave-to-bottom ability + the new PutCardFromGraveyardOnBottomOfLibrary
 effect."""
 
 from mtg_bot.agents import Agent, RandomAgent
+from mtg_bot.actions import drain_stack
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import PutCardFromGraveyardOnBottomOfLibrary
 from mtg_bot.game import GameState, Player, Zone
@@ -95,6 +96,7 @@ def test_chrome_companion_gains_life_on_becoming_tapped():
     state.battlefield.append(chrome)
     life_before = state.players[0].life
     tap_permanent(state, chrome)
+    drain_stack(state)
     assert chrome.tapped is True
     assert state.players[0].life == life_before + 1
 
@@ -109,6 +111,7 @@ def test_chrome_companion_lifegain_does_not_repeat_when_already_tapped():
     life_before = state.players[0].life
     # tap_permanent no-ops when already tapped — trigger shouldn't fire.
     tap_permanent(state, chrome)
+    drain_stack(state)
     assert state.players[0].life == life_before
 
 

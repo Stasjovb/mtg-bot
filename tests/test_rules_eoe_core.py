@@ -565,6 +565,7 @@ def test_skittermaw_does_not_fire_when_void_inactive():
 
 
 def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
@@ -574,10 +575,12 @@ def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
     # A creature died earlier this turn — Void is active.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert skitter.plus_one_counters == 1
 
 
 def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
@@ -586,6 +589,7 @@ def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
     skitter = state.battlefield[0]
     state.spell_warped_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert skitter.plus_one_counters == 1
 
 
@@ -608,6 +612,7 @@ def test_skittermaw_only_fires_on_its_controllers_end_step():
 def test_void_end_step_trigger_stacks_across_turns():
     """Over multiple turns with Void active each time, Skittermaw piles up
     counters — sanity that counters persist across turns."""
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, run_cleanup_step
 
@@ -618,6 +623,7 @@ def test_void_end_step_trigger_stacks_across_turns():
     for _ in range(3):
         state.permanent_left_battlefield_this_turn = True
         run_beginning_of_end_step_triggers(state)
+        drain_stack(state)
         run_cleanup_step(state)  # resets Void flags for next turn
     assert skitter.plus_one_counters == 3
 

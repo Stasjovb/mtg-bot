@@ -87,12 +87,14 @@ def test_synthesizer_labship_combat_trigger_only_at_tier_2():
     # Below threshold: no effect.
     labship.charge_counters = 1
     run_beginning_of_combat_triggers(state)
+    drain_stack(state)
     assert robot.temp_power_bonus == 0
     assert "flying" not in robot.temp_keywords
 
     # At threshold: pump applies.
     labship.charge_counters = 2
     run_beginning_of_combat_triggers(state)
+    drain_stack(state)
     assert robot.temp_power_bonus == 2
     assert robot.temp_toughness_bonus == 2
     assert "flying" in robot.temp_keywords

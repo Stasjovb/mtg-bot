@@ -134,6 +134,7 @@ def test_chorale_end_step_sacrifice_integration():
     )
     # Void inactive → end step sacrifices Chorale.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert aura not in state.battlefield
 
 

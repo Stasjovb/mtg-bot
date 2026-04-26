@@ -111,6 +111,7 @@ def test_end_step_sacrifices_sothera_and_reanimates_when_player_creatureless():
     state.players[1].exile.append(enemy)
     # Now P1 controls no creatures. End-step fires.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Sothera sacrificed.
     assert sothera not in state.battlefield
     # Bear reanimated under P0's control with +1/+1 counters.

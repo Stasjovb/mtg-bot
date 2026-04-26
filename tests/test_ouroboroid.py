@@ -1,5 +1,6 @@
 """Tests for Ouroboroid's beginning-of-combat counter cascade."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
@@ -28,6 +29,7 @@ def test_ouroboroid_adds_counters_equal_to_its_power_each_combat():
     )
     state.battlefield.append(bear)
     run_beginning_of_combat_triggers(state)
+    drain_stack(state)
     # Ouroboroid power is 1; each creature gets 1 counter.
     assert ouro.plus_one_counters == 1
     assert bear.plus_one_counters == 1
@@ -44,10 +46,12 @@ def test_ouroboroid_counter_cascade_grows_each_combat():
     # Fire once → Ouro gets 1 counter (from itself), bear doesn't
     # exist so skipped.
     run_beginning_of_combat_triggers(state)
+    drain_stack(state)
     assert ouro.plus_one_counters == 1
     # Fire again → Ouro power is now 2, so each creature gets 2
     # counters. Ouro is the only creature → gets 2 more → 3 total.
     run_beginning_of_combat_triggers(state)
+    drain_stack(state)
     assert ouro.plus_one_counters == 3
 
 

@@ -1,6 +1,6 @@
 """Tests for Perigee Beckoner pump + Vaultguard Trooper discard-draw."""
 
-from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
+from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -102,6 +102,7 @@ def test_vaultguard_trooper_fires_when_two_tapped_creatures():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(c)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Hand discarded (2 cards to graveyard), drew 2 cards.
     assert len(p.hand) == 2
     assert all(c.printing.name == "Plains" for c in p.hand)

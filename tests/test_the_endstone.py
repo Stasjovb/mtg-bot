@@ -4,6 +4,7 @@ from mtg_bot.actions import (
     CastSpell,
     PlayLand,
     apply_action,
+    drain_stack,
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
@@ -100,6 +101,7 @@ def test_endstone_end_step_life_halving():
     )
     state.battlefield.append(endstone)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Standard starting life = 20, half rounded up = 10.
     assert p.life == 10
 

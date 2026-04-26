@@ -412,6 +412,8 @@ def test_molecular_modifier_pumps_on_beginning_of_combat():
     for p in state.players:
         p.agent = RandomAgent(rng=random.Random(0))
     run_beginning_of_combat_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
 
     # Some creature you control got +1/+0 first strike (random target of
     # Modifier or Bear — both qualify).
@@ -450,6 +452,8 @@ def test_molecular_modifier_self_targets_when_solo():
     for p in state.players:
         p.agent = RandomAgent(rng=random.Random(0))
     run_beginning_of_combat_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     mod_obj = state.battlefield[0]
     assert mod_obj.temp_power_bonus == 1
 
@@ -944,6 +948,8 @@ def test_starfighter_pilot_surveils_when_tapped_by_attacking():
 
     state.step = Step.DECLARE_ATTACKERS
     apply(state, DeclareAttackers(attacker_ids=frozenset({obj.id})))
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Pilot tapped via attack → becomes_tapped triggers → surveil 1 resolved
     assert obj.tapped
     assert any("surveils" in e for e in state.log)
