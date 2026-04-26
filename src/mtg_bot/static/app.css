@@ -373,6 +373,17 @@ body { display: grid; grid-template-columns: 1fr 280px;
    stay clickable to jump forward. */
 .log-entry.future { color: #6c6c78; }
 .log-entry.future:hover { color: #d0d0d8; }
+/* Warp casts are a non-obvious alt-cost path. Tint the line and inline
+   a WARP badge so it reads at a glance — easy to mistake for a regular
+   cast otherwise. Magenta matches the .card.warped exile indicator. */
+.log-entry.warp { color: #f0c0f0; }
+.log-entry.warp.future { color: #8a6f8a; }
+.warp-badge-inline { display: inline-block;
+                     background: rgba(180, 60, 180, 0.92);
+                     color: #fce8fc;
+                     font: 700 0.78em/1 ui-monospace, monospace;
+                     padding: 1px 4px; border-radius: 2px;
+                     letter-spacing: 0.08em; vertical-align: baseline; }
 
 /* ---- engine recommendations panel ---- */
 

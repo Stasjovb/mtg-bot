@@ -1051,7 +1051,7 @@ function renderLog(body, snap) {
     } else if (currentLogSize !== undefined && i >= currentLogSize) {
       d.classList.add('future');
     }
-    d.textContent = e;
+    renderLogEntryText(d, e);
     // Click jumps (forward or backward) to the first snapshot that
     // introduced this log entry. Index entries carry log_size
     // (cumulative len(state.log) at that snapshot); the first idx
@@ -1082,6 +1082,27 @@ function renderLog(body, snap) {
   } else {
     body.scrollTop = body.scrollHeight;
   }
+}
+
+// Render a log entry's text into ``el``. If the entry contains the
+// "(warp)" suffix produced by a warp cast (see actions.cast_spell), tag
+// the entry with the .warp class and replace the inline "(warp)" with
+// a magenta WARP badge so the alt cast mode is unmistakable in the log.
+function renderLogEntryText(el, text) {
+  const warpIdx = text.indexOf(' (warp)');
+  if (warpIdx === -1) {
+    el.textContent = text;
+    return;
+  }
+  el.classList.add('warp');
+  el.appendChild(document.createTextNode(text.slice(0, warpIdx)));
+  const badge = document.createElement('span');
+  badge.className = 'warp-badge-inline';
+  badge.textContent = 'WARP';
+  el.appendChild(document.createTextNode(' '));
+  el.appendChild(badge);
+  const tail = text.slice(warpIdx + ' (warp)'.length);
+  if (tail) el.appendChild(document.createTextNode(tail));
 }
 
 // Binary search over game.index for the smallest snapshot idx whose log
