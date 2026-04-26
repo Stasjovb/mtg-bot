@@ -968,15 +968,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Perigee Beckoner `{4}{B}` 4/5 Creature. Warp `{1}{B}` (real
-        # warp cost per oracle — note previous build had `{2}{B}`).
+        # Perigee Beckoner `{4}{B}` 4/5 Creature. Warp `{1}{B}`.
         # "When this creature enters, until end of turn, another target
         # creature you control gets +2/+0 and gains 'When this creature
         # dies, return it to the battlefield tapped under its owner's
         # control.'"
-        # Simplification: the granted "dies → return tapped" rider is
-        # dropped (requires granted-triggered-ability infrastructure).
-        # The +2/+0 UEOT pump is kept.
+        # Wires the +2/+0 pump together with the granted dies-rider via
+        # PumpTargetCreatureUntilEOT.granted_triggered_ability — the
+        # rider lives in temp_triggered_abilities until cleanup. The
+        # rider's resolve (PerigeeBeckonerDiesReturnTappedEffect) reads
+        # state.resolving_source set by _fire_dies_triggers when it
+        # walks the dying object's temp_triggered_abilities.
         make_creature(
             "Perigee Beckoner", "{4}{B}", 4, 5,
             warp="{1}{B}",
@@ -986,6 +988,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=2, toughness_bonus=0,
                         you_control_only=True,
+                        exclude_self=True,
+                        granted_triggered_ability=TriggeredAbility(
+                            trigger="dies",
+                            effect=PerigeeBeckonerDiesReturnTappedEffect(),
+                        ),
                     ),
                 ),
             ),

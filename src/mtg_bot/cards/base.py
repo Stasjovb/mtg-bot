@@ -60,6 +60,7 @@ from mtg_bot.effects import (
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
     MemorialVaultActivatedEffect,
+    PerigeeBeckonerDiesReturnTappedEffect,
     PossibilityTechnicianETBEffect,
     TerritorialBruntarLandfallEffect,
     TractorBeamETBEffect,

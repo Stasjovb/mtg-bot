@@ -2411,3 +2411,56 @@ class DiplomaticRelationsEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class PerigeeBeckonerDiesReturnTappedEffect(Effect):
+    """Perigee Beckoner's granted dies-rider: "When this creature dies,
+    return it to the battlefield tapped under its owner's control."
+
+    Resolves directly from ``_fire_dies_triggers`` (mirrors the
+    Requiem-Monolith dealt-damage rider pattern): the dying creature is
+    sitting in its owner's graveyard with ``state.resolving_source`` set
+    to it. We move it back onto the battlefield, tapped, under its
+    owner's id (per oracle — "owner's control", not "your control").
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        source = state.resolving_source
+        if source is None:
+            return
+        owner = state.player_by_id(source.owner_id)
+        # Tokens cease to exist on death — nothing to bring back.
+        if source.printing.is_token:
+            return
+        # The dying creature should be in its owner's graveyard. If it's
+        # been moved elsewhere already (e.g. exiled by a replacement),
+        # we don't return anything.
+        if source not in owner.graveyard:
+            return
+        owner.graveyard.remove(source)
+        # Clear the temp_triggered_abilities now so a second death this
+        # turn (re-killed after the return) doesn't re-fire the rider —
+        # rules-wise the granted UEOT trigger is on the FORMER object;
+        # the returned object is a "new object" with no memory of UEOT
+        # grants. (Cleanup wipes them at end of turn anyway.)
+        source.temp_triggered_abilities = ()
+        put_into_battlefield(state, source, owner.id)
+        source.tapped = True
+        state.log.append(
+            f"{source.printing.name} returns to P{owner.id}'s "
+            f"battlefield tapped (granted dies-rider)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "return this creature to the battlefield tapped under its "
+            "owner's control"
+        )
+
+
+

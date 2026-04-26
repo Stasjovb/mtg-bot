@@ -2721,6 +2721,11 @@ class PumpTargetCreatureUntilEOT(Effect):
     # as a no-op when no target is chosen or available (e.g. Dubious
     # Delicacy's ETB "up to one target creature gets -3/-3 UEOT").
     optional: bool = False
+    # "Another target creature ..." — exclude state.resolving_source from
+    # legal targets and from resolve. Matches oracle wording on cards
+    # like Perigee Beckoner's ETB ("another target creature you control
+    # gets +2/+0 and gains [dies-rider]").
+    exclude_self: bool = False
 
     def requires_target(self) -> bool:
         return not self.optional
@@ -2731,6 +2736,8 @@ class PumpTargetCreatureUntilEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        source = state.resolving_source if self.exclude_self else None
+        source_id = source.id if source is not None else -1
         return [
             ("creature", o.id)
             for o in state.battlefield
@@ -2742,6 +2749,7 @@ class PumpTargetCreatureUntilEOT(Effect):
                 or self.target_subtype in o.printing.subtypes
                 or self.target_subtype == o.temp_subtype
             )
+            and o.id != source_id
         ]
 
     def resolve(

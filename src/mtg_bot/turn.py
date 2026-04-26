@@ -630,6 +630,25 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             controller_id=dead.controller_id,
             label="dies",
         )
+    # UEOT-granted "When this creature dies, ..." triggers sitting in
+    # ``dead.temp_triggered_abilities`` (Perigee Beckoner's pump rider).
+    # Direct resolve rather than stack-push because the granted ability
+    # is ephemeral and isn't represented in the printed-ability ledger;
+    # using synthetic indices for push_triggered_ability would require
+    # broadening the ledger key type. Mirrors the dealt-damage path in
+    # combat._fire_enchanted_dealt_damage_triggers. resolving_source is
+    # set to the dying object so the granted effect can read it.
+    for ability in dead.temp_triggered_abilities:
+        if ability.trigger != "dies":
+            continue
+        state.log.append(
+            f"{dead.printing.name}'s granted dies trigger fires"
+        )
+        state.resolving_source = dead
+        try:
+            ability.effect.resolve(state, dead.controller_id, ())
+        finally:
+            state.resolving_source = None
     # "Whenever a creature you control with a +1/+1 counter on it dies" —
     # only fires if the dying creature actually had a +1/+1 counter. The
     # nontoken-only variant (Rayblade Trooper) additionally requires the

@@ -200,6 +200,7 @@ from mtg_bot.effects.bespoke import (
     MutinousMassacreEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
+    PerigeeBeckonerDiesReturnTappedEffect,
     PinnacleStarcageETBEffect,
     PinnacleStarcageSacEffect,
     PossibilityTechnicianETBEffect,
