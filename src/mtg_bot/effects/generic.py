@@ -2544,7 +2544,7 @@ class SearchLibraryForCard(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
+        from mtg_bot.game import Zone, reveal_to_all, shuffle_library
 
         p = state.player_by_id(controller_id)
         options = [c for c in p.library if self._matches(c.printing)]
@@ -2553,6 +2553,7 @@ class SearchLibraryForCard(Effect):
                 f"P{controller_id} searches library — no "
                 f"{self.filter_name} found"
             )
+            shuffle_library(state, controller_id)
             return
         chosen_id = None
         if p.agent is not None:
@@ -2564,6 +2565,7 @@ class SearchLibraryForCard(Effect):
                 state.log.append(
                     f"P{controller_id} declines to fetch"
                 )
+                shuffle_library(state, controller_id)
                 return
             chosen_id = options[0].id
         card = next((c for c in options if c.id == chosen_id), options[0])
@@ -2573,7 +2575,6 @@ class SearchLibraryForCard(Effect):
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to hand"
         )
-        from mtg_bot.game import reveal_to_all, shuffle_library
         reveal_to_all(state, card)
         shuffle_library(state, controller_id)
 
@@ -4837,6 +4838,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import shuffle_library
 
         x = state.resolving_x_value
         p = state.player_by_id(controller_id)
@@ -4851,18 +4853,17 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
                 f"P{controller_id} searches for a green creature with "
                 f"MV ≤ {x} — none found"
             )
+            shuffle_library(state, controller_id)
             return
         chosen_id = None
         if p.agent is not None:
             chosen_id = p.agent.choose_card_from_library(
                 state, controller_id, [c.id for c in options]
             )
-        from mtg_bot.game import shuffle_library
         if chosen_id is None:
             state.log.append(
                 f"P{controller_id} declines to fetch from Green Sun's Zenith"
             )
-            # Still shuffle per oracle.
             shuffle_library(state, controller_id)
             return
         card = next((c for c in options if c.id == chosen_id), options[0])

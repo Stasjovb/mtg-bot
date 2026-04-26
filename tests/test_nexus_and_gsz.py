@@ -215,22 +215,24 @@ def test_gsz_tutors_green_creature_within_mv_limit():
     assert blue2 in p.library
 
 
-def test_gsz_no_match_returns_silently():
+def test_gsz_no_match_still_shuffles():
+    from mtg_bot.game import reveal_to_all
     state = _new_state(p0_agent=_PickFirst())
     p = state.player_by_id(0)
     blue = state.new_object(_BLUE_2, 0, Zone.LIBRARY)
+    reveal_to_all(state, blue)
     p.library.append(blue)
 
     state.resolving_x_value = 5
     SearchLibraryForGreenCreatureWithMVAtMostX().resolve(state, 0, ())
-    # Nothing moved; no error.
     assert blue in p.library
     assert blue not in state.battlefield
+    # Oracle "then shuffle" fires even with no match — reveal state cleared.
+    assert blue.publicly_known_to == frozenset()
 
 
 def test_gsz_agent_declining_still_shuffles():
-    """Declining (agent returns None) is legal — library is shuffled
-    but no card is fetched."""
+    from mtg_bot.game import reveal_to_all
     class _Declines(Agent):
         def choose_card_from_library(self, state, player_id, option_ids):
             return None
@@ -238,12 +240,14 @@ def test_gsz_agent_declining_still_shuffles():
     state = _new_state(p0_agent=_Declines())
     p = state.player_by_id(0)
     green2 = state.new_object(_GREEN_2, 0, Zone.LIBRARY)
+    reveal_to_all(state, green2)
     p.library.append(green2)
 
     state.resolving_x_value = 3
     SearchLibraryForGreenCreatureWithMVAtMostX().resolve(state, 0, ())
     assert green2 in p.library
     assert any("declines" in line for line in state.log)
+    assert green2.publicly_known_to == frozenset()
 
 
 def test_gsz_shuffles_self_into_library_on_resolve():

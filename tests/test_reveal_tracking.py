@@ -287,11 +287,21 @@ def test_search_library_decline_still_resets_on_shuffle():
     SearchLibraryForCard(
         filter_name="basic_plains", may_fail=True,
     ).resolve(state, 0, ())
-    # Decline path goes through the early-return BEFORE the mandatory
-    # shuffle in our impl — verify the decline path's documented
-    # behavior. (If the engine starts shuffling on decline, this test
-    # will surface the change so we update reveal expectations too.)
-    assert salted.publicly_known_to == frozenset({0, 1})
+    # Decline triggers the mandatory shuffle, which clears reveal state.
+    assert salted.publicly_known_to == frozenset()
+
+
+def test_search_library_no_options_still_shuffles():
+    """No matching card in library: oracle "then shuffle" still fires."""
+    state = _new_state()
+    p0 = state.players[0]
+    salted = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+    reveal_to_all(state, salted)
+    p0.library.append(salted)
+    SearchLibraryForCard(
+        filter_name="basic_island", may_fail=True,
+    ).resolve(state, 0, ())
+    assert salted.publicly_known_to == frozenset()
 
 
 def test_look_at_top_n_reveal_marks_only_revealed_card_publicly_known():
