@@ -45,6 +45,18 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    # "Until your next turn" pump expiry: clear extended-temporal pump
+    # bonuses tagged with this active player as the source-controller.
+    # Matches Mouth of the Storm's "creatures your opponents control
+    # get -3/-0 until your next turn." — the bonus survives the cleanup
+    # step of the casting turn AND the opponent's full turn, then clears
+    # right at the start of the source-controller's next turn.
+    for obj in state.battlefield:
+        if obj.extended_temp_expires_at_player_id == ap.id:
+            obj.extended_temp_power_bonus = 0
+            obj.extended_temp_toughness_bonus = 0
+            obj.extended_temp_keywords = frozenset()
+            obj.extended_temp_expires_at_player_id = None
     # Phasing: "until its controller's next turn." At the start of the
     # phased creature's controller's untap step, phase it (and anything
     # attached to it) back in. Matches Robe of Stars' Astral Projection.

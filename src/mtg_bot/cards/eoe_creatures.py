@@ -1709,15 +1709,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. ETB:
         # "creatures your opponents control get -3/-0 until your next
-        # turn." Simplification: the engine only tracks UEOT, not "until
-        # your next turn," so the debuff is applied UEOT (clears at the
-        # cleanup step of the casting player's turn). Practical impact is
-        # similar — opponents' creatures still have full power back before
-        # they can swing back at us next turn — but a true "until your
-        # next turn" clause would persist through the OPPONENT's whole
-        # next turn (relevant if the opponent attacks Mouth's controller's
-        # planeswalker on their next turn before our next turn). Pump
-        # durations across turns aren't modeled.
+        # turn." The debuff uses the ``extended_temp_*`` pump pathway
+        # (until_caster_next_turn=True), so it survives the casting
+        # turn's cleanup AND the opponent's full next turn, and clears
+        # at the START of the source controller's next turn (their
+        # untap step) — exactly per oracle.
         make_creature(
             "Mouth of the Storm", "{6}{U}", 6, 6,
             keywords={"flying"},
@@ -1728,6 +1724,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PumpCreaturesOpponentsControlUntilEOT(
                         power_bonus=-3,
                         toughness_bonus=0,
+                        until_caster_next_turn=True,
                     ),
                 ),
             ),

@@ -98,6 +98,18 @@ class GameObject:
     temp_power_bonus: int = 0
     temp_toughness_bonus: int = 0
     temp_keywords: frozenset[str] = field(default_factory=frozenset)
+    # Extended-temporal-scope bonuses: "until your next turn" — expire
+    # at the START (untap step) of player ``extended_temp_expires_at_player_id``,
+    # NOT at this turn's cleanup. Stacked additively, contribute to
+    # effective_power / effective_toughness / effective_keywords just
+    # like the regular temp_* fields. Matches Mouth of the Storm's
+    # "creatures your opponents control get -3/-0 until your next turn."
+    # Set ``extended_temp_expires_at_player_id`` to the casting/source
+    # controller's id; their next untap clears these.
+    extended_temp_power_bonus: int = 0
+    extended_temp_toughness_bonus: int = 0
+    extended_temp_keywords: frozenset[str] = field(default_factory=frozenset)
+    extended_temp_expires_at_player_id: Optional[int] = None
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.
@@ -288,7 +300,9 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     if is_stationed(obj):
         kws = kws | obj.printing.stationed_keywords
     _, _, granted = _static_bonuses(state, obj)
-    return kws | granted | obj.temp_keywords
+    return (
+        kws | granted | obj.temp_keywords | obj.extended_temp_keywords
+    )
 
 
 def _dynamic_base_pt(
@@ -572,7 +586,11 @@ def effective_power(state: GameState, obj: GameObject) -> int:
         base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
     power_bonus, _, _ = _static_bonuses(state, obj)
     return (
-        base + obj.plus_one_counters + power_bonus + obj.temp_power_bonus
+        base
+        + obj.plus_one_counters
+        + power_bonus
+        + obj.temp_power_bonus
+        + obj.extended_temp_power_bonus
     )
 
 
@@ -588,7 +606,11 @@ def effective_toughness(state: GameState, obj: GameObject) -> int:
         base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
     _, toughness_bonus, _ = _static_bonuses(state, obj)
     return (
-        base + obj.plus_one_counters + toughness_bonus + obj.temp_toughness_bonus
+        base
+        + obj.plus_one_counters
+        + toughness_bonus
+        + obj.temp_toughness_bonus
+        + obj.extended_temp_toughness_bonus
     )
 
 

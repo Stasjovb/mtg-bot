@@ -2939,26 +2939,26 @@ class PumpCreaturesYouControlUntilEOT(Effect):
 @dataclass(frozen=True)
 class PumpCreaturesOpponentsControlUntilEOT(Effect):
     """Each creature an opponent of the controller controls gets
-    +power/+toughness until end of turn (applied at resolution; creatures
-    entering later don't get the bonus — Stage-3 simplification vs. a
-    continuous effect).
+    +power/+toughness until end of turn (applied at resolution;
+    creatures entering later don't get the bonus — Stage-3 snapshot vs.
+    a true continuous effect).
 
-    Negative bonuses model debuffs like "creatures your opponents control
-    get -3/-0 until end of turn" (one-time snapshot).
+    Negative bonuses model debuffs like "creatures your opponents
+    control get -3/-0 until end of turn" (one-time snapshot).
 
-    Used as an approximation for "until your next turn" pump durations —
-    the engine only tracks UEOT, not "until your next turn." This is a
-    close approximation in practice: the debuff still wears off before the
-    debuffed creatures' controller's next combat in either case (UEOT
-    clears at the cleanup step of the casting player's turn; "until your
-    next turn" would clear at the casting player's next untap). Callers
-    using this for "until your next turn" should document the
-    simplification at the call site.
+    Set ``until_caster_next_turn=True`` for the "until your next turn"
+    variant (Mouth of the Storm). The bonuses are written to the
+    ``extended_temp_*`` fields on each affected GameObject and tagged
+    with the resolving controller's id. They DON'T clear at the
+    casting turn's cleanup; instead they expire at the start
+    (``run_untap_step``) of that controller's NEXT turn, so the
+    opponent's full subsequent turn keeps the debuff applied.
     """
 
     power_bonus: int = 0
     toughness_bonus: int = 0
     granted_keywords: frozenset[str] = frozenset()
+    until_caster_next_turn: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -2970,25 +2970,44 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
                 continue
             if not obj.printing.is_creature:
                 continue
-            obj.temp_power_bonus += self.power_bonus
-            obj.temp_toughness_bonus += self.toughness_bonus
-            if self.granted_keywords:
-                obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            if self.until_caster_next_turn:
+                obj.extended_temp_power_bonus += self.power_bonus
+                obj.extended_temp_toughness_bonus += self.toughness_bonus
+                if self.granted_keywords:
+                    obj.extended_temp_keywords = (
+                        obj.extended_temp_keywords | self.granted_keywords
+                    )
+                obj.extended_temp_expires_at_player_id = controller_id
+            else:
+                obj.temp_power_bonus += self.power_bonus
+                obj.temp_toughness_bonus += self.toughness_bonus
+                if self.granted_keywords:
+                    obj.temp_keywords = obj.temp_keywords | self.granted_keywords
             count += 1
         # Format signed bonuses ("+3"/"-3" rather than "+-3").
         p_str = f"{self.power_bonus:+d}"
         t_str = f"{self.toughness_bonus:+d}"
+        scope = (
+            f"until P{controller_id}'s next turn"
+            if self.until_caster_next_turn
+            else "until end of turn"
+        )
         state.log.append(
             f"P{controller_id}'s opponents' creatures ({count}) get "
-            f"{p_str}/{t_str} until end of turn"
+            f"{p_str}/{t_str} {scope}"
         )
 
     def describe(self) -> str:
         p_str = f"{self.power_bonus:+d}"
         t_str = f"{self.toughness_bonus:+d}"
+        scope = (
+            "until your next turn"
+            if self.until_caster_next_turn
+            else "until end of turn"
+        )
         return (
             f"creatures your opponents control get {p_str}/{t_str} "
-            f"until end of turn"
+            f"{scope}"
         )
 
 

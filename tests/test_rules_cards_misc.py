@@ -6846,6 +6846,86 @@ def test_mouth_of_the_storm_card_definition_has_etb_trigger():
     assert isinstance(eff, PumpCreaturesOpponentsControlUntilEOT)
     assert eff.power_bonus == -3
     assert eff.toughness_bonus == 0
+    # New: Mouth of the Storm uses the "until your next turn" scope.
+    assert eff.until_caster_next_turn is True
+
+
+def test_mouth_of_the_storm_debuff_persists_through_cleanup():
+    """Oracle: 'until YOUR next turn' — the -3/-0 must NOT clear at
+    the casting turn's cleanup. The opponent's full next turn still
+    sees the debuffed P/T."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(op)
+    base_p = effective_power(state, op)
+    # Cast on P0's turn (active_player_idx already 0 in _arena).
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0,
+        until_caster_next_turn=True,
+    ).resolve(state, controller_id=0)
+    assert effective_power(state, op) == base_p - 3
+
+    # Casting turn's cleanup — debuff stays.
+    run_cleanup_step(state)
+    assert effective_power(state, op) == base_p - 3
+    assert op.extended_temp_power_bonus == -3
+
+
+def test_mouth_of_the_storm_debuff_clears_at_caster_next_untap():
+    """The debuff clears at the START of the source-controller's NEXT
+    untap step (their next turn beginning), per oracle."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_power
+    from mtg_bot.turn import run_untap_step
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(op)
+    base_p = effective_power(state, op)
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0,
+        until_caster_next_turn=True,
+    ).resolve(state, controller_id=0)
+    # Pretend a turn passes: cleanup, opponent's untap (their turn),
+    # opponent's cleanup, then back to caster's untap.
+    run_cleanup_step(state)
+    state.active_player_idx = 1
+    run_untap_step(state)  # opponent's untap — debuff still active
+    assert op.extended_temp_power_bonus == -3
+    assert effective_power(state, op) == base_p - 3
+    run_cleanup_step(state)
+    state.active_player_idx = 0
+    run_untap_step(state)  # caster's next untap — debuff clears now
+    assert op.extended_temp_power_bonus == 0
+    assert effective_power(state, op) == base_p
+
+
+def test_mouth_of_the_storm_debuff_skips_caster_own_creatures():
+    """Sanity: the until-your-next-turn debuff hits opponents' creatures
+    only — controller's own creatures are untouched even with the new
+    extended-temporal pump path."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    own = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(own)
+    base_p = effective_power(state, own)
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0,
+        until_caster_next_turn=True,
+    ).resolve(state, controller_id=0)
+    assert effective_power(state, own) == base_p
+    assert own.extended_temp_power_bonus == 0
 
 
 def test_pump_creatures_opponents_control_describe_and_log():
