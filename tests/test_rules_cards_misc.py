@@ -2124,6 +2124,7 @@ def test_nanoform_sentinel_untaps_once_per_turn():
 
 
 def test_meltstrider_eulogist_counter_dies_triggers_draw():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
@@ -2141,6 +2142,7 @@ def test_meltstrider_eulogist_counter_dies_triggers_draw():
     state.battlefield.append(victim)
     hand_before = len(state.players[0].hand)
     move_off_battlefield(state, victim, destination="graveyard")
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before + 1
 
 
@@ -2186,6 +2188,7 @@ def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
 
 
 def test_lightless_evangel_counter_on_sacrifice():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import sacrifice
 
@@ -2200,6 +2203,7 @@ def test_lightless_evangel_counter_on_sacrifice():
     )
     state.battlefield.append(lander)
     sacrifice(state, lander)
+    drain_stack(state)
     assert le.plus_one_counters == 1
 
 
@@ -5136,7 +5140,7 @@ def test_stun_counter_keeps_creature_tapped_one_turn():
 
 def test_cryogen_relic_etb_and_leaves_draw():
     from mtg_bot.cards import EOE_CREATURES
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import drain_stack, put_into_battlefield
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -5146,11 +5150,13 @@ def test_cryogen_relic_etb_and_leaves_draw():
     )
     hand_before = len(state.players[0].hand)
     put_into_battlefield(state, relic, 0)
-    # After ETB: hand changes by -1 (relic left hand) + 1 (drew a card).
-    assert len(state.players[0].hand) == hand_before
+    drain_stack(state)
+    # ETB trigger drew 1 card.
+    assert len(state.players[0].hand) == hand_before + 1
     # Destroy it — leaves trigger draws another card.
     hand_before_destroy = len(state.players[0].hand)
     destroy(state, relic)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before_destroy + 1
 
 

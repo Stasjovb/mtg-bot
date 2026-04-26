@@ -234,6 +234,7 @@ def test_dual_sun_adepts_double_strike_deals_damage_twice():
 
 
 def test_edge_rover_dies_each_player_creates_a_lander():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
@@ -241,6 +242,7 @@ def test_edge_rover_dies_each_player_creates_a_lander():
     state = _arena(p0_battlefield=[rover])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
+    drain_stack(state)
     # Both P0 and P1 should have a Lander token now
     p0_landers = [
         o for o in state.battlefield
@@ -680,6 +682,7 @@ def test_tragic_trajectory_void_mode_minus_10_10_kills():
 
 
 def test_beamsaw_prospector_dies_creates_lander_for_controller_only():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
@@ -687,6 +690,7 @@ def test_beamsaw_prospector_dies_creates_lander_for_controller_only():
     state = _arena(p0_battlefield=[prospector])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
+    drain_stack(state)
     landers = [o for o in state.battlefield if o.printing is TOKEN_PRINTINGS["Lander"]]
     assert len(landers) == 1
     assert landers[0].controller_id == 0

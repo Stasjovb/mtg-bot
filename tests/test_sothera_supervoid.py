@@ -1,6 +1,7 @@
 """Tests for Sothera, the Supervoid — dies-exile-opponent and end-step
 reanimate effects."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SotheraEndStepReanimateEffect, SotheraExileOpponentCreatureEffect
@@ -79,6 +80,7 @@ def test_creature_dies_triggers_observer_via_pipeline():
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     my_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     destroy(state, my_bear)
+    drain_stack(state)
     assert enemy not in state.battlefield
 
 

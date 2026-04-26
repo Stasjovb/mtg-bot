@@ -2,6 +2,7 @@
 observer trigger, the new ConditionalIfSourcePowerAtLeast effect, and
 leaves-battlefield self-trigger gated on power."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
@@ -103,6 +104,7 @@ def test_vondam_counts_allied_creature_dying():
     state.battlefield.append(ally)
     life_before = state.players[0].life
     destroy(state, ally)
+    drain_stack(state)
     assert vondam.plus_one_counters == 1
     assert state.players[0].life == life_before + 1
 
@@ -119,6 +121,7 @@ def test_vondam_counts_allied_creature_exiled():
     state.battlefield.append(ally)
     life_before = state.players[0].life
     move_off_battlefield(state, ally, destination="exile")
+    drain_stack(state)
     assert vondam.plus_one_counters == 1
     assert state.players[0].life == life_before + 1
 
@@ -165,6 +168,7 @@ def test_vondam_death_at_power_4_destroys_target_permanent():
     )
     state.battlefield.append(enemy)
     destroy(state, vondam)
+    drain_stack(state)
     # Enemy bear should be gone (destroyed by Vondam's leaves trigger).
     assert enemy not in state.battlefield
 
