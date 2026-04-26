@@ -149,6 +149,7 @@ from mtg_bot.effects.combinators import (
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
     ConditionalIfYouControlAtLeast,
+    ConditionalIfYouGainedLifeAtLeast,
     ConditionalOnTappedCreatures,
     ModalChooseOne,
     OptionalPutCreatureFromHandOntoBattlefield,

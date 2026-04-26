@@ -566,6 +566,47 @@ class ConditionalIfYouControlAtLeast(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalIfYouGainedLifeAtLeast(Effect):
+    """Run ``inner`` only if the effect's controller has gained at least
+    ``threshold`` life this turn at resolution.
+
+    Matches "draw a card if you've gained 3 or more life this turn"
+    end-step riders (Haliya, Guided by Light).
+    """
+
+    threshold: int
+    inner: Effect
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner.legal_targets(state, controller_id)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        gained = state.player_by_id(controller_id).life_gained_this_turn
+        if gained < self.threshold:
+            state.log.append(
+                f"conditional skipped (gained {gained} life, need "
+                f"{self.threshold})"
+            )
+            return
+        self.inner.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"if you've gained {self.threshold} or more life this turn, "
+            f"{self.inner.describe()}"
+        )
+
+
+
+@dataclass(frozen=True)
 class ConditionalOnTappedCreatures(Effect):
     """Run ``effect`` only if the controller has at least ``min_count``
     tapped creatures on the battlefield at resolution.

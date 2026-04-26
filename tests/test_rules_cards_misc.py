@@ -3592,6 +3592,56 @@ def test_haliya_gains_life_on_creature_enter():
     assert state.players[0].life == life_before + 1
 
 
+def test_haliya_guided_eot_draws_when_three_life_gained():
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    state.active_player_idx = 0
+    haliya = state.new_object(
+        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(haliya)
+    # Stock the library with a known card so we can detect the draw.
+    plains = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+    state.players[0].library.append(plains)
+    state.players[0].life_gained_this_turn = 3
+    hand_before = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    assert len(state.players[0].hand) == hand_before + 1
+
+
+def test_haliya_guided_eot_no_draw_below_threshold():
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _arena()
+    state.active_player_idx = 0
+    haliya = state.new_object(
+        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(haliya)
+    plains = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+    state.players[0].library.append(plains)
+    state.players[0].life_gained_this_turn = 2  # under threshold
+    hand_before = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    assert len(state.players[0].hand) == hand_before
+
+
+def test_haliya_guided_has_warp_cost():
+    from mtg_bot.cards import EOE_CREATURES
+
+    h = EOE_CREATURES["Haliya, Guided by Light"]
+    assert h.warp_cost_str == "{W}"
+
+
 def test_creature_or_artifact_trigger_skips_self_entry():
     """The trigger says 'another creature or artifact'. Self-entry
     shouldn't trigger — the source is excluded."""

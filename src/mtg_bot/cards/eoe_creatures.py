@@ -2230,16 +2230,23 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         # Haliya, Guided by Light: {2}{W} 2/3 Legendary. Whenever Haliya
         # or another creature or artifact you control enters, you gain
-        # 1 life. Dropped the "draw if you've gained 3 life this turn"
-        # EoT rider + Warp {W} (life-gained-this-turn tracking not yet
-        # modeled).
+        # 1 life. At the beginning of your end step, draw a card if
+        # you've gained 3 or more life this turn. Warp {W}.
         make_creature(
             "Haliya, Guided by Light", "{2}{W}", 2, 3,
             legendary=True,
+            warp="{W}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="creature_or_artifact_enters_you_control",
                     effect=GainLife(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger="beginning_of_end_step",
+                    effect=ConditionalIfYouGainedLifeAtLeast(
+                        threshold=3,
+                        inner=DrawCards(amount=1),
+                    ),
                 ),
             ),
         ),

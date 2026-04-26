@@ -18,6 +18,7 @@ from mtg_bot.effects import (
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
     ConditionalIfYouControlAtLeast,
+    ConditionalIfYouGainedLifeAtLeast,
     ControlTargetOpponentNextTurn,
     DealDamageToControllerAndAddMana,
     BecomeLandCreatureUEOT,
