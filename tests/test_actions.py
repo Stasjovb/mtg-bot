@@ -74,3 +74,66 @@ def test_resolve_creature_puts_it_on_battlefield():
     assert bear in state.battlefield
     assert bear.summoning_sick is True
     assert not state.stack
+
+
+# ---------------------------------------------------------------------
+# Log target naming: the cast/activate/ETB log lines should name what
+# they're targeting so log readers don't see "X's ability goes on the
+# stack" with no indication of the chosen target.
+# ---------------------------------------------------------------------
+
+
+from mtg_bot.actions import _format_log_targets  # noqa: E402
+
+
+def test_format_log_targets_returns_empty_for_no_targets():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    assert _format_log_targets(state, ()) == ""
+
+
+def test_format_log_targets_names_battlefield_permanent():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    assert _format_log_targets(state, (("creature", bear.id),)) \
+        == " targeting Wild Bear"
+
+
+def test_format_log_targets_names_player():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    assert _format_log_targets(state, (("player", 1),)) \
+        == " targeting Player 1"
+
+
+def test_format_log_targets_joins_multiple_with_commas():
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    out = _format_log_targets(
+        state,
+        (("creature", bear.id), ("player", 1)),
+    )
+    assert out == " targeting Wild Bear, Player 1"
+
+
+def test_format_log_targets_marks_unknown_id():
+    """If a target id can't be resolved (already left battlefield, weird
+    state), the suffix says ``?{kind}#{id}`` so the gap is visible
+    rather than silently dropped."""
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    out = _format_log_targets(state, (("creature", 99999),))
+    assert out == " targeting ?creature#99999"

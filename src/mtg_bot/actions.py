@@ -10,6 +10,36 @@ from mtg_bot.game import (
 )
 
 
+def _format_log_targets(state: GameState, targets: tuple) -> str:
+    """Return a ``" targeting Goblin Runner, Player 1"`` suffix for a
+    log line announcing a spell or triggered ability going on the
+    stack. Returns an empty string when there are no targets so the
+    caller can unconditionally append it.
+
+    Permanent ids resolve via the battlefield; spell/ability ids fall
+    back to the stack (rare but possible for triggers that target
+    in-flight spells). Unknown ids stringify as ``"?{kind}#{id}"`` —
+    visible enough that a missing target shows up as a UI bug rather
+    than a silent gap."""
+    if not targets:
+        return ""
+    parts: list[str] = []
+    for kind, tid in targets:
+        if kind == "player":
+            parts.append(f"Player {tid}")
+            continue
+        obj = next((o for o in state.battlefield if o.id == tid), None)
+        if obj is not None:
+            parts.append(obj.printing.name)
+            continue
+        on_stack = next((s for s in state.stack if s.source.id == tid), None)
+        if on_stack is not None:
+            parts.append(on_stack.source.printing.name)
+            continue
+        parts.append(f"?{kind}#{tid}")
+    return " targeting " + ", ".join(parts)
+
+
 @dataclass(frozen=True)
 class Action:
     pass
@@ -693,7 +723,10 @@ def _cast_spell(
         )
     )
     mode = " (warp)" if use_warp else ""
-    state.log.append(f"P{player_id} casts {card.printing.name}{mode}")
+    state.log.append(
+        f"P{player_id} casts {card.printing.name}{mode}"
+        + _format_log_targets(state, targets)
+    )
 
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
@@ -1169,6 +1202,7 @@ def _activate_ability(
     )
     state.log.append(
         f"P{player_id} activates {source.printing.name}'s ability"
+        + _format_log_targets(state, targets)
     )
 
 
@@ -1635,4 +1669,5 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
             )
             state.log.append(
                 f"{creature.printing.name}'s ETB trigger goes on the stack"
+                + _format_log_targets(state, targets)
             )
