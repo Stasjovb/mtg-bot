@@ -4552,6 +4552,192 @@ def test_planet_land_in_all_printings():
         assert name in printings
 
 
+def _command_bridge(state, owner_id=0):
+    """Helper: put a Command Bridge into ``owner_id``'s hand and
+    return (card, agent). The test installs an agent on the player —
+    Command Bridge's ETB rider asks the agent for a tap-or-sac choice.
+    """
+    from mtg_bot.cards import UTILITY_LANDS
+
+    cb = state.new_object(
+        UTILITY_LANDS["Command Bridge"], owner_id=owner_id,
+        zone=Zone.HAND,
+    )
+    state.players[owner_id].hand.append(cb)
+    return cb
+
+
+def test_command_bridge_enters_tapped_with_alt_permanent_tap():
+    """Plays Command Bridge with an untapped Plains in play. Agent
+    chooses to tap the Plains; Command Bridge survives and is itself
+    tapped (enters tapped). The chosen Plains becomes tapped."""
+    from mtg_bot.actions import _play_land, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    plains.tapped = False
+    state.battlefield.append(plains)
+    cb = _command_bridge(state, owner_id=0)
+    _play_land(state, 0, cb.id)
+    # Command Bridge entered the battlefield and is tapped.
+    assert cb in state.battlefield
+    assert cb.tapped is True
+    # The ETB went on the stack — resolve it.
+    assert len(state.stack) == 1
+    resolve_top_of_stack(state)
+    # Bridge is still on the battlefield (alt-cost paid by tapping
+    # the Plains).
+    assert cb in state.battlefield
+    assert plains.tapped is True
+
+
+def test_command_bridge_sacrifices_when_no_untapped_permanent():
+    """No untapped permanents available (the Bridge itself enters tapped
+    and is excluded from candidates). The ETB sacrifices the Bridge."""
+    from mtg_bot.actions import _play_land, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    cb = _command_bridge(state, owner_id=0)
+    _play_land(state, 0, cb.id)
+    # Bridge is on the battlefield and tapped.
+    assert cb in state.battlefield
+    assert cb.tapped is True
+    assert len(state.stack) == 1
+    resolve_top_of_stack(state)
+    # No untapped permanent → sacrificed to the graveyard.
+    assert cb not in state.battlefield
+    assert cb in state.players[0].graveyard
+
+
+def test_command_bridge_sacrifices_when_agent_declines():
+    """Agent refuses to tap any permanent (returns None). The Bridge
+    is sacrificed even if untapped permanents are available."""
+    from mtg_bot.actions import _play_land, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    class Decliner(RandomAgent):
+        def choose_target(self, state, player_id, legal_targets):
+            return None
+
+    state = _arena()
+    state.players[0].agent = Decliner(rng=random.Random(0))
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    plains.tapped = False
+    state.battlefield.append(plains)
+    cb = _command_bridge(state, owner_id=0)
+    _play_land(state, 0, cb.id)
+    resolve_top_of_stack(state)
+    # Plains is still untapped; Bridge was sacrificed.
+    assert plains.tapped is False
+    assert cb not in state.battlefield
+    assert cb in state.players[0].graveyard
+
+
+def test_command_bridge_taps_for_any_color():
+    """Activate Command Bridge's mana ability and verify it adds an
+    "any"-colored coin that can pay any colored requirement. Mana
+    abilities resolve immediately (no stack)."""
+    from mtg_bot.actions import _activate_ability, can_pay_cost
+    from mtg_bot.cards import UTILITY_LANDS, parse_mana_cost
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    cb = state.new_object(
+        UTILITY_LANDS["Command Bridge"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    cb.tapped = False  # bypass enters-tapped rider for this isolated test
+    state.battlefield.append(cb)
+    # Pre-activation: nothing in pool.
+    assert state.players[0].mana_pool == []
+    _activate_ability(state, 0, cb.id, ability_index=0)
+    # Bridge tapped, one "any"-color coin in the pool.
+    assert cb.tapped is True
+    assert len(state.players[0].mana_pool) == 1
+    assert state.players[0].mana_pool[0].color == "any"
+    # That coin can pay {W}, {U}, {B}, {R}, or {G} (and {1} generic).
+    for symbol in ("{W}", "{U}", "{B}", "{R}", "{G}", "{1}"):
+        assert can_pay_cost(state, 0, parse_mana_cost(symbol)) is True
+
+
+def test_sacrifice_self_unless_tap_no_resolving_source_is_noop():
+    """Defensive branch: if state.resolving_source is None the effect is
+    a silent no-op (not all triggers wire a source)."""
+    from mtg_bot.effects import SacrificeSelfUnlessTapPermanent
+
+    state = _arena()
+    eff = SacrificeSelfUnlessTapPermanent()
+    state.resolving_source = None
+    eff.resolve(state, controller_id=0)
+    # Nothing crashed; nothing changed.
+    assert state.battlefield == []
+    # describe() returns a stable text.
+    assert "sacrifice" in eff.describe()
+    assert "tap" in eff.describe()
+
+
+def test_sacrifice_self_unless_tap_invalid_agent_pick_sacrifices():
+    """Defensive branch: agent returns an id that isn't a candidate.
+    The effect treats this like a decline and sacrifices the source."""
+    from mtg_bot.actions import _play_land, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    class BadPicker(RandomAgent):
+        def choose_target(self, state, player_id, legal_targets):
+            # Return a tuple shaped like a legal pick but with a
+            # non-existent object id.
+            return ("untapped_permanent", 99999)
+
+    state = _arena()
+    state.players[0].agent = BadPicker(rng=random.Random(0))
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    plains.tapped = False
+    state.battlefield.append(plains)
+    cb = _command_bridge(state, owner_id=0)
+    _play_land(state, 0, cb.id)
+    resolve_top_of_stack(state)
+    assert cb not in state.battlefield
+    assert cb in state.players[0].graveyard
+
+
+def test_command_bridge_in_all_printings_with_full_rules_text():
+    """Sanity: Command Bridge is registered AND its printing reflects
+    the full rules text (enters_tapped, ETB trigger, mana ability)."""
+    from mtg_bot.cards import UTILITY_LANDS, all_printings
+    from mtg_bot.effects import (
+        AddManaToPool, SacrificeSelfUnlessTapPermanent,
+    )
+
+    assert "Command Bridge" in all_printings()
+    cb = UTILITY_LANDS["Command Bridge"]
+    assert cb.enters_tapped is True
+    assert len(cb.triggered_abilities) == 1
+    assert cb.triggered_abilities[0].trigger == "etb"
+    assert isinstance(
+        cb.triggered_abilities[0].effect, SacrificeSelfUnlessTapPermanent
+    )
+    assert len(cb.activated_abilities) == 1
+    assert cb.activated_abilities[0].is_mana_ability is True
+    eff = cb.activated_abilities[0].effect
+    assert isinstance(eff, AddManaToPool)
+    assert eff.produces == (("any", 1),)
+
+
 def test_lashwhip_cost_reduction_with_three_enemy_creatures():
     from mtg_bot.actions import apply_cost_reductions
     from mtg_bot.cards import EOE_CREATURES

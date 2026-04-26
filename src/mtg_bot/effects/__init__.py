@@ -156,6 +156,7 @@ from mtg_bot.effects.combinators import (
     OptionalSacAnotherForPumpSelfUEOT,
     OptionalSacArtifactForEffect,
     OptionalSacLandOrLanderForBasicLandRamp,
+    SacrificeSelfUnlessTapPermanent,
     SacrificeSelfUnlessVoidActive,
     Sequence,
 )
