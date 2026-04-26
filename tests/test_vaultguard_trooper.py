@@ -11,6 +11,7 @@ declines, neither the discard nor the dependent draw fires.
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.actions import drain_stack
 from mtg_bot.turn import run_beginning_of_end_step_triggers
 
 
@@ -67,6 +68,7 @@ def test_vaultguard_yes_path_discards_hand_and_draws_two():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p0.library.append(c)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Hand is now exactly the two Plains we drew off the library.
     assert len(p0.hand) == 2
     assert all(c.printing.name == "Plains" for c in p0.hand)
@@ -92,6 +94,7 @@ def test_vaultguard_no_path_skips_discard_and_draw():
         p0.library.append(c)
         library_cards.append(c)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Hand still holds the original three Forests in order.
     assert p0.hand == hand_cards
     # Library is untouched.
@@ -116,6 +119,7 @@ def test_vaultguard_empty_hand_yes_still_draws_two():
         p0.library.append(c)
         library_cards.append(c)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Two cards drawn.
     assert len(p0.hand) == 2
     assert all(c.printing.name == "Plains" for c in p0.hand)
