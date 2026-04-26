@@ -587,6 +587,139 @@ def test_mobile_right_column_stacks_below_board(mobile_page):
 # ------------------------------------------------------------------------
 
 
+# ------------------------------------------------------------------------
+# Regression coverage for recently-shipped UI fixes
+# ------------------------------------------------------------------------
+
+
+def test_mobile_scrubber_is_pinned_to_bottom_of_viewport(mobile_page):
+    """The scrubber + phase-tracker bundle is wrapped in #bottom-controls,
+    which gets ``position: fixed; bottom: 0`` on mobile so the controls
+    stay visible while the (taller) board scrolls underneath."""
+    _run_short_game(mobile_page)
+    bc = mobile_page.locator("#bottom-controls")
+    assert bc.count() == 1
+    rect = bc.bounding_box()
+    assert rect is not None
+    bottom_edge = rect["y"] + rect["height"]
+    # Allow a 2px slack for sub-pixel rounding.
+    assert abs(bottom_edge - MOBILE_VIEWPORT["height"]) <= 2, (
+        f"#bottom-controls bottom edge at {bottom_edge:.1f}px, expected "
+        f"~{MOBILE_VIEWPORT['height']}px (not pinned to viewport bottom)"
+    )
+    pos = mobile_page.evaluate(
+        "() => getComputedStyle(document.getElementById('bottom-controls')).position"
+    )
+    assert pos == "fixed", f"#bottom-controls position is {pos!r}, expected 'fixed'"
+
+
+def test_mobile_scrubber_stays_visible_after_scrolling_board(mobile_page):
+    """Scrolling the (long) board must NOT push the bottom controls off
+    screen — that's the whole point of the fixed positioning. Scroll to
+    the bottom and confirm the scrubber's slider is still rendered
+    inside the viewport."""
+    _run_short_game(mobile_page, max_turns=20)
+    mobile_page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+    mobile_page.wait_for_timeout(120)
+    box = mobile_page.locator("#scrub-slider").bounding_box()
+    assert box is not None
+    # Slider's vertical center should still be inside the viewport.
+    cy = box["y"] + box["height"] / 2
+    assert 0 <= cy <= MOBILE_VIEWPORT["height"], (
+        f"#scrub-slider center y={cy:.1f}px is off-screen after scrolling "
+        "(viewport height = {MOBILE_VIEWPORT['height']}px)"
+    )
+
+
+def test_mobile_zones_grid_uses_two_columns(mobile_page):
+    """The desktop 3-column zones grid clipped the Graveyard chip on
+    mobile (110px side panel / 4 chips). The mobile override is 2x2."""
+    _run_short_game(mobile_page)
+    cols = mobile_page.evaluate(
+        "() => getComputedStyle(document.querySelector('.zones'))"
+        ".gridTemplateColumns.split(' ').length"
+    )
+    assert cols == 2, f"mobile .zones has {cols} columns, expected 2"
+
+
+def test_battlefield_stacks_identical_permanents_with_count_badge(page):
+    """Identical permanents (same name, tap status, P/T, counters, etc.)
+    should collapse into a single rendered card with a stack-badge
+    showing the count. After 20 turns of a Forest+Forest matchup the
+    battlefield has multiple identical lands; the .stack-badge must
+    appear with a 2x or larger count."""
+    _run_short_game(page, seed=0, max_turns=20)
+    # Step backwards from the last snapshot until we find one with a
+    # battlefield row that has identical permanents (multiple lands of
+    # the same type — basic lands of one color suffice).
+    found = page.evaluate("""async () => {
+      const max = parseInt(document.getElementById('scrub-slider').max, 10);
+      for (let i = max; i >= 0; i--) {
+        let s = game.snapCache.get(i);
+        if (!s) {
+          const r = await fetch(`/api/snapshot/${game.gameId}/${i}`);
+          s = await r.json();
+          game.snapCache.set(i, s);
+        }
+        for (const pl of s.players) {
+          const counts = {};
+          for (const o of pl.battlefield) {
+            const k = `${o.name}|${o.tapped}|${o.summoning_sick}`;
+            counts[k] = (counts[k] || 0) + 1;
+            if (counts[k] >= 2) return i;
+          }
+        }
+      }
+      return -1;
+    }""")
+    assert found >= 0, (
+        "no snapshot in a 20-turn game had two identical permanents "
+        "(same name + tap + sickness) — the test premise no longer holds"
+    )
+    page.evaluate(
+        "i => { const s = document.getElementById('scrub-slider');"
+        " s.value = i; s.dispatchEvent(new Event('input')); }",
+        found,
+    )
+    page.wait_for_timeout(300)
+    badges = page.locator(".battlefield .card .stack-badge")
+    assert badges.count() >= 1, (
+        "snapshot has duplicate permanents but no .stack-badge rendered — "
+        "groupBattlefield grouping is not running"
+    )
+    # The badge text should be of the form ``Nx`` with N >= 2.
+    text = badges.first.inner_text()
+    m = re.match(r"(\d+)x", text)
+    assert m is not None and int(m.group(1)) >= 2, (
+        f"stack-badge text {text!r} does not match expected 'Nx' format with N>=2"
+    )
+
+
+def test_log_entry_click_rewinds_scrubber_to_introducing_snapshot(page):
+    """Clicking a log entry should jump the scrubber to the snapshot
+    that introduced the line. We click the very first log entry while
+    parked at the last snapshot — the slider must move backwards."""
+    _run_short_game(page, max_turns=10)
+    # Park at the last snapshot, capture the index, then click the
+    # first log entry. After the click the slider value should be
+    # strictly less than the last snapshot index.
+    last_idx = page.evaluate(
+        "() => parseInt(document.getElementById('scrub-slider').value, 10)"
+    )
+    assert last_idx > 0, "test needs more than one snapshot"
+    log_entries = page.locator(".log-entry")
+    assert log_entries.count() > 0, "log panel should have entries after a game"
+    log_entries.first.click()
+    page.wait_for_timeout(300)
+    new_idx = page.evaluate(
+        "() => parseInt(document.getElementById('scrub-slider').value, 10)"
+    )
+    assert new_idx < last_idx, (
+        f"slider stayed at {new_idx} after clicking the first log entry; "
+        f"expected something < {last_idx}"
+    )
+
+
 def test_server_error_surfaces_in_status_line(page):
     """Submit the form with a non-numeric seed to force /api/play to 400, and
     verify the JS error handler lands an 'Error:' in the status line with the
