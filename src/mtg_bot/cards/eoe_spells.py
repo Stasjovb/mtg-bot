@@ -13,8 +13,15 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 EOE_SPELLS: dict[str, CardPrinting] = {
     c.name: c
     for c in [
+        # Plasma Bolt: "Deals 2 damage to any target. Void — deals 3
+        # instead." Same target either way; ConditionalIfVoid switches
+        # the damage amount at resolution.
         make_sorcery(
-            "Plasma Bolt", "{R}", effect=DealDamageAnyTarget(amount=2),
+            "Plasma Bolt", "{R}",
+            effect=ConditionalIfVoid(
+                then_effect=DealDamageAnyTarget(amount=3),
+                else_effect=DealDamageAnyTarget(amount=2),
+            ),
         ),
         make_instant(
             "Bombard", "{2}{R}", effect=DealDamageToTargetCreature(amount=4),

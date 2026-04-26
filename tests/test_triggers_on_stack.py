@@ -92,7 +92,8 @@ def test_dies_trigger_can_be_responded_to_with_an_instant():
     bolt_item = state.stack[-1]
     assert bolt_item.source.printing.name == "Plasma Bolt"
     resolve_top_of_stack(state)
-    assert state.players[0].life == p0_life_before - 2
+    # Gravpack already died this turn → Void active → Plasma Bolt deals 3.
+    assert state.players[0].life == p0_life_before - 3
     # Now the dies trigger is on top; resolve it.
     assert len(state.stack) == 1
     resolve_top_of_stack(state)

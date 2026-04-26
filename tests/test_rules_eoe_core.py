@@ -77,6 +77,67 @@ def test_sorcery_goes_on_stack_at_sorcery_timing_and_resolves_to_graveyard():
     assert life_lost + self_hit == 2 or life_lost == 0  # may have hit creature
 
 
+def test_plasma_bolt_void_rider_deals_3_when_void_active():
+    """Plasma Bolt's "Void — deals 3 damage instead" rider. Switch on at
+    resolution time when a nonland permanent has left the battlefield this
+    turn (or a spell was warped)."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+
+    class _PickFirstAgent(RandomAgent):
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[BASIC_LANDS["Mountain"]],
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = _PickFirstAgent()
+    # Manually flip Void on — equivalent to a nonland permanent having
+    # left the battlefield earlier this turn.
+    state.permanent_left_battlefield_this_turn = True
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    # No creatures, so target was a player (whichever the agent picked).
+    total_damage = (20 - state.players[0].life) + (20 - state.players[1].life)
+    assert total_damage == 3
+
+
+def test_plasma_bolt_deals_2_when_void_inactive():
+    """With no nonland permanent having left the battlefield and no spell
+    warped, Plasma Bolt deals 2."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+
+    class _PickFirstAgent(RandomAgent):
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[BASIC_LANDS["Mountain"]],
+        p1_life=20,
+    )
+    for p in state.players:
+        p.agent = _PickFirstAgent()
+    assert state.permanent_left_battlefield_this_turn is False
+    assert state.spell_warped_this_turn is False
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    total_damage = (20 - state.players[0].life) + (20 - state.players[1].life)
+    assert total_damage == 2
+
+
 def test_sorcery_not_legal_outside_main_phase():
     from mtg_bot.cards import EOE_SPELLS
 
