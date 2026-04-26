@@ -556,6 +556,7 @@ class PainForAllETBEffect(Effect):
             if creature is None:
                 return
             creature.damage += amount
+            creature.damaged_this_turn = True
             state.log.append(
                 f"{enchanted.printing.name} deals {amount} to "
                 f"{creature.printing.name}"
@@ -903,6 +904,7 @@ class RequiemMonolithActivatedEffect(Effect):
         if tgt is None:
             return
         tgt.damage += 1
+        tgt.damaged_this_turn = True
         owner = state.player_by_id(tgt.controller_id)
         draw_card(state, owner.id)
         owner.life -= 1

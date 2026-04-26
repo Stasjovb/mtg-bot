@@ -42,6 +42,11 @@ class GameObject:
     # Marked lethal by a deathtouch source this turn — destroyed by SBAs
     # regardless of damage vs toughness. Cleared when damage is cleared.
     marked_lethal: bool = False
+    # "Was this creature dealt damage this turn?" — set True at every site
+    # that applies damage (combat damage, _apply_damage, bespoke pingers).
+    # Cleared at cleanup. Used by effects with riders gated on
+    # "if that creature wasn't dealt damage this turn" (Faller's Faithful).
+    damaged_this_turn: bool = False
     # +1/+1 counters raise effective power and toughness by equal amounts.
     # Persist across turns (never wear off on their own).
     plus_one_counters: int = 0

@@ -1171,6 +1171,9 @@ def test_fallers_faithful_etb_destroys_creature():
     from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
+    # Stock P1's library so the rider draw (target's controller draws 2)
+    # doesn't deck them out.
+    _stock_library(state, 1, count=10)
     victim = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
     )
@@ -1185,6 +1188,103 @@ def test_fallers_faithful_etb_destroys_creature():
     state.resolving_source = ff
     etb.effect.resolve(state, 0, (("creature", victim.id),))
     assert victim not in state.battlefield
+
+
+def test_fallers_faithful_undamaged_target_draws_two():
+    """Oracle: 'If that creature wasn't dealt damage this turn, its
+    controller draws two cards.' Target is a freshly-summoned Wild Bear
+    that's never been damaged, so its controller (P1) draws 2.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    _stock_library(state, 1, count=10)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    assert victim.damaged_this_turn is False
+    ff = state.new_object(
+        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ff)
+    etb = next(
+        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ff
+    p1_hand_before = len(state.players[1].hand)
+    p1_lib_before = len(state.players[1].library)
+    etb.effect.resolve(state, 0, (("creature", victim.id),))
+    assert victim not in state.battlefield
+    # Victim's controller draws 2 cards.
+    assert len(state.players[1].hand) == p1_hand_before + 2
+    assert len(state.players[1].library) == p1_lib_before - 2
+
+
+def test_fallers_faithful_damaged_target_no_draw():
+    """If the targeted creature WAS dealt damage this turn, the rider
+    doesn't fire — controller doesn't draw.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    _stock_library(state, 1, count=10)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+    # Pre-damage the victim this turn (e.g., Shock targeting it earlier).
+    victim.damage = 1
+    victim.damaged_this_turn = True
+    ff = state.new_object(
+        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ff)
+    etb = next(
+        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ff
+    p1_hand_before = len(state.players[1].hand)
+    p1_lib_before = len(state.players[1].library)
+    etb.effect.resolve(state, 0, (("creature", victim.id),))
+    assert victim not in state.battlefield
+    # No draw because the target was damaged this turn.
+    assert len(state.players[1].hand) == p1_hand_before
+    assert len(state.players[1].library) == p1_lib_before
+
+
+def test_damaged_this_turn_clears_at_cleanup():
+    """The damaged_this_turn flag is per-turn and clears at cleanup —
+    a turn-1 damage event must not bleed into turn 2's bookkeeping.
+    """
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    bear.damage = 1
+    bear.damaged_this_turn = True
+    run_cleanup_step(state)
+    assert bear.damaged_this_turn is False
+    assert bear.damage == 0
+
+
+def test_apply_damage_marks_damaged_this_turn():
+    """The shared _apply_damage helper (used by direct-damage spells)
+    must set damaged_this_turn so Faller's Faithful and similar riders
+    see the right history.
+    """
+    from mtg_bot.effects.base import _apply_damage
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    assert bear.damaged_this_turn is False
+    _apply_damage(state, ("creature", bear.id), 1)
+    assert bear.damage == 1
+    assert bear.damaged_this_turn is True
 
 
 def test_biotech_specialist_and_kav_landseeker_make_landers():

@@ -85,6 +85,7 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:
             obj.damage += amount
+            obj.damaged_this_turn = True
             state.log.append(f"{obj.printing.name} takes {amount} damage")
 
 

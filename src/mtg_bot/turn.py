@@ -150,6 +150,7 @@ def move_off_battlefield(
     state.battlefield.remove(obj)
     obj.damage = 0
     obj.marked_lethal = False
+    obj.damaged_this_turn = False
     obj.tapped = False
     obj.attacking = False
     obj.blocking = None
@@ -981,6 +982,7 @@ def run_cleanup_step(state: GameState) -> None:
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
+        obj.damaged_this_turn = False
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
         obj.temp_keywords = frozenset()

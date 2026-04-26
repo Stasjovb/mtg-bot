@@ -373,6 +373,7 @@ def _resolve_damage_step(
                     )
                 else:
                     obj.damage += amount
+                    obj.damaged_this_turn = True
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
                 # Fire "whenever enchanted creature is dealt damage"
