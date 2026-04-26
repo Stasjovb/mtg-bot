@@ -124,12 +124,18 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 draw_if_target_has_plus_one_counter=1,
             ),
         ),
-        # Desculpting Blast — real card says "nonland permanent"; we
-        # simplify to creatures only. The "if it was attacking, create
-        # a Drone token" rider is also skipped.
+        # Desculpting Blast — return target nonland permanent to its
+        # owner's hand. If it was attacking, create a 1/1 colorless
+        # Drone artifact creature token (with flying + the Drone block
+        # restriction). Both clauses now wired through
+        # ReturnTargetCreatureToOwnersHand's allow_nonland_permanent
+        # and create_drone_if_was_attacking flags.
         make_instant(
             "Desculpting Blast", "{1}{U}",
-            effect=ReturnTargetCreatureToOwnersHand(),
+            effect=ReturnTargetCreatureToOwnersHand(
+                allow_nonland_permanent=True,
+                create_drone_if_was_attacking=True,
+            ),
         ),
         # Emergency Eject — destroy any nonland permanent; its controller
         # creates a Lander token as consolation ramp.

@@ -1065,6 +1065,65 @@ def test_desculpting_blast_bounces_creature_to_hand():
     assert enemy_bear not in state.battlefield
 
 
+def test_desculpting_blast_can_target_nonland_artifact():
+    """Oracle: 'Return target NONLAND PERMANENT to its owner's hand.'
+    Artifacts (non-creature, non-land) are valid targets."""
+    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+
+    state = _arena()
+    artifact = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(artifact)
+    legal = EOE_SPELLS["Desculpting Blast"].spell_effect.legal_targets(
+        state, controller_id=0,
+    )
+    target_ids = {tid for _, tid in legal}
+    assert artifact.id in target_ids
+
+
+def test_desculpting_blast_drone_token_when_target_was_attacking():
+    """Oracle: 'If it was attacking, create a 1/1 colorless Drone artifact
+    creature token...' The Drone is created on the spell's controller's
+    side."""
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    attacker.attacking = True
+    state.battlefield.append(attacker)
+    EOE_SPELLS["Desculpting Blast"].spell_effect.resolve(
+        state, 0, (("permanent", attacker.id),),
+    )
+    # Bear back in P1's hand, Drone token under P0's control.
+    assert attacker in state.players[1].hand
+    drones = [
+        o for o in state.battlefield
+        if o.printing.name == "Drone" and o.controller_id == 0
+    ]
+    assert len(drones) == 1
+
+
+def test_desculpting_blast_no_drone_if_not_attacking():
+    """Control case: target wasn't attacking → no Drone created."""
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _arena()
+    bystander = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    # bystander.attacking stays False
+    state.battlefield.append(bystander)
+    EOE_SPELLS["Desculpting Blast"].spell_effect.resolve(
+        state, 0, (("permanent", bystander.id),),
+    )
+    assert bystander in state.players[1].hand
+    drones = [o for o in state.battlefield if o.printing.name == "Drone"]
+    assert len(drones) == 0
+
+
 def test_bouncing_a_token_makes_it_cease():
     from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.effects import ReturnTargetCreatureToOwnersHand

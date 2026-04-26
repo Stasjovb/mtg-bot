@@ -270,7 +270,17 @@ class ReturnTargetCreatureToOwnersHand(Effect):
     Tokens cease to exist when bounced (they'd briefly be in hand, then
     rule 704.5d kicks in). Matches oracle text like "Return target
     creature to its owner's hand."
+
+    Set ``allow_nonland_permanent=True`` to broaden legal targets to any
+    nonland permanent (Desculpting Blast). Set
+    ``create_drone_if_was_attacking=True`` to add the
+    "if it was attacking, create a 1/1 colorless Drone artifact creature
+    token..." rider — checked at resolve time before the target leaves
+    the battlefield (which clears the attacking flag).
     """
+
+    allow_nonland_permanent: bool = False
+    create_drone_if_was_attacking: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -278,6 +288,12 @@ class ReturnTargetCreatureToOwnersHand(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        if self.allow_nonland_permanent:
+            return [
+                ("permanent", o.id)
+                for o in state.battlefield
+                if not o.printing.is_land
+            ]
         return [
             ("creature", o.id)
             for o in state.battlefield
@@ -293,11 +309,13 @@ class ReturnTargetCreatureToOwnersHand(Effect):
         if not targets:
             return
         kind, target_id = targets[0]
-        if kind != "creature":
+        if kind not in ("creature", "permanent"):
             return
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is None:
             return
+        # Snapshot rider conditions BEFORE the bounce (which clears flags).
+        was_attacking = obj.attacking
         state.battlefield.remove(obj)
         # Reset combat/damage state on the way off the battlefield
         obj.damage = 0
@@ -328,9 +346,21 @@ class ReturnTargetCreatureToOwnersHand(Effect):
         state.log.append(
             f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
         )
+        if self.create_drone_if_was_attacking and was_attacking:
+            from mtg_bot.actions import put_into_battlefield
+            from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+            drone_printing = TOKEN_PRINTINGS["Drone"]
+            drone = state.new_object(
+                drone_printing, owner_id=controller_id, zone=Zone.STACK,
+            )
+            put_into_battlefield(state, drone, controller_id)
 
     def describe(self) -> str:
-        return "return target creature to its owner's hand"
+        scope = "nonland permanent" if self.allow_nonland_permanent else "creature"
+        base = f"return target {scope} to its owner's hand"
+        if self.create_drone_if_was_attacking:
+            base += "; if it was attacking, create a Drone token"
+        return base
 
 
 
