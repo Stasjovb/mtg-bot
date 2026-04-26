@@ -584,6 +584,37 @@ def _cast_spell(
         card.cast_via_warp = bool(use_warp)
         if use_warp:
             state.spell_warped_this_turn = True
+            # Pay the warp ability's "Pay N life" rider, if any (Timeline
+            # Culler). legal_actions has already gated p.life > cost.
+            life_cost = card.printing.warp_additional_life_cost
+            if life_cost > 0:
+                p.life -= life_cost
+                state.log.append(
+                    f"P{player_id} pays {life_cost} life for warp "
+                    f"(life: {p.life})"
+                )
+    elif (
+        use_warp
+        and (
+            grave_card := next(
+                (c for c in p.graveyard if c.id == card_id), None
+            )
+        ) is not None
+        and grave_card.printing.warp_castable_from_graveyard
+    ):
+        # Warp-cast from the graveyard (Timeline Culler).
+        card = grave_card
+        cost = card.printing.warp_cost
+        p.graveyard.remove(card)
+        card.cast_via_warp = True
+        state.spell_warped_this_turn = True
+        life_cost = card.printing.warp_additional_life_cost
+        if life_cost > 0:
+            p.life -= life_cost
+            state.log.append(
+                f"P{player_id} pays {life_cost} life for warp from "
+                f"graveyard (life: {p.life})"
+            )
     else:
         # Cast from exile: legal for (a) cards previously exiled by warp
         # (warped=True), or (b) cards marked impulse-playable this turn

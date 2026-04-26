@@ -312,6 +312,15 @@ class CardPrinting:
     # normal cost on a later turn.
     warp_cost: ManaCost | None = None
     warp_cost_str: str = ""
+    # Additional life cost paid alongside the warp mana cost. When > 0,
+    # warp-casting deducts this life from the caster on top of paying
+    # warp_cost. Matches Timeline Culler's "Warp—{B}, Pay 2 life."
+    # legal_actions checks the controller has > life loss available.
+    warp_additional_life_cost: int = 0
+    # When True, the card is also castable via its warp ability from
+    # the graveyard, not just the hand. Matches Timeline Culler's
+    # "You may cast this card from your graveyard using its warp ability."
+    warp_castable_from_graveyard: bool = False
     # "Kicker {cost}" — an optional additional mana cost the caster may
     # pay while casting. If paid, the StackItem is marked kicked and
     # the resolving effect can branch on state.resolving_kicked.
@@ -592,6 +601,8 @@ def make_creature(
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
     replaces_draw_with_extra_when_hand_at_most_one: bool = False,
+    warp_additional_life_cost: int = 0,
+    warp_castable_from_graveyard: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -637,6 +648,8 @@ def make_creature(
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
         ),
+        warp_additional_life_cost=warp_additional_life_cost,
+        warp_castable_from_graveyard=warp_castable_from_graveyard,
     )
 
 

@@ -459,6 +459,93 @@ def test_warp_cast_creature_dying_before_end_step_does_not_exile():
     assert obj.warped is False
 
 
+def test_timeline_culler_warp_pays_two_life_from_hand():
+    """Warp—{B}, Pay 2 life. Cast from hand pays the mana + life."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    culler = EOE_CREATURES["Timeline Culler"]
+    state = _arena(
+        p0_hand=[culler],
+        p0_battlefield=[BASIC_LANDS["Swamp"]],
+        p0_life=20,
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    card = state.players[0].hand[0]
+    apply(state, CastSpell(card.id, use_warp=True))
+    resolve_top_of_stack(state)
+    assert card in state.battlefield
+    assert card.cast_via_warp is True
+    assert state.players[0].life == 18  # 20 - 2
+
+
+def test_timeline_culler_warp_castable_from_graveyard():
+    """The "you may cast this from your graveyard via warp" clause —
+    legal_actions proposes the warp cast, _cast_spell pulls from
+    the graveyard, life is paid."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_CREATURES
+    import random
+
+    culler = EOE_CREATURES["Timeline Culler"]
+    state = _arena(
+        p0_battlefield=[BASIC_LANDS["Swamp"]],
+        p0_life=20,
+    )
+    grave_card = state.new_object(culler, owner_id=0, zone=Zone.GRAVEYARD)
+    state.players[0].graveyard.append(grave_card)
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    moves = legal_moves(state, player_id=0)
+    grave_warp_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == grave_card.id
+        and m.use_warp
+    ]
+    assert grave_warp_casts, "warp from graveyard should be a legal move"
+
+    apply(state, grave_warp_casts[0])
+    resolve_top_of_stack(state)
+    assert grave_card in state.battlefield
+    assert grave_card not in state.players[0].graveyard
+    assert state.players[0].life == 18
+
+
+def test_timeline_culler_warp_blocked_when_life_too_low():
+    """Can't warp if you'd lose to the life cost."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    culler = EOE_CREATURES["Timeline Culler"]
+    state = _arena(
+        p0_hand=[culler],
+        p0_battlefield=[BASIC_LANDS["Swamp"]],
+        p0_life=2,  # equal to cost — paying would drop to 0 → loss
+    )
+    card = state.players[0].hand[0]
+    moves = legal_moves(state, player_id=0)
+    warp_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and m.use_warp
+    ]
+    assert not warp_casts, (
+        "warp should be illegal when life ≤ life cost "
+        "(paying would lose the game)"
+    )
+
+
+def test_timeline_culler_printing_has_expected_warp_attrs():
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Timeline Culler"]
+    assert c.warp_cost_str == "{B}"
+    assert c.warp_additional_life_cost == 2
+    assert c.warp_castable_from_graveyard is True
+
+
 # --------------------------------------------------------------------------
 # Rule: SPACECRAFT & STATION — non-creature artifacts that become creatures
 # --------------------------------------------------------------------------

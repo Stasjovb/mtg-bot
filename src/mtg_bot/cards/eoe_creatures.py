@@ -1579,9 +1579,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
         ),
-        make_creature(  # Timeline Culler — drops "when this attacks, mill 3 / return creature" rider.
+        # Timeline Culler: 2/2 Haste. Warp—{B}, Pay 2 life. Castable
+        # from graveyard via the warp ability. (Stale prior comment
+        # claimed an "attacks, mill 3 / return creature" rider, but
+        # the printed oracle has no such trigger.)
+        make_creature(
             "Timeline Culler", "{B}{B}", 2, 2,
             keywords={"haste"},
+            warp="{B}",
+            warp_additional_life_cost=2,
+            warp_castable_from_graveyard=True,
         ),
         make_creature(  # Rust Harvester — drops its "discard a card, sacrifice an artifact" trigger.
             "Rust Harvester", "{R}", 1, 1,

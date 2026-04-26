@@ -122,10 +122,16 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 ),
             ):
                 actions.append(CastSpell(card.id, kicked=True))
-        if card.printing.warp_cost is not None and can_pay_cost(
-            state, player_id,
-            _effective_cost(card, card.printing.warp_cost),
-        ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
+        if (
+            card.printing.warp_cost is not None
+            and can_pay_cost(
+                state, player_id,
+                _effective_cost(card, card.printing.warp_cost),
+            )
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+            and p.life > card.printing.warp_additional_life_cost
+        ):
             actions.append(CastSpell(card.id, use_warp=True))
 
     if not _is_sorcery_timing(state, player_id):
@@ -176,11 +182,38 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     ),
                 ):
                     actions.append(CastSpell(card.id, kicked=True))
-            if card.printing.warp_cost is not None and can_pay_cost(
+            if (
+                card.printing.warp_cost is not None
+                and can_pay_cost(
+                    state, player_id,
+                    _effective_cost(card, card.printing.warp_cost),
+                )
+                and _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+                and p.life > card.printing.warp_additional_life_cost
+            ):
+                actions.append(CastSpell(card.id, use_warp=True))
+
+    # Warp-cast from graveyard. Timeline Culler grants this; see
+    # warp_castable_from_graveyard. Currently only sorcery-speed since
+    # all such cards in the pool are creatures.
+    for card in p.graveyard:
+        if not card.printing.warp_castable_from_graveyard:
+            continue
+        if card.printing.warp_cost is None:
+            continue
+        if card.printing.is_instant:
+            continue  # extend if a future card needs instant-speed grave warp
+        if (
+            can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
-            ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
-                actions.append(CastSpell(card.id, use_warp=True))
+            )
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+            and p.life > card.printing.warp_additional_life_cost
+        ):
+            actions.append(CastSpell(card.id, use_warp=True))
 
     # Warp-exile recasts at sorcery speed (for creatures / sorceries).
     # Instants in warp-exile could be recast at instant speed, but we don't
