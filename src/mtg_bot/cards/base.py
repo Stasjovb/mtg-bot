@@ -490,6 +490,13 @@ class CardPrinting:
     # hooked (those aren't hit by any currently-modeled card that
     # targets Nexus / GSZ specifically).
     shuffles_into_library_instead_of_graveyard: bool = False
+    # Draw replacement: while any permanent with this flag is on the
+    # battlefield under the drawing player's control AND that player
+    # has one or fewer cards in hand, every "draw one or more cards"
+    # event for that player draws one extra card. Matches Quantum
+    # Riddler. Consumed by game.effective_draw_count and the
+    # draw_n_cards helper in turn.py.
+    replaces_draw_with_extra_when_hand_at_most_one: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -584,6 +591,7 @@ def make_creature(
     is_token_doubler: bool = False,
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
+    replaces_draw_with_extra_when_hand_at_most_one: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -626,6 +634,9 @@ def make_creature(
         is_token_doubler=is_token_doubler,
         devour_land_multiplier=devour_land_multiplier,
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        replaces_draw_with_extra_when_hand_at_most_one=(
+            replaces_draw_with_extra_when_hand_at_most_one
+        ),
     )
 
 

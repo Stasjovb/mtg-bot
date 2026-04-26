@@ -175,9 +175,9 @@ class TannukEnsignLandfallEffect(Effect):
         count = state.ability_resolutions_this_turn.get(key, 0) + 1
         state.ability_resolutions_this_turn[key] = count
         if count == 2:
-            from mtg_bot.turn import draw_card
+            from mtg_bot.turn import draw_n_cards
 
-            draw_card(state, controller_id)
+            draw_n_cards(state, controller_id, 1)
             state.log.append(
                 f"Tannuk landfall second-time bonus: P{controller_id} "
                 f"draws a card"
@@ -220,7 +220,7 @@ class SelfcraftMechanETBEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card, sacrifice as _sacrifice
+        from mtg_bot.turn import draw_n_cards, sacrifice as _sacrifice
 
         p = state.player_by_id(controller_id)
         artifacts = [
@@ -263,7 +263,7 @@ class SelfcraftMechanETBEffect(Effect):
                     )
         # Draw a card either way — the sacrifice happened, so the
         # reflexive trigger's effect resolves fully.
-        draw_card(state, controller_id)
+        draw_n_cards(state, controller_id, 1)
 
     def describe(self) -> str:
         return (
@@ -618,7 +618,7 @@ class AllFatesScrollDrawEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         names: set[str] = set()
         for o in state.battlefield:
@@ -631,10 +631,9 @@ class AllFatesScrollDrawEffect(Effect):
                 f"lands; draws 0"
             )
             return
-        for _ in range(x):
-            draw_card(state, controller_id)
+        drawn = draw_n_cards(state, controller_id, x)
         state.log.append(
-            f"All-Fates Scroll: P{controller_id} draws {x} cards"
+            f"All-Fates Scroll: P{controller_id} draws {drawn} cards"
         )
 
     def describe(self) -> str:
@@ -697,7 +696,7 @@ class WeftwalkingETBEffect(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import Zone
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         p = state.player_by_id(controller_id)
         # Move hand and graveyard back into the library.
@@ -719,8 +718,7 @@ class WeftwalkingETBEffect(Effect):
             f"Weftwalking: P{controller_id} shuffles {moved} cards into "
             f"library and draws 7"
         )
-        for _ in range(7):
-            draw_card(state, controller_id)
+        draw_n_cards(state, controller_id, 7)
 
     def describe(self) -> str:
         return (
@@ -891,7 +889,7 @@ class RequiemMonolithActivatedEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         if not targets:
             return
@@ -906,11 +904,11 @@ class RequiemMonolithActivatedEffect(Effect):
         tgt.damage += 1
         tgt.damaged_this_turn = True
         owner = state.player_by_id(tgt.controller_id)
-        draw_card(state, owner.id)
+        drawn = draw_n_cards(state, owner.id, 1)
         owner.life -= 1
         state.log.append(
             f"Requiem Monolith: {tgt.printing.name} takes 1; "
-            f"P{owner.id} draws 1 and loses 1 life"
+            f"P{owner.id} draws {drawn} and loses 1 life"
         )
 
     def describe(self) -> str:
@@ -1190,9 +1188,9 @@ class AnticausalVestigeLeavesEffect(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.actions import put_into_battlefield
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
-        draw_card(state, controller_id)
+        draw_n_cards(state, controller_id, 1)
         p = state.player_by_id(controller_id)
         land_count = sum(
             1 for o in state.battlefield

@@ -103,8 +103,27 @@ def draw_card(state: GameState, player_id: int) -> None:
     p.hand.append(top)
 
 
+def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
+    """Resolve a "draw N cards" event for ``player_id`` with replacement
+    effects applied. Returns the effective count actually drawn.
+
+    Use this whenever a single MTG event would draw one or more cards
+    (the draw step, "draw a card" ETB triggers, "draw N" spells like
+    Decode Transmissions). The Quantum-Riddler-style "draw that many
+    plus one instead" replacement adjusts the count once per event,
+    not once per card drawn — loop callers must use this helper
+    rather than calling ``draw_card`` themselves N times.
+    """
+    from mtg_bot.game import effective_draw_count
+
+    effective = effective_draw_count(state, player_id, n)
+    for _ in range(effective):
+        draw_card(state, player_id)
+    return effective
+
+
 def run_draw_step(state: GameState) -> None:
-    draw_card(state, state.active_player().id)
+    draw_n_cards(state, state.active_player().id, 1)
 
 
 def move_off_battlefield(

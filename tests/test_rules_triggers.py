@@ -298,6 +298,9 @@ def test_germinating_wurm_etb_gains_two_life():
 
 
 def test_quantum_riddler_etb_draws_a_card():
+    """Riddler's ETB resolves the draw replacement on its own card draw:
+    hand is 0 at ETB time, Riddler is on the battlefield, so the +1
+    rider fires — DrawCards(1) draws 2."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.cards import EOE_CREATURES
 
@@ -314,8 +317,86 @@ def test_quantum_riddler_etb_draws_a_card():
     apply(state, CastSpell(obj.id))
     resolve_top_of_stack(state)  # spell
     assert len(state.players[0].hand) == 0
-    resolve_top_of_stack(state)  # draw trigger
-    assert len(state.players[0].hand) == 1
+    resolve_top_of_stack(state)  # draw trigger; replacement adds +1
+    assert len(state.players[0].hand) == 2
+
+
+def test_quantum_riddler_replacement_off_when_hand_too_full():
+    """With 2+ cards in hand, the replacement doesn't apply — draws are
+    plain count."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import draw_n_cards
+
+    riddler = EOE_CREATURES["Quantum Riddler"]
+    state = _arena(
+        p0_hand=[BASIC_LANDS["Island"]] * 2,  # 2 cards
+        p0_battlefield=[],
+    )
+    rb = state.new_object(riddler, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(rb)
+    for _ in range(5):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+    drawn = draw_n_cards(state, 0, 1)
+    assert drawn == 1
+
+
+def test_quantum_riddler_replacement_off_with_no_riddler():
+    """No Riddler on the battlefield → replacement inactive even at
+    hand=0."""
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.turn import draw_n_cards
+
+    state = _arena(p0_hand=[], p0_battlefield=[])
+    for _ in range(3):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+    drawn = draw_n_cards(state, 0, 1)
+    assert drawn == 1
+
+
+def test_quantum_riddler_replacement_adds_one_per_event_not_per_card():
+    """A "draw 3" event becomes "draw 4", not "draw 6" — the rider
+    triggers once per event."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import draw_n_cards
+
+    riddler = EOE_CREATURES["Quantum Riddler"]
+    state = _arena(p0_hand=[], p0_battlefield=[])
+    rb = state.new_object(riddler, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(rb)
+    for _ in range(10):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+    drawn = draw_n_cards(state, 0, 3)
+    assert drawn == 4
+
+
+def test_quantum_riddler_replacement_does_not_stack_with_multiple_copies():
+    """Two Riddlers add one card per event, not two — the replacement
+    is binary "is any Riddler active", not multiplicative."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.turn import draw_n_cards
+
+    riddler = EOE_CREATURES["Quantum Riddler"]
+    state = _arena(p0_hand=[], p0_battlefield=[])
+    for _ in range(2):
+        rb = state.new_object(riddler, owner_id=0, zone=Zone.BATTLEFIELD)
+        state.battlefield.append(rb)
+    for _ in range(5):
+        obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+        state.players[0].library.append(obj)
+    drawn = draw_n_cards(state, 0, 1)
+    assert drawn == 2
+
+
+def test_quantum_riddler_has_warp_cost_and_flying():
+    from mtg_bot.cards import EOE_CREATURES
+
+    r = EOE_CREATURES["Quantum Riddler"]
+    assert r.warp_cost_str == "{1}{U}"
+    assert "flying" in r.keywords
+    assert r.replaces_draw_with_extra_when_hand_at_most_one is True
 
 
 def test_real_virus_beetle_makes_every_opponent_discard():

@@ -1650,15 +1650,14 @@ class DrawCardsEqualToResolvingCounterAmount(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         amount = state.resolving_counter_amount
         if amount <= 0:
             return
-        for _ in range(amount):
-            draw_card(state, controller_id)
+        drawn = draw_n_cards(state, controller_id, amount)
         state.log.append(
-            f"P{controller_id} draws {amount} (counter-added trigger)"
+            f"P{controller_id} draws {drawn} (counter-added trigger)"
         )
 
     def describe(self) -> str:
@@ -1682,15 +1681,14 @@ class DrawCardsEqualToResolvingCombatDamage(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         amount = state.resolving_combat_damage_amount
         if amount <= 0:
             return
-        for _ in range(amount):
-            draw_card(state, controller_id)
+        drawn = draw_n_cards(state, controller_id, amount)
         state.log.append(
-            f"P{controller_id} draws {amount} cards (combat-damage trigger)"
+            f"P{controller_id} draws {drawn} cards (combat-damage trigger)"
         )
 
     def describe(self) -> str:
@@ -2123,11 +2121,10 @@ class DrawCards(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
-        for _ in range(self.amount):
-            draw_card(state, controller_id)
-        state.log.append(f"P{controller_id} draws {self.amount} card(s)")
+        drawn = draw_n_cards(state, controller_id, self.amount)
+        state.log.append(f"P{controller_id} draws {drawn} card(s)")
 
     def describe(self) -> str:
         if self.amount == 1:
@@ -2144,15 +2141,14 @@ class EachPlayerDraws(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_card
+        from mtg_bot.turn import draw_n_cards
 
         for i in range(len(state.players)):
             idx = (state.active_player_idx + i) % len(state.players)
             p = state.players[idx]
             if p.has_lost:
                 continue
-            for _ in range(self.amount):
-                draw_card(state, p.id)
+            draw_n_cards(state, p.id, self.amount)
         state.log.append(
             f"each player draws {self.amount} card(s) "
             f"(from {state.players[controller_id].id}'s trigger)"
@@ -2829,7 +2825,7 @@ class DestroyTargetCreature(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import destroy, draw_card
+        from mtg_bot.turn import destroy, draw_n_cards
 
         if not targets:
             return
@@ -2848,8 +2844,9 @@ class DestroyTargetCreature(Effect):
         state.log.append(f"{obj.printing.name} is destroyed")
         destroy(state, obj)
         if self.draw_if_undamaged_amount > 0 and was_undamaged:
-            for _ in range(self.draw_if_undamaged_amount):
-                draw_card(state, victim_controller_id)
+            draw_n_cards(
+                state, victim_controller_id, self.draw_if_undamaged_amount,
+            )
             state.log.append(
                 f"P{victim_controller_id} draws "
                 f"{self.draw_if_undamaged_amount} "

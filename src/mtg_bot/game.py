@@ -427,6 +427,33 @@ def effective_activated_abilities(
     return tuple(base)
 
 
+def effective_draw_count(
+    state: "GameState", player_id: int, base_count: int
+) -> int:
+    """Effective number of cards a "draw N" event should draw for
+    ``player_id``, accounting for active replacement effects.
+
+    Currently models Quantum Riddler: "As long as you have one or
+    fewer cards in hand, if you would draw one or more cards, you
+    draw that many cards plus one instead." Returns ``base_count + 1``
+    when the controller has a Quantum-Riddler-flavored permanent on
+    the battlefield AND hand size ≤ 1 AND base_count ≥ 1; otherwise
+    returns ``base_count`` unchanged. Multiple Riddlers don't stack —
+    the replacement adds one card per draw event regardless.
+    """
+    if base_count < 1:
+        return base_count
+    p = state.player_by_id(player_id)
+    if len(p.hand) > 1:
+        return base_count
+    has_riddler = any(
+        o.controller_id == player_id
+        and o.printing.replaces_draw_with_extra_when_hand_at_most_one
+        for o in state.battlefield
+    )
+    return base_count + 1 if has_riddler else base_count
+
+
 def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
     """Return how many times an ETB-caused triggered ability on a
     permanent controlled by ``controller_id`` should fire.

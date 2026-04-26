@@ -242,8 +242,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blue
+        # Quantum Riddler: Flying. ETB → draw a card. As long as you have
+        # one or fewer cards in hand, "draw N" events draw N+1 instead.
+        # Warp {1}{U}.
         make_creature(
             "Quantum Riddler", "{3}{U}{U}", 4, 6,
+            keywords={"flying"},
+            warp="{1}{U}",
+            replaces_draw_with_extra_when_hand_at_most_one=True,
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
             ),
