@@ -162,6 +162,23 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    # Aura-granted "you control enchanted permanent" reversion: if any
+    # permanent on the battlefield had its controller swapped by THIS
+    # aura (Tractor Beam), restore the saved controller before any
+    # cascading aura-burials run. Doing this first keeps the
+    # subsequent attached_to detach + bury logic working with the
+    # post-revert controller.
+    for other in state.battlefield:
+        if other.swapped_controller_by_aura_id == obj.id:
+            prior = other.controller_id_before_aura_swap
+            if prior is not None:
+                other.controller_id = prior
+                state.log.append(
+                    f"{other.printing.name} reverts to P{prior} "
+                    f"(no longer enchanted by {obj.printing.name})"
+                )
+            other.swapped_controller_by_aura_id = None
+            other.controller_id_before_aura_swap = None
     # Any attachment on this object: Equipment falls off (stays on
     # battlefield, attached_to cleared); Auras are sent to their
     # owners' graveyards.

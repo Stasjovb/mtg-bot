@@ -142,6 +142,17 @@ class GameObject:
     # controller it came from. run_cleanup_step swaps ``controller_id``
     # back and clears this field. None = no temporary-control effect.
     temp_original_controller_id: Optional[int] = None
+    # Aura-granted "you control enchanted permanent" tracking: when an
+    # Aura with this clause attaches, the enchanted permanent stores
+    # the aura's id in ``swapped_controller_by_aura_id`` and the prior
+    # controller in ``controller_id_before_aura_swap``. When that
+    # specific aura leaves the battlefield, ``move_off_battlefield``
+    # restores the saved controller and clears both fields. Distinct
+    # from the UEOT temp_original_controller_id mechanism — the swap
+    # persists for the lifetime of the aura attachment, not just
+    # until cleanup. Tractor Beam.
+    swapped_controller_by_aura_id: Optional[int] = None
+    controller_id_before_aura_swap: Optional[int] = None
     # Planeswalker loyalty counters. Initialized to printing.loyalty
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.

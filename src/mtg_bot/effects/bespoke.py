@@ -649,12 +649,20 @@ class AllFatesScrollDrawEffect(Effect):
 
 @dataclass(frozen=True)
 class TractorBeamETBEffect(Effect):
-    """Tractor Beam's ETB (simplified): "Tap enchanted permanent."
+    """Tractor Beam's ETB and continuous-while-attached riders:
 
-    Real oracle adds "You control enchanted permanent." and
-    "Enchanted permanent doesn't untap during its controller's untap
-    step." Neither is modeled — engine has no "don't untap" replacement
-    effect and no persistent gain-control mechanic yet.
+    - ETB: tap enchanted permanent.
+    - Continuous: "You control enchanted permanent." Modeled by
+      saving the prior controller in
+      ``controller_id_before_aura_swap`` and the aura's id in
+      ``swapped_controller_by_aura_id`` on the enchanted permanent,
+      then setting its ``controller_id`` to the aura's controller.
+      ``move_off_battlefield`` reverts the swap when this aura
+      leaves play.
+    - The "doesn't untap during its controller's untap step" rider
+      is wired separately via the Aura's
+      ``attached_prevents_untap=True`` flag — orthogonal to this ETB
+      effect.
     """
 
     def resolve(
@@ -672,13 +680,28 @@ class TractorBeamETBEffect(Effect):
         )
         if target is None:
             return
+        # Continuous control swap: save the prior controller and
+        # claim the permanent for the aura's controller. Skip if
+        # already self-controlled to avoid a redundant swap chain.
+        if target.controller_id != controller_id:
+            target.controller_id_before_aura_swap = target.controller_id
+            target.swapped_controller_by_aura_id = aura.id
+            target.controller_id = controller_id
+            state.log.append(
+                f"P{controller_id} gains control of "
+                f"{target.printing.name} via Tractor Beam"
+            )
+        # ETB tap (oracle: "tap enchanted permanent").
         tap_permanent(state, target)
         state.log.append(
             f"Tractor Beam taps {target.printing.name}"
         )
 
     def describe(self) -> str:
-        return "tap enchanted permanent"
+        return (
+            "tap enchanted permanent and gain control of it while "
+            "this Aura is attached"
+        )
 
 
 
