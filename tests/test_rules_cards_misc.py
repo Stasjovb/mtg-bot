@@ -1515,6 +1515,35 @@ def test_enchantment_is_permanent_but_not_creature():
     assert c.is_instant is False
 
 
+def test_eusocial_engineering_warp_cast_and_end_step_exile():
+    """Non-creature warp end-to-end: cast an enchantment via Warp {1}{G},
+    it resolves onto the battlefield, then end-of-turn warp-exile fires."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+    from mtg_bot.turn import run_end_step_warp_exile
+    import random
+
+    euso = EOE_CREATURES["Eusocial Engineering"]
+    assert euso.warp_cost_str == "{1}{G}"
+    state = _arena(
+        p0_hand=[euso],
+        p0_battlefield=[BASIC_LANDS["Forest"]] * 2,  # enough for warp {1}{G}
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    card = state.players[0].hand[0]
+    apply(state, CastSpell(card.id, use_warp=True))
+    resolve_top_of_stack(state)
+    assert card in state.battlefield
+    assert card.cast_via_warp is True
+
+    run_end_step_warp_exile(state)
+    assert card not in state.battlefield
+    assert card in state.players[0].exile
+    assert card.warped is True
+
+
 def test_simplified_spacecraft_loads_and_stations():
     """Synthesizer Labship and Sledge-Class Seedship ship as vanilla
     Spacecraft — simplified to station threshold + stationed_keywords."""

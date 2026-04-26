@@ -2375,11 +2375,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Eusocial Engineering: {3}{G}{G} Enchantment. Landfall → create
-        # a 2/2 Robot token. Simplification: drops Warp (our warp mechanic
-        # is creature-only; enchantment warps would need the flow wired
-        # for non-creature permanents).
+        # a 2/2 Robot token. Warp {1}{G}.
         make_enchantment(
             "Eusocial Engineering", "{3}{G}{G}",
+            warp="{1}{G}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="landfall",
