@@ -144,10 +144,13 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         nonbasic_lands_are_mountains=True,
     ),
     # Burgeoning {G}: whenever an opponent plays a land, you may put a
-    # land card from your hand onto the battlefield. Trigger fires only
-    # on the land-drop action (actions.play_land), not on any other
-    # "enters the battlefield" event — Burgeoning-put lands fire
-    # landfall but don't re-fire the opponent-plays-land chain.
+    # land card from your hand onto the battlefield. The
+    # opponent-plays-land trigger fires only on the land-drop action
+    # (actions.play_land), so a Burgeoning-dropped land — which is
+    # *put* onto the battlefield, not *played* per CR 305.1 — correctly
+    # fires landfall on its controller's permanents but does NOT
+    # re-fire the opponent-plays-land chain. See test_burgeoning.py for
+    # the regression coverage that pins both halves of this behavior.
     "Burgeoning": make_enchantment(
         "Burgeoning", "{G}",
         triggered_abilities=(
