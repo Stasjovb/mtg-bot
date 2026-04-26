@@ -528,6 +528,61 @@ def test_rayblade_trooper_etb_boosts_existing_creature():
     assert enemy.plus_one_counters == 0
 
 
+def test_rayblade_trooper_dies_trigger_makes_soldier_token():
+    """Rayblade's death-watch: a nontoken creature you control with a
+    +1/+1 counter dies → 1/1 Soldier token appears."""
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import move_off_battlefield
+
+    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(
+        p0_battlefield=[],
+    )
+    rb = state.new_object(rayblade, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(rb)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    victim.plus_one_counters = 1
+    state.battlefield.append(victim)
+    move_off_battlefield(state, victim, destination="graveyard")
+    drain_stack(state)
+    tokens = [o for o in state.battlefield if o.printing.is_token]
+    assert len(tokens) == 1
+    assert tokens[0].printing.name == "Human Soldier"
+
+
+def test_rayblade_trooper_dies_trigger_skips_token_dying():
+    """The trigger explicitly says NONTOKEN — a dying token with a
+    counter shouldn't fire it."""
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import move_off_battlefield
+
+    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena()
+    rb = state.new_object(rayblade, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(rb)
+    # A token creature with a +1/+1 counter on it.
+    tok = state.new_object(
+        TOKEN_PRINTINGS["Human Soldier"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    tok.plus_one_counters = 1
+    state.battlefield.append(tok)
+    tokens_before = sum(1 for o in state.battlefield if o.printing.is_token)
+    move_off_battlefield(state, tok, destination="graveyard")
+    # No new token created; token also vanishes (rule 704.5d) so count
+    # ends up tokens_before - 1 (the dying token gone, no new ones).
+    tokens_after = sum(1 for o in state.battlefield if o.printing.is_token)
+    assert tokens_after == tokens_before - 1
+
+
+def test_rayblade_trooper_has_warp_cost():
+    from mtg_bot.cards import EOE_CREATURES
+
+    assert EOE_CREATURES["Rayblade Trooper"].warp_cost_str == "{1}{W}"
+
+
 def test_honored_knight_captain_etb_creates_a_soldier_token():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.cards import EOE_CREATURES

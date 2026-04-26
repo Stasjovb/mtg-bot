@@ -14,12 +14,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
     c.name: c
     for c in [
         # White
+        # ETB: +1/+1 counter on target creature you control. Also has a
+        # death-watch trigger: whenever a nontoken creature you control
+        # with a +1/+1 counter on it dies, make a 1/1 Soldier token.
+        # Warp {1}{W}.
         make_creature(
             "Rayblade Trooper", "{2}{W}", 2, 2,
+            warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger="nontoken_creature_you_control_with_counter_dies",
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
+                        count=1,
+                    ),
                 ),
             ),
         ),

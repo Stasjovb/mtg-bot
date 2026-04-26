@@ -410,6 +410,10 @@ class TriggeredAbility:
                 "Whenever a creature you control with a +1/+1 counter on "
                 "it dies"
             ),
+            "nontoken_creature_you_control_with_counter_dies": (
+                "Whenever a nontoken creature you control with a +1/+1 "
+                "counter on it dies"
+            ),
             "sacrifice_creature_or_artifact": (
                 "Whenever you sacrifice another creature or artifact"
             ),

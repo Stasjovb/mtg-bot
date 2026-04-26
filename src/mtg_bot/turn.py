@@ -589,14 +589,25 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             label="dies",
         )
     # "Whenever a creature you control with a +1/+1 counter on it dies" —
-    # only fires if the dying creature actually had a +1/+1 counter.
+    # only fires if the dying creature actually had a +1/+1 counter. The
+    # nontoken-only variant (Rayblade Trooper) additionally requires the
+    # dying creature not to be a token printing.
     if dead.plus_one_counters > 0:
         controller = dead.controller_id
+        dead_is_token = dead.printing.is_token
         for obj in list(state.battlefield):
             if obj.controller_id != controller:
                 continue
             for i, ability in enumerate(obj.printing.triggered_abilities):
-                if ability.trigger != "creature_you_control_with_counter_dies":
+                if ability.trigger == "creature_you_control_with_counter_dies":
+                    label = "counter-creature-dies"
+                elif (
+                    ability.trigger
+                    == "nontoken_creature_you_control_with_counter_dies"
+                    and not dead_is_token
+                ):
+                    label = "nontoken-counter-creature-dies"
+                else:
                     continue
                 push_triggered_ability(
                     state,
@@ -604,7 +615,7 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
                     ability=ability,
                     ability_index=i,
                     controller_id=controller,
-                    label="counter-creature-dies",
+                    label=label,
                 )
 
 
