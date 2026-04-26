@@ -324,6 +324,12 @@ def _resolve_damage_step(
                          blocker.id, blocker_kws, blocker.controller_id)
                     )
 
+    # Combat damage in MTG is simultaneous, so aggregate damage to each
+    # player into a single end-of-step log line ("P0 takes 5 (life:
+    # 15)") instead of one line per attacker. Creature damage,
+    # lifelink, and infect-poison events stay per-source because each
+    # one can independently matter for triggers and SBAs.
+    player_life_damage: dict[int, int] = {}
     sources_hit_player: list[tuple[int, int, int]] = []
     for (
         kind, target_id, amount, source_id, source_kws, source_controller,
@@ -335,7 +341,8 @@ def _resolve_damage_step(
             p = state.player_by_id(target_id)
             if has_infect:
                 # Infect: damage to a player becomes that many poison
-                # counters instead of life loss.
+                # counters instead of life loss. Per-event log preserved
+                # so the source/amount remains traceable.
                 p.poison_counters += amount
                 state.log.append(
                     f"P{target_id} gets {amount} poison counter(s) "
@@ -343,8 +350,8 @@ def _resolve_damage_step(
                 )
             else:
                 p.life -= amount
-                state.log.append(
-                    f"P{target_id} takes {amount} (life: {p.life})"
+                player_life_damage[target_id] = (
+                    player_life_damage.get(target_id, 0) + amount
                 )
             sources_hit_player.append((source_id, target_id, amount))
         else:
@@ -382,6 +389,14 @@ def _resolve_damage_step(
             state.log.append(
                 f"P{source_controller} gains {amount} life (life: {gainer.life})"
             )
+
+    # Emit aggregated player-damage lines after all events applied so
+    # the "(life: N)" reading reflects the final post-step total.
+    for target_id, total in player_life_damage.items():
+        p = state.player_by_id(target_id)
+        state.log.append(
+            f"P{target_id} takes {total} (life: {p.life})"
+        )
 
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.

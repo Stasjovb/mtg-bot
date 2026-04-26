@@ -70,6 +70,57 @@ def test_multiple_attackers_one_unblocked():
     assert blocker.damage == 1
 
 
+# ---------------------------------------------------------------------
+# Combat damage log aggregation: simultaneous-damage from multiple
+# attackers should produce ONE summary line per defender, not one
+# line per attacker.
+# ---------------------------------------------------------------------
+
+
+def test_combat_damage_log_aggregates_multiple_attackers_into_one_line():
+    state = _setup_two_players()
+    a1 = _put_on_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], 0)   # 2/2
+    a2 = _put_on_battlefield(state, SYNTHETIC_CREATURES["Sapling"], 0)     # 1/2
+    a3 = _put_on_battlefield(state, SYNTHETIC_CREATURES["Forest Giant"], 0)  # 3/3
+    declare_attackers(state, [a1.id, a2.id, a3.id])
+    resolve_combat_damage(state, defending_player_id=1)
+    takes_lines = [e for e in state.log if "P1 takes" in e]
+    assert len(takes_lines) == 1, (
+        f"expected one aggregated 'P1 takes' line, got {takes_lines}"
+    )
+    # Total = 2 + 1 + 3 = 6; P1 starts at 20.
+    assert takes_lines[0] == "P1 takes 6 (life: 14)"
+    assert state.players[1].life == 14
+
+
+def test_combat_damage_log_omitted_when_no_player_damage_dealt():
+    """All attackers blocked → no 'takes' line for the defender."""
+    state = _setup_two_players()
+    attacker = _put_on_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
+    blocker = _put_on_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
+    declare_attackers(state, [attacker.id])
+    declare_blockers(state, {blocker.id: attacker.id})
+    resolve_combat_damage(state, defending_player_id=1)
+    takes_lines = [e for e in state.log if " takes " in e and "life:" in e]
+    assert takes_lines == []
+
+
+def test_combat_damage_log_aggregates_per_defender_in_multiplayer_layout():
+    """If two different players take damage in the same step (e.g.
+    via direct multi-target damage from outside combat — unlikely in
+    pure combat, but exercises the per-defender aggregation), each
+    gets its own summary line summing only THEIR damage."""
+    state = _setup_two_players()
+    state.players.append(Player(id=2))
+    a1 = _put_on_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], 0)   # 2
+    a2 = _put_on_battlefield(state, SYNTHETIC_CREATURES["Forest Giant"], 0)  # 3
+    declare_attackers(state, [a1.id, a2.id])
+    # Both go at P1.
+    resolve_combat_damage(state, defending_player_id=1)
+    takes = [e for e in state.log if "takes" in e and "life:" in e]
+    assert takes == ["P1 takes 5 (life: 15)"]
+
+
 def test_summoning_sick_creature_not_eligible_to_attack():
     from mtg_bot.combat import eligible_attackers
 
