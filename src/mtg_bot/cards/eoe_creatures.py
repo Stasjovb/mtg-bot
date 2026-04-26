@@ -2094,9 +2094,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             equip_cost="{3}",
         ),
         # Illvoi Light Jammer: {1}{U} Equipment with Flash. ETB
-        # auto-attach; equipped creature gets +1/+2. Equip {3}. Dropped:
-        # "that creature gains hexproof UEOT" rider (hexproof not yet
-        # modeled).
+        # auto-attach to target creature you control; that creature
+        # gains hexproof UEOT. Equipped creature gets +1/+2. Dropped:
+        # the Equip {3} activated ability.
         make_equipment(
             "Illvoi Light Jammer", "{1}{U}",
             power_bonus=1, toughness_bonus=2,
@@ -2104,7 +2104,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=AttachToTargetCreatureYouControl(),
+                    effect=AttachToTargetCreatureYouControl(
+                        granted_keywords_ueot=frozenset({"hexproof"}),
+                    ),
                 ),
             ),
             equip_cost="{3}",

@@ -627,9 +627,12 @@ class AttachToTargetCreatureYouControl(Effect):
     Optional ``granted_keywords_ueot``: keywords the chosen target also
     gains until end of turn. Matches oracle riders like Squire's
     Lightblade's "...attach it to target creature you control. That
-    creature gains first strike until end of turn." Adding the keyword
+    creature gains first strike until end of turn." and Illvoi Light
+    Jammer's "...gains hexproof until end of turn." Adding the keyword
     here (rather than via a separate Sequence sub-effect) keeps the
-    target shared between attach and the UEOT grant.
+    target shared between attach and the UEOT grant. The grant is
+    applied after the attach succeeds; if the attach fizzles, no
+    keywords are granted.
     """
 
     granted_keywords_ueot: frozenset[str] = frozenset()
