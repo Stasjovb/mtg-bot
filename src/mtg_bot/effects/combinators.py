@@ -744,9 +744,23 @@ class ModalChooseOne(Effect):
             return (0, 0)
         all_targeted = all(m.requires_target() for m in self.modes)
         # min_t=0 for mixed modes (you might pick the untargeted mode);
-        # min_t=1 when every mode needs a target. max_t=1 — we don't
-        # model multi-target modes yet.
-        return (1 if all_targeted else 0, 1)
+        # min_t=min-of-targeted-modes when every mode needs a target.
+        # max_t=max across modes — supports multi-target modes (e.g.
+        # Archenemy's Charm mode 1 returns up to 2 cards).
+        # Defensive: not every mode-like object subclasses Effect (some
+        # tests pass minimal stubs), so fall back to the base default
+        # (1, 1) when target_count_range isn't implemented.
+        def _range(m):
+            tcr = getattr(m, "target_count_range", None)
+            return tcr() if callable(tcr) else (1, 1)
+        targeted_ranges = [
+            _range(m) for m in self.modes if m.requires_target()
+        ]
+        max_t = max(r[1] for r in targeted_ranges)
+        if not all_targeted:
+            return (0, max_t)
+        min_t = min(r[0] for r in targeted_ranges)
+        return (min_t, max_t)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -780,16 +794,20 @@ class ModalChooseOne(Effect):
         state.log.append(
             f"modal: P{controller_id} chooses mode {idx} ({chosen.describe()})"
         )
-        # If the chosen mode requires a target but the passed target is
-        # not in its legal set (target was picked for a different mode),
-        # fizzle silently rather than crash.
+        # If the chosen mode requires a target, filter the passed targets
+        # down to those legal for THIS mode (the cast pipeline may have
+        # collected targets across the union of all modes' pools). Fizzle
+        # silently if none survive.
         if chosen.requires_target():
             legal = chosen.legal_targets(state, controller_id)
-            if not targets or targets[0] not in legal:
+            filtered = tuple(t for t in targets if t in legal)
+            if not filtered:
                 state.log.append(
-                    f"modal fizzle: chosen mode requires a legal target"
+                    "modal fizzle: chosen mode requires a legal target"
                 )
                 return
+            chosen.resolve(state, controller_id, filtered)
+            return
         chosen.resolve(state, controller_id, targets)
 
     def describe(self) -> str:

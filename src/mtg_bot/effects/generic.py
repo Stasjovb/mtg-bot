@@ -1095,6 +1095,72 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnUpToNCreaturesFromYourGraveyardToHand(Effect):
+    """Return up to ``max_n`` creature cards from your graveyard to your hand.
+
+    Models the "return one or two target creature [or planeswalker] cards
+    from your graveyard to your hand" mode of Archenemy's Charm. Since
+    planeswalkers aren't yet modeled in our card pool, the legal-target
+    pool is creature-only; if/when planeswalker cards land in graveyards,
+    they'd surface here through the same code path automatically.
+    """
+
+    max_n: int = 2
+    min_n: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (self.min_n, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        if not targets:
+            return
+        p = state.player_by_id(controller_id)
+        seen_ids: set[int] = set()
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            if target_id in seen_ids:
+                continue
+            seen_ids.add(target_id)
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            reveal_to_all(state, card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creature cards from your "
+            f"graveyard to your hand"
+        )
+
+
+
+@dataclass(frozen=True)
 class ExileEachOpponentsGraveyard(Effect):
     """Move every card in each opponent's graveyard to that player's exile."""
 
@@ -5420,6 +5486,75 @@ class PutPlusOneCounterOnTargetCreature(Effect):
         if self.amount == 1:
             return "put a +1/+1 counter on target creature"
         return f"put {self.amount} +1/+1 counters on target creature"
+
+
+
+@dataclass(frozen=True)
+class PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(Effect):
+    """Put N +1/+1 counters on target creature you control AND grant it
+    keywords until end of turn (a single chosen target).
+
+    Models the third mode of Archenemy's Charm ("Put two +1/+1 counters
+    on target creature you control. It gains lifelink until end of
+    turn."). Done as a single combined effect rather than a Sequence
+    because Sequence currently allows at most one targeting sub-effect.
+    """
+
+    amount: int = 2
+    granted_keywords: frozenset[str] = frozenset()
+    you_control_only: bool = True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and (not self.you_control_only or o.controller_id == controller_id)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, self.amount)
+        if self.granted_keywords:
+            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        state.log.append(
+            f"{obj.printing.name} gets {self.amount} +1/+1 counter(s) "
+            f"(now {obj.plus_one_counters})"
+            + (
+                f" and gains {', '.join(sorted(self.granted_keywords))} "
+                f"until end of turn"
+                if self.granted_keywords else ""
+            )
+        )
+
+    def describe(self) -> str:
+        kw = (
+            f". It gains {', '.join(sorted(self.granted_keywords))} "
+            f"until end of turn"
+            if self.granted_keywords else ""
+        )
+        return (
+            f"put {self.amount} +1/+1 counters on target creature you "
+            f"control{kw}"
+        )
 
 
 

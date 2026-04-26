@@ -725,9 +725,26 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Instants — remaining ones shipped as minimal approximations.
-        make_instant(  # Archenemy's Charm — simplified to just exile-target-creature mode.
+        # Archenemy's Charm `{B}{B}{B}` Instant — Choose one:
+        #   • Exile target creature or planeswalker.
+        #   • Return one or two target creature and/or planeswalker
+        #     cards from your graveyard to your hand.
+        #   • Put two +1/+1 counters on target creature you control. It
+        #     gains lifelink until end of turn.
+        # Planeswalkers aren't fully modeled in our card pool yet — the
+        # creature-only target pools are exhaustive in practice.
+        make_instant(
             "Archenemy's Charm", "{B}{B}{B}",
-            effect=ExileTargetCreature(),
+            effect=ModalChooseOne(modes=(
+                ExileTargetCreature(),
+                ReturnUpToNCreaturesFromYourGraveyardToHand(
+                    max_n=2, min_n=1,
+                ),
+                PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+                    amount=2,
+                    granted_keywords=frozenset({"lifelink"}),
+                ),
+            )),
         ),
         # Close Encounter `{1}{G}` Instant:
         # "As an additional cost to cast this spell, choose a creature
