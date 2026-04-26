@@ -105,6 +105,38 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
             ).attacked_with_spacecraft_this_turn = True
         # Fire "whenever this creature attacks" triggers on the attacker.
         _fire_attacks_triggers(state, obj)
+    # After all attackers are declared, fire Exalted (rule 702.83):
+    # "Whenever a creature you control attacks alone, that creature gets
+    # +1/+1 until end of turn." Multiple instances of Exalted stack —
+    # each Exalted permanent the attacker's controller has applies its
+    # own +1/+1.
+    _fire_exalted_pumps(state)
+
+
+def _fire_exalted_pumps(state: GameState) -> None:
+    """If exactly one creature is attacking, scan permanents its
+    controller controls for the ``"exalted"`` keyword. Each instance
+    grants +1/+1 until end of turn to the lone attacker.
+    """
+    attackers = [o for o in state.battlefield if o.attacking]
+    if len(attackers) != 1:
+        return
+    attacker = attackers[0]
+    controller_id = attacker.controller_id
+    exalted_count = 0
+    for source in state.battlefield:
+        if source.controller_id != controller_id:
+            continue
+        if "exalted" in source.printing.keywords:
+            exalted_count += 1
+    if exalted_count == 0:
+        return
+    attacker.temp_power_bonus += exalted_count
+    attacker.temp_toughness_bonus += exalted_count
+    state.log.append(
+        f"{attacker.printing.name} gets +{exalted_count}/+{exalted_count} "
+        f"until end of turn (Exalted x{exalted_count})"
+    )
 
 
 def _fire_attacks_triggers(state: GameState, attacker) -> None:

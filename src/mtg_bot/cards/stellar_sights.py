@@ -141,12 +141,14 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     ),
     # Cathedral of War: enters tapped, {T}: Add {C}. Exalted (whenever
     # a creature you control attacks alone, it gets +1/+1 UEOT).
-    # Simplification: Exalted dropped — the engine has no "attacks alone"
-    # trigger machinery. Taps-for-C + enters-tapped still matter for
-    # mana sequencing, so restoring the timing half is still worthwhile.
+    # Implementation: the "exalted" keyword on the printing is read by
+    # combat._fire_exalted_pumps after declare_attackers — if exactly
+    # one creature is attacking, each Exalted permanent its controller
+    # has pumps it +1/+1 UEOT (multiple instances stack per 702.83).
     "Cathedral of War": make_utility_land(
         "Cathedral of War",
         enters_tapped=True,
+        keywords=frozenset({"exalted"}),
     ),
     # Celestial Colonnade: enters tapped, {T}: W or U, {3}{W}{U}:
     # → 4/4 W/U Elemental flying vigilance UEOT.

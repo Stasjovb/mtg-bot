@@ -53,11 +53,13 @@ def test_cathedral_of_war_enters_tapped():
     assert p.is_land
 
 
-def test_cathedral_of_war_has_no_exalted_keyword():
-    """Exalted is documented-dropped — confirm the card doesn't claim
-    to grant it via keywords or abilities."""
+def test_cathedral_of_war_has_exalted_keyword():
+    """Cathedral of War grants Exalted via the ``"exalted"`` keyword on
+    its printing. The pump is applied by combat._fire_exalted_pumps
+    after declare_attackers, so no triggered/activated abilities live
+    on the printing itself."""
     p = STELLAR_SIGHTS_LANDS["Cathedral of War"]
-    assert "exalted" not in p.keywords
+    assert "exalted" in p.keywords
     assert p.triggered_abilities == ()
     assert p.activated_abilities == ()
 
