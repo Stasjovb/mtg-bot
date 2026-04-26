@@ -35,17 +35,19 @@ from mtg_bot.search.strategy import SearchStrategy
 @dataclass(frozen=True)
 class HeuristicConfig:
     """Weights for ``MtgHeuristicEvaluator``. Defaults match the
-    evaluator's own defaults (0.4 / 0.4 / 0.2)."""
+    evaluator's own defaults (0.4 / 0.4 / 0.15 / 0.05)."""
 
     life_weight: float = 0.4
     board_weight: float = 0.4
-    card_weight: float = 0.2
+    card_weight: float = 0.15
+    mana_dev_weight: float = 0.05
 
     def build(self) -> Evaluator:
         return MtgHeuristicEvaluator(
             life_weight=self.life_weight,
             board_weight=self.board_weight,
             card_weight=self.card_weight,
+            mana_dev_weight=self.mana_dev_weight,
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -26,7 +26,8 @@ def test_heuristic_config_defaults_match_evaluator_defaults():
     cfg = HeuristicConfig()
     assert cfg.life_weight == 0.4
     assert cfg.board_weight == 0.4
-    assert cfg.card_weight == 0.2
+    assert cfg.card_weight == 0.15
+    assert cfg.mana_dev_weight == 0.05
 
 
 def test_heuristic_config_is_frozen_and_hashable():
@@ -41,13 +42,17 @@ def test_heuristic_config_is_frozen_and_hashable():
 
 
 def test_heuristic_config_build_returns_evaluator_with_normalized_weights():
-    cfg = HeuristicConfig(life_weight=2.0, board_weight=2.0, card_weight=1.0)
+    cfg = HeuristicConfig(
+        life_weight=2.0, board_weight=2.0, card_weight=1.0,
+        mana_dev_weight=0.0,
+    )
     evaluator = cfg.build()
     assert isinstance(evaluator, MtgHeuristicEvaluator)
-    # Evaluator renormalizes — 2/2/1 → 0.4/0.4/0.2 internally.
+    # Evaluator renormalizes — 2/2/1/0 → 0.4/0.4/0.2/0.0 internally.
     assert evaluator.life_weight == pytest.approx(0.4)
     assert evaluator.board_weight == pytest.approx(0.4)
     assert evaluator.card_weight == pytest.approx(0.2)
+    assert evaluator.mana_dev_weight == pytest.approx(0.0)
 
 
 def test_heuristic_config_json_round_trip():

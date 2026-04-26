@@ -39,6 +39,7 @@ def test_default_weights_normalize():
         evaluator.life_weight
         + evaluator.board_weight
         + evaluator.card_weight
+        + evaluator.mana_dev_weight
     )
     assert abs(total - 1.0) < 1e-9
 
@@ -46,21 +47,25 @@ def test_default_weights_normalize():
 def test_custom_weights_renormalized():
     evaluator = MtgHeuristicEvaluator(
         life_weight=2.0, board_weight=2.0, card_weight=1.0,
+        mana_dev_weight=0.0,
     )
     total = (
         evaluator.life_weight
         + evaluator.board_weight
         + evaluator.card_weight
+        + evaluator.mana_dev_weight
     )
     assert abs(total - 1.0) < 1e-9
     assert evaluator.life_weight == evaluator.board_weight
     assert evaluator.card_weight < evaluator.life_weight
+    assert evaluator.mana_dev_weight == 0.0
 
 
 def test_zero_weights_rejected():
     with pytest.raises(ValueError):
         MtgHeuristicEvaluator(
             life_weight=0, board_weight=0, card_weight=0,
+            mana_dev_weight=0,
         )
 
 
@@ -166,11 +171,10 @@ def test_balanced_position_scores_near_zero():
     engine = adapter.engine_state
     engine.players[0].life = 20
     engine.players[1].life = 20
-    # Match hand sizes.
-    while len(engine.players[0].hand) > len(engine.players[1].hand):
-        engine.players[0].hand.pop()
-    while len(engine.players[1].hand) > len(engine.players[0].hand):
-        engine.players[1].hand.pop()
+    # Clear both hands entirely: random opening hands have different
+    # land/spell ratios, which the mana_dev term picks up on.
+    engine.players[0].hand.clear()
+    engine.players[1].hand.clear()
     evaluator = MtgHeuristicEvaluator()
     score = evaluator.evaluate(adapter, player_id=0)
     assert abs(score) < 1e-9
@@ -403,3 +407,130 @@ def test_triggered_ability_on_stack_does_not_score():
     _put_creature_spell_on_stack(engine, "Battlefield Recruit", 0)
     after = evaluator._evaluate_nonterminal(engine, player_id=0)
     assert after > base
+
+
+# =====================================================================
+# Mana development (lands stuck in hand)
+# =====================================================================
+
+
+def _put_lands_in_hand(engine, player_id: int, n: int) -> None:
+    from mtg_bot.cards import BASIC_LANDS
+    for _ in range(n):
+        forest = engine.new_object(
+            BASIC_LANDS["Forest"], owner_id=player_id, zone=Zone.HAND,
+        )
+        engine.players[player_id].hand.append(forest)
+
+
+def _put_lands_in_play(engine, player_id: int, n: int) -> None:
+    from mtg_bot.cards import BASIC_LANDS
+    for _ in range(n):
+        forest = engine.new_object(
+            BASIC_LANDS["Forest"], owner_id=player_id,
+            zone=Zone.BATTLEFIELD,
+        )
+        forest.controller_id = player_id
+        engine.battlefield.append(forest)
+
+
+def test_stuck_lands_zero_when_under_two_in_hand():
+    """One land in hand isn't 'stuck' — keeping it for counter bait or
+    fetch timing is legitimate at our complexity. Only the second-and-
+    onward count."""
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].hand.clear()
+    _put_lands_in_hand(engine, 0, 1)
+    evaluator = MtgHeuristicEvaluator()
+    assert evaluator._stuck_lands(engine, 0) == 0
+
+
+def test_stuck_lands_counts_excess_when_under_threshold():
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].hand.clear()
+    _put_lands_in_hand(engine, 0, 4)
+    # 0 lands in play; 4 in hand → 3 stuck.
+    evaluator = MtgHeuristicEvaluator()
+    assert evaluator._stuck_lands(engine, 0) == 3
+
+
+def test_stuck_lands_disabled_at_or_above_threshold():
+    """Once you're at five lands in play you've ramped enough; the
+    marginal land matters less and the term should not push you to slam
+    every land in a late-game hand."""
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].hand.clear()
+    _put_lands_in_hand(engine, 0, 4)
+    _put_lands_in_play(engine, 0, 5)
+    evaluator = MtgHeuristicEvaluator()
+    assert evaluator._stuck_lands(engine, 0) == 0
+
+
+def _put_spells_in_hand(engine, player_id: int, n: int) -> None:
+    for _ in range(n):
+        spell = engine.new_object(
+            SYNTHETIC_CREATURES["Battlefield Recruit"],
+            owner_id=player_id, zone=Zone.HAND,
+        )
+        engine.players[player_id].hand.append(spell)
+
+
+def test_stuck_lands_lowers_score_for_holder():
+    """Holding excess lands instead of spells reads as worse, all else
+    equal. Hand sizes are matched so the card-advantage term cancels —
+    the only remaining signal is mana development."""
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].life = engine.players[1].life = 20
+    engine.players[0].hand.clear()
+    engine.players[1].hand.clear()
+    _put_lands_in_hand(engine, 0, 4)   # P0: 4 lands → 3 stuck
+    _put_spells_in_hand(engine, 1, 4)  # P1: 4 spells → 0 stuck
+    evaluator = MtgHeuristicEvaluator()
+    score = evaluator.evaluate(adapter, player_id=0)
+    assert score < 0, (
+        f"holding lands while opponent holds spells should score "
+        f"negative for the land-holder (got {score})"
+    )
+
+
+def test_opponent_stuck_lands_helps_score():
+    """Mirror: when the opponent is the one sitting on lands, my score
+    goes up. Matched hand sizes again so the only signal is mana_dev."""
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].life = engine.players[1].life = 20
+    engine.players[0].hand.clear()
+    engine.players[1].hand.clear()
+    _put_spells_in_hand(engine, 0, 4)  # P0: 4 spells → 0 stuck
+    _put_lands_in_hand(engine, 1, 4)   # P1: 4 lands → 3 stuck
+    evaluator = MtgHeuristicEvaluator()
+    score = evaluator.evaluate(adapter, player_id=0)
+    assert score > 0
+
+
+def test_playing_a_stuck_land_raises_score():
+    """The behavior the term exists to encourage: moving a land from
+    hand to battlefield when you have ≥2 lands in hand and <5 lands in
+    play should raise the score."""
+    adapter = _adapter()
+    engine = adapter.engine_state
+    engine.players[0].life = engine.players[1].life = 20
+    engine.players[0].hand.clear()
+    engine.players[1].hand.clear()
+    _put_lands_in_hand(engine, 0, 3)  # 3 in hand, 0 in play → 2 stuck
+    evaluator = MtgHeuristicEvaluator()
+    pre = evaluator.evaluate(adapter, player_id=0)
+    # Simulate playing one land: hand → battlefield.
+    forest = engine.players[0].hand.pop()
+    forest.zone = Zone.BATTLEFIELD
+    forest.controller_id = 0
+    engine.battlefield.append(forest)
+    post = evaluator.evaluate(adapter, player_id=0)
+    assert post > pre, (
+        f"playing a stuck land should raise the score "
+        f"(pre={pre}, post={post})"
+    )

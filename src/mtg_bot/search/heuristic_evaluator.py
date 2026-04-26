@@ -1,7 +1,7 @@
 """Handcrafted MTG heuristic evaluator.
 
 Replaces ``RandomRolloutEvaluator``'s "play out the game randomly to
-completion" approach with a fast position scorer. Three components,
+completion" approach with a fast position scorer. Four components,
 weighted-summed into ``[-1, 1]`` from the asked-for player's
 perspective:
 
@@ -22,9 +22,18 @@ perspective:
    to another (hand → battlefield via spell resolution, hand → stack
    mid-cast). Differential capped at ±7. A weak signal alone but
    cheap and useful as a tiebreaker.
+4. **Mana development.** Penalizes lands sitting unused in your hand
+   while you still have room to grow your mana base (<5 lands in
+   play). Counts each land beyond the first as "stuck" — the first
+   one might reasonably be held; the second-and-onward almost never
+   should. Mirrors the sign for the opponent (their stuck lands are
+   good for you). Differential capped at ±4. Without this term the
+   card-advantage component already netted out land-play to zero, so
+   MCTS at low budget had no positive signal pulling it toward
+   developing mana.
 
-Default weights: 0.4 life / 0.4 board / 0.2 cards. Tunable via
-constructor for experimentation.
+Default weights: 0.4 life / 0.4 board / 0.15 cards / 0.05 mana_dev.
+Tunable via constructor for experimentation.
 
 NOT designed to play optimal MTG — it's a baseline so MCTS has
 something fast to score with that beats "play the rest of the game
@@ -59,6 +68,8 @@ from mtg_bot.search.protocol import GameState, PlayerID
 _LIFE_NORMALIZER = 20.0
 _BOARD_NORMALIZER = 20.0
 _CARD_NORMALIZER = 7.0
+_MANA_DEV_NORMALIZER = 4.0
+_MANA_DEV_LAND_THRESHOLD = 5  # only penalize while still ramping
 
 
 def _clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -77,9 +88,10 @@ class MtgHeuristicEvaluator(Evaluator):
         self,
         life_weight: float = 0.4,
         board_weight: float = 0.4,
-        card_weight: float = 0.2,
+        card_weight: float = 0.15,
+        mana_dev_weight: float = 0.05,
     ) -> None:
-        total = life_weight + board_weight + card_weight
+        total = life_weight + board_weight + card_weight + mana_dev_weight
         if total <= 0:
             raise ValueError(
                 f"weight sum must be positive; got {total}"
@@ -89,6 +101,7 @@ class MtgHeuristicEvaluator(Evaluator):
         self.life_weight = life_weight / total
         self.board_weight = board_weight / total
         self.card_weight = card_weight / total
+        self.mana_dev_weight = mana_dev_weight / total
 
     def _evaluate_nonterminal(
         self, state: GameState, player_id: PlayerID
@@ -119,10 +132,19 @@ class MtgHeuristicEvaluator(Evaluator):
             (my_cards - their_cards) / _CARD_NORMALIZER
         )
 
+        # Mirrored sign: stuck lands are bad for the holder, so
+        # (their_stuck - my_stuck) is the positive-for-me signal.
+        my_stuck = self._stuck_lands(engine, me.id)
+        their_stuck = self._stuck_lands(engine, them.id)
+        mana_dev_score = _clamp(
+            (their_stuck - my_stuck) / _MANA_DEV_NORMALIZER
+        )
+
         return _clamp(
             self.life_weight * life_score
             + self.board_weight * board_score
             + self.card_weight * card_score
+            + self.mana_dev_weight * mana_dev_score
         )
 
     @staticmethod
@@ -163,6 +185,28 @@ class MtgHeuristicEvaluator(Evaluator):
             t = item.source.printing.toughness or 0
             total += p + t
         return total
+
+    @staticmethod
+    def _stuck_lands(engine: EngineGameState, player_id: PlayerID) -> int:
+        """Lands held in hand the player should be playing this turn.
+
+        Active only while the player has fewer than
+        ``_MANA_DEV_LAND_THRESHOLD`` lands on the battlefield (the early
+        ramp window — once you're at five mana the marginal land matters
+        less, and the term shouldn't push you to slam every land in a
+        hand full of late-game spells). Within that window, each land
+        beyond the first counts as stuck — holding one back can be
+        legitimate (counter bait, fetch timing); holding two-plus
+        almost never is at our card pool's complexity."""
+        p = engine.player_by_id(player_id)
+        lands_in_play = 0
+        for o in engine.battlefield:
+            if o.controller_id == player_id and o.printing.is_land:
+                lands_in_play += 1
+                if lands_in_play >= _MANA_DEV_LAND_THRESHOLD:
+                    return 0
+        lands_in_hand = sum(1 for c in p.hand if c.printing.is_land)
+        return max(0, lands_in_hand - 1)
 
     @staticmethod
     def _card_count(engine: EngineGameState, player_id: PlayerID) -> int:
