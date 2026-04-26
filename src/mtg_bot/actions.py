@@ -1836,6 +1836,14 @@ def resolve_top_of_stack(state: GameState) -> None:
                     f"{card.printing.name} enters attached to "
                     f"{target_obj.printing.name}"
                 )
+                # Static "you control enchanted permanent" applies
+                # immediately when the aura enters — BEFORE any ETB
+                # triggers go on the stack. Static abilities are
+                # continuous, not stack-based, so the swap kicks in
+                # the moment the aura is attached. Tractor Beam.
+                apply_aura_static_grants_on_attach(
+                    state, card, target_obj, item.controller_id,
+                )
             else:
                 state.log.append(
                     f"{card.printing.name} resolves onto the battlefield"
@@ -1858,6 +1866,36 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.resolving_x_value = 0
         state.resolving_kicked = False
         state.resolving_additional_cost_choice_id = None
+
+
+def apply_aura_static_grants_on_attach(
+    state: GameState, aura: "GameObject", target: "GameObject",
+    controller_id: int,
+) -> None:
+    """Apply an aura's continuous-while-attached statics to its
+    target the moment the aura enters attached. Static abilities are
+    continuous (not stack-based), so they take effect immediately —
+    before any ETB triggers go on the stack.
+
+    Currently models Tractor Beam's "you control enchanted permanent"
+    via the ``attached_grants_control`` printing flag. Records the
+    prior controller in ``controller_id_before_aura_swap`` and the
+    aura's id in ``swapped_controller_by_aura_id`` on the target so
+    ``move_off_battlefield`` can revert when the aura leaves play.
+    Skips the swap when the target is already self-controlled (no
+    redundant chain).
+    """
+    if (
+        aura.printing.attached_grants_control
+        and target.controller_id != controller_id
+    ):
+        target.controller_id_before_aura_swap = target.controller_id
+        target.swapped_controller_by_aura_id = aura.id
+        target.controller_id = controller_id
+        state.log.append(
+            f"P{controller_id} gains control of "
+            f"{target.printing.name} via {aura.printing.name}"
+        )
 
 
 def put_into_battlefield(

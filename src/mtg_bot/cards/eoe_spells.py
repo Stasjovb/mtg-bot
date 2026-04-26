@@ -420,6 +420,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_aura(
             "Tractor Beam", "{2}{U}{U}",
             attached_prevents_untap=True,
+            attached_grants_control=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",

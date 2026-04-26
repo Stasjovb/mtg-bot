@@ -649,20 +649,16 @@ class AllFatesScrollDrawEffect(Effect):
 
 @dataclass(frozen=True)
 class TractorBeamETBEffect(Effect):
-    """Tractor Beam's ETB and continuous-while-attached riders:
+    """Tractor Beam's ETB triggered ability: ``When this Aura enters,
+    tap enchanted permanent.``
 
-    - ETB: tap enchanted permanent.
-    - Continuous: "You control enchanted permanent." Modeled by
-      saving the prior controller in
-      ``controller_id_before_aura_swap`` and the aura's id in
-      ``swapped_controller_by_aura_id`` on the enchanted permanent,
-      then setting its ``controller_id`` to the aura's controller.
-      ``move_off_battlefield`` reverts the swap when this aura
-      leaves play.
-    - The "doesn't untap during its controller's untap step" rider
-      is wired separately via the Aura's
-      ``attached_prevents_untap=True`` flag — orthogonal to this ETB
-      effect.
+    The static "you control enchanted permanent" clause is applied
+    separately in the aura-resolution path: ``_resolve_top_of_stack``
+    reads the printing's ``attached_grants_control`` flag and swaps
+    the target's controller BEFORE this ETB trigger goes on the stack
+    — static abilities are continuous, not stack-based. The "doesn't
+    untap during its controller's untap step" static is wired via
+    ``attached_prevents_untap=True`` and queried at the untap step.
     """
 
     def resolve(
@@ -680,28 +676,13 @@ class TractorBeamETBEffect(Effect):
         )
         if target is None:
             return
-        # Continuous control swap: save the prior controller and
-        # claim the permanent for the aura's controller. Skip if
-        # already self-controlled to avoid a redundant swap chain.
-        if target.controller_id != controller_id:
-            target.controller_id_before_aura_swap = target.controller_id
-            target.swapped_controller_by_aura_id = aura.id
-            target.controller_id = controller_id
-            state.log.append(
-                f"P{controller_id} gains control of "
-                f"{target.printing.name} via Tractor Beam"
-            )
-        # ETB tap (oracle: "tap enchanted permanent").
         tap_permanent(state, target)
         state.log.append(
             f"Tractor Beam taps {target.printing.name}"
         )
 
     def describe(self) -> str:
-        return (
-            "tap enchanted permanent and gain control of it while "
-            "this Aura is attached"
-        )
+        return "tap enchanted permanent"
 
 
 

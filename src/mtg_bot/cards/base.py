@@ -402,6 +402,16 @@ class CardPrinting:
     # When True on an aura/equipment attached to a permanent, the
     # untap step skips that permanent.
     attached_prevents_untap: bool = False
+    # "You control enchanted permanent." Tractor Beam's static
+    # control-grant clause. When True on an aura, the moment it
+    # enters the battlefield attached to a target, the target's
+    # controller is swapped to the aura's controller — applied
+    # BEFORE any ETB triggers go on the stack, since static abilities
+    # are continuous (not stack-based). The swap is recorded on the
+    # target via ``swapped_controller_by_aura_id`` /
+    # ``controller_id_before_aura_swap`` and reverted in
+    # ``move_off_battlefield`` when the aura leaves play.
+    attached_grants_control: bool = False
     # "The first time you would create one or more tokens each turn,
     # you may instead create that many tokens that are copies of
     # enchanted permanent." Moonlit Meditation. Aura-only flag.
@@ -980,6 +990,7 @@ def make_aura(
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     aura_enchant_type: str = "creature",
     attached_prevents_untap: bool = False,
+    attached_grants_control: bool = False,
     replaces_first_tokens_with_copies: bool = False,
     attached_grants_ward: str | None = None,
 ) -> CardPrinting:
@@ -1015,6 +1026,7 @@ def make_aura(
         ),
         aura_enchant_type=aura_enchant_type,
         attached_prevents_untap=attached_prevents_untap,
+        attached_grants_control=attached_grants_control,
         replaces_first_tokens_with_copies=replaces_first_tokens_with_copies,
         attached_grants_ward_cost=(
             parse_mana_cost(attached_grants_ward)

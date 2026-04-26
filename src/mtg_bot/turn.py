@@ -192,7 +192,8 @@ def move_off_battlefield(
             att.attached_to = None
     for aura in auras_to_bury:
         state.log.append(
-            f"{aura.printing.name} falls off and is buried"
+            f"{aura.printing.name} is put into the graveyard "
+            f"(enchanted permanent left the battlefield)"
         )
         move_off_battlefield(state, aura, destination="graveyard")
     state.battlefield.remove(obj)
