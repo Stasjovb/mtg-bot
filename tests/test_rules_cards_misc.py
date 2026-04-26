@@ -5592,3 +5592,160 @@ def test_etb_triggers_fire_in_full_game_flow():
     )
 
 
+# --------------------------------------------------------------------------
+# Mouth of the Storm — ETB debuffs opponents' creatures -3/-0 UEOT
+# (oracle: "until your next turn"; engine approximates with UEOT).
+# --------------------------------------------------------------------------
+
+
+def test_mouth_of_the_storm_etb_debuffs_only_opponents_creatures():
+    """ETB resolves: opponent creatures get -3/-0 UEOT, controller's own
+    creatures are untouched."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_power, effective_toughness
+
+    state = _arena()
+    # P0 controls Mouth of the Storm (the source). Two opponent (P1)
+    # creatures and one own (P0) creature on the battlefield.
+    mouth = state.new_object(
+        EOE_CREATURES["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(mouth)
+    op1 = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op1)
+    op2 = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op2)
+    own = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(own)
+
+    # Snapshot starting effective P/T.
+    op1_p_before = effective_power(state, op1)
+    op1_t_before = effective_toughness(state, op1)
+    op2_p_before = effective_power(state, op2)
+    op2_t_before = effective_toughness(state, op2)
+    own_p_before = effective_power(state, own)
+    own_t_before = effective_toughness(state, own)
+
+    # Resolve the ETB effect directly (Mouth's only ETB ability).
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0
+    ).resolve(state, controller_id=0)
+
+    # Both opponent creatures: power -3, toughness unchanged.
+    assert effective_power(state, op1) == op1_p_before - 3
+    assert effective_toughness(state, op1) == op1_t_before
+    assert effective_power(state, op2) == op2_p_before - 3
+    assert effective_toughness(state, op2) == op2_t_before
+    # Controller's own creature: untouched.
+    assert effective_power(state, own) == own_p_before
+    assert effective_toughness(state, own) == own_t_before
+
+
+def test_mouth_of_the_storm_debuff_clears_at_cleanup():
+    """The -3/-0 wears off at the cleanup step — UEOT plumbing reverts
+    temp_power_bonus to 0."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_power
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op)
+    base_p = effective_power(state, op)
+
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0
+    ).resolve(state, controller_id=0)
+    assert effective_power(state, op) == base_p - 3
+
+    run_cleanup_step(state)
+    assert op.temp_power_bonus == 0
+    assert effective_power(state, op) == base_p
+
+
+def test_mouth_of_the_storm_card_definition_has_etb_trigger():
+    """The card registry exposes the ETB triggered ability with the
+    expected parameters."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+
+    mouth = EOE_CREATURES["Mouth of the Storm"]
+    etb_abilities = [
+        ab for ab in mouth.triggered_abilities if ab.trigger == "etb"
+    ]
+    assert len(etb_abilities) == 1
+    eff = etb_abilities[0].effect
+    assert isinstance(eff, PumpCreaturesOpponentsControlUntilEOT)
+    assert eff.power_bonus == -3
+    assert eff.toughness_bonus == 0
+
+
+def test_pump_creatures_opponents_control_describe_and_log():
+    """Sanity: describe() and the log line render with signed bonuses."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+
+    eff = PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0
+    )
+    d = eff.describe()
+    assert "creatures your opponents control" in d
+    assert "-3" in d
+    assert "+0" in d
+    assert "end of turn" in d
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op)
+    eff.resolve(state, controller_id=0)
+    assert any(
+        "opponents' creatures" in entry and "-3/+0" in entry
+        for entry in state.log
+    )
+
+
+def test_pump_creatures_opponents_control_no_targets_logs_zero():
+    """Resolving with no opponent creatures present is a clean no-op
+    (still logs, with count 0)."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+
+    state = _arena()
+    # Only a P0 creature — no opponent creatures on the battlefield.
+    own = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(own)
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=-3, toughness_bonus=0
+    ).resolve(state, controller_id=0)
+    assert own.temp_power_bonus == 0
+    assert any("(0)" in entry for entry in state.log)
+
+
+def test_pump_creatures_opponents_control_grants_keywords():
+    """Coverage: granted_keywords path adds keywords to opponent
+    creatures alongside the P/T change."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(op)
+    PumpCreaturesOpponentsControlUntilEOT(
+        power_bonus=0,
+        toughness_bonus=0,
+        granted_keywords=frozenset({"first strike"}),
+    ).resolve(state, controller_id=0)
+    assert "first strike" in op.temp_keywords
+
+

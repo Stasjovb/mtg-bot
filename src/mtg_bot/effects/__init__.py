@@ -93,6 +93,7 @@ from mtg_bot.effects.generic import (
     MovePlusOneCounterBetweenPermanentsYouControl,
     MoveSelfCountersToTargetCreatureYouControl,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
     PhaseOutEquippedCreature,
