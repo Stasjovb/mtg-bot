@@ -2457,12 +2457,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         # Meltstrider's Resolve: {G} Aura. Enchanted creature gets +0/+2
         # and has menace (modeling "can't be blocked by more than one
-        # creature"). Dropped: "when this Aura enters, enchanted creature
-        # fights up to one target creature an opponent controls" ETB.
+        # creature"). ETB: "enchanted creature fights up to one target
+        # creature an opponent controls" — wired through
+        # EnchantedCreatureFightsTargetEffect, which reads
+        # state.resolving_source.attached_to as the fighter and routes
+        # damage through _apply_damage so dealt-damage triggers fire.
         make_aura(
             "Meltstrider's Resolve", "{G}",
             power_bonus=0, toughness_bonus=2,
             granted_keywords=frozenset({"menace"}),
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=EnchantedCreatureFightsTargetEffect(),
+                ),
+            ),
         ),
         # Banishing Light: {2}{W} Enchantment. Oblivion-Ring-style ETB
         # exile target nonland permanent an opponent controls; returns

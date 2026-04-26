@@ -194,6 +194,7 @@ from mtg_bot.effects.bespoke import (
     DepressurizeEffect,
     DiplomaticRelationsEffect,
     DyadrineAttackEffect,
+    EnchantedCreatureFightsTargetEffect,
     FamishedWorldsireETBEffect,
     FocusFireEffect,
     KavaronHarrierAttackEffect,

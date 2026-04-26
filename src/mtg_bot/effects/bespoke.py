@@ -683,6 +683,85 @@ class TractorBeamETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class EnchantedCreatureFightsTargetEffect(Effect):
+    """Meltstrider's Resolve's ETB: "When this Aura enters, enchanted
+    creature fights up to one target creature an opponent controls."
+
+    The fighter is the Aura's enchanted creature (read from
+    ``state.resolving_source.attached_to``), not a player-chosen friendly
+    creature. "Up to one" makes the target optional — with no opponent
+    creatures around, the spell still resolves (and the Aura still
+    attaches). When both fighters are present, each deals damage equal
+    to its power to the other simultaneously, going through
+    ``_apply_damage`` so any "when ~ is dealt damage" auras (Cryoshatter,
+    Pain for All) on either fighter trigger correctly. State-based
+    actions then handle creatures with lethal damage.
+    """
+
+    def requires_target(self) -> bool:
+        return False
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        if not targets:
+            return
+        aura = state.resolving_source
+        if aura is None or aura.attached_to is None:
+            return
+        enchanted = next(
+            (o for o in state.battlefield if o.id == aura.attached_to),
+            None,
+        )
+        if enchanted is None:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        opp_creature = next(
+            (o for o in state.battlefield if o.id == target_id),
+            None,
+        )
+        if opp_creature is None:
+            return
+        enchanted_power = effective_power(state, enchanted)
+        opp_power = effective_power(state, opp_creature)
+        state.log.append(
+            f"{enchanted.printing.name} fights {opp_creature.printing.name}"
+        )
+        # Simultaneous damage: each deals damage equal to its power to
+        # the other. Compute amounts before applying so a fighter that
+        # dies still deals its damage (rule 701.12).
+        if opp_power > 0:
+            _apply_damage(state, ("creature", enchanted.id), opp_power)
+        if enchanted_power > 0:
+            _apply_damage(state, ("creature", opp_creature.id), enchanted_power)
+
+    def describe(self) -> str:
+        return (
+            "enchanted creature fights up to one target creature an "
+            "opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
 class WeftwalkingETBEffect(Effect):
     """Weftwalking's ETB: "Shuffle your hand and graveyard into your
     library, then draw seven cards."
