@@ -1513,7 +1513,10 @@ class AddManaToPool(Effect):
 
     ``spend_restriction`` tags each generated coin for cost-payment
     filtering (e.g., "artifact_spell" for Steelswarm Operator's
-    "Spend this mana only to cast an artifact spell").
+    "Spend this mana only to cast an artifact spell";
+    "artifact_activation" for Steelswarm's second mana ability
+    "Spend this mana only to activate abilities of artifact
+    sources").
     """
 
     produces: tuple[tuple[str, int], ...]

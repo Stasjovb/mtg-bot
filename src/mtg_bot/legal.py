@@ -318,7 +318,22 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if ability.cost.mana is not None:
                 from mtg_bot.actions import _effective_ability_mana_cost
                 effective_mana = _effective_ability_mana_cost(state, obj, ability)
-                if not can_pay_cost(state, player_id, effective_mana):
+                # Match the spell_kind tagging used by _activate_ability
+                # so artifact-restricted coins are seen as payable for
+                # artifact-source ability activations (and similarly for
+                # colorless-Eldrazi Temple's gate on Eldrazi activations).
+                ability_spell_kind = "spell"
+                if (
+                    "Eldrazi" in obj.printing.subtypes
+                    and not obj.printing.mana_cost.colored
+                ):
+                    ability_spell_kind = "colorless_eldrazi_ability"
+                elif obj.printing.is_artifact:
+                    ability_spell_kind = "artifact_activation"
+                if not can_pay_cost(
+                    state, player_id, effective_mana,
+                    spell_kind=ability_spell_kind,
+                ):
                     continue
             if ability.cost.tap_self:
                 if obj.tapped:

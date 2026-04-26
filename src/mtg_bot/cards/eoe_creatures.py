@@ -1574,10 +1574,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # oracle: "Flying. {T}: Add {U}. Spend this mana only to cast
         # an artifact spell. {T}: Add {U}{U}. Spend this mana only to
         # activate abilities of artifact sources."
-        # Simplification: both mana abilities use the same cost ({T}),
-        # so a turn only activates one. The second (Add {U}{U}, spend
-        # on artifact-activation-abilities) is dropped — the engine
-        # doesn't model "artifact_activation" spend restrictions.
+        # Both {T} mana abilities are separately-activatable; tapping
+        # for one prevents the other this untap (shared cost). The
+        # second ability mints "artifact_activation"-restricted coins
+        # — see _coin_satisfies_context in actions.py for the gate.
         make_creature(
             "Steelswarm Operator", "{1}{U}", 1, 1,
             artifact=True,
@@ -1588,6 +1588,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=AddManaToPool(
                         produces=(("U", 1),),
                         spend_restriction="artifact_spell",
+                    ),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("U", 1), ("U", 1)),
+                        spend_restriction="artifact_activation",
                     ),
                     is_mana_ability=True,
                 ),

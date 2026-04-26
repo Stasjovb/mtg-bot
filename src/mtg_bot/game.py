@@ -707,7 +707,11 @@ class ManaCoin:
 
     ``spend_restriction`` gates what the coin can pay for. None =
     unrestricted. Known values: "artifact_spell" (Steelswarm Operator's
-    "Spend this mana only to cast an artifact spell").
+    first mana ability — "Spend this mana only to cast an artifact
+    spell"); "artifact_activation" (Steelswarm Operator's second mana
+    ability — "Spend this mana only to activate abilities of artifact
+    sources"); "colorless_eldrazi" (Eldrazi Temple's second mana
+    ability).
     """
 
     color: str

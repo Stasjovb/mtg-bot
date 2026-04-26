@@ -212,6 +212,55 @@ def test_all_fates_any_color_mana_pays_any_colored_cost():
 
 def test_steelswarm_printing_has_mana_ability():
     ss = EOE_CREATURES["Steelswarm Operator"]
-    assert len(ss.activated_abilities) == 1
-    a = ss.activated_abilities[0]
-    assert a.is_mana_ability
+    # Steelswarm prints two mana abilities: {T}: Add {U} (artifact-
+    # spell-restricted) and {T}: Add {U}{U} (artifact-activation-
+    # restricted). Both share the {T} cost, so only one fires per
+    # untap, but both must be defined on the printing.
+    assert len(ss.activated_abilities) == 2
+    assert all(a.is_mana_ability for a in ss.activated_abilities)
+
+
+def test_steelswarm_printing_two_mana_abilities_have_correct_shapes():
+    ss = EOE_CREATURES["Steelswarm Operator"]
+    a0, a1 = ss.activated_abilities
+    # First: {T}: Add {U}, restricted to artifact_spell.
+    assert a0.cost.tap_self is True
+    assert a0.effect.produces == (("U", 1),)
+    assert a0.effect.spend_restriction == "artifact_spell"
+    # Second: {T}: Add {U}{U}, restricted to artifact_activation.
+    assert a1.cost.tap_self is True
+    assert a1.effect.produces == (("U", 1), ("U", 1))
+    assert a1.effect.spend_restriction == "artifact_activation"
+
+
+def test_steelswarm_second_ability_adds_two_blue_artifact_activation_coins():
+    state = _new_state()
+    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss.summoning_sick = False
+    apply_action(
+        state, 0, ActivateAbility(source_id=ss.id, ability_index=1),
+    )
+    p = state.players[0]
+    # Two blue coins, each tagged with the artifact-activation gate.
+    assert len(p.mana_pool) == 2
+    assert all(c.color == "U" for c in p.mana_pool)
+    assert all(
+        c.spend_restriction == "artifact_activation" for c in p.mana_pool
+    )
+    # Source taps once (shared {T} cost across both mana abilities).
+    assert ss.tapped is True
+    assert state.stack == []
+
+
+def test_artifact_activation_coin_pays_for_artifact_ability_activation():
+    """A coin tagged 'artifact_activation' satisfies a payment context
+    of 'artifact_activation' (Steelswarm-style), but not the default
+    'spell' context."""
+    state = _new_state()
+    state.players[0].mana_pool.append(
+        ManaCoin(color="U", spend_restriction="artifact_activation")
+    )
+    cost = parse_mana_cost("{U}")
+    assert can_pay_cost(state, 0, cost, spell_kind="artifact_activation")
+    assert not can_pay_cost(state, 0, cost, spell_kind="spell")
+    assert not can_pay_cost(state, 0, cost, spell_kind="artifact_spell")

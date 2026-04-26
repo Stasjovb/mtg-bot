@@ -139,8 +139,13 @@ def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
       - "colorless_eldrazi_ability": unrestricted or
         "colorless_eldrazi"-tagged. Set when activating an ability
         on a colorless-Eldrazi permanent.
-      - "activated_ability": unrestricted only (for now — future
-        "artifact_activation" tag would go here).
+      - "artifact_activation": unrestricted or
+        "artifact_activation"-tagged. Set when activating an
+        ability on an artifact source (Steelswarm Operator's
+        second mana ability: "Spend this mana only to activate
+        abilities of artifact sources").
+      - "activated_ability": unrestricted only (a generic
+        non-artifact ability activation).
     """
     if coin.spend_restriction is None:
         return True
@@ -149,6 +154,11 @@ def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
     if spell_kind in (
         "colorless_eldrazi_spell", "colorless_eldrazi_ability"
     ) and coin.spend_restriction == "colorless_eldrazi":
+        return True
+    if (
+        spell_kind == "artifact_activation"
+        and coin.spend_restriction == "artifact_activation"
+    ):
         return True
     return False
 
@@ -1018,12 +1028,16 @@ def _activate_ability(
             )
         # Eldrazi Temple's second mana ability lets the colorless
         # Eldrazi owner pay for activations on their Eldrazi.
+        # Steelswarm Operator's second mana ability lets the
+        # controller pay for activations on artifact sources.
         ability_spell_kind = "spell"
         if (
             "Eldrazi" in source.printing.subtypes
             and not source.printing.mana_cost.colored
         ):
             ability_spell_kind = "colorless_eldrazi_ability"
+        elif source.printing.is_artifact:
+            ability_spell_kind = "artifact_activation"
         auto_tap_for_cost(
             state, player_id, mana, spell_kind=ability_spell_kind,
         )
