@@ -2912,21 +2912,24 @@ class GrantTriggeredAbilityUEOT(Effect):
 
 
 @dataclass(frozen=True)
-class PumpTargetOtherArtifactYouControlUEOT(Effect):
-    """Synthesizer Labship's 2+ tier trigger effect (simplified):
-    up to one other target artifact you control that's a creature gets
-    +power/+toughness and gains ``granted_keywords`` until end of turn.
+class TargetArtifactBecomesCreatureUEOT(Effect):
+    """Synthesizer Labship's 2+ tier trigger: ``up to one other target
+    artifact you control becomes an artifact creature with base power
+    and toughness ``power``/``toughness`` and gains ``granted_keywords``
+    until end of turn.``
 
-    Simplification: the real card reads "up to one other target artifact
-    you control becomes an artifact creature with base P/T 2/2 and gains
-    flying UEOT". We drop the "becomes a creature" aspect (which needs
-    layered continuous effects) and require the target to be a creature
-    already — good for stationed Spacecraft and artifact creatures. The
-    target filter still excludes the effect's own source ("other").
+    The effect reuses the manland animation primitives — sets
+    ``temp_is_creature``, overrides base P/T via ``temp_base_pt_override``,
+    and folds keywords into ``temp_keywords``. Cleanup wipes all three.
+    Targets exclude the source (``"other"``); both creature and non-
+    creature artifacts are valid targets (a non-creature artifact
+    gains creature status until end of turn; an already-creature
+    artifact has its base P/T overridden — which can shrink a
+    stationed Spacecraft).
     """
 
-    power_bonus: int = 0
-    toughness_bonus: int = 0
+    power: int = 0
+    toughness: int = 0
     granted_keywords: frozenset[str] = frozenset()
 
     def requires_target(self) -> bool:
@@ -2939,16 +2942,13 @@ class PumpTargetOtherArtifactYouControlUEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
-        from mtg_bot.game import is_creature_now
-
         source = state.resolving_source
         source_id = source.id if source is not None else -1
         return [
-            ("creature", o.id)
+            ("permanent", o.id)
             for o in state.battlefield
             if o.controller_id == controller_id
             and o.printing.is_artifact
-            and is_creature_now(o)
             and o.id != source_id
         ]
 
@@ -2959,23 +2959,24 @@ class PumpTargetOtherArtifactYouControlUEOT(Effect):
         if not targets:
             return
         kind, target_id = targets[0]
-        if kind != "creature":
+        if kind != "permanent":
             return
         obj = next(
             (o for o in state.battlefield if o.id == target_id), None
         )
         if obj is None:
             return
-        obj.temp_power_bonus += self.power_bonus
-        obj.temp_toughness_bonus += self.toughness_bonus
+        obj.temp_is_creature = True
+        obj.temp_base_pt_override = (self.power, self.toughness)
         if self.granted_keywords:
             obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        kw_note = (
+            f" and gains {', '.join(sorted(self.granted_keywords))}"
+            if self.granted_keywords else ""
+        )
         state.log.append(
-            f"{obj.printing.name} gets "
-            f"+{self.power_bonus}/+{self.toughness_bonus}"
-            + (f" and gains {', '.join(sorted(self.granted_keywords))}"
-               if self.granted_keywords else "")
-            + " until end of turn"
+            f"{obj.printing.name} becomes a {self.power}/{self.toughness}"
+            f" artifact creature{kw_note} until end of turn"
         )
 
     def describe(self) -> str:
@@ -2983,8 +2984,9 @@ class PumpTargetOtherArtifactYouControlUEOT(Effect):
         if self.granted_keywords:
             kw = f" and gains {', '.join(sorted(self.granted_keywords))}"
         return (
-            f"up to one other target artifact you control gets "
-            f"+{self.power_bonus}/+{self.toughness_bonus}{kw} until end of turn"
+            f"up to one other target artifact you control becomes a "
+            f"{self.power}/{self.toughness} artifact creature{kw} until "
+            f"end of turn"
         )
 
 

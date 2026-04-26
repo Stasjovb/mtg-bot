@@ -17,7 +17,7 @@ from mtg_bot.cards import (
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
     DealDamageToTargetCreature,
-    PumpTargetOtherArtifactYouControlUEOT,
+    TargetArtifactBecomesCreatureUEOT,
     TriggeredAbility,
 )
 from mtg_bot.game import GameState, Player, Zone
@@ -69,10 +69,9 @@ def test_should_fire_trigger_no_source_returns_false():
 
 def test_synthesizer_labship_combat_trigger_only_at_tier_2():
     """Synthesizer Labship's beginning-of-combat trigger is gated at 2+
-    counters. Below threshold: no pump. At or above: target artifact
-    creature gets +2/+2 + flying UEOT."""
+    counters. Below threshold: no effect. At or above: target artifact
+    becomes a 2/2 creature with flying UEOT (overriding base P/T)."""
     state = _new_state()
-    p = state.players[0]
     state.active_player_idx = 0
     labship = state.new_object(
         EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
@@ -88,21 +87,21 @@ def test_synthesizer_labship_combat_trigger_only_at_tier_2():
     labship.charge_counters = 1
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
-    assert robot.temp_power_bonus == 0
+    assert robot.temp_base_pt_override is None
     assert "flying" not in robot.temp_keywords
 
-    # At threshold: pump applies.
+    # At threshold: rider applies.
     labship.charge_counters = 2
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
-    assert robot.temp_power_bonus == 2
-    assert robot.temp_toughness_bonus == 2
+    assert robot.temp_is_creature is True
+    assert robot.temp_base_pt_override == (2, 2)
     assert "flying" in robot.temp_keywords
 
 
 def test_synthesizer_labship_excludes_self_from_targets():
-    """The effect targets OTHER artifact creatures — Labship can't buff
-    itself even once it's stationed into creature mode."""
+    """The effect targets OTHER artifact permanents — Labship can't
+    buff itself even once it's stationed into creature mode."""
     state = _new_state()
     state.active_player_idx = 0
     labship = state.new_object(
@@ -110,9 +109,9 @@ def test_synthesizer_labship_excludes_self_from_targets():
     )
     labship.charge_counters = 9  # stationed → is a creature + tier 2+ active
     state.battlefield.append(labship)
-    # No other artifact creatures on the battlefield.
-    effect = PumpTargetOtherArtifactYouControlUEOT(
-        power_bonus=2, toughness_bonus=2,
+    # No other artifact permanents on the battlefield.
+    effect = TargetArtifactBecomesCreatureUEOT(
+        power=2, toughness=2,
         granted_keywords=frozenset({"flying"}),
     )
     state.resolving_source = labship
@@ -120,8 +119,8 @@ def test_synthesizer_labship_excludes_self_from_targets():
         legal = effect.legal_targets(state, 0)
     finally:
         state.resolving_source = None
-    # Labship is an artifact creature (stationed at 9) but self-targeting
-    # is disallowed → empty.
+    # Labship is an artifact (and a creature once stationed) but
+    # self-targeting is disallowed → empty.
     assert legal == []
 
 
@@ -141,8 +140,8 @@ def test_synthesizer_labship_legal_target_excludes_opponent_artifacts():
         TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(my_robot)
-    effect = PumpTargetOtherArtifactYouControlUEOT(
-        power_bonus=2, toughness_bonus=2,
+    effect = TargetArtifactBecomesCreatureUEOT(
+        power=2, toughness=2,
         granted_keywords=frozenset({"flying"}),
     )
     state.resolving_source = labship
@@ -150,12 +149,12 @@ def test_synthesizer_labship_legal_target_excludes_opponent_artifacts():
         legal = effect.legal_targets(state, 0)
     finally:
         state.resolving_source = None
-    assert legal == [("creature", my_robot.id)]
+    assert legal == [("permanent", my_robot.id)]
 
 
-def test_pump_target_other_artifact_resolve_no_targets_noop():
-    effect = PumpTargetOtherArtifactYouControlUEOT(
-        power_bonus=2, toughness_bonus=2,
+def test_target_artifact_becomes_creature_resolve_no_targets_noop():
+    effect = TargetArtifactBecomesCreatureUEOT(
+        power=2, toughness=2,
         granted_keywords=frozenset({"flying"}),
     )
     state = _new_state()
@@ -163,31 +162,32 @@ def test_pump_target_other_artifact_resolve_no_targets_noop():
     effect.resolve(state, 0, ())
 
 
-def test_pump_target_other_artifact_resolve_bad_kind_noop():
-    """Defensive: resolving with a non-creature kind is a silent no-op."""
-    effect = PumpTargetOtherArtifactYouControlUEOT(power_bonus=1)
+def test_target_artifact_becomes_creature_resolve_bad_kind_noop():
+    """Defensive: resolving with a non-permanent kind is a silent no-op."""
+    effect = TargetArtifactBecomesCreatureUEOT(power=1, toughness=1)
     state = _new_state()
     effect.resolve(state, 0, (("player", 0),))
 
 
-def test_pump_target_other_artifact_resolve_missing_object_noop():
+def test_target_artifact_becomes_creature_resolve_missing_object_noop():
     """Defensive: target id not on battlefield is a silent no-op."""
-    effect = PumpTargetOtherArtifactYouControlUEOT(power_bonus=1)
+    effect = TargetArtifactBecomesCreatureUEOT(power=1, toughness=1)
     state = _new_state()
-    effect.resolve(state, 0, (("creature", 999),))
+    effect.resolve(state, 0, (("permanent", 999),))
 
 
-def test_pump_target_other_artifact_describe():
-    text = PumpTargetOtherArtifactYouControlUEOT(
-        power_bonus=2, toughness_bonus=2,
+def test_target_artifact_becomes_creature_describe():
+    text = TargetArtifactBecomesCreatureUEOT(
+        power=2, toughness=2,
         granted_keywords=frozenset({"flying"}),
     ).describe()
-    assert "other target artifact" in text
+    assert "becomes" in text
+    assert "2/2" in text
     assert "flying" in text
-    text_no_kw = PumpTargetOtherArtifactYouControlUEOT(
-        power_bonus=1, toughness_bonus=1,
+    text_no_kw = TargetArtifactBecomesCreatureUEOT(
+        power=1, toughness=1,
     ).describe()
-    assert "+1/+1" in text_no_kw
+    assert "1/1" in text_no_kw
 
 
 def test_dawnsire_attacks_trigger_only_at_tier_10():

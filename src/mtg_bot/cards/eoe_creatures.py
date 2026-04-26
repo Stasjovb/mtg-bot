@@ -662,10 +662,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # 2+ | At the beginning of combat on your turn, up to one other
         # target artifact you control becomes an artifact creature with
         # base P/T 2/2 and gains flying until end of turn.
-        # Simplification: we can't make a non-creature artifact "become"
-        # a creature (needs layered continuous effects). We approximate
-        # by restricting the target to artifacts that are already
-        # creatures and pumping +2/+2 + flying UEOT on them.
+        # The 2+ tier trigger reuses the manland animation primitives
+        # (temp_is_creature + temp_base_pt_override + temp_keywords)
+        # via TargetArtifactBecomesCreatureUEOT — non-creature artifacts
+        # gain creature status with base 2/2 + flying UEOT, while an
+        # already-creature artifact has its base P/T overridden (which
+        # can shrink a stationed Spacecraft, matching oracle).
         make_spacecraft(
             "Synthesizer Labship", "{U}", 4, 4,
             station_threshold=9,
@@ -673,8 +675,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="beginning_of_combat",
-                    effect=PumpTargetOtherArtifactYouControlUEOT(
-                        power_bonus=2, toughness_bonus=2,
+                    effect=TargetArtifactBecomesCreatureUEOT(
+                        power=2, toughness=2,
                         granted_keywords=frozenset({"flying"}),
                     ),
                     tier_threshold=2,
