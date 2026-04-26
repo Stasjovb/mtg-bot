@@ -5728,34 +5728,47 @@ class PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(Effect):
 @dataclass(frozen=True)
 class PutPlusOneCounterOnEachCreatureYouControl(Effect):
     """Put ``amount`` +1/+1 counter(s) on each creature the controller
-    controls at resolution. Matches Atmospheric Greenhouse's ETB."""
+    controls at resolution. Matches Atmospheric Greenhouse's ETB.
+
+    ``exclude_source=True`` models "each other creature you control" — reads
+    ``state.resolving_source`` to skip the triggering permanent (e.g.
+    Dawnstrike Vanguard's end-step trigger).
+    """
 
     amount: int = 1
+    exclude_source: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.game import add_plus_one_counters
+        source = state.resolving_source if self.exclude_source else None
         count = 0
         for obj in state.battlefield:
             if obj.controller_id != controller_id:
                 continue
             if not obj.printing.is_creature:
                 continue
+            if source is not None and obj is source:
+                continue
             add_plus_one_counters(state, obj, self.amount)
             count += 1
+        scope = "other creature(s)" if self.exclude_source else "creature(s)"
         state.log.append(
-            f"P{controller_id}'s {count} creature(s) each get "
+            f"P{controller_id}'s {count} {scope} each get "
             f"a +1/+1 counter"
         )
 
     def describe(self) -> str:
-        if self.amount == 1:
-            return "put a +1/+1 counter on each creature you control"
-        return (
-            f"put {self.amount} +1/+1 counters on each creature you control"
+        scope = (
+            "each other creature you control"
+            if self.exclude_source
+            else "each creature you control"
         )
+        if self.amount == 1:
+            return f"put a +1/+1 counter on {scope}"
+        return f"put {self.amount} +1/+1 counters on {scope}"
 
 
 

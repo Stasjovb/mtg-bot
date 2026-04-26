@@ -652,27 +652,115 @@ def test_sunstar_chaplain_conditional_plus_one():
 
 
 def test_dawnstrike_vanguard_mass_buff_when_condition_met():
+    """Condition met → each OTHER creature you control gets +1/+1; the
+    Vanguard itself does NOT (oracle: "other than this creature")."""
     from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_toughness
 
     state = _arena()
     van = state.new_object(
         EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(van)
+    allies = []
     for _ in range(2):
         ally = state.new_object(
             SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
         )
         ally.tapped = True
         state.battlefield.append(ally)
+        allies.append(ally)
     van.tapped = True
     assert "lifelink" in van.printing.keywords
     trigger = van.printing.triggered_abilities[0]
     state.resolving_source = van
     trigger.effect.resolve(state, 0)
-    for o in state.battlefield:
-        if o.controller_id == 0:
-            assert o.plus_one_counters == 1
+    # Vanguard itself is excluded — base 4/5 unchanged.
+    assert van.plus_one_counters == 0
+    assert effective_power(state, van) == 4
+    assert effective_toughness(state, van) == 5
+    # Each OTHER creature got +1/+1.
+    for ally in allies:
+        assert ally.plus_one_counters == 1
+        assert effective_power(state, ally) == 3
+        assert effective_toughness(state, ally) == 3
+
+
+def test_dawnstrike_vanguard_no_buff_when_condition_unmet():
+    """Condition unmet (fewer than 2 tapped creatures) → no counters
+    on anybody, including the Vanguard."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_toughness
+
+    state = _arena()
+    van = state.new_object(
+        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(van)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ally)
+    # Only the Vanguard is tapped — that's one tapped creature, fewer
+    # than the required two.
+    van.tapped = True
+    trigger = van.printing.triggered_abilities[0]
+    state.resolving_source = van
+    trigger.effect.resolve(state, 0)
+    assert van.plus_one_counters == 0
+    assert ally.plus_one_counters == 0
+    assert effective_power(state, van) == 4
+    assert effective_toughness(state, van) == 5
+    assert effective_power(state, ally) == 2
+    assert effective_toughness(state, ally) == 2
+
+
+def test_dawnstrike_vanguard_repeated_triggers_never_buff_self():
+    """Two end-step trigger resolutions stack counters on allies but
+    never on the Vanguard itself, even though it's a tapped creature
+    that helps satisfy the condition. Live shifts in plus_one_counters
+    confirm the "other than this creature" clause holds across firings."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_power, effective_toughness
+
+    state = _arena()
+    van = state.new_object(
+        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(van)
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    ally.tapped = True
+    state.battlefield.append(ally)
+    van.tapped = True
+    trigger = van.printing.triggered_abilities[0]
+    state.resolving_source = van
+
+    # First firing: condition met (2 tapped) → ally gets +1/+1.
+    trigger.effect.resolve(state, 0)
+    assert van.plus_one_counters == 0
+    assert ally.plus_one_counters == 1
+    assert effective_power(state, van) == 4
+    assert effective_toughness(state, van) == 5
+    assert effective_power(state, ally) == 3
+
+    # Untap the ally — only the Vanguard is tapped now, condition unmet.
+    ally.tapped = False
+    trigger.effect.resolve(state, 0)
+    assert van.plus_one_counters == 0
+    assert ally.plus_one_counters == 1  # unchanged
+
+    # Re-tap the ally → condition met again, second counter on ally,
+    # still none on the Vanguard.
+    ally.tapped = True
+    trigger.effect.resolve(state, 0)
+    assert van.plus_one_counters == 0
+    assert ally.plus_one_counters == 2
+    assert effective_power(state, van) == 4
+    assert effective_toughness(state, van) == 5
+    assert effective_power(state, ally) == 4
+    assert effective_toughness(state, ally) == 4
 
 
 def test_cloudsculpt_technician_self_buff_with_artifact():

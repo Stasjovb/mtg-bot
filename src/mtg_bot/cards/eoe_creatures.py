@@ -1873,11 +1873,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Dawnstrike Vanguard: 4/5 Lifelink. Conditional EoT: put +1/+1
-        # counter on each other creature you control. Oracle says "each
-        # creature you control other than this creature"; we simplify by
-        # counting itself too — the functional upside is minor since it
-        # also has lifelink-enabled stats. Tracked simplification.
+        # Dawnstrike Vanguard: 4/5 Lifelink. Conditional EoT: if you
+        # control two or more tapped creatures, put a +1/+1 counter on
+        # each creature you control other than this creature. The
+        # ``exclude_source=True`` flag honors the "other than this
+        # creature" clause via state.resolving_source.
         make_creature(
             "Dawnstrike Vanguard", "{5}{W}", 4, 5,
             keywords={"lifelink"},
@@ -1887,6 +1887,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=ConditionalOnTappedCreatures(
                         effect=PutPlusOneCounterOnEachCreatureYouControl(
                             amount=1,
+                            exclude_source=True,
                         ),
                         min_count=2,
                     ),
