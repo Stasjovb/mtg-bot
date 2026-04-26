@@ -411,6 +411,11 @@ class CardPrinting:
     # When True, the caster must randomly discard a card to pay the ward;
     # if their hand is empty, the spell is countered.
     ward_discard_random: bool = False
+    # Ward—Discard a card (chosen, non-mana ward). Sunset Saboteur.
+    # When True, the caster picks (via ``Agent.choose_discard``) which card
+    # to discard from their hand to pay the ward; if their hand is empty,
+    # the spell is countered.
+    ward_discard_chosen: bool = False
     # Equipment: continuous bonuses granted to the equipped creature.
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
@@ -639,6 +644,7 @@ def make_creature(
     legendary: bool = False,
     ward: str | None = None,
     ward_discard_random: bool = False,
+    ward_discard_chosen: bool = False,
     grants_additional_land_per_turn: int = 0,
     extra_etb_trigger: int = 0,
     grants_cast_artifact_from_top_of_library: bool = False,
@@ -679,6 +685,7 @@ def make_creature(
         ward_cost=parse_mana_cost(ward) if ward else None,
         ward_cost_str=ward or "",
         ward_discard_random=ward_discard_random,
+        ward_discard_chosen=ward_discard_chosen,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         extra_etb_trigger=extra_etb_trigger,
         grants_cast_artifact_from_top_of_library=(

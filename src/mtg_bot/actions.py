@@ -984,6 +984,26 @@ def _apply_ward_check(
                 f"to pay Ward for {obj.printing.name}"
             )
             continue
+        # Ward — Discard a card (chosen by caster). Sunset Saboteur.
+        if obj.printing.ward_discard_chosen:
+            p = state.player_by_id(caster_id)
+            if not p.hand:
+                state.log.append(
+                    f"Spell countered by {obj.printing.name}'s Ward "
+                    f"(hand empty, can't discard)"
+                )
+                return True
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, caster_id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{caster_id} discards {card.printing.name} "
+                f"to pay Ward for {obj.printing.name}"
+            )
+            continue
         ward = obj.printing.ward_cost
         if ward is None:
             continue
