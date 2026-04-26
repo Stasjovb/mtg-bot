@@ -62,10 +62,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Knight Luminary has warp {1}{W} — warp is not implemented yet, so
-        # Luminary only plays at its regular cost.
+        # ETB creates a 1/1 Human Soldier token. Warp {1}{W} — alt-cost
+        # cast from hand, exiled at next end step, recastable later.
         make_creature(
             "Knight Luminary", "{3}{W}", 3, 2,
+            warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",

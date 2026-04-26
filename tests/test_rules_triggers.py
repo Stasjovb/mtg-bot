@@ -555,6 +555,8 @@ def test_knight_luminary_etb_creates_a_soldier_token():
     from mtg_bot.cards import EOE_CREATURES
 
     luminary = EOE_CREATURES["Knight Luminary"]
+    # Warp {1}{W} alt-cost is now declared on the printing.
+    assert luminary.warp_cost_str == "{1}{W}"
     state = _arena(
         p0_hand=[luminary],
         p0_battlefield=[BASIC_LANDS["Plains"]] * 4,
