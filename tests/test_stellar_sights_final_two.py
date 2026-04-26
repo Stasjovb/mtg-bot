@@ -1,9 +1,14 @@
 """Tests for Eldrazi Temple (colorless-Eldrazi spend restriction) and
 Swarmyard (regenerate mechanic).
 
-Both cards are gameplay-moot in our EoE pool — no Eldrazi cards, no
-Rat/Spider/Squirrel/Insect/Snake creatures — so these tests construct
-synthetic targets via dataclasses.replace to exercise the machinery.
+Eldrazi Temple is gameplay-moot in our EoE pool (no Eldrazi cards),
+so its tests synthesize targets via dataclasses.replace.
+
+Swarmyard does have an in-pool target — Skystinger (Insect Warrior).
+These tests still use synthetic creatures to exercise the machinery
+exhaustively (Rat subtype, no-subtype baseline, second-strike, zero-
+toughness, cleanup); a Skystinger-specific end-to-end test lives in
+``test_swarmyard_regenerate.py``.
 """
 
 import dataclasses

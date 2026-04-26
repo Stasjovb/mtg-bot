@@ -928,9 +928,10 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Rat, Spider,
     # Squirrel, Insect, or Snake.
     #
-    # Gameplay-moot in our EoE pool — no printed creatures have any of
-    # the five allowed subtypes — but the regenerate machinery is now
-    # fully wired (GameObject.regeneration_shield + SBA check in
+    # Live in our EoE pool: Skystinger is "Creature — Insect Warrior"
+    # so its Insect subtype matches the allowed-subtypes filter. The
+    # regenerate machinery is fully wired
+    # (GameObject.regeneration_shield + SBA check in
     # state_based_actions + UEOT cleanup). The ability's target
     # filter lists the subtype constraint so legal_moves honors it.
     "Swarmyard": make_utility_land(
