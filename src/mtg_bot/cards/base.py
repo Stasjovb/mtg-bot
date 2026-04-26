@@ -46,6 +46,7 @@ from mtg_bot.effects import (
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
     DestroyAllCreatures,
+    DestroyEnchantedPermanent,
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,

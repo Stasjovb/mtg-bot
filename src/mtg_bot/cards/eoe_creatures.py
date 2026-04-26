@@ -2251,12 +2251,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Cryoshatter: {U} Aura. Enchanted creature gets -5/-0.
-        # Simplified: drops the "when enchanted creature becomes tapped
-        # or is dealt damage, destroy it" compound trigger.
+        # Cryoshatter: {U} Aura. Enchanted creature gets -5/-0 and
+        # "when this creature becomes tapped, destroy it." The
+        # becomes-tapped half is implemented via an
+        # ``enchanted_permanent_becomes_tapped`` aura trigger fired by
+        # ``tap_permanent``. Simplified: drops the "or is dealt damage"
+        # half of the compound trigger (no damage-trigger plumbing yet).
         make_aura(
             "Cryoshatter", "{U}",
             power_bonus=-5, toughness_bonus=0,
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="enchanted_permanent_becomes_tapped",
+                    effect=DestroyEnchantedPermanent(),
+                ),
+            ),
         ),
         # Meltstrider's Resolve: {G} Aura. Enchanted creature gets +0/+2
         # and has menace (modeling "can't be blocked by more than one

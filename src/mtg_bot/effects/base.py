@@ -377,6 +377,9 @@ class TriggeredAbility:
             "dies": "When ~ dies",
             "landfall": "Landfall — Whenever a land you control enters",
             "becomes_tapped": "Whenever ~ becomes tapped",
+            "enchanted_permanent_becomes_tapped": (
+                "Whenever enchanted permanent becomes tapped"
+            ),
             "second_spell_each_turn": (
                 "Whenever you cast your second spell each turn"
             ),

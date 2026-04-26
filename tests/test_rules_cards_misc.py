@@ -2874,6 +2874,88 @@ def test_aura_goes_to_graveyard_when_enchanted_creature_leaves():
     assert aura in state.players[0].graveyard
 
 
+def test_cryoshatter_destroys_host_when_host_becomes_tapped():
+    """Cryoshatter's "when enchanted creature becomes tapped, destroy it"
+    half: tapping the host should destroy the host, and the aura then
+    follows it off the battlefield (auras leave when their host does).
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    # Sanity: both on the battlefield, neither is in a graveyard yet.
+    assert bear in state.battlefield
+    assert cryo in state.battlefield
+    # Tap the bear via tap_permanent — this is the trigger source.
+    tap_permanent(state, bear)
+    # Bear was destroyed.
+    assert bear not in state.battlefield
+    assert bear in state.players[1].graveyard
+    # Cryoshatter, having lost its host, also left the battlefield
+    # (auras get sent to their owner's graveyard when their host leaves).
+    assert cryo not in state.battlefield
+    assert cryo in state.players[0].graveyard
+
+
+def test_cryoshatter_no_op_when_host_already_tapped():
+    """If the host is already tapped, tap_permanent is a no-op and the
+    aura's becomes-tapped trigger does NOT fire (no re-trigger)."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    bear.tapped = True
+    state.battlefield.append(bear)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    tap_permanent(state, bear)
+    assert bear in state.battlefield
+    assert cryo in state.battlefield
+
+
+def test_tap_permanent_does_not_fire_aura_trigger_for_other_hosts():
+    """An aura's enchanted-permanent-becomes-tapped trigger only fires
+    when ITS host is tapped, not when some other permanent is tapped."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import tap_permanent
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    other = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(other)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    # Tap the OTHER bear (not the enchanted one).
+    tap_permanent(state, other)
+    # Enchanted bear is untouched; aura still attached.
+    assert bear in state.battlefield
+    assert cryo in state.battlefield
+    assert cryo.attached_to == bear.id
+
+
 def test_meltstriders_resolve_grants_buff_and_menace():
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_toughness, effective_keywords

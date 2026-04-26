@@ -509,6 +509,12 @@ def destroy(state: GameState, obj: "GameObject") -> bool:
 def tap_permanent(state: GameState, obj: "GameObject") -> None:
     """Tap ``obj`` and fire any of its "becomes_tapped" triggered abilities.
 
+    Also fires "enchanted_permanent_becomes_tapped" triggers on any Aura
+    attached to ``obj`` — this is how Cryoshatter ("when enchanted
+    creature becomes tapped, destroy it") works. The aura is the trigger
+    source (state.resolving_source), and effects that need to know about
+    the host follow ``aura.attached_to``.
+
     If the object is already tapped, this is a no-op (no re-trigger).
     Current EoE cards using this trigger are untargeted — if a future card
     requires a target we'd add the same target-selection branch used in
@@ -550,6 +556,47 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
             effect.resolve(state, obj.controller_id, targets)
         finally:
             state.resolving_source = None
+    # Auras attached to ``obj`` whose oracle text is
+    # "whenever enchanted permanent becomes tapped, ..." (Cryoshatter).
+    # Snapshot the attached list so an aura's effect destroying the host
+    # (which sends the aura to the graveyard) can't perturb iteration.
+    for aura in list(state.battlefield):
+        if not aura.printing.is_aura:
+            continue
+        if aura.attached_to != obj.id:
+            continue
+        for i, ability in enumerate(aura.printing.triggered_abilities):
+            if ability.trigger != "enchanted_permanent_becomes_tapped":
+                continue
+            if not should_fire_trigger(state, aura.id, i, ability):
+                continue
+            state.log.append(
+                f"{aura.printing.name}'s enchanted-permanent-becomes-tapped "
+                f"ability triggers"
+            )
+            state.resolving_source = aura
+            ac_id = aura.controller_id
+            controller = state.player_by_id(ac_id)
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            try:
+                if effect.requires_target():
+                    legal = effect.legal_targets(state, ac_id)
+                    if not legal:
+                        state.log.append(
+                            f"{aura.printing.name}'s trigger fizzles "
+                            f"(no legal targets)"
+                        )
+                        continue
+                    if controller.agent is not None:
+                        chosen = controller.agent.choose_target(
+                            state, ac_id, legal
+                        )
+                        if chosen is not None:
+                            targets = (chosen,)
+                effect.resolve(state, ac_id, targets)
+            finally:
+                state.resolving_source = None
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:

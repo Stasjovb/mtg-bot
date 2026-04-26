@@ -2683,6 +2683,47 @@ class DestroyTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class DestroyEnchantedPermanent(Effect):
+    """Destroy the permanent enchanted by the resolving Aura.
+
+    Untargeted: the source is the aura (read from
+    ``state.resolving_source``), and the affected permanent is whatever
+    that aura is currently attached to. Used by Cryoshatter's
+    "when enchanted creature becomes tapped, destroy it" trigger.
+
+    If the aura is no longer on the battlefield or has no host (e.g.,
+    the host already left), the effect fizzles.
+    """
+
+    def requires_target(self) -> bool:
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import destroy
+
+        aura = state.resolving_source
+        if aura is None or aura.attached_to is None:
+            return
+        host = next(
+            (o for o in state.battlefield if o.id == aura.attached_to),
+            None,
+        )
+        if host is None:
+            return
+        state.log.append(
+            f"{host.printing.name} is destroyed by {aura.printing.name}"
+        )
+        destroy(state, host)
+
+    def describe(self) -> str:
+        return "destroy enchanted permanent"
+
+
+
+@dataclass(frozen=True)
 class DestroyTargetArtifact(Effect):
     """Destroy target artifact. Tokens cease to exist."""
 

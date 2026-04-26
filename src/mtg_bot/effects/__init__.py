@@ -52,6 +52,7 @@ from mtg_bot.effects.generic import (
     DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyAllCreatures,
     DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
+    DestroyEnchantedPermanent,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     DestroyTargetArtifactOrTappedCreature,
