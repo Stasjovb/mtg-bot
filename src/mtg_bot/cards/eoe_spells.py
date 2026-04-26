@@ -597,14 +597,21 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Thrumming Hivepool `{6}` Artifact. Real oracle: "Affinity for
-        # Slivers. Slivers you control have double strike and haste.
-        # At the beginning of your upkeep, create two 1/1 colorless
-        # Sliver creature tokens."
-        # Simplification: Affinity (cost reduction) is dropped. The
-        # Sliver anthem grants double strike + haste via a
+        # Slivers (This spell costs {1} less to cast for each Sliver
+        # you control.). Slivers you control have double strike and
+        # haste. At the beginning of your upkeep, create two 1/1
+        # colorless Sliver creature tokens."
+        # Affinity wired via a CostReduction with the new
+        # "affinity_for_slivers" condition (amount * Sliver count).
+        # The Sliver anthem grants double strike + haste via a
         # SLIVERS_YOU_CONTROL static.
         make_artifact(
             "Thrumming Hivepool", "{6}",
+            cost_reductions=(
+                CostReduction(
+                    amount=1, condition="affinity_for_slivers",
+                ),
+            ),
             static_abilities=(
                 StaticAbility(
                     scope=StaticScope.SLIVERS_YOU_CONTROL,

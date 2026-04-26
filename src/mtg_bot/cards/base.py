@@ -875,6 +875,7 @@ def make_artifact(
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = False,
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    cost_reductions: tuple[CostReduction, ...] = (),
 ) -> CardPrinting:
     """Build a non-creature, non-Spacecraft Artifact permanent."""
     prefix = "Legendary " if legendary else ""
@@ -892,6 +893,7 @@ def make_artifact(
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
+        cost_reductions=tuple(cost_reductions),
     )
 
 

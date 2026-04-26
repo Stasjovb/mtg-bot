@@ -376,6 +376,18 @@ def _evaluate_cost_reduction(
                 ):
                     names.add(o.printing.name)
             return rule.amount * len(names)
+    elif rule.condition == "affinity_for_slivers":
+        # Thrumming Hivepool: "Affinity for Slivers (This spell costs
+        # {1} less to cast for each Sliver you control.)" — count
+        # Slivers the caster controls on the battlefield. The spell
+        # itself is on the stack, not the battlefield, so it isn't
+        # counted (matches MTG rules 702.41 for Affinity).
+        sliver_count = sum(
+            1 for o in state.battlefield
+            if o.controller_id == caster_id
+            and "Sliver" in o.printing.subtypes
+        )
+        return rule.amount * sliver_count
     elif rule.condition == "target_is_blocking_creature":
         # Dark Endurance: "this spell costs {1} less to cast if it
         # targets a blocking creature." Cast-pipeline path passes the
