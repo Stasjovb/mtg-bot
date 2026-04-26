@@ -1605,6 +1605,97 @@ def test_bioengineered_future_etb_makes_lander():
     assert len(landers) == 1
 
 
+def test_bioengineered_future_grants_etb_counters_per_land_entered_this_turn():
+    """Oracle: 'Each creature you control enters with an additional +1/+1
+    counter on it for each land that entered the battlefield under your
+    control this turn.'
+
+    Two lands entered → next creature enters with 2 +1/+1 counters."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.actions import put_into_battlefield
+
+    state = _arena()
+    state.players[0].lands_entered_this_turn = 2
+    enc = state.new_object(
+        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(enc)
+    bear_in_hand = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, bear_in_hand, controller_id=0)
+    assert bear_in_hand.plus_one_counters == 2
+
+
+def test_bioengineered_future_no_lands_means_no_extra_counters():
+    """If no lands entered yet, the entering creature gets 0 extra counters."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.actions import put_into_battlefield
+
+    state = _arena()
+    assert state.players[0].lands_entered_this_turn == 0
+    enc = state.new_object(
+        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(enc)
+    bear_in_hand = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, bear_in_hand, controller_id=0)
+    assert bear_in_hand.plus_one_counters == 0
+
+
+def test_bioengineered_future_anthem_stacks_with_multiple_sources():
+    """Two Bioengineered Futures double the counters per land entered."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.actions import put_into_battlefield
+
+    state = _arena()
+    state.players[0].lands_entered_this_turn = 3
+    for _ in range(2):
+        enc = state.new_object(
+            EOE_CREATURES["Bioengineered Future"], owner_id=0,
+            zone=Zone.BATTLEFIELD,
+        )
+        state.battlefield.append(enc)
+    bear_in_hand = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, bear_in_hand, controller_id=0)
+    # 2 sources × 3 lands = 6 extra counters.
+    assert bear_in_hand.plus_one_counters == 6
+
+
+def test_lands_entered_this_turn_increments_on_play_land():
+    """Playing a land via _play_land bumps lands_entered_this_turn (in
+    addition to lands_played_this_turn)."""
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards import BASIC_LANDS
+
+    state = _arena()
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.HAND,
+    )
+    state.players[0].hand.append(forest)
+    _play_land(state, 0, forest.id)
+    assert state.players[0].lands_played_this_turn == 1
+    assert state.players[0].lands_entered_this_turn == 1
+
+
+def test_lands_entered_this_turn_resets_at_cleanup():
+    """The counter resets at end-of-turn cleanup."""
+    from mtg_bot.turn import run_cleanup_step
+
+    state = _arena()
+    state.players[0].lands_entered_this_turn = 5
+    state.players[1].lands_entered_this_turn = 2
+    run_cleanup_step(state)
+    assert state.players[0].lands_entered_this_turn == 0
+    assert state.players[1].lands_entered_this_turn == 0
+
+
 def test_eusocial_engineering_landfall_makes_robot():
     """Enchantment sits on battlefield and fires Landfall."""
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS

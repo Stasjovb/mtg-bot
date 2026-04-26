@@ -2395,9 +2395,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Bioengineered Future: {1}{G}{G} Enchantment. ETB create a
-        # Lander token. Simplified: drops the "each creature you control
-        # enters with an additional +1/+1 counter" replacement effect
-        # (replacement effects aren't modeled).
+        # Lander token. While on the battlefield, each creature you
+        # control enters with an additional +1/+1 counter on it for
+        # each land that entered the battlefield under your control
+        # this turn. The ETB-counter rider is wired through the
+        # ``grants_etb_counter_per_land_entered_this_turn`` flag,
+        # which actions.put_into_battlefield consults when each
+        # creature ETBs.
         make_enchantment(
             "Bioengineered Future", "{1}{G}{G}",
             triggered_abilities=(
@@ -2409,6 +2413,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
             ),
+            grants_etb_counter_per_land_entered_this_turn=True,
         ),
         # Eusocial Engineering: {3}{G}{G} Enchantment. Landfall → create
         # a 2/2 Robot token. Warp {1}{G}.

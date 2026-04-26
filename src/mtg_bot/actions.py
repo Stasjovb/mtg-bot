@@ -490,6 +490,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         _offer_echoing_deeps_copy(state, player_id, card)
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
+    p.lands_entered_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
     # ETB triggers on the land itself (Command Bridge's
     # sacrifice-unless-tap rider). Push them on the stack like any
@@ -1550,6 +1551,28 @@ def put_into_battlefield(
             + mc.generic
             + sum(n for _, n in mc.colored),
         )
+    # External anthems that grant extra ETB counters to creatures:
+    # "Each creature you control enters with an additional +1/+1 counter
+    # on it for each land that entered the battlefield under your control
+    # this turn" (Bioengineered Future). Applied per source on the
+    # controller's battlefield — multiple sources stack.
+    if obj.printing.is_creature:
+        controller = state.player_by_id(controller_id)
+        anthem_sources = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id
+            and getattr(
+                o.printing,
+                "grants_etb_counter_per_land_entered_this_turn",
+                False,
+            )
+        )
+        if anthem_sources and controller.lands_entered_this_turn:
+            from mtg_bot.game import add_plus_one_counters
+            add_plus_one_counters(
+                state, obj,
+                anthem_sources * controller.lands_entered_this_turn,
+            )
     # Planeswalker: initialize loyalty counters to the printed starting
     # loyalty. Only applied the first time the card enters the
     # battlefield (loyalty_counters starts at 0).
@@ -1562,6 +1585,12 @@ def put_into_battlefield(
     if obj.printing.devour_land_multiplier > 0:
         _apply_devour(state, obj, controller_id)
     state.battlefield.append(obj)
+    # Track land ETBs for "lands entered under your control this turn"
+    # (Bioengineered Future). Distinct from lands_played_this_turn — this
+    # also covers basics fetched via Lander tokens or other search-and-
+    # put-onto-battlefield effects that don't go through _play_land.
+    if obj.printing.is_land:
+        state.player_by_id(controller_id).lands_entered_this_turn += 1
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:
         _fire_artifact_enters_triggers(state, obj)

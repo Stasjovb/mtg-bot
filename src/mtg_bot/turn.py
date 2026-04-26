@@ -884,6 +884,7 @@ def run_cleanup_step(state: GameState) -> None:
         p.noncreature_spells_cast_this_turn = 0
         p.attacked_with_spacecraft_this_turn = False
         p.life_gained_this_turn = 0
+        p.lands_entered_this_turn = 0
         # Revert Dominion Bracelet agent override (applied at untap).
         if p.agent_override_saved is not None:
             state.log.append(

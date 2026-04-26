@@ -446,6 +446,13 @@ class CardPrinting:
     #     i.e. X + base generic + colored pips (Dyadrine).
     #   None — no such replacement.
     enters_with_counters_from_x: str | None = None
+    # External-anthem flag. While this permanent is on the battlefield,
+    # each creature its controller plays enters with one additional +1/+1
+    # counter for each land that entered the battlefield under that
+    # controller this turn (read from Player.lands_entered_this_turn).
+    # Multiple sources stack. Matches Bioengineered Future. Consumed in
+    # actions.put_into_battlefield.
+    grants_etb_counter_per_land_entered_this_turn: bool = False
     # Aura enchant restriction. Auras default to enchanting creatures;
     # Hardlight Containment enchants artifacts (and our machinery
     # wouldn't find a legal target otherwise). Accepts "creature" or
@@ -936,6 +943,7 @@ def make_enchantment(
     is_token_doubler: bool = False,
     restricts_noncreature_spells_to_one_per_turn: bool = False,
     warp: str | None = None,
+    grants_etb_counter_per_land_entered_this_turn: bool = False,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
     like any other permanent and sits there firing triggers or providing
@@ -962,6 +970,9 @@ def make_enchantment(
         ),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
+        grants_etb_counter_per_land_entered_this_turn=(
+            grants_etb_counter_per_land_entered_this_turn
+        ),
     )
 
 

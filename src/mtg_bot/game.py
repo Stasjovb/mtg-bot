@@ -603,6 +603,14 @@ class Player:
     graveyard: list[GameObject] = field(default_factory=list)
     exile: list[GameObject] = field(default_factory=list)
     lands_played_this_turn: int = 0
+    # Number of lands that have entered the battlefield under this player's
+    # control during the current turn. Distinct from lands_played_this_turn
+    # (which counts the per-turn land-drop action only): incremented for
+    # *every* land ETB, including basics fetched by Lander tokens or other
+    # search-and-put-onto-battlefield effects. Reset at cleanup. Used by
+    # cards that read "for each land that entered the battlefield under your
+    # control this turn" (Bioengineered Future).
+    lands_entered_this_turn: int = 0
     # Number of spells this player has cast in the current turn. Reset at
     # cleanup. Used by "whenever you cast your Nth spell each turn" triggers.
     spells_cast_this_turn: int = 0
