@@ -859,6 +859,7 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
         obj.temp_keywords = frozenset()
+        obj.temp_triggered_abilities = ()
         obj.temp_unblockable = False
         obj.temp_base_pt_override = None
         obj.temp_is_creature = False

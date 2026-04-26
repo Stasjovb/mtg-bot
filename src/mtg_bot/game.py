@@ -110,6 +110,15 @@ class GameObject:
     extended_temp_toughness_bonus: int = 0
     extended_temp_keywords: frozenset[str] = field(default_factory=frozenset)
     extended_temp_expires_at_player_id: Optional[int] = None
+    # UEOT triggered abilities granted by other effects (e.g. Requiem
+    # Monolith's "Whenever this creature is dealt damage, you draw that
+    # many cards and lose that much life"). Stored as a tuple so the
+    # field is frozen-friendly and additive grants stack. Fire helpers
+    # iterate this alongside ``printing.triggered_abilities``; the
+    # ``should_fire_trigger`` once-per-turn ledger uses synthetic
+    # ``("temp", i)`` indices to avoid colliding with printed-ability
+    # indices. Cleared at cleanup.
+    temp_triggered_abilities: "tuple[TriggeredAbility, ...]" = ()
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.

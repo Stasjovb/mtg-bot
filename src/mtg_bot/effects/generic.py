@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import (
-    Effect, Target,
+    Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
     _find_moonlit_replacement_source,
 )
@@ -2631,6 +2631,10 @@ class PumpTargetCreatureUntilEOT(Effect):
     strike and reach until end of turn." Bonuses stack additively and are
     cleared at cleanup. Negative bonuses model "target creature gets
     -N/-0" debuffs.
+
+    ``granted_triggered_ability`` (optional) appends a UEOT triggered
+    ability to the target's ``temp_triggered_abilities``. Use for cards
+    whose pump rider also grants "Whenever ~ does X, Y" until EOT.
     """
 
     power_bonus: int = 0
@@ -2653,6 +2657,13 @@ class PumpTargetCreatureUntilEOT(Effect):
     # (Blinkmoth Nexus — the animated Nexus carries the Blinkmoth
     # subtype as a temp grant from BecomeLandCreatureUEOT).
     target_subtype: str | None = None
+    # Granted triggered ability that's appended to the target's
+    # ``temp_triggered_abilities`` UEOT. Matches oracle text like
+    # Requiem Monolith's "Until end of turn, target creature gains
+    # 'Whenever this creature is dealt damage, you draw that many
+    # cards and lose that much life.'" Cleared at cleanup with the
+    # rest of the temp_* fields.
+    granted_triggered_ability: "TriggeredAbility | None" = None
 
     def requires_target(self) -> bool:
         return True
@@ -2694,11 +2705,18 @@ class PumpTargetCreatureUntilEOT(Effect):
             granted = granted | self.granted_keywords_if_warp_cast
         if granted:
             obj.temp_keywords = obj.temp_keywords | granted
+        if self.granted_triggered_ability is not None:
+            obj.temp_triggered_abilities = (
+                obj.temp_triggered_abilities
+                + (self.granted_triggered_ability,)
+            )
         state.log.append(
             f"{obj.printing.name} gets "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
             + (f" and gains {', '.join(sorted(granted))}"
                if granted else "")
+            + (" and gains a granted triggered ability"
+               if self.granted_triggered_ability is not None else "")
         )
         if (
             self.draw_if_target_has_plus_one_counter > 0
@@ -2725,7 +2743,74 @@ class PumpTargetCreatureUntilEOT(Effect):
             parts.append(
                 f"gains {', '.join(sorted(self.granted_keywords))}"
             )
+        if self.granted_triggered_ability is not None:
+            parts.append(
+                f"gains \"{self.granted_triggered_ability.describe()}\""
+            )
         return " and ".join(parts) + " until end of turn."
+
+
+@dataclass(frozen=True)
+class GrantTriggeredAbilityUEOT(Effect):
+    """Grant a triggered ability to target creature until end of turn.
+
+    Appends ``ability`` to the target's ``temp_triggered_abilities``.
+    Fire helpers iterate that tuple alongside the printed abilities.
+    Cleared at cleanup. Use for "Until end of turn, target creature
+    gains 'Whenever ~ does X, Y.'" — Requiem Monolith is the canonical
+    EoE example.
+
+    ``you_control_only`` mirrors the same flag on PumpTargetCreatureUntilEOT
+    for "target creature you control" wording.
+    """
+
+    ability: "TriggeredAbility | None" = None
+    you_control_only: bool = False
+    opponents_only: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and (not self.you_control_only or o.controller_id == controller_id)
+            and (not self.opponents_only or o.controller_id != controller_id)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.ability is None or not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_triggered_abilities = (
+            obj.temp_triggered_abilities + (self.ability,)
+        )
+        state.log.append(
+            f"{obj.printing.name} gains a granted triggered ability "
+            f"until end of turn"
+        )
+
+    def describe(self) -> str:
+        if self.ability is None:
+            return "grant a triggered ability until end of turn"
+        return (
+            f"until end of turn, target creature gains "
+            f"\"{self.ability.describe()}\""
+        )
 
 
 

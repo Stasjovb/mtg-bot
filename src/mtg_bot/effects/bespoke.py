@@ -871,16 +871,55 @@ class RovingActuatorETBEffect(Effect):
 
 
 @dataclass(frozen=True)
-class RequiemMonolithActivatedEffect(Effect):
-    """Requiem Monolith's activated ability (simplified): immediately
-    deals 1 damage to target creature; that creature's controller
-    draws 1 card and loses 1 life.
+class RequiemMonolithDealtDamageEffect(Effect):
+    """The "draw that many cards and lose that much life" rider Requiem
+    Monolith grants UEOT.
 
-    Simplification: the real card grants a UEOT triggered ability
-    ("whenever this creature is dealt damage, draw that many cards
-    and lose that much life") then pings for 1. The engine doesn't
-    support granting triggered abilities UEOT yet, so we execute the
-    first iteration directly (ping 1 → 1 card drawn and 1 life lost).
+    Reads ``state.resolving_combat_damage_amount`` for the incoming
+    damage amount and applies it to the granted creature's controller
+    (state.resolving_source is set to that creature by the fire helper).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        amount = state.resolving_combat_damage_amount
+        if amount <= 0:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        owner = state.player_by_id(source.controller_id)
+        for _ in range(amount):
+            draw_card(state, owner.id)
+        owner.life -= amount
+        state.log.append(
+            f"Requiem Monolith rider: P{owner.id} draws {amount} "
+            f"and loses {amount} life (life: {owner.life})"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you draw that many cards and lose that much life"
+        )
+
+
+@dataclass(frozen=True)
+class RequiemMonolithActivatedEffect(Effect):
+    """Requiem Monolith's activated ability (full):
+    "Until end of turn, target creature gains 'Whenever this creature is
+    dealt damage, you draw that many cards and lose that much life.'
+    That creature's controller may have this artifact deal 1 damage to
+    it."
+
+    Wires the granted UEOT trigger via ``temp_triggered_abilities`` and
+    then offers the target's controller (via ``choose_mode``) a may-deal-
+    1-damage decision. If the controller accepts, the artifact deals 1
+    to the target — which fires the granted trigger we just installed,
+    drawing 1 and losing 1 life.
     """
 
     def requires_target(self) -> bool:
@@ -899,7 +938,8 @@ class RequiemMonolithActivatedEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import draw_n_cards
+        from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
+        from mtg_bot.effects.base import TriggeredAbility
 
         if not targets:
             return
@@ -911,22 +951,42 @@ class RequiemMonolithActivatedEffect(Effect):
         )
         if tgt is None:
             return
+        # Grant the UEOT trigger.
+        granted = TriggeredAbility(
+            trigger="this_dealt_damage",
+            effect=RequiemMonolithDealtDamageEffect(),
+        )
+        tgt.temp_triggered_abilities = tgt.temp_triggered_abilities + (granted,)
+        state.log.append(
+            f"Requiem Monolith: {tgt.printing.name} gains the "
+            f"dealt-damage trigger until end of turn"
+        )
+        # The TARGET's controller may have the artifact deal 1 damage to it.
+        target_controller = state.player_by_id(tgt.controller_id)
+        if target_controller.has_lost or target_controller.agent is None:
+            return
+        modes = ["have Requiem Monolith deal 1 damage to it", "decline"]
+        choice = target_controller.agent.choose_mode(
+            state, target_controller.id, modes,
+        )
+        if choice != 0:
+            state.log.append(
+                f"P{target_controller.id} declines the optional 1 damage"
+            )
+            return
         tgt.damage += 1
         tgt.damaged_this_turn = True
-        owner = state.player_by_id(tgt.controller_id)
-        drawn = draw_n_cards(state, owner.id, 1)
-        owner.life -= 1
         state.log.append(
-            f"Requiem Monolith: {tgt.printing.name} takes 1; "
-            f"P{owner.id} draws {drawn} and loses 1 life"
+            f"Requiem Monolith deals 1 to {tgt.printing.name}"
         )
+        _fire_enchanted_dealt_damage_triggers(state, tgt, 1)
 
     def describe(self) -> str:
         return (
-            "until end of turn, target creature gains 'whenever this "
+            "until end of turn, target creature gains \"whenever this "
             "creature is dealt damage, you draw that many cards and "
-            "lose that much life'; deal 1 damage to it (simplified "
-            "to a one-shot ping + draw/loss)"
+            "lose that much life\"; that creature's controller may have "
+            "this artifact deal 1 damage to it"
         )
 
 

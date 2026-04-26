@@ -436,9 +436,13 @@ def _fire_enchanted_dealt_damage_triggers(
     state: GameState, obj: "GameObject", amount: int,
 ) -> None:
     """Fire "whenever enchanted creature is dealt damage" triggers on
-    auras attached to ``obj``. Amount exposed via
-    state.resolving_combat_damage_amount for effects that want to
-    read it (e.g., Pain for All's echo-damage-to-each-opponent).
+    auras attached to ``obj``, plus any UEOT-granted
+    ``this_dealt_damage`` triggers sitting in
+    ``obj.temp_triggered_abilities`` (Requiem Monolith).
+
+    Amount exposed via state.resolving_combat_damage_amount for effects
+    that want to read it (e.g., Pain for All's
+    echo-damage-to-each-opponent, Requiem Monolith's draw-and-lose).
     """
     from mtg_bot.actions import push_triggered_ability
 
@@ -459,6 +463,27 @@ def _fire_enchanted_dealt_damage_triggers(
                 label="enchanted-creature-dealt-damage",
                 combat_damage_amount=amount,
             )
+    # UEOT-granted "Whenever this creature is dealt damage, ..." triggers
+    # on the damaged object itself (Requiem Monolith). Direct resolve
+    # rather than stack-push because the granted ability is ephemeral
+    # and isn't represented in the printed-ability ledger; using
+    # synthetic indices for push_triggered_ability would require
+    # broadening the ledger key type. Sets resolving_source +
+    # combat_damage_amount around the resolve so the inner effect can
+    # read the damage amount.
+    for ability in obj.temp_triggered_abilities:
+        if ability.trigger != "this_dealt_damage":
+            continue
+        state.log.append(
+            f"{obj.printing.name}'s granted dealt-damage trigger fires"
+        )
+        state.resolving_source = obj
+        state.resolving_combat_damage_amount = amount
+        try:
+            ability.effect.resolve(state, obj.controller_id, ())
+        finally:
+            state.resolving_source = None
+            state.resolving_combat_damage_amount = 0
 
 
 def _fire_combat_damage_to_player_triggers(
