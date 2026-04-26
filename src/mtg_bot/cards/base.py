@@ -534,6 +534,13 @@ class CardPrinting:
     # Riddler. Consumed by game.effective_draw_count and the
     # draw_n_cards helper in turn.py.
     replaces_draw_with_extra_when_hand_at_most_one: bool = False
+    # Block restriction: "This creature can block only creatures with
+    # flying." Sibling concept to reach (which loosens what *flying*
+    # attackers can be blocked by). Matches the EoE Drone token printed
+    # on Pinnacle Emissary, Station Monitor, etc. Consumed by
+    # combat.can_block — when True on the blocker's printing, the
+    # blocker may only declare blocks against attackers with flying.
+    can_only_block_creatures_with_flying: bool = False
 
     @property
     def is_land(self) -> bool:
@@ -1011,6 +1018,7 @@ def make_token_creature(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     artifact: bool = False,
     activated_abilities: tuple[ActivatedAbility, ...] = (),
+    can_only_block_creatures_with_flying: bool = False,
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -1018,7 +1026,9 @@ def make_token_creature(
     The "Token" supertype distinguishes them so the engine can remove them
     from any non-battlefield zone per MTG rule 704.5d. Setting
     ``artifact=True`` adds the Artifact card type (e.g. for EoE's colorless
-    Robot tokens).
+    Robot tokens). ``can_only_block_creatures_with_flying`` plumbs the
+    block-restriction flag onto the resulting printing — used by the EoE
+    Drone token.
     """
     subtypes_str = " ".join(subtypes)
     extra_type = "Artifact " if artifact else ""
@@ -1039,6 +1049,9 @@ def make_token_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         activated_abilities=tuple(activated_abilities),
+        can_only_block_creatures_with_flying=(
+            can_only_block_creatures_with_flying
+        ),
     )
 
 

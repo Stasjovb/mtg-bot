@@ -49,14 +49,16 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Robot": make_token_creature(
         "Robot", 2, 2, subtypes=("Robot",), artifact=True
     ),
-    # 1/1 colorless Drone artifact creature with flying. Created by
-    # Pinnacle Emissary and other EoE artifact triggers. The printed
-    # "can block only creatures with flying" restriction isn't
-    # modeled here (block-restriction machinery would need a new
-    # hook); kept as a plain flying 1/1.
+    # 1/1 colorless Drone artifact creature with flying and "this
+    # token can block only creatures with flying." Created by Pinnacle
+    # Emissary, Station Monitor, and other EoE artifact triggers. The
+    # block-restriction is enforced via
+    # CardPrinting.can_only_block_creatures_with_flying, which
+    # combat.can_block consults when the blocker is a Drone.
     "Drone": make_token_creature(
         "Drone", 1, 1, subtypes=("Drone",), artifact=True,
         keywords=frozenset({"flying"}),
+        can_only_block_creatures_with_flying=True,
     ),
     # Lander — artifact token (not a creature) with a sacrifice-to-ramp
     # activated ability. Created by many EoE spells and triggers.

@@ -1219,8 +1219,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # 1/1 colorless Drone artifact creature token with flying and
         # 'This token can block only creatures with flying.'"
         # Warp `{U/R}` — modeled as `{U}{R}` since hybrid mana isn't
-        # a separate cost structure in our engine.
-        # Simplification: the Drone's block-restriction is dropped.
+        # a separate cost structure in our engine. Both halves of the
+        # Drone (flying + block-restriction) are modeled on the
+        # TOKEN_PRINTINGS["Drone"] printing.
         make_creature(
             "Pinnacle Emissary", "{1}{U}{R}", 3, 3,
             artifact=True,
@@ -1291,7 +1292,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # "Whenever you cast your second spell each turn, create a
         # 1/1 colorless Drone artifact creature token with flying
         # and 'This token can block only creatures with flying.'"
-        # Simplification: block-restriction on the Drone is dropped.
+        # Both halves of the Drone are modeled on
+        # TOKEN_PRINTINGS["Drone"].
         make_creature(
             "Station Monitor", "{W}{U}", 2, 2,
             triggered_abilities=(

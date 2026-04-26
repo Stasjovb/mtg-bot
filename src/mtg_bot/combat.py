@@ -60,6 +60,10 @@ def can_block(
     rejects all blocks while its controller has already cast two or more
     spells this turn. This is a static printed clause checked at
     block-declaration time, not a runtime ``temp_unblockable`` flag.
+
+    "Can block only creatures with flying" (EoE Drone token): a blocker
+    whose printing carries this flag may only declare blocks against
+    attackers that have flying.
     """
     attacker_kws = effective_keywords(state, attacker)
     blocker_kws = effective_keywords(state, blocker)
@@ -69,6 +73,9 @@ def can_block(
     if attacker.printing.unblockable_if_two_spells_cast_this_turn:
         controller = state.player_by_id(attacker.controller_id)
         if controller.spells_cast_this_turn >= 2:
+            return False
+    if blocker.printing.can_only_block_creatures_with_flying:
+        if "flying" not in attacker_kws:
             return False
     return True
 

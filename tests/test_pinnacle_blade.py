@@ -41,6 +41,50 @@ def test_drone_token_is_flying_one_one_artifact_creature():
     assert "flying" in d.keywords
 
 
+def test_drone_token_printing_has_block_restriction_flag():
+    """The Drone token's printing carries the block-restriction flag
+    so combat.can_block can enforce 'can block only creatures with
+    flying' without needing to special-case the token name."""
+    d = TOKEN_PRINTINGS["Drone"]
+    assert d.can_only_block_creatures_with_flying is True
+
+
+def test_drone_token_cannot_block_nonflying_attacker():
+    """A Drone declared as a blocker against a vanilla ground
+    attacker is rejected by can_block."""
+    from mtg_bot.combat import can_block
+
+    state = _new_state()
+    drone = state.new_object(
+        TOKEN_PRINTINGS["Drone"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(drone)
+    # Wild Bear: vanilla 2/2, no flying.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    assert can_block(state, drone, bear) is False
+
+
+def test_drone_token_can_block_flying_attacker():
+    """A Drone (flying + 'can block only creatures with flying') is
+    allowed to block another flying attacker."""
+    from mtg_bot.combat import can_block
+
+    state = _new_state()
+    drone = state.new_object(
+        TOKEN_PRINTINGS["Drone"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(drone)
+    # Use another Drone as the flying attacker — printed flying keyword.
+    flyer = state.new_object(
+        TOKEN_PRINTINGS["Drone"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(flyer)
+    assert can_block(state, drone, flyer) is True
+
+
 # -----------------------
 # Pinnacle Emissary cast-artifact-spell trigger
 # -----------------------
