@@ -5481,6 +5481,7 @@ def test_mm_menon_artifact_enters_triggers_counter_on_target():
 
 def test_zookeeper_mechan_pump_activation():
     from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
     from mtg_bot.game import effective_power
 
     state = _arena()
@@ -5492,9 +5493,52 @@ def test_zookeeper_mechan_pump_activation():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ally)
-    act = zoo.printing.activated_abilities[0]
-    act.effect.resolve(state, 0, (("creature", ally.id),))
+    pump = next(
+        a for a in zoo.printing.activated_abilities
+        if isinstance(a.effect, PumpTargetCreatureUntilEOT)
+    )
+    pump.effect.resolve(state, 0, (("creature", ally.id),))
     assert effective_power(state, ally) == 6  # 2 + 4
+
+
+def test_zookeeper_mechan_has_mana_ability():
+    """Oracle: '{T}: Add {R}.' Zookeeper Mechan now ships the mana
+    ability that was previously dropped behind a stale 'creature mana
+    abilities aren't modeled' comment."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import AddManaToPool
+
+    zoo = EOE_CREATURES["Zookeeper Mechan"]
+    mana_abilities = [
+        a for a in zoo.activated_abilities
+        if isinstance(a.effect, AddManaToPool)
+    ]
+    assert len(mana_abilities) == 1
+    ma = mana_abilities[0]
+    assert ma.is_mana_ability is True
+    assert ma.cost.tap_self is True
+    assert ma.effect.produces == (("R", 1),)
+
+
+def test_zookeeper_mechan_taps_to_add_red_mana():
+    """Activating the mana ability taps Zookeeper and adds {R} to the pool."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import AddManaToPool
+
+    state = _arena()
+    zoo = state.new_object(
+        EOE_CREATURES["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(zoo)
+    ma = next(
+        a for a in zoo.printing.activated_abilities
+        if isinstance(a.effect, AddManaToPool)
+    )
+    # Resolve the effect (the cost-pay path is shared with land taps;
+    # this test focuses on the produces side).
+    ma.effect.resolve(state, 0, ())
+    pool = state.players[0].mana_pool
+    assert any(coin.color == "R" for coin in pool)
 
 
 def test_skystinger_has_blocks_flying_trigger():

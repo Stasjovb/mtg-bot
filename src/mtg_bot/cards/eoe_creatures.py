@@ -2170,13 +2170,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Zookeeper Mechan: {1}{R} 1/3 Artifact Creature — Robot.
-        # Activated {6}{R}, sorcery-speed pump +4/+0 UEOT on target
-        # creature you control. Dropped: the {T}: Add {R} mana ability
-        # (creature mana abilities aren't modeled).
+        # {T}: Add {R}.
+        # {6}{R}: Target creature you control gets +4/+0 until end of
+        # turn. Activate only as a sorcery.
         make_creature(
             "Zookeeper Mechan", "{1}{R}", 1, 3,
             artifact=True,
             activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("R", 1),)),
+                    is_mana_ability=True,
+                ),
                 ActivatedAbility(
                     cost=ActivationCost(
                         mana=parse_mana_cost("{6}{R}"), mana_str="{6}{R}",
