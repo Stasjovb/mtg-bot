@@ -3062,6 +3062,12 @@ class PumpCreaturesYouControlUntilEOT(Effect):
     end of turn" (Contested War Zone). Attackers are always the
     active player's, so in practice this picks up your own attackers
     during your turn.
+
+    ``also_untap_if_not_your_turn=True`` models the Zealous Display
+    rider — "If it's not your turn, untap those creatures." When the
+    spell resolves on an opponent's turn, every creature that received
+    the pump is also untapped, letting them block (or, with vigilance/
+    haste, attack again next turn fresh).
     """
 
     power_bonus: int = 0
@@ -3069,13 +3075,19 @@ class PumpCreaturesYouControlUntilEOT(Effect):
     granted_keywords: frozenset[str] = frozenset()
     exclude_source: bool = False
     attacking_only: bool = False
+    also_untap_if_not_your_turn: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
         source = state.resolving_source if self.exclude_source else None
+        untap_rider_active = (
+            self.also_untap_if_not_your_turn
+            and state.players[state.active_player_idx].id != controller_id
+        )
         count = 0
+        untapped_count = 0
         for obj in state.battlefield:
             if self.attacking_only:
                 if not obj.attacking:
@@ -3091,6 +3103,9 @@ class PumpCreaturesYouControlUntilEOT(Effect):
             obj.temp_toughness_bonus += self.toughness_bonus
             if self.granted_keywords:
                 obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            if untap_rider_active and obj.tapped:
+                obj.tapped = False
+                untapped_count += 1
             count += 1
         if self.attacking_only:
             scope = "attacking creatures"
@@ -3102,6 +3117,11 @@ class PumpCreaturesYouControlUntilEOT(Effect):
             f"P{controller_id}'s {scope} ({count}) get "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
         )
+        if untap_rider_active and untapped_count:
+            state.log.append(
+                f"P{controller_id}'s {scope} ({untapped_count}) untap "
+                f"(not P{controller_id}'s turn)"
+            )
 
     def describe(self) -> str:
         if self.attacking_only:

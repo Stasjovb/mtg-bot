@@ -93,13 +93,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Zealous Display: "Creatures you control get +2/+0 until end of
-        # turn. If it's not your turn, untap those creatures." We ship
-        # the pump part; the conditional untap rider (a niche combat
-        # trick) is flagged and skipped for now.
+        # turn. If it's not your turn, untap those creatures." Both the
+        # pump and the conditional-untap rider are wired through
+        # PumpCreaturesYouControlUntilEOT.also_untap_if_not_your_turn.
         make_instant(
             "Zealous Display", "{2}{W}",
             effect=PumpCreaturesYouControlUntilEOT(
                 power_bonus=2, toughness_bonus=0,
+                also_untap_if_not_your_turn=True,
             ),
         ),
         # Rig for War: "Target creature gets +3/+0 and gains first strike
