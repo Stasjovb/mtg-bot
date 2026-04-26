@@ -3255,13 +3255,17 @@ def test_scout_for_survivors_returns_with_counters():
     from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
-    # Seed 3 small creatures in graveyard + 1 big one.
+    # Oracle: 'with TOTAL mana value 3 or less'. Seed 3 MV-1 creatures
+    # (sum 3, fits the budget) plus a big creature too large to be a
+    # legal singleton target. Wild Bear (MV 2) was the prior fixture
+    # but two of them already exceeds the budget; switch to Coastal
+    # Scout (MV 1) so the test exercises the maximum-sized legal pick.
     small = []
     for _ in range(3):
         c = state.new_object(
-            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,
+            SYNTHETIC_CREATURES["Coastal Scout"], owner_id=0,
             zone=Zone.GRAVEYARD,
-        )  # {1}{G}, MV 2
+        )  # MV 1
         state.players[0].graveyard.append(c)
         small.append(c)
     big = state.new_object(
@@ -3273,7 +3277,7 @@ def test_scout_for_survivors_returns_with_counters():
     effect = EOE_SPELLS["Scout for Survivors"].spell_effect
     legal = effect.legal_targets(state, 0)
     legal_ids = {tid for _, tid in legal}
-    # All 3 small creatures legal, big one NOT legal (MV > 3).
+    # All 3 small creatures legal, big one NOT legal (MV > 3 budget).
     for s in small:
         assert s.id in legal_ids
     assert big.id not in legal_ids
@@ -3292,11 +3296,100 @@ def test_scout_for_survivors_noop_paths():
     from mtg_bot.effects import ReturnUpToNSmallCreaturesFromGraveyardWithCounters
 
     state = _arena()
-    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n=2, max_mv=1)
+    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+        max_n=2, max_total_mv=1,
+    )
     assert "graveyard" in e.describe()
     e.resolve(state, controller_id=0, targets=())
     e.resolve(state, controller_id=0, targets=(("creature", 1),))
     e.resolve(state, controller_id=0, targets=(("graveyard_creature", 99999),))
+
+
+def test_scout_for_survivors_total_mv_budget_skips_overflow_picks():
+    """Oracle: 'with TOTAL mana value 3 or less'. Picking three MV-1
+    creatures is fine; adding an MV-3 to the same set should drop the
+    last pick (the MV-3) since the running budget is already 3 → 0."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import ReturnUpToNSmallCreaturesFromGraveyardWithCounters
+
+    state = _arena()
+    p = state.players[0]
+    # Three MV-1 creatures + one MV-3 creature, all in the graveyard.
+    one_mv = []
+    for _ in range(3):
+        c = state.new_object(
+            SYNTHETIC_CREATURES["Coastal Scout"], owner_id=0, zone=Zone.GRAVEYARD,
+        )  # 1/1 with mana cost {R}
+        p.graveyard.append(c)
+        one_mv.append(c)
+    big = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=0, zone=Zone.GRAVEYARD,
+    )  # 4/4 with mana cost {3}{U} — MV 4
+    p.graveyard.append(big)
+    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+        max_n=4, max_total_mv=3,
+    )
+    e.resolve(
+        state, 0,
+        targets=tuple(("graveyard_creature", c.id) for c in one_mv + [big]),
+    )
+    # All three MV-1 came back; the MV-4 was over-budget and stayed.
+    for c in one_mv:
+        assert c in state.battlefield
+        assert c.plus_one_counters == 1
+    assert big in p.graveyard
+    assert big not in state.battlefield
+
+
+def test_scout_for_survivors_total_mv_budget_admits_full_set_when_within_budget():
+    """A pure MV-1 set of three under a budget of 3 fits exactly."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import ReturnUpToNSmallCreaturesFromGraveyardWithCounters
+
+    state = _arena()
+    p = state.players[0]
+    cs = []
+    for _ in range(3):
+        c = state.new_object(
+            SYNTHETIC_CREATURES["Coastal Scout"], owner_id=0, zone=Zone.GRAVEYARD,
+        )  # MV 1
+        p.graveyard.append(c)
+        cs.append(c)
+    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+        max_n=3, max_total_mv=3,
+    )
+    e.resolve(
+        state, 0,
+        targets=tuple(("graveyard_creature", c.id) for c in cs),
+    )
+    for c in cs:
+        assert c in state.battlefield
+        assert c.plus_one_counters == 1
+
+
+def test_scout_for_survivors_legal_targets_excludes_oversized_singletons():
+    """A creature with MV greater than the budget is never a legal
+    single-pick target."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import ReturnUpToNSmallCreaturesFromGraveyardWithCounters
+
+    state = _arena()
+    p = state.players[0]
+    big = state.new_object(
+        SYNTHETIC_CREATURES["Deep Leviathan"], owner_id=0, zone=Zone.GRAVEYARD,
+    )  # MV 4
+    p.graveyard.append(big)
+    small = state.new_object(
+        SYNTHETIC_CREATURES["Coastal Scout"], owner_id=0, zone=Zone.GRAVEYARD,
+    )  # MV 1
+    p.graveyard.append(small)
+    e = ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+        max_n=3, max_total_mv=3,
+    )
+    legal = e.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    assert small.id in target_ids
+    assert big.id not in target_ids
 
 
 def test_biosynthic_burst_counter_keywords_untap():

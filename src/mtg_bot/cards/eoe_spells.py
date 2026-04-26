@@ -966,13 +966,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Biosynthic Burst", "{1}{G}",
             effect=BiosynthicBurstEffect(),
         ),
-        # Scout for Survivors — reanimate up to 3 small creatures with
-        # +1/+1 counter on each. Simplified: real card says "total mana
-        # value 3 or less" (sum); we use per-card filter instead.
+        # Scout for Survivors: return up to three target creature cards
+        # with TOTAL mana value 3 or less from your graveyard to the
+        # battlefield with a +1/+1 counter on each. The total-MV
+        # constraint is enforced at resolution time (the cast pipeline
+        # picks targets sequentially without a running budget — see
+        # docstring on ReturnUpToNSmallCreaturesFromGraveyardWithCounters).
         make_sorcery(
             "Scout for Survivors", "{2}{W}",
             effect=ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
-                max_n=3, max_mv=3,
+                max_n=3, max_total_mv=3,
             ),
         ),
         # Drill Too Deep `{1}{R}` Instant — Choose one:
