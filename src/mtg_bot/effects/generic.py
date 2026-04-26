@@ -6342,3 +6342,134 @@ class TargetOpponentDiscards(Effect):
 
 
 
+@dataclass(frozen=True)
+class PumpTargetArtifactOrCreatureUntilEOT(Effect):
+    """Target artifact or creature gets +power/+toughness and optionally gains
+    keywords until end of turn.
+
+    Matches oracle text like "Target artifact or creature gains indestructible
+    until end of turn" (Reroute Systems mode 1). Uses the ``("permanent", id)``
+    target kind because either an artifact or a creature can be hit. The same
+    ``temp_keywords`` / ``temp_*_bonus`` plumbing as
+    ``PumpTargetCreatureUntilEOT`` — bonuses clear at cleanup.
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact or o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not (obj.printing.is_artifact or obj.printing.is_creature):
+            return
+        obj.temp_power_bonus += self.power_bonus
+        obj.temp_toughness_bonus += self.toughness_bonus
+        if self.granted_keywords:
+            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        keyword_text = (
+            f" and gains {', '.join(sorted(self.granted_keywords))}"
+            if self.granted_keywords else ""
+        )
+        state.log.append(
+            f"{obj.printing.name} gets "
+            f"+{self.power_bonus}/+{self.toughness_bonus}"
+            f"{keyword_text} until end of turn"
+        )
+
+    def describe(self) -> str:
+        parts: list[str] = []
+        if self.power_bonus or self.toughness_bonus:
+            parts.append(
+                f"target artifact or creature gets "
+                f"+{self.power_bonus}/+{self.toughness_bonus}"
+            )
+        if self.granted_keywords:
+            kw = ', '.join(sorted(self.granted_keywords))
+            if parts:
+                parts.append(f"gains {kw}")
+            else:
+                parts.append(
+                    f"target artifact or creature gains {kw}"
+                )
+        return " and ".join(parts) + " until end of turn."
+
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetTappedCreature(Effect):
+    """Deal ``amount`` damage to a target *tapped* creature.
+
+    Matches oracle text "~ deals N damage to target tapped creature"
+    (Reroute Systems mode 2). Like ``DealDamageToTargetCreature`` but the
+    legal-targets pool is gated on ``obj.tapped`` and the damage application
+    re-verifies tappedness at resolution (the target may have untapped
+    between cast and resolve — fizzle in that case).
+    """
+
+    amount: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.tapped
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # Re-verify tappedness at resolution — target may have untapped
+        # since the spell was cast.
+        if not obj.tapped:
+            state.log.append(
+                f"{obj.printing.name} is no longer tapped — "
+                f"damage fizzles"
+            )
+            return
+        _apply_damage(state, targets[0], self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to target tapped creature"
+
+
+

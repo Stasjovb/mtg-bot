@@ -1940,7 +1940,7 @@ def test_reroute_systems_indestructible_mode():
     )
     state.battlefield.append(bear)
     EOE_SPELLS["Reroute Systems"].spell_effect.resolve(
-        state, 0, (("creature", bear.id),)
+        state, 0, (("permanent", bear.id),)
     )
     from mtg_bot.game import effective_keywords
     assert "indestructible" in effective_keywords(state, bear)
