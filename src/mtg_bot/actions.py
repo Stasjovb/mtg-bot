@@ -207,7 +207,7 @@ def apply_cost_reductions(
     generic mana reduced accordingly. Unknown conditions are treated as
     False (no reduction), which is safe and warns via a log entry.
 
-    Known conditions:
+    Spell-local conditions:
       - ``another_spell_cast_this_turn``: caster's spells_cast_this_turn
         is already ≥ 1 (this spell will be their 2nd or later).
       - ``attacked_with_spacecraft_this_turn``: caster attacked with any
@@ -215,8 +215,16 @@ def apply_cost_reductions(
       - ``per_differently_named_land`` (with ``per_land_group=True``):
         amount is multiplied by the number of distinct basic-land names
         the caster controls.
+
+    External reductions: also walks every permanent the caster controls
+    on the battlefield and applies any ``external_cost_reductions``
+    that match (Uthros Psionicist's "your second spell costs {2} less"
+    lives here). Externals stack with the spell's own reductions —
+    a 5-cost spell with a 3-less self-reduction and a 2-less external
+    ends up at 0 generic.
     """
     cost = base_cost
+    cost = _apply_external_cost_reductions(state, caster_id, cost)
     for rule in printing.cost_reductions:
         reduction = 0
         if rule.condition == "another_spell_cast_this_turn":
@@ -259,6 +267,46 @@ def apply_cost_reductions(
             state.log.append(
                 f"cost reduced by {reduction} ({rule.condition})"
             )
+    return cost
+
+
+def _apply_external_cost_reductions(
+    state: GameState, caster_id: int, cost: "ManaCost",
+) -> "ManaCost":
+    """Walk the caster's battlefield for permanents that grant external
+    cost reductions to other spells. Each permanent's
+    ``external_cost_reductions`` are evaluated against the same caster
+    state used by spell-local reductions. Reductions stack (multiple
+    permanents granting the same reduction sum together)."""
+    caster = state.player_by_id(caster_id)
+    for permanent in state.battlefield:
+        if permanent.controller_id != caster_id:
+            continue
+        if permanent.phased_out:
+            continue
+        externals = getattr(
+            permanent.printing, "external_cost_reductions", ()
+        )
+        for ext in externals:
+            reduction = 0
+            if ext.condition == "second_spell_this_turn":
+                # The second spell is the one cast when
+                # spells_cast_this_turn is currently 1 (the spell-cast
+                # path increments AFTER cost is paid, so we check the
+                # pre-increment value here).
+                if caster.spells_cast_this_turn == 1:
+                    reduction = ext.amount
+            else:
+                state.log.append(
+                    f"unknown external cost-reduction condition "
+                    f"{ext.condition!r}; treating as no reduction"
+                )
+            if reduction > 0:
+                cost = cost.reduced(reduction)
+                state.log.append(
+                    f"cost reduced by {reduction} from "
+                    f"{permanent.printing.name} ({ext.condition})"
+                )
     return cost
 
 

@@ -28,6 +28,7 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CostReduction,
     DOMINION_BRACELET_GRANTED_ABILITY,
+    ExternalCostReduction,
     ManaCost,
     RAGOST_FOOD_GRANTED_ABILITY,
     cost,

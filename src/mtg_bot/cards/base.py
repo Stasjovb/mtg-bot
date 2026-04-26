@@ -238,6 +238,29 @@ class CostReduction:
     per_land_group: bool = False
 
 
+@dataclass(frozen=True)
+class ExternalCostReduction:
+    """Static cost-reduction granted by a permanent on the battlefield
+    to OTHER spells the controller casts. Lives on a permanent's
+    printing; ``apply_cost_reductions`` scans the caster's battlefield
+    for these whenever they cast a spell.
+
+    Distinct from ``CostReduction`` (which is baked into the spell
+    being cast and reduces ITS own cost). Externals come from a
+    different permanent than the spell, and apply to spells they
+    don't share an id with.
+
+    Conditions:
+      - ``second_spell_this_turn``: the spell being cast is exactly
+        the controller's second spell of the turn (Uthros Psionicist).
+        Triggers when ``spells_cast_this_turn == 1`` (we're about to
+        increment to 2).
+    """
+
+    amount: int
+    condition: str
+
+
 def parse_mana_cost(s: str) -> ManaCost:
     if not s:
         return ManaCost()
@@ -390,6 +413,13 @@ class CardPrinting:
     # if you've cast another spell this turn"). Consumed by
     # actions.apply_cost_reductions().
     cost_reductions: tuple[CostReduction, ...] = ()
+    # Static cost-reduction effects this permanent provides to the
+    # controller's OTHER spells while it's on the battlefield (e.g.,
+    # Uthros Psionicist: "the second spell you cast each turn costs
+    # {2} less"). apply_cost_reductions() walks the caster's battlefield
+    # and applies any matching externals on top of the spell's own
+    # cost_reductions.
+    external_cost_reductions: tuple[ExternalCostReduction, ...] = ()
     # Continuous abilities that buff other permanents while this permanent
     # is on the battlefield (anthems, keyword grants).
     static_abilities: tuple[StaticAbility, ...] = ()
@@ -544,6 +574,7 @@ def make_creature(
     grants_food_ability_to_your_artifacts: bool = False,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
+    external_cost_reductions: tuple[ExternalCostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
     subtypes: tuple[str, ...] = (),
     dynamic_pt_formula: str | None = None,
@@ -586,6 +617,7 @@ def make_creature(
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",
         cost_reductions=tuple(cost_reductions),
+        external_cost_reductions=tuple(external_cost_reductions),
         enters_with_counters_from_x=enters_with_counters_from_x,
         dynamic_pt_formula=dynamic_pt_formula,
         is_token_doubler=is_token_doubler,

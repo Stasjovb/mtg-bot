@@ -3076,6 +3076,82 @@ def test_unknown_cost_reduction_condition_logged_and_ignored():
     assert any("unknown cost-reduction" in l for l in state.log)
 
 
+def test_uthros_psionicist_external_reduction_kicks_in_for_second_spell():
+    """Psionicist on the battlefield → second spell of the turn costs
+    {2} less generic. First spell of the turn → no reduction."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
+    target = EOE_CREATURES["Rayblade Trooper"]  # {2}{G} 3/3, no own reductions
+    # First spell: spells_cast_this_turn == 0 → no reduction.
+    reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
+    assert reduced.generic == 2
+    # Second spell: spells_cast_this_turn == 1 → -2.
+    state.players[0].spells_cast_this_turn = 1
+    reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
+    assert reduced.generic == 0
+
+
+def test_uthros_psionicist_does_not_reduce_for_third_or_later_spell():
+    """The condition is exactly the second spell, not 'spells beyond
+    the first' — third spell of the turn shouldn't get the discount."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
+    target = EOE_CREATURES["Rayblade Trooper"]
+    state.players[0].spells_cast_this_turn = 2  # this would be the 3rd
+    reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
+    assert reduced.generic == 2  # back to base
+
+
+def test_psionicist_does_not_reduce_opponent_spells():
+    """External cost reduction is "you control" only — opponents'
+    spells get no discount even if it's their second spell."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
+    target = EOE_CREATURES["Rayblade Trooper"]
+    state.players[1].spells_cast_this_turn = 1
+    # Casting as P1 — Psionicist belongs to P0, no discount.
+    reduced = apply_cost_reductions(target, state, 1, target.mana_cost)
+    assert reduced.generic == 2
+
+
+def test_psionicist_plus_gigastorm_titan_stacks_to_zero_generic():
+    """The replay-40 case: Uthros Psionicist on the battlefield, one
+    spell already cast this turn (Melded Moxite), then cast Gigastorm
+    Titan. Titan's own -3 + Psionicist's -2 → {4}{U} → {U}."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
+    titan = EOE_CREATURES["Gigastorm Titan"]
+    state.players[0].spells_cast_this_turn = 1  # Moxite was the 1st spell
+    reduced = apply_cost_reductions(titan, state, 0, titan.mana_cost)
+    assert reduced.generic == 0  # 4 - 3 (own) - 2 (psionicist) = -1 → clamped to 0
+    # The colored {U} requirement is preserved; only generic gets reduced.
+    assert reduced.colored == titan.mana_cost.colored
+
+
+def test_external_reduction_logged_with_source_name():
+    """The reduction log line should name the source permanent so a
+    replay reader can see WHERE the discount came from."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
+    target = EOE_CREATURES["Rayblade Trooper"]
+    state.players[0].spells_cast_this_turn = 1
+    apply_cost_reductions(target, state, 0, target.mana_cost)
+    assert any(
+        "Uthros Psionicist" in line and "cost reduced" in line
+        for line in state.log
+    ), f"expected log line naming the source; got: {state.log}"
+
+
 def test_mana_cost_reduced_never_below_zero():
     from mtg_bot.cards import ManaCost
 

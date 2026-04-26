@@ -1586,13 +1586,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
         ),
         # Uthros Psionicist: {2}{U} 2/4. "The second spell you cast each
-        # turn costs {2} less to cast." This is a STATIC ability (it's
-        # not a cost reduction on the Psionicist itself) but our cost-
-        # reduction framework is card-local. Simplification retained:
-        # the static buff to other spells isn't modeled; Psionicist
-        # ships as a plain 2/4.
+        # turn costs {2} less to cast." External cost reduction granted
+        # to OTHER spells the controller casts; stacks with the spell's
+        # own cost_reductions (e.g. Gigastorm Titan's "{3} less if you've
+        # already cast another spell this turn" → second spell of the
+        # turn nets a 5-cost spell down to 0 generic when both apply).
         make_creature(
             "Uthros Psionicist", "{2}{U}", 2, 4,
+            external_cost_reductions=(
+                ExternalCostReduction(
+                    amount=2,
+                    condition="second_spell_this_turn",
+                ),
+            ),
         ),
         # Gigastorm Titan: {4}{U} 4/4. Costs {3} less to cast if you've
         # already cast another spell this turn.
