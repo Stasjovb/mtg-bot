@@ -353,13 +353,21 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Sami, Wildcat Captain — Legendary double-strike+vigilance body.
-        # Real card also has "Spells you cast have affinity for artifacts"
-        # (cost reduction based on artifact count) which we don't model.
+        # Sami, Wildcat Captain — Legendary double-strike+vigilance body
+        # whose static ability "Spells you cast have affinity for
+        # artifacts" grants every spell the controller casts a {1}-less
+        # discount per artifact they control. Wired via an
+        # ExternalCostReduction with the new "affinity_for_artifacts"
+        # condition.
         make_creature(
             "Sami, Wildcat Captain", "{4}{R}{W}", 4, 4,
             keywords={"double strike", "vigilance"},
             legendary=True,
+            external_cost_reductions=(
+                ExternalCostReduction(
+                    amount=1, condition="affinity_for_artifacts",
+                ),
+            ),
         ),
         # Memorial Team Leader: "During your turn, other creatures you
         # control get +1/+0. Warp {1}{R}."

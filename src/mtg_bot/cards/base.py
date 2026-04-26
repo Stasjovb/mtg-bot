@@ -278,7 +278,11 @@ class ExternalCostReduction:
       - ``second_spell_this_turn``: the spell being cast is exactly
         the controller's second spell of the turn (Uthros Psionicist).
         Triggers when ``spells_cast_this_turn == 1`` (we're about to
-        increment to 2).
+        increment to 2). Reduction is ``amount`` flat.
+      - ``affinity_for_artifacts``: the spell costs ``amount`` less for
+        each artifact the caster controls (Sami, Wildcat Captain's
+        "Spells you cast have affinity for artifacts"). Reduction is
+        ``amount * artifact_count``.
     """
 
     amount: int

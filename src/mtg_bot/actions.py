@@ -390,6 +390,19 @@ def _apply_external_cost_reductions(
                 # pre-increment value here).
                 if caster.spells_cast_this_turn == 1:
                     reduction = ext.amount
+            elif ext.condition == "affinity_for_artifacts":
+                # Sami, Wildcat Captain: "Spells you cast have affinity
+                # for artifacts. (They cost {1} less to cast for each
+                # artifact you control.)" — count artifacts the caster
+                # controls on the battlefield. The spell being cast is
+                # on the stack, not the battlefield, so it isn't
+                # counted (matches MTG rules 702.41).
+                artifact_count = sum(
+                    1 for o in state.battlefield
+                    if o.controller_id == caster_id
+                    and o.printing.is_artifact
+                )
+                reduction = ext.amount * artifact_count
             else:
                 state.log.append(
                     f"unknown external cost-reduction condition "
