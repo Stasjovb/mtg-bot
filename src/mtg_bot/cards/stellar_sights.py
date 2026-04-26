@@ -65,10 +65,19 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     ),
     # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact
     # creature with flying UEOT. Also: {1}, {T}: +1/+1 UEOT to target
-    # Blinkmoth — dropped (simplification: other Blinkmoths rare).
+    # Blinkmoth Nexus: {T}: Add {C}.
+    # {1}: This land becomes a 1/1 Blinkmoth artifact creature with
+    # flying until end of turn. It's still a land.
+    # {1}, {T}: Target Blinkmoth creature gets +1/+1 until end of turn.
+    # The Blinkmoth-pump targets via target_subtype="Blinkmoth"; the
+    # animated Nexus picks up the Blinkmoth subtype via
+    # BecomeLandCreatureUEOT.granted_subtype, so it can target itself.
     "Blinkmoth Nexus": make_utility_land(
         "Blinkmoth Nexus",
+        produces=frozenset({"C"}),
         activated_abilities=(
+            # Animation kept at index 0 per the manland test convention
+            # (other manlands also expose their animation as ability 0).
             ActivatedAbility(
                 cost=ActivationCost(
                     mana=parse_mana_cost("{1}"), mana_str="{1}",
@@ -76,6 +85,22 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
                 effect=BecomeLandCreatureUEOT(
                     power=1, toughness=1,
                     granted_keywords=frozenset({"flying"}),
+                    granted_subtype="Blinkmoth",
+                ),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=1, toughness_bonus=1,
+                    target_subtype="Blinkmoth",
                 ),
             ),
         ),

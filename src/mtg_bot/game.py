@@ -57,6 +57,12 @@ class GameObject:
     # object counts as a creature for combat/targeting purposes.
     # Cleared at cleanup. Pair with temp_base_pt_override + temp_keywords.
     temp_is_creature: bool = False
+    # Subtype granted UEOT — typically by an animation effect like
+    # Blinkmoth Nexus's "becomes a 1/1 Blinkmoth artifact creature".
+    # Cleared at cleanup. Consumed by target-subtype filters that
+    # need to recognize creatures whose subtype is granted at runtime
+    # (e.g. PumpTargetCreatureUntilEOT.target_subtype="Blinkmoth").
+    temp_subtype: str | None = None
     # "You may play this card this turn" — set on cards exiled by
     # impulse-style effects (Territorial Bruntar landfall, Memorial
     # Vault activated). Cleared at cleanup. legal_actions honors it

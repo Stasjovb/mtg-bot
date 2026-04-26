@@ -850,6 +850,7 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_unblockable = False
         obj.temp_base_pt_override = None
         obj.temp_is_creature = False
+        obj.temp_subtype = None
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
         # Revert "gain control until end of turn" effects.

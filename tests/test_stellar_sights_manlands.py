@@ -111,7 +111,7 @@ def test_become_land_creature_unblockable_flag():
 MANLAND_TABLE = [
     (
         "Blinkmoth Nexus", "{1}", (1, 1), {"flying"}, False,
-        frozenset(), False,
+        frozenset({"C"}), False,
     ),
     (
         "Celestial Colonnade", "{3}{W}{U}", (4, 4),
@@ -177,9 +177,11 @@ def test_every_manland_has_expected_printing_metadata():
         assert p.enters_tapped == enters_tapped, (
             f"{name} enters_tapped mismatch"
         )
-        assert len(p.activated_abilities) == 1, (
-            f"{name} should have exactly one activated ability (the "
-            f"manland animation)"
+        assert len(p.activated_abilities) >= 1, (
+            f"{name} should have at least one activated ability (the "
+            f"manland animation at index 0; some lands like Blinkmoth "
+            f"Nexus also ship a {{T}}: Add {{C}} mana ability and a "
+            f"subtype-specific pump)"
         )
 
 
@@ -286,6 +288,78 @@ def test_infect_damage_to_player_via_damage_pipeline():
 # -----------------------
 # Progress marker
 # -----------------------
+
+
+# -----------------------
+# Blinkmoth Nexus's restored mana ability + Blinkmoth-only pump
+# -----------------------
+
+
+def test_blinkmoth_nexus_taps_for_one_colorless():
+    """Oracle: '{T}: Add {C}.' Was previously dropped — now wired."""
+    state = _new_state()
+    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    # Mana ability lives at activated_abilities[1] (animation kept at 0).
+    apply_action(
+        state, 0, ActivateAbility(source_id=nexus.id, ability_index=1),
+    )
+    pool = state.players[0].mana_pool
+    assert any(coin.color == "C" for coin in pool)
+    assert nexus.tapped
+
+
+def test_blinkmoth_nexus_animates_with_blinkmoth_subtype():
+    """The animated Nexus carries the granted subtype 'Blinkmoth' so
+    it qualifies as a target for its own +1/+1 pump."""
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _new_state()
+    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    _mana_for(state, "{1}")
+    apply_action(
+        state, 0, ActivateAbility(source_id=nexus.id, ability_index=0),
+    )
+    while state.stack:
+        resolve_top_of_stack(state)
+    assert nexus.temp_is_creature
+    assert nexus.temp_subtype == "Blinkmoth"
+
+
+def test_blinkmoth_nexus_pump_targets_only_blinkmoth_creatures():
+    """Oracle: '{1}, {T}: Target Blinkmoth creature gets +1/+1 UEOT.'
+    Filter excludes non-Blinkmoth creatures from legal targets."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = _new_state()
+    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    pump_ability = nexus.printing.activated_abilities[2]
+    legal = pump_ability.effect.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    # Bear is not a Blinkmoth → not legal.
+    assert bear.id not in target_ids
+
+
+def test_blinkmoth_nexus_pump_finds_animated_self():
+    """After animating, the Nexus's Blinkmoth subtype lets it target
+    itself with the +1/+1 pump."""
+    from mtg_bot.actions import resolve_top_of_stack
+
+    state = _new_state()
+    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    _mana_for(state, "{1}")
+    apply_action(
+        state, 0, ActivateAbility(source_id=nexus.id, ability_index=0),
+    )
+    while state.stack:
+        resolve_top_of_stack(state)
+    pump_ability = nexus.printing.activated_abilities[2]
+    legal = pump_ability.effect.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    assert nexus.id in target_ids
 
 
 def test_thirteen_manlands_restored_no_longer_stand_ins():

@@ -2570,6 +2570,13 @@ class PumpTargetCreatureUntilEOT(Effect):
     # draw a card." Matches Dual-Sun Technique. The controller of the
     # spell does the drawing. Inspected at resolution time.
     draw_if_target_has_plus_one_counter: int = 0
+    # Target subtype filter: when set, only creatures whose subtypes
+    # (printed OR runtime-granted via ``GameObject.temp_subtype``)
+    # include this value are legal targets. Matches oracle text like
+    # "Target Blinkmoth creature gets +1/+1 until end of turn"
+    # (Blinkmoth Nexus — the animated Nexus carries the Blinkmoth
+    # subtype as a temp grant from BecomeLandCreatureUEOT).
+    target_subtype: str | None = None
 
     def requires_target(self) -> bool:
         return True
@@ -2580,9 +2587,14 @@ class PumpTargetCreatureUntilEOT(Effect):
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature
+            if (o.printing.is_creature or o.temp_is_creature)
             and (not self.you_control_only or o.controller_id == controller_id)
             and (not self.opponents_only or o.controller_id != controller_id)
+            and (
+                self.target_subtype is None
+                or self.target_subtype in o.printing.subtypes
+                or self.target_subtype == o.temp_subtype
+            )
         ]
 
     def resolve(
@@ -3598,6 +3610,11 @@ class BecomeLandCreatureUEOT(Effect):
     toughness: int = 0
     granted_keywords: frozenset[str] = frozenset()
     unblockable: bool = False
+    # Subtype the animated creature gains UEOT (e.g., "Blinkmoth" for
+    # Blinkmoth Nexus, "Elemental" for Lavaclaw Reaches). Stored on
+    # ``GameObject.temp_subtype`` and cleared at cleanup. Read by
+    # target filters (e.g. PumpTargetCreatureUntilEOT.target_subtype).
+    granted_subtype: str | None = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -3614,6 +3631,8 @@ class BecomeLandCreatureUEOT(Effect):
             )
         if self.unblockable:
             source.temp_unblockable = True
+        if self.granted_subtype is not None:
+            source.temp_subtype = self.granted_subtype
         kw_note = (
             f" with {', '.join(sorted(self.granted_keywords))}"
             if self.granted_keywords else ""
