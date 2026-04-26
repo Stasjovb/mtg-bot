@@ -20,6 +20,7 @@ case, 0.0 in the stub case.
 from __future__ import annotations
 
 import random
+import re
 from typing import Any, Optional
 
 from mtg_bot.actions import (
@@ -64,6 +65,43 @@ _SORCERY_STEPS = {"precombat_main", "postcombat_main"}
 def _is_land_card(card: dict[str, Any]) -> bool:
     type_line = (card.get("type_line") or "").lower()
     return "land" in type_line
+
+
+def _approx_cmc(mana_cost: Optional[str]) -> int:
+    """Sum the converted mana cost of a Scryfall-style cost string like
+    ``{2}{W}{W}`` -> 4. ``X`` is treated as 0 (a permissive lower
+    bound — even casting for X=0 still requires the named cost). Hybrid,
+    phyrexian, and colorless pip symbols each count as 1 mana of generic
+    value, which is the correct lower bound on what's required."""
+    if not mana_cost:
+        return 0
+    total = 0
+    for sym in re.findall(r"\{([^}]*)\}", mana_cost):
+        if sym.isdigit():
+            total += int(sym)
+        elif sym.upper() == "X":
+            continue
+        else:
+            total += 1
+    return total
+
+
+def _available_mana(player: dict[str, Any]) -> int:
+    """Approximate amount of mana the player can produce right now: every
+    untapped land plus any mana already floating in the pool. Used to
+    filter out obviously-unaffordable spells in the replay-mode stub.
+
+    Color requirements and tap-for-N producers (Sol Ring, etc.) are
+    ignored. The real PIMC path uses ``recommend_from_state`` which
+    checks legality against the live engine — this is only a coarse
+    sanity filter so the panel doesn't suggest casting Banishing Light
+    on turn 1."""
+    untapped = 0
+    for o in player.get("battlefield", []):
+        if "land" in (o.get("type_line") or "").lower() and not o.get("tapped"):
+            untapped += 1
+    floating = len(player.get("mana_pool", []))
+    return untapped + floating
 
 
 def _hand_card_rec(card: dict[str, Any], action_type: str) -> dict[str, Any]:
@@ -115,20 +153,30 @@ def recommend_from_snapshot(
         "detail": None,
     })
 
-    # Most interesting choices are at sorcery timing: main phase, empty stack,
-    # you have priority (which is what priority_player_idx tells us).
+    # Sorcery-speed actions (playing lands, casting non-instants) require
+    # main phase + empty stack + the priority holder is also the active
+    # player. Without the active-player check the stub recommended turn-1
+    # spells to whoever held priority instead of the actual active player.
     is_sorcery_timing = (
         snap.get("step") in _SORCERY_STEPS
         and not snap.get("stack")
+        and snap.get("active_player_idx") == priority_player_id
     )
 
     if is_sorcery_timing:
+        available = _available_mana(player)
         for card in player.get("hand", []):
             if _is_land_card(card):
                 if player.get("lands_played_this_turn", 0) == 0:
                     recs.append(_hand_card_rec(card, "PlayLand"))
             else:
-                recs.append(_hand_card_rec(card, "CastSpell"))
+                # Filter out spells the player obviously can't pay for.
+                # The stub doesn't have engine access, so we approximate
+                # via "untapped lands + floating mana >= cmc". Misses
+                # color requirements but catches the common turn-1
+                # "Cast Banishing Light with no mana" case.
+                if _approx_cmc(card.get("mana_cost")) <= available:
+                    recs.append(_hand_card_rec(card, "CastSpell"))
 
     return _finalize(recs, priority_player_id, n)
 

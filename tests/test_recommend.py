@@ -92,12 +92,24 @@ def test_play_land_suppressed_if_already_played_one_this_turn():
     assert not any(r["action_type"] == "PlayLand" for r in recs)
 
 
+def _untapped_lands(n: int) -> list[dict]:
+    """Helper: produce ``n`` untapped basic lands for the player's
+    battlefield. Used by tests that need the player to have enough
+    mana for the recommend stub to consider a spell castable."""
+    return [
+        {"id": 1000 + i, "name": "Forest",
+         "type_line": "Basic Land — Forest", "tapped": False}
+        for i in range(n)
+    ]
+
+
 def test_spells_in_hand_appear_as_cast_at_sorcery_timing():
     snap = _base_snapshot(players=[
         {"id": 0, "hand": [
             {"id": 20, "name": "Goblin Runner", "type_line": "Creature",
              "mana_cost": "{R}", "scryfall_id": "def"},
-        ], "lands_played_this_turn": 0},
+        ], "lands_played_this_turn": 0,
+         "battlefield": _untapped_lands(1)},
         {"id": 1, "hand": [], "lands_played_this_turn": 0},
     ])
     recs = recommend_from_snapshot(snap, n=10)["recommendations"]
@@ -112,7 +124,8 @@ def test_spells_suppressed_outside_sorcery_timing():
         {"id": 0, "hand": [
             {"id": 20, "name": "Goblin Runner", "type_line": "Creature",
              "mana_cost": "{R}", "scryfall_id": "def"},
-        ], "lands_played_this_turn": 0},
+        ], "lands_played_this_turn": 0,
+         "battlefield": _untapped_lands(1)},
         {"id": 1, "hand": [], "lands_played_this_turn": 0},
     ])
     recs = recommend_from_snapshot(snap, n=10)["recommendations"]
@@ -126,7 +139,8 @@ def test_spells_suppressed_when_stack_is_nonempty():
             {"id": 0, "hand": [
                 {"id": 20, "name": "Goblin Runner", "type_line": "Creature",
                  "mana_cost": "{R}", "scryfall_id": "def"},
-            ], "lands_played_this_turn": 0},
+            ], "lands_played_this_turn": 0,
+             "battlefield": _untapped_lands(1)},
             {"id": 1, "hand": [], "lands_played_this_turn": 0},
         ],
     )
@@ -140,7 +154,8 @@ def test_n_limits_number_of_recommendations():
             {"id": i, "name": f"Card {i}", "type_line": "Creature",
              "mana_cost": "{1}", "scryfall_id": None}
             for i in range(10)
-        ], "lands_played_this_turn": 0},
+        ], "lands_played_this_turn": 0,
+         "battlefield": _untapped_lands(1)},
         {"id": 1, "hand": [], "lands_played_this_turn": 0},
     ])
     assert len(recommend_from_snapshot(snap, n=3)["recommendations"]) == 3
@@ -159,11 +174,94 @@ def test_stub_scores_are_all_zero_by_contract():
         {"id": 0, "hand": [
             {"id": 20, "name": "Goblin Runner", "type_line": "Creature",
              "mana_cost": "{R}", "scryfall_id": "def"},
-        ], "lands_played_this_turn": 0},
+        ], "lands_played_this_turn": 0,
+         "battlefield": _untapped_lands(1)},
         {"id": 1, "hand": [], "lands_played_this_turn": 0},
     ])
     for rec in recommend_from_snapshot(snap, n=10)["recommendations"]:
         assert rec["score"] == 0.0
+
+
+def test_spells_filtered_when_player_lacks_mana():
+    """Turn 1 with no untapped mana: a 3-cost spell (e.g. Banishing
+    Light at {2}{W}) must NOT be recommended — the stub had no mana
+    check and the UI was offering illegal plays."""
+    snap = _base_snapshot(players=[
+        {"id": 0, "hand": [
+            {"id": 30, "name": "Banishing Light", "type_line": "Enchantment",
+             "mana_cost": "{2}{W}", "scryfall_id": "bl"},
+        ], "lands_played_this_turn": 0,
+         "battlefield": []},
+        {"id": 1, "hand": [], "lands_played_this_turn": 0},
+    ])
+    recs = recommend_from_snapshot(snap, n=10)["recommendations"]
+    assert not any(r["source_name"] == "Banishing Light" for r in recs)
+
+
+def test_spells_allowed_when_enough_untapped_lands():
+    """3 untapped lands → the 3-cost spell is castable."""
+    snap = _base_snapshot(players=[
+        {"id": 0, "hand": [
+            {"id": 30, "name": "Banishing Light", "type_line": "Enchantment",
+             "mana_cost": "{2}{W}", "scryfall_id": "bl"},
+        ], "lands_played_this_turn": 1,
+         "battlefield": _untapped_lands(3)},
+        {"id": 1, "hand": [], "lands_played_this_turn": 0},
+    ])
+    recs = recommend_from_snapshot(snap, n=10)["recommendations"]
+    assert any(r["source_name"] == "Banishing Light" for r in recs)
+
+
+def test_tapped_lands_do_not_count_toward_available_mana():
+    snap = _base_snapshot(players=[
+        {"id": 0, "hand": [
+            {"id": 30, "name": "Goblin Runner", "type_line": "Creature",
+             "mana_cost": "{R}", "scryfall_id": "gr"},
+        ], "lands_played_this_turn": 1,
+         "battlefield": [
+            {"id": 1000, "name": "Mountain",
+             "type_line": "Basic Land — Mountain", "tapped": True},
+         ]},
+        {"id": 1, "hand": [], "lands_played_this_turn": 0},
+    ])
+    recs = recommend_from_snapshot(snap, n=10)["recommendations"]
+    assert not any(r["action_type"] == "CastSpell" for r in recs)
+
+
+def test_floating_mana_pool_counts_toward_available_mana():
+    """Even with all lands tapped, mana already in the pool should
+    let a spell with matching CMC be recommended."""
+    snap = _base_snapshot(players=[
+        {"id": 0, "hand": [
+            {"id": 30, "name": "Goblin Runner", "type_line": "Creature",
+             "mana_cost": "{R}", "scryfall_id": "gr"},
+        ], "lands_played_this_turn": 1,
+         "battlefield": [],
+         "mana_pool": [{"color": "R", "spend_restriction": None}]},
+        {"id": 1, "hand": [], "lands_played_this_turn": 0},
+    ])
+    recs = recommend_from_snapshot(snap, n=10)["recommendations"]
+    assert any(r["source_name"] == "Goblin Runner" for r in recs)
+
+
+def test_sorcery_speed_actions_suppressed_when_not_active_player():
+    """If priority is with the non-active player during the active
+    player's main phase, no sorcery-speed plays should be recommended.
+    Banishing Light @ {2}{W}, P1 has plenty of mana, but P0 is the
+    active player — P1 can only cast instants here."""
+    snap = _base_snapshot(active_player_idx=0, priority_player_idx=1,
+                          players=[
+        {"id": 0, "hand": [], "lands_played_this_turn": 1,
+         "battlefield": []},
+        {"id": 1, "hand": [
+            {"id": 30, "name": "Banishing Light", "type_line": "Enchantment",
+             "mana_cost": "{2}{W}", "scryfall_id": "bl"},
+        ], "lands_played_this_turn": 0,
+         "battlefield": _untapped_lands(3)},
+    ])
+    recs = recommend_from_snapshot(snap, n=10)["recommendations"]
+    assert not any(r["action_type"] == "CastSpell" for r in recs)
+    assert not any(r["action_type"] == "PlayLand" for r in recs)
 
 
 # ------------------------------------------------------------------------
