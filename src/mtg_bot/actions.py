@@ -1754,10 +1754,19 @@ def resolve_top_of_stack(state: GameState) -> None:
         _send_to_graveyard_or_library(state, item.source)
         return
 
-    # Triggered-ability resolution
+    # Triggered- or activated-ability resolution. StackItem.ability holds
+    # either a TriggeredAbility or an ActivatedAbility — distinguish by
+    # type so the log accurately names which kind resolved.
     if item.ability is not None:
+        from mtg_bot.effects import ActivatedAbility
+
+        kind = (
+            "activated"
+            if isinstance(item.ability, ActivatedAbility)
+            else "triggered"
+        )
         state.log.append(
-            f"{item.source.printing.name}'s triggered ability resolves"
+            f"{item.source.printing.name}'s {kind} ability resolves"
         )
         state.resolving_source = item.source
         state.resolving_x_value = item.x_value
