@@ -351,12 +351,21 @@ def create_app(
         """Compact index of every snapshot's turn + step, for fast step/turn
         navigation in the scrubber without fetching each snapshot's full
         payload. Returned as a parallel array so the client can index by
-        snapshot idx directly."""
+        snapshot idx directly.
+
+        ``log_size`` is the cumulative ``len(snapshot.log)`` at that moment.
+        Logs grow monotonically across snapshots, so a client wanting to
+        find "which snapshot first introduced log entry N" can binary-
+        search this array for the smallest index where ``log_size > N``."""
         game = cache.get(game_id)
         if game is None:
             abort(404, description="unknown game_id")
         return jsonify([
-            {"turn_number": s["turn_number"], "step": s["step"]}
+            {
+                "turn_number": s["turn_number"],
+                "step": s["step"],
+                "log_size": len(s["log"]),
+            }
             for s in game.snapshots
         ])
 

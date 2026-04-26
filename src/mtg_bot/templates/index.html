@@ -50,29 +50,31 @@
   <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>
 </header>
 
-<div id="scrubber" class="scrubber hidden" aria-label="Snapshot scrubber">
-  <div class="scrubber-controls">
-    <button type="button" id="btn-first"     title="First snapshot (Home)">&laquo;</button>
-    <button type="button" id="btn-prev-turn" title="Previous turn (Shift+Left)">&#8676;T</button>
-    <button type="button" id="btn-prev-step" title="Previous step (Alt+Left)">&#8676;S</button>
-    <button type="button" id="btn-prev"      title="Previous snapshot (Left)">&lsaquo;</button>
-    <button type="button" id="btn-play"      title="Play (Space)">&#9654;</button>
-    <button type="button" id="btn-next"      title="Next snapshot (Right)">&rsaquo;</button>
-    <button type="button" id="btn-next-step" title="Next step (Alt+Right)">S&#8677;</button>
-    <button type="button" id="btn-next-turn" title="Next turn (Shift+Right)">T&#8677;</button>
-    <button type="button" id="btn-last"      title="Last snapshot (End)">&raquo;</button>
+<div id="bottom-controls" class="bottom-controls">
+  <div id="scrubber" class="scrubber hidden" aria-label="Snapshot scrubber">
+    <div class="scrubber-controls">
+      <button type="button" id="btn-first"     title="First snapshot (Home)">&laquo;</button>
+      <button type="button" id="btn-prev-turn" title="Previous turn (Shift+Left)">&#8676;T</button>
+      <button type="button" id="btn-prev-step" title="Previous step (Alt+Left)">&#8676;S</button>
+      <button type="button" id="btn-prev"      title="Previous snapshot (Left)">&lsaquo;</button>
+      <button type="button" id="btn-play"      title="Play (Space)">&#9654;</button>
+      <button type="button" id="btn-next"      title="Next snapshot (Right)">&rsaquo;</button>
+      <button type="button" id="btn-next-step" title="Next step (Alt+Right)">S&#8677;</button>
+      <button type="button" id="btn-next-turn" title="Next turn (Shift+Right)">T&#8677;</button>
+      <button type="button" id="btn-last"      title="Last snapshot (End)">&raquo;</button>
+    </div>
+    <input type="range" id="scrub-slider" min="0" max="0" value="0" step="1" aria-label="Snapshot slider">
+    <div class="scrubber-readout">
+      <span id="scrub-label">&mdash;</span>
+      <span id="scrub-counter" class="muted">0 / 0</span>
+    </div>
+    <button type="button" id="btn-engine" class="engine-toggle"
+            title="Toggle engine recommendations panel">Engine</button>
   </div>
-  <input type="range" id="scrub-slider" min="0" max="0" value="0" step="1" aria-label="Snapshot slider">
-  <div class="scrubber-readout">
-    <span id="scrub-label">&mdash;</span>
-    <span id="scrub-counter" class="muted">0 / 0</span>
-  </div>
-  <button type="button" id="btn-engine" class="engine-toggle"
-          title="Toggle engine recommendations panel">Engine</button>
-</div>
 
-<div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
-  <ol id="phase-list" class="phase-list"></ol>
+  <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
+    <ol id="phase-list" class="phase-list"></ol>
+  </div>
 </div>
 
 <main id="board" class="board hidden" aria-label="Game board">

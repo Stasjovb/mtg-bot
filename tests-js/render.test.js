@@ -455,3 +455,188 @@ describe('openZoneModal / closeZoneModal', () => {
     expect(document.getElementById('zone-modal').hidden).toBe(true);
   });
 });
+
+
+// ---------------------------------------------------------------------
+// groupBattlefield + Nx stack-badge rendering
+// ---------------------------------------------------------------------
+
+describe('groupBattlefield', () => {
+  function basePerm(overrides = {}) {
+    return {
+      id: 1, name: 'Mountain',
+      type_line: 'Basic Land — Mountain',
+      is_creature: false, is_creature_now: false,
+      is_land: true, is_token: false, is_spacecraft: false,
+      is_planeswalker: false, is_stationed: false,
+      effective_power: null, effective_toughness: null,
+      tapped: false, summoning_sick: false,
+      attacking: false, blocking: null,
+      plus_one_counters: 0, damage: 0, stun_counters: 0,
+      loyalty_counters: 0, charge_counters: 0,
+      attached_to: null, scryfall_id: 'mt-1',
+      ...overrides,
+    };
+  }
+
+  it('collapses three identical mountains into one stack of count 3', () => {
+    const grouped = groupBattlefield([basePerm({ id: 1 }), basePerm({ id: 2 }), basePerm({ id: 3 })]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].stack_count).toBe(3);
+  });
+
+  it('keeps tapped vs untapped as separate stacks', () => {
+    const grouped = groupBattlefield([
+      basePerm({ id: 1, tapped: true }),
+      basePerm({ id: 2, tapped: true }),
+      basePerm({ id: 3, tapped: false }),
+    ]);
+    expect(grouped).toHaveLength(2);
+    const counts = grouped.map(g => g.stack_count).sort();
+    expect(counts).toEqual([1, 2]);
+  });
+
+  it('keeps creatures with different P/T in separate stacks', () => {
+    // Same name, but +1/+1 counters mean different effective P/T → distinct.
+    const grouped = groupBattlefield([
+      basePerm({ id: 1, name: 'Bear', effective_power: 2, effective_toughness: 2 }),
+      basePerm({ id: 2, name: 'Bear', effective_power: 3, effective_toughness: 3,
+                plus_one_counters: 1 }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('keeps summoning-sick creatures separate from rested ones', () => {
+    const grouped = groupBattlefield([
+      basePerm({ id: 1, name: 'Bear', is_creature_now: true,
+                summoning_sick: true,
+                effective_power: 2, effective_toughness: 2 }),
+      basePerm({ id: 2, name: 'Bear', is_creature_now: true,
+                summoning_sick: false,
+                effective_power: 2, effective_toughness: 2 }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('does not mutate the input snapshot objects', () => {
+    const a = basePerm({ id: 1 });
+    groupBattlefield([a, basePerm({ id: 2 })]);
+    expect(a.stack_count).toBeUndefined();
+  });
+
+  it('returns groups in the order of first occurrence', () => {
+    const grouped = groupBattlefield([
+      basePerm({ id: 1, name: 'Mountain' }),
+      basePerm({ id: 2, name: 'Forest' }),
+      basePerm({ id: 3, name: 'Mountain' }),
+    ]);
+    expect(grouped.map(g => g.name)).toEqual(['Mountain', 'Forest']);
+  });
+});
+
+
+describe('cardEl stack badge', () => {
+  function basePerm(overrides = {}) {
+    return {
+      id: 1, name: 'Mountain',
+      is_creature: false, is_creature_now: false,
+      is_land: true, is_token: false,
+      tapped: false, summoning_sick: false,
+      attacking: false, blocking: null,
+      plus_one_counters: 0, damage: 0, stun_counters: 0,
+      loyalty_counters: 0, charge_counters: 0,
+      attached_to: null, scryfall_id: 'mt-1',
+      ...overrides,
+    };
+  }
+
+  it('renders the Nx stack badge when stack_count > 1', () => {
+    const el = cardEl(basePerm({ stack_count: 4 }), { permanent: true });
+    const badge = el.querySelector('.stack-badge');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe('4x');
+    expect(el.classList.contains('stacked')).toBe(true);
+  });
+
+  it('omits the stack badge for a stack of one', () => {
+    const el = cardEl(basePerm({ stack_count: 1 }), { permanent: true });
+    expect(el.querySelector('.stack-badge')).toBeNull();
+    expect(el.classList.contains('stacked')).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------
+// renderLog click → rewind via firstSnapshotWithLogEntry
+// ---------------------------------------------------------------------
+
+describe('renderLog click rewind', () => {
+  function setupGame({ index, currentIdx = 5 }) {
+    globalThis.game = {
+      gameId: 'g1',
+      snapshotCount: index.length,
+      summary: { game_id: 'g1', snapshot_count: index.length },
+      index,
+      snapCache: new Map(),
+      currentIdx,
+      playing: false,
+      playTimer: null,
+    };
+  }
+
+  it('rewinds to the snapshot that introduced the clicked log entry', () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    // Snapshot 0 has 0 log entries, 1 has 2, 2 has 5, 3 has 7. Entry 3
+    // first appears in snapshot 2 (the smallest idx with log_size > 3).
+    setupGame({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 2 },
+        { turn_number: 1, step: 'draw', log_size: 5 },
+        { turn_number: 1, step: 'precombat_main', log_size: 7 },
+      ],
+      currentIdx: 3,
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, {
+      log: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      log_since_last: ['f', 'g'],
+    });
+    const entries = body.querySelectorAll('.log-entry');
+    expect(entries).toHaveLength(7);
+    entries[3].click();
+    expect(goToSpy).toHaveBeenCalledWith(2);
+  });
+
+  it('does not call goTo when clicking an entry already at the current snapshot', () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    setupGame({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 3 },
+      ],
+      currentIdx: 1,
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, { log: ['a', 'b', 'c'], log_since_last: ['a', 'b', 'c'] });
+    body.querySelectorAll('.log-entry')[2].click();
+    expect(goToSpy).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op for older indexes that lack log_size data', () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    setupGame({
+      index: [
+        { turn_number: 1, step: 'untap' },
+        { turn_number: 1, step: 'upkeep' },
+      ],
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, { log: ['a', 'b'], log_since_last: [] });
+    body.querySelectorAll('.log-entry')[0].click();
+    expect(goToSpy).not.toHaveBeenCalled();
+  });
+});

@@ -221,6 +221,21 @@ body { display: grid; grid-template-columns: 1fr 280px;
 .card .pt-badge    { position: absolute; right: -6px; bottom: -6px;
                      background: #1a1a24; color: var(--ink); border: 1px solid var(--panel-edge);
                      border-radius: 10px; padding: 1px 6px; font-weight: 700; font-size: 0.85em; }
+/* "3x" stack-count badge on a grouped permanent. Top-left, distinct from the
+   counter-badge color so a stacked +1/+1 pile (counter at top-left, count at
+   top-right) reads cleanly. */
+.card .stack-badge { position: absolute; left: -6px; top: -6px;
+                     background: #1a1a24; color: var(--accent);
+                     border: 1px solid var(--accent); border-radius: 10px;
+                     padding: 1px 6px; font-weight: 700; font-size: 0.8em;
+                     line-height: 1; }
+/* When a card is part of a stack we visually offset it slightly with a
+   pseudo-element shadow so it reads as a pile rather than a single card. */
+.card.stacked::before { content: ''; position: absolute; inset: 0;
+                        border-radius: var(--card-radius);
+                        box-shadow: 4px 4px 0 -1px rgba(255,255,255,0.18),
+                                    7px 7px 0 -2px rgba(255,255,255,0.10);
+                        pointer-events: none; }
 .card .counter-badge { position: absolute; left: -6px; top: -6px;
                        background: #2a4432; color: #c7f0c8; border: 1px solid #4a6;
                        border-radius: 50%; min-width: 22px; height: 22px; padding: 0 4px;
@@ -332,7 +347,8 @@ body { display: grid; grid-template-columns: 1fr 280px;
 .log-body { flex: 1; overflow-y: auto; font: 0.8em/1.35 ui-monospace, monospace;
             color: #d0d0d8; background: var(--bg); border: 1px solid var(--panel-edge);
             border-radius: 4px; padding: 0.5em; }
-.log-entry { padding: 0.05em 0; }
+.log-entry { padding: 0.05em 0; cursor: pointer; }
+.log-entry:hover { background: rgba(255, 255, 255, 0.06); }
 .log-entry + .log-entry { border-top: 1px dashed #1f1f2b; }
 /* Highlight events that happened during the currently-displayed step. */
 .log-entry.this-step { background: rgba(212, 196, 106, 0.12);
@@ -404,25 +420,42 @@ body { display: grid; grid-template-columns: 1fr 280px;
     --side-panel-w: 110px;
   }
   body { grid-template-columns: 1fr;
-         grid-template-rows: auto auto auto auto auto; }
+         grid-template-rows: auto auto auto auto auto;
+         /* Reserve room at the bottom for the fixed scrubber + phase
+            tracker; otherwise the bottom of the board hides under it.
+            Sized generously since the scrubber wraps to ~3 rows on
+            mobile. */
+         padding-bottom: var(--bottom-controls-h, 11em); }
 
   .top-bar { gap: 0.6em; padding: 0.5em 0.7em; }
   .play-form { gap: 0.4em; flex-basis: 100%; }
   .play-form label { font-size: 0.8em; }
   .play-form input, .play-form select { width: 4.5em; padding: 0.25em 0.4em; }
 
-  .scrubber { flex-wrap: wrap; gap: 0.4em; padding: 0.45em 0.6em; }
+  /* Pin the controls bundle to the bottom of the viewport so it stays
+     visible while scrolling the (often much taller) board. */
+  .bottom-controls { position: fixed; left: 0; right: 0; bottom: 0;
+                     z-index: 100; background: var(--panel);
+                     border-top: 2px solid var(--panel-edge);
+                     box-shadow: 0 -2px 8px rgba(0,0,0,0.35); }
+
+  .scrubber { flex-wrap: wrap; gap: 0.4em; padding: 0.45em 0.6em;
+              border-bottom: 1px solid var(--panel-edge); }
   .scrubber-controls { flex-wrap: wrap; }
   #scrub-slider { min-width: 0; flex: 1 1 100%; order: 4; }
   .scrubber-readout { min-width: 0; flex-direction: row; gap: 0.6em;
                       flex: 0 0 auto; }
   .engine-toggle { flex: 0 0 auto; }
+  .phase-tracker { padding: 0.3em 0.5em; }
 
   .board { grid-column: 1; grid-row: 4; overflow: visible;
            padding: 0.5em; gap: 0.4em; }
   .player-row { padding: 0.4em; gap: 0.4em; }
   .side-panel { gap: 0.3em; }
   .life { font-size: 2em; }
+  /* 4 zone chips don't fit in a 3-col grid at 110px side-panel width —
+     the graveyard label gets clipped. 2x2 lays them out cleanly. */
+  .zones { grid-template-columns: repeat(2, 1fr); }
 
   .right-col { grid-column: 1; grid-row: 5;
                border-left: none; border-top: 1px solid var(--panel-edge); }

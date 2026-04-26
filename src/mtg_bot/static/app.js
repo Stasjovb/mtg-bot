@@ -688,11 +688,59 @@ function battlefieldEl(p, isTop) {
   bf.className = 'battlefield';
   const lands = p.battlefield.filter(o => o.is_land);
   const nonlands = p.battlefield.filter(o => !o.is_land);
-  const creaturesRow = rowOfCards(nonlands, 'bf-row creatures', true);
-  const landsRow = rowOfCards(lands, 'bf-row lands', true);
+  const creaturesRow = rowOfCards(groupBattlefield(nonlands), 'bf-row creatures', true);
+  const landsRow = rowOfCards(groupBattlefield(lands), 'bf-row lands', true);
   // Lands rendered behind/further from the stack for both players:
   bf.append(isTop ? landsRow : creaturesRow, isTop ? creaturesRow : landsRow);
   return bf;
+}
+
+// Group identical permanents into stacks rendered as a single card with an
+// "Nx" badge. Two permanents collapse only if every visually-distinguishing
+// piece of state matches: name, tap status, summoning sickness, attack/block
+// status, every kind of counter, damage, attached_to host, station status.
+// (If anything that affects rendering differs, they get their own stack.)
+// Returns a list of "render objects" in the original order; each is just a
+// reference to the first card in its group with a synthetic ``stack_count``
+// field telling cardEl how many to draw.
+function groupBattlefield(cards) {
+  const groups = new Map();
+  const order = [];
+  for (const c of cards) {
+    const key = stackKey(c);
+    if (groups.has(key)) {
+      groups.get(key).stack_count += 1;
+    } else {
+      // Shallow-copy with stack_count so we don't mutate the snapshot.
+      const proxy = Object.assign({}, c, { stack_count: 1 });
+      groups.set(key, proxy);
+      order.push(proxy);
+    }
+  }
+  return order;
+}
+
+function stackKey(c) {
+  // Anything that produces a different visual on the card must be in this
+  // key. Use the field names cardEl reads. Ordering is fixed so the JSON
+  // serialization is canonical for any equal pair of permanents.
+  return JSON.stringify([
+    c.name,
+    !!c.tapped,
+    !!c.summoning_sick && !!c.is_creature_now,
+    !!c.attacking,
+    !!c.blocking,
+    !!c.is_token,
+    c.plus_one_counters || 0,
+    c.damage || 0,
+    c.stun_counters || 0,
+    c.loyalty_counters || 0,
+    c.charge_counters || 0,
+    !!c.is_stationed,
+    c.attached_to ? c.attached_to.id : null,
+    c.effective_power ?? null,
+    c.effective_toughness ?? null,
+  ]);
 }
 
 function handEl(p) {
@@ -753,6 +801,13 @@ function cardEl(c, { permanent }) {
     if (c.attacking) el.classList.add('attacking');
     if (c.blocking) el.classList.add('blocking');
     if (c.is_token) el.classList.add('token');
+    if (c.stack_count && c.stack_count > 1) {
+      el.classList.add('stacked');
+      const sb = document.createElement('div');
+      sb.className = 'stack-badge';
+      sb.textContent = `${c.stack_count}x`;
+      el.appendChild(sb);
+    }
 
     if (c.is_creature_now) {
       const pt = document.createElement('div');
@@ -957,7 +1012,31 @@ function renderLog(body, snap) {
     d.className = 'log-entry';
     if (i >= firstRecent && recentCount > 0) d.classList.add('this-step');
     d.textContent = e;
+    // Click rewinds to the first snapshot that introduced this log entry.
+    // Index entries carry log_size (cumulative len(state.log) at that
+    // snapshot); the first idx with log_size > i is the snapshot where
+    // entry i first appeared.
+    d.addEventListener('click', () => {
+      const target = firstSnapshotWithLogEntry(i);
+      if (target !== null && target !== game.currentIdx) goTo(target);
+    });
     body.appendChild(d);
   });
   body.scrollTop = body.scrollHeight;
+}
+
+// Binary search over game.index for the smallest snapshot idx whose log
+// already contains entry ``logIdx``. Returns null if the index lacks
+// log_size data (older replays / out-of-game state).
+function firstSnapshotWithLogEntry(logIdx) {
+  if (!game || !game.index || game.index.length === 0) return null;
+  if (game.index[0].log_size === undefined) return null;
+  let lo = 0;
+  let hi = game.index.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (game.index[mid].log_size > logIdx) hi = mid;
+    else lo = mid + 1;
+  }
+  return game.index[lo].log_size > logIdx ? lo : null;
 }

@@ -672,6 +672,23 @@ def test_api_snapshots_index_returns_turn_and_step_per_snapshot(client):
     assert all(b >= a for a, b in zip(turns, turns[1:]))
 
 
+def test_api_snapshots_index_log_size_grows_monotonically(client):
+    """Each index entry exposes log_size (cumulative len(state.log)) so the
+    UI can binary-search "which snapshot first introduced log entry N"
+    without fetching every snapshot's payload. Logs only grow, so the
+    sequence must be non-decreasing."""
+    play = client.get("/api/play?seed=0&max_turns=5").get_json()
+    idx = client.get(f"/api/snapshots_index/{play['game_id']}").get_json()
+    sizes = [e["log_size"] for e in idx]
+    assert all(b >= a for a, b in zip(sizes, sizes[1:]))
+    # And the final snapshot's log_size must match the actual final log
+    # length, otherwise the binary search would miss late entries.
+    last = client.get(
+        f"/api/snapshot/{play['game_id']}/{play['snapshot_count'] - 1}"
+    ).get_json()
+    assert sizes[-1] == len(last["log"])
+
+
 def test_api_snapshots_index_unknown_game_id_404(client):
     assert client.get("/api/snapshots_index/deadbeef").status_code == 404
 
