@@ -8,6 +8,7 @@ from __future__ import annotations
 
 __all__ = [
     "_arena",
+    "_drain_stack",
     "_find_first",
     "_find_playland_for",
     "_find_cast_for",
@@ -122,18 +123,36 @@ def _find_cast_for(state, name):
 
 
 
+def _drain_stack(state: GameState) -> None:
+    """Test helper alias for ``mtg_bot.actions.drain_stack``.
+
+    See that function for full docs. Use this in tests that fire
+    triggers via direct calls (``declare_attackers``, ``declare_blockers``,
+    manual ``put_into_battlefield``, etc.) and then need to observe the
+    trigger's *resolved* effects.
+    """
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
+
+
 def _simulate_combat_step(state, attackers, assignments=()):
     """Declare attackers then blockers, then resolve damage (simultaneous)."""
     state.step = Step.DECLARE_ATTACKERS
     apply(
         state, DeclareAttackers(attacker_ids=frozenset(attackers)), player_id=0
     )
+    # Attacks triggers landed on the stack. Drain before blockers so a
+    # test asserting an attack trigger's effect (life loss, counter,
+    # token spawn) sees the resolved board state.
+    _drain_stack(state)
     state.step = Step.DECLARE_BLOCKERS
     apply(state, DeclareBlockers(assignments=tuple(assignments)), player_id=1)
+    _drain_stack(state)
     state.step = Step.COMBAT_DAMAGE
     from mtg_bot.combat import resolve_combat_damage
     resolve_combat_damage(state, defending_player_id=1)
     state_based_actions(state)
+    _drain_stack(state)
 
 
 

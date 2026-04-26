@@ -3,6 +3,7 @@ trigger and the DrawCardsEqualToResolvingCombatDamage effect."""
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_combat_damage_to_player_triggers
 from mtg_bot.effects import DrawCardsEqualToResolvingCombatDamage
 from mtg_bot.game import GameState, Player, Zone
@@ -68,6 +69,7 @@ def test_starwinder_draws_equal_to_bear_damage():
     state.battlefield.append(bear)
     # Simulate bear (2 power) connecting with P1.
     _fire_combat_damage_to_player_triggers(state, [(bear.id, 1, 2)])
+    drain_stack(state)
     assert len(state.players[0].hand) == 2
 
 
@@ -80,6 +82,7 @@ def test_starwinder_draws_equal_to_its_own_damage():
     state.battlefield.append(starwinder)
     # Simulate Starwinder (7 power) itself connecting.
     _fire_combat_damage_to_player_triggers(state, [(starwinder.id, 1, 7)])
+    drain_stack(state)
     assert len(state.players[0].hand) == 7
 
 

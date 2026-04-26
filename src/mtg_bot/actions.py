@@ -1375,6 +1375,21 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     owner.graveyard.append(card)
 
 
+def drain_stack(state: GameState) -> None:
+    """Resolve every StackItem until empty, interleaving SBAs.
+
+    Engine-level utility used by tests that fire triggers via direct calls
+    (``declare_attackers``, ``declare_blockers``, ``put_into_battlefield``,
+    etc.) and then need to observe the trigger's *resolved* effects. The
+    real engine drains the stack via the priority loop; tests that bypass
+    priority must drain explicitly.
+    """
+    from mtg_bot.turn import state_based_actions
+    while state.stack:
+        resolve_top_of_stack(state)
+        state_based_actions(state)
+
+
 def resolve_top_of_stack(state: GameState) -> None:
     item = state.stack.pop()
 
@@ -1657,6 +1672,100 @@ def _fire_artifact_enters_triggers(
                     state.resolving_source = None
 
 
+def push_triggered_ability(
+    state: GameState,
+    *,
+    source: "GameObject",
+    ability,
+    ability_index: int,
+    controller_id: int,
+    label: str,
+    combat_damage_amount: int = 0,
+    fixed_targets: tuple[tuple[str, int], ...] | None = None,
+) -> bool:
+    """Push a triggered ability onto the stack, picking targets if needed.
+
+    Centralizes the trigger-firing path so every triggered ability gets a
+    response window instead of resolving immediately at the fire site.
+
+    - ``label``: short descriptor used in the log (e.g. ``"dies"``,
+      ``"attacks"``). The log line reads
+      ``f"{source.name}'s {label} trigger goes on the stack" + targets``.
+    - ``ability_index``: index into ``source.printing.triggered_abilities``;
+      used by ``should_fire_trigger`` for the ``once_per_turn`` ledger.
+    - ``combat_damage_amount``: stashed on the StackItem for
+      combat-damage triggers so the resolving effect can read
+      ``state.resolving_combat_damage_amount``.
+    - ``fixed_targets``: when the trigger's targets are determined by the
+      event itself (e.g. "the player who was hit"), pass them here and
+      target selection is skipped. Otherwise the controller's agent picks
+      from ``effect.legal_targets`` as the ability goes on the stack.
+
+    Returns True when the ability lands on the stack, False when it's
+    gated off (tier/once-per-turn/void) or fizzles (no legal targets).
+    """
+    from mtg_bot.turn import should_fire_trigger
+
+    if not should_fire_trigger(state, source.id, ability_index, ability):
+        return False
+    effect = ability.effect
+    if fixed_targets is not None:
+        targets: tuple[tuple[str, int], ...] = fixed_targets
+    else:
+        targets = ()
+        min_t, max_t = effect.target_count_range()
+        if max_t > 0:
+            state.resolving_source = source
+            state.resolving_combat_damage_amount = combat_damage_amount
+            try:
+                legal = effect.legal_targets(state, controller_id)
+            finally:
+                state.resolving_source = None
+                state.resolving_combat_damage_amount = 0
+            if not legal and min_t > 0:
+                state.log.append(
+                    f"{source.printing.name}'s {label} trigger has no "
+                    f"legal targets; fizzles"
+                )
+                return False
+            controller = state.player_by_id(controller_id)
+            chosen_list: list[tuple[str, int]] = []
+            remaining = list(legal)
+            for _ in range(max_t):
+                if not remaining:
+                    break
+                if controller.agent is None:  # pragma: no cover
+                    break
+                pick = controller.agent.choose_target(
+                    state, controller_id, remaining
+                )
+                if pick is None or pick not in remaining:
+                    break
+                chosen_list.append(pick)
+                remaining.remove(pick)
+            if len(chosen_list) < min_t:  # pragma: no cover
+                state.log.append(
+                    f"{source.printing.name}'s {label} trigger had no "
+                    f"target chosen; fizzles"
+                )
+                return False
+            targets = tuple(chosen_list)
+    state.stack.append(
+        StackItem(
+            source=source,
+            controller_id=controller_id,
+            ability=ability,
+            targets=targets,
+            combat_damage_amount=combat_damage_amount,
+        )
+    )
+    state.log.append(
+        f"{source.printing.name}'s {label} trigger goes on the stack"
+        + _format_log_targets(state, targets)
+    )
+    return True
+
+
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     """Push any ETB triggers from ``creature`` onto the stack, in printing order.
 
@@ -1665,65 +1774,22 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     are no legal targets, the ability fizzles (doesn't go on the stack at
     all), per the simplified Stage-3 targeting model.
     """
-    from mtg_bot.game import StackItem
+    from mtg_bot.game import etb_trigger_multiplier
 
-    from mtg_bot.game import etb_trigger_multiplier, is_void_active
-
-    for ability in creature.printing.triggered_abilities:
+    for ability_index, ability in enumerate(creature.printing.triggered_abilities):
         if ability.trigger != "etb":
             continue
-        if ability.requires_void and not is_void_active(state):
-            continue
         controller_id = creature.controller_id
-        effect = ability.effect
         # Starfield Vocalist and similar permanents multiply ETB-caused
         # trigger firings. Each firing independently selects its target
         # set via the controller's agent.
         firings = etb_trigger_multiplier(state, controller_id)
         for _ in range(firings):
-            targets: tuple[tuple[str, int], ...] = ()
-            min_t, max_t = effect.target_count_range()
-            if max_t > 0:
-                state.resolving_source = creature
-                try:
-                    legal = effect.legal_targets(state, controller_id)
-                finally:
-                    state.resolving_source = None
-                if not legal and min_t > 0:
-                    state.log.append(
-                        f"{creature.printing.name}'s ETB has no legal "
-                        f"targets; trigger fizzles"
-                    )
-                    continue
-                controller = state.player_by_id(controller_id)
-                chosen_list: list[tuple[str, int]] = []
-                remaining = list(legal)
-                for _ in range(max_t):
-                    if not remaining:
-                        break
-                    pick = controller.agent.choose_target(
-                        state, controller_id, remaining
-                    )
-                    if pick is None or pick not in remaining:
-                        break
-                    chosen_list.append(pick)
-                    remaining.remove(pick)
-                if len(chosen_list) < min_t:  # pragma: no cover
-                    state.log.append(
-                        f"{creature.printing.name}'s ETB had no target "
-                        f"chosen; trigger fizzles"
-                    )
-                    continue
-                targets = tuple(chosen_list)
-            state.stack.append(
-                StackItem(
-                    source=creature,
-                    controller_id=controller_id,
-                    ability=ability,
-                    targets=targets,
-                )
-            )
-            state.log.append(
-                f"{creature.printing.name}'s ETB trigger goes on the stack"
-                + _format_log_targets(state, targets)
+            push_triggered_ability(
+                state,
+                source=creature,
+                ability=ability,
+                ability_index=ability_index,
+                controller_id=controller_id,
+                label="ETB",
             )

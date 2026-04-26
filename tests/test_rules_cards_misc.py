@@ -3123,6 +3123,7 @@ def test_cryoshatter_destroys_host_when_dealt_direct_damage():
     DealDamageAnyTarget(amount=1).resolve(
         state, controller_id=0, targets=(("creature", bear.id),)
     )
+    _drain_stack(state)
     state_based_actions(state)
     # Bear destroyed by Cryoshatter (1 damage is sublethal vs 2 toughness,
     # so the destruction comes from the aura trigger, not SBA lethal damage).
@@ -3833,6 +3834,7 @@ def test_sunset_saboteur_attacks_trigger_fires():
     )
     state.battlefield.append(enemy)
     declare_attackers(state, [sab.id])
+    _drain_stack(state)
     assert enemy.plus_one_counters == 1
 
 
@@ -4289,6 +4291,7 @@ def test_comet_crawler_attacks_may_sac_pumps():
     )
     state.battlefield.append(fodder)
     declare_attackers(state, [crawler.id])
+    _drain_stack(state)
     # Fodder sacrificed; crawler pumped.
     assert fodder not in state.battlefield
     assert effective_power(state, crawler) == 4  # 2 + 2

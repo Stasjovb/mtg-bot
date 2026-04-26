@@ -434,11 +434,23 @@ def should_fire_trigger(
 ) -> bool:
     """True if ``ability`` on the permanent with id ``source_id`` may fire.
 
-    Honors both ``ability.tier_threshold`` (EoE Spacecraft tier gate:
-    source must have at least that many charge counters) and
-    ``ability.once_per_turn`` (records fire in state.once_per_turn_fired
-    to prevent a second fire this turn).
+    Honors three independent gates:
+
+    - ``ability.requires_void``: EoE Void rider — only fires while
+      ``is_void_active(state)`` (a non-land permanent left the
+      battlefield this turn or a spell was warped this turn).
+    - ``ability.tier_threshold``: EoE Spacecraft tier gate — source must
+      have at least that many charge counters.
+    - ``ability.once_per_turn``: records the fire in
+      ``state.once_per_turn_fired`` so the trigger fires at most once
+      per turn. Eager record matches MTG semantics: the ability has
+      "triggered" the moment its event happens, even if it later fails
+      to find legal targets and fizzles off the stack.
     """
+    from mtg_bot.game import is_void_active
+
+    if getattr(ability, "requires_void", False) and not is_void_active(state):
+        return False
     tier = getattr(ability, "tier_threshold", 0)
     if tier > 0:
         source = next((o for o in state.battlefield if o.id == source_id), None)

@@ -7,7 +7,7 @@ Exercises:
 - Sunken Citadel's simplified tap-for-any-color ability.
 """
 
-from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
+from mtg_bot.actions import ActivateAbility, apply_action, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import Agent
 from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
 from mtg_bot.cards.base import make_creature
@@ -71,6 +71,7 @@ def test_contested_war_zone_changes_controller_on_combat_damage():
     attacker.summoning_sick = False
     declare_attackers(state, [attacker.id])
     resolve_combat_damage(state, defending_player_id=1)
+    drain_stack(state)
     assert zone.controller_id == 0  # P0 now controls the zone
 
 

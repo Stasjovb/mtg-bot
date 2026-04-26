@@ -7,6 +7,7 @@ from mtg_bot.cards import (
     EOE_SPELLS,
     SYNTHETIC_CREATURES,
 )
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import OptionalPutCreatureFromHandOntoBattlefield
 from mtg_bot.game import GameState, Player, Zone
@@ -110,6 +111,7 @@ def test_sledge_class_attack_trigger_fires_when_attacking():
     )
     p.hand.append(bear)
     declare_attackers(state, [sledge.id])
+    drain_stack(state)
     # Attack trigger put the bear into play.
     assert bear in state.battlefield
 

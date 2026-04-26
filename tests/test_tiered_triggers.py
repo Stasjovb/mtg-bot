@@ -5,7 +5,7 @@ Tier gating works off charge counters on the source: an ability with
 This mirrors ``StaticAbility.tier_threshold`` but for triggered abilities.
 """
 
-from mtg_bot.actions import CastSpell, apply_action, resolve_top_of_stack
+from mtg_bot.actions import CastSpell, apply_action, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -207,16 +207,21 @@ def test_dawnsire_attacks_trigger_only_at_tier_10():
     # the gate, set counters to 9 temporarily).
     dawnsire.charge_counters = 9
     declare_attackers(state, [dawnsire.id])
+    drain_stack(state)
     # At 9 counters, the 10+ trigger shouldn't fire — victim untouched.
     assert victim.damage == 0
+    assert victim in state.battlefield
     # Reset for the next attack.
     dawnsire.attacking = False
     # Clean up any damage marked on dawnsire from the first pass.
     dawnsire.damage = 0
-    # At 10+: trigger fires, victim takes 100 damage (lethal).
+    # At 10+: trigger fires, victim takes 100 damage (lethal); SBAs then
+    # destroy the victim.
     dawnsire.charge_counters = 10
     declare_attackers(state, [dawnsire.id])
-    assert victim.damage == 100
+    drain_stack(state)
+    assert victim not in state.battlefield
+    assert victim in state.players[1].graveyard
 
 
 def test_tier_threshold_attacks_fires_when_source_exactly_at_threshold():
@@ -234,4 +239,7 @@ def test_tier_threshold_attacks_fires_when_source_exactly_at_threshold():
     )
     state.battlefield.append(victim)
     declare_attackers(state, [dawnsire.id])
-    assert victim.damage == 100
+    drain_stack(state)
+    # 100 damage is lethal; SBAs immediately destroy the victim.
+    assert victim not in state.battlefield
+    assert victim in state.players[1].graveyard

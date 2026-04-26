@@ -2,6 +2,7 @@
 
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 from mtg_bot.effects import PainForAllDamageEchoEffect, PainForAllETBEffect
 from mtg_bot.game import GameState, Player, Zone
@@ -114,6 +115,7 @@ def test_aura_fires_when_enchanted_creature_takes_damage():
     aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
     # Directly invoke the combat hook with amount = 4.
     _fire_enchanted_dealt_damage_triggers(state, bear, 4)
+    drain_stack(state)
     assert state.players[1].life == 16
 
 
