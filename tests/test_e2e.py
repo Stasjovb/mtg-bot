@@ -720,6 +720,147 @@ def test_log_entry_click_rewinds_scrubber_to_introducing_snapshot(page):
     )
 
 
+# ------------------------------------------------------------------------
+# Replay-from-URL flow + attack-arrow-on-lethal regression
+#
+# Both features need a saved replay file with specific properties (a real
+# game that ended in lethal life damage). One fixture generates it once
+# per session and a dedicated live-server points its replays_root at the
+# tmp dir; two tests share the resulting replay-loaded page.
+# ------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def lethal_replay_setup(tmp_path_factory):
+    """Build a replay file capturing a real game that ended with one
+    player at <=0 life (life damage, not poison/deck-out). Returns
+    ``(replays_dir, filename)``. Searches deterministic seeds so the
+    same fixture is produced every test run."""
+    from mtg_bot.replay import save_replay
+    from mtg_bot.simulate import simulate_game
+    from mtg_bot.training.replay_capture import ReplayRecorder
+
+    replays_dir = tmp_path_factory.mktemp("lethal_replays")
+    for seed in range(0, 200):
+        recorder = ReplayRecorder()
+        state = simulate_game(
+            colors=["G", "R"], seed=seed, max_turns=80,
+            on_snapshot=recorder.record,
+            snapshot_granularity="step",
+        )
+        if not state.is_over() or state.winner_id is None:
+            continue
+        loser = next(p for p in state.players if p.has_lost)
+        # Lethal life damage only — skip poison, deck-out, mill.
+        if loser.life > 0 or loser.poison_counters >= 10:
+            continue
+        # Need at least one snapshot post-loss with an attacking creature
+        # for the attack-arrow test to be meaningful.
+        has_attacking_post_loss = any(
+            any(
+                pl.get("has_lost") for pl in snap["players"]
+            )
+            and any(
+                o.get("attacking")
+                for pl in snap["players"]
+                for o in pl["battlefield"]
+            )
+            for snap in recorder.snapshots
+        )
+        if not has_attacking_post_loss:
+            continue
+        replay = recorder.to_replay(
+            {"base_seed": seed, "winner": state.winner_id}
+        )
+        filename = f"lethal_seed{seed}.json.gz"
+        save_replay(replay, replays_dir / filename)
+        return replays_dir, filename
+    pytest.skip(
+        "could not find a lethal-life-damage game with post-loss attackers "
+        "in seeds 0..199"
+    )
+
+
+@pytest.fixture(scope="session")
+def replay_server(lethal_replay_setup):
+    """Live server with replays_root pointing at the lethal-replay tmp
+    dir, so /api/load_replay can find the fixture."""
+    replays_dir, _ = lethal_replay_setup
+    app = create_app(replays_root=replays_dir)
+    app.config["TESTING"] = True
+    t = _ServerThread(app)
+    t.start()
+    url = f"http://127.0.0.1:{t.port}"
+    yield url
+    t.stop()
+    t.join(timeout=5)
+
+
+@pytest.fixture
+def replay_page(browser, replay_server, lethal_replay_setup):
+    """Page navigated to the lethal-damage replay via ?replay=<filename>."""
+    _, filename = lethal_replay_setup
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    p = ctx.new_page()
+    p.goto(f"{replay_server}/?replay={filename}",
+           wait_until="domcontentloaded")
+    p.wait_for_function(
+        "() => /Loaded replay|wins|Draw/.test("
+        "document.getElementById('status').textContent)",
+        timeout=30_000,
+    )
+    yield p
+    ctx.close()
+
+
+def test_replay_url_loads_and_starts_at_first_snapshot(replay_page):
+    """``?replay=<filename>`` should load the fixture and park the
+    scrubber at snapshot 0 — the start of the game, not the final
+    state. Together those cover both the URL handler and the
+    open-at-beginning behavior."""
+    idx = replay_page.evaluate(
+        "() => parseInt(document.getElementById('scrub-slider').value, 10)"
+    )
+    assert idx == 0, f"replay opened at snapshot {idx}, expected 0"
+    status = replay_page.locator("#status").inner_text()
+    assert "Loaded replay" in status or "wins" in status or "Draw" in status
+
+
+def test_attack_arrow_does_not_point_back_at_controller(replay_page):
+    """Across every snapshot in a replay that ended in lethal life
+    damage, no attacking creature should have ``attacking_defender.id
+    == controller_id``. The original bug had the serializer's "skip
+    dead opponent" loop wrap back to the attacker's own controller in
+    a 2-player game once the only opponent's has_lost flipped."""
+    bad = replay_page.evaluate("""async () => {
+      const max = parseInt(document.getElementById('scrub-slider').max, 10);
+      const offenders = [];
+      for (let i = 0; i <= max; i++) {
+        let s = game.snapCache.get(i);
+        if (!s) {
+          const r = await fetch(`/api/snapshot/${game.gameId}/${i}`);
+          s = await r.json();
+          game.snapCache.set(i, s);
+        }
+        for (const pl of s.players) {
+          for (const o of pl.battlefield) {
+            if (!o.attacking) continue;
+            const def = o.attacking_defender;
+            if (def && def.id === pl.id) {
+              offenders.push({ snap: i, perm: o.name, controller: pl.id });
+            }
+          }
+        }
+      }
+      return offenders;
+    }""")
+    assert bad == [], (
+        f"found {len(bad)} attack arrow(s) pointing back at the "
+        f"controller across the replay: {bad[:3]}"
+        + ("..." if len(bad) > 3 else "")
+    )
+
+
 def test_server_error_surfaces_in_status_line(page):
     """Submit the form with a non-numeric seed to force /api/play to 400, and
     verify the JS error handler lands an 'Error:' in the status line with the
