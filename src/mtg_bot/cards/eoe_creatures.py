@@ -2077,9 +2077,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             equip_cost="{5}",
         ),
         # Squire's Lightblade: {W} Equipment with Flash. ETB auto-attach;
-        # equipped creature gets +1/+0. Equip {3}. Dropped: the one-shot
-        # "gains first strike UEOT" on ETB (would be a separate Sequence
-        # effect, skipped for clarity).
+        # the chosen target gets +1/+0 and gains first strike until end
+        # of turn. Dropped: the Equip {3} activated ability.
         make_equipment(
             "Squire's Lightblade", "{W}",
             power_bonus=1, toughness_bonus=0,
@@ -2087,7 +2086,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=AttachToTargetCreatureYouControl(),
+                    effect=AttachToTargetCreatureYouControl(
+                        granted_keywords_ueot=frozenset({"first strike"}),
+                    ),
                 ),
             ),
             equip_cost="{3}",

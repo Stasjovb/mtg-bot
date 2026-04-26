@@ -623,7 +623,16 @@ class AttachToTargetCreatureYouControl(Effect):
 
     Reads state.resolving_source for the Equipment. No-op if the source
     isn't an Equipment (is_equipment check on subtypes).
+
+    Optional ``granted_keywords_ueot``: keywords the chosen target also
+    gains until end of turn. Matches oracle riders like Squire's
+    Lightblade's "...attach it to target creature you control. That
+    creature gains first strike until end of turn." Adding the keyword
+    here (rather than via a separate Sequence sub-effect) keeps the
+    target shared between attach and the UEOT grant.
     """
+
+    granted_keywords_ueot: frozenset[str] = frozenset()
 
     def requires_target(self) -> bool:
         return True
@@ -662,9 +671,25 @@ class AttachToTargetCreatureYouControl(Effect):
         state.log.append(
             f"{source.printing.name} is attached to {target.printing.name}"
         )
+        if self.granted_keywords_ueot:
+            target.temp_keywords = (
+                target.temp_keywords | self.granted_keywords_ueot
+            )
+            state.log.append(
+                f"{target.printing.name} gains "
+                f"{', '.join(sorted(self.granted_keywords_ueot))} "
+                "until end of turn"
+            )
 
     def describe(self) -> str:
-        return "attach this Equipment to target creature you control"
+        base = "attach this Equipment to target creature you control"
+        if self.granted_keywords_ueot:
+            return (
+                f"{base}. That creature gains "
+                f"{', '.join(sorted(self.granted_keywords_ueot))} "
+                "until end of turn"
+            )
+        return base
 
 
 
