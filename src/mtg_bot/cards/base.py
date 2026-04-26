@@ -164,6 +164,7 @@ from mtg_bot.effects import (
     DiscardHandThenDrawN,
     DoubleTargetCreaturesPowerUEOT,
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    TargetOpponentLosesLife,
     TargetOpponentLosesNYouGainN,
     TargetPlayerLosesLife,
     ExileAllCreaturesAndSpacecraft,

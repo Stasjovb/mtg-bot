@@ -2145,11 +2145,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Dubious Delicacy: {2}{B} Artifact — Food. Flash + ETB -3/-3 UEOT
-        # + one of two "2 tap sac" modes for life-swing. Simplifications:
-        # "up to one" target → required target; only the gain-life
-        # activation kept (the "target opponent loses 3 life" variant
-        # collapses into EachOpponentLosesLife which has similar flavor).
+        # Dubious Delicacy: {2}{B} Artifact — Food. Printed oracle:
+        #   Flash
+        #   When this artifact enters, up to one target creature gets
+        #     -3/-3 until end of turn.
+        #   {2}, {T}, Sacrifice this artifact: You gain 3 life.
+        #   {2}, {T}, Sacrifice this artifact: Target opponent loses 3 life.
+        # All three abilities (one ETB trigger + two activated) are
+        # modeled. The ETB uses optional=True so "up to one target" is
+        # actually optional (no fizzle when the battlefield has no
+        # creatures). The two activated abilities share an identical cost
+        # but are distinct: each is its own activation choice on the
+        # stack, with the second targeting one specific opponent (not
+        # each opponent).
         make_artifact(
             "Dubious Delicacy", "{2}{B}",
             keywords={"flash"},
@@ -2158,6 +2166,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     trigger="etb",
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=-3, toughness_bonus=-3,
+                        optional=True,
                     ),
                 ),
             ),
@@ -2176,7 +2185,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         tap_self=True,
                         sacrifice_self=True,
                     ),
-                    effect=EachOpponentLosesLife(amount=3),
+                    effect=TargetOpponentLosesLife(amount=3),
                 ),
             ),
         ),

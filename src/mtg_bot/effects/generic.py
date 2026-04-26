@@ -1393,6 +1393,55 @@ class TargetOpponentLosesNYouGainN(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentLosesLife(Effect):
+    """Target opponent loses ``amount`` life.
+
+    Matches oracle text like "Target opponent loses 3 life" — the second
+    activated ability on Dubious Delicacy ({2}, {T}, Sacrifice this
+    artifact: Target opponent loses 3 life). The legality pool is
+    explicitly opponents-only, so the controller can never target
+    themselves.
+    """
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, pid = targets[0]
+        if kind != "player":
+            return
+        try:
+            opp = state.player_by_id(pid)
+        except KeyError:
+            return
+        if opp.id == controller_id:
+            return
+        opp.life -= self.amount
+        state.log.append(
+            f"P{pid} loses {self.amount} life (now {opp.life})"
+        )
+
+    def describe(self) -> str:
+        return f"target opponent loses {self.amount} life"
+
+
+
+@dataclass(frozen=True)
 class PumpTargetOtherCreatureByXOverXWhereXIsSourcePower(Effect):
     """Target another creature you control gets +X/+X until end of turn,
     where X is the effect's source's effective power. Reads
@@ -2632,6 +2681,10 @@ class PumpTargetCreatureUntilEOT(Effect):
     cleared at cleanup. Negative bonuses model "target creature gets
     -N/-0" debuffs.
 
+    Set ``optional=True`` for "up to one target creature" oracle text:
+    the trigger / activation resolves as a no-op when no target is
+    chosen / available (e.g. Dubious Delicacy's ETB).
+
     ``granted_triggered_ability`` (optional) appends a UEOT triggered
     ability to the target's ``temp_triggered_abilities``. Use for cards
     whose pump rider also grants "Whenever ~ does X, Y" until EOT.
@@ -2664,9 +2717,16 @@ class PumpTargetCreatureUntilEOT(Effect):
     # cards and lose that much life.'" Cleared at cleanup with the
     # rest of the temp_* fields.
     granted_triggered_ability: "TriggeredAbility | None" = None
+    # "Up to one target" semantics — the trigger / activation resolves
+    # as a no-op when no target is chosen or available (e.g. Dubious
+    # Delicacy's ETB "up to one target creature gets -3/-3 UEOT").
+    optional: bool = False
 
     def requires_target(self) -> bool:
-        return True
+        return not self.optional
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int

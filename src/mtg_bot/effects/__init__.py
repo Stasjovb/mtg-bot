@@ -152,6 +152,7 @@ from mtg_bot.effects.generic import (
     TapTargetOpponentPermanentAndStunIt,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
+    TargetOpponentLosesLife,
     TargetOpponentLosesNYouGainN,
     TargetPlayerLosesLife,
     UntapTargetLand,
