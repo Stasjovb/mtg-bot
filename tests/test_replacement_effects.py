@@ -8,7 +8,10 @@ from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import CreateToken
-from mtg_bot.game import GameState, Player, Zone, etb_trigger_multiplier
+from mtg_bot.game import (
+    GameState, Player, Zone,
+    effective_power, effective_toughness, etb_trigger_multiplier,
+)
 from mtg_bot.turn import run_cleanup_step, run_untap_step
 
 
@@ -199,6 +202,22 @@ def test_tractor_beam_printing_has_no_untap_flag():
 def test_moonlit_meditation_printing_has_replace_flag():
     m = EOE_SPELLS["Moonlit Meditation"]
     assert m.replaces_first_tokens_with_copies is True
+
+
+def test_moonlit_meditation_grants_no_pump():
+    """Printed oracle has no P/T bonus — pin the un-pumped reality."""
+    m = EOE_SPELLS["Moonlit Meditation"]
+    assert m.equipment_bonuses == (0, 0, frozenset())
+
+
+def test_moonlit_attached_bear_keeps_printed_pt():
+    """A 2/2 bear enchanted by Moonlit Meditation stays 2/2 — no
+    pump bonus from the aura."""
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
+    _put(state, EOE_SPELLS["Moonlit Meditation"], attached_to=bear.id)
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2
 
 
 def test_starfield_printing_has_extra_etb_trigger():

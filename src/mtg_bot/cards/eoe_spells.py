@@ -399,8 +399,8 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # instead create that many tokens that are copies of enchanted
         # permanent." Replacement effect wired via
         # replaces_first_tokens_with_copies + state.players_who_
-        # created_tokens_this_turn (cleared at cleanup). Stand-in's
-        # placeholder +1/+1 P/T bonus dropped — real card has none.
+        # created_tokens_this_turn (cleared at cleanup). No P/T bonus
+        # — real card grants none.
         make_aura(
             "Moonlit Meditation", "{2}{U}",
             replaces_first_tokens_with_copies=True,
@@ -413,8 +413,8 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # Partial implementation: ETB tap + don't-untap clause
         # (attached_prevents_untap). The gain-control clause is NOT
         # modeled — the enchanted permanent remains under its original
-        # controller even while Tractor Beam is on it. Stand-in's
-        # placeholder +2/+2 bonus dropped (real card has none).
+        # controller even while Tractor Beam is on it. No P/T bonus
+        # — real card grants none.
         make_aura(
             "Tractor Beam", "{2}{U}{U}",
             attached_prevents_untap=True,
@@ -450,7 +450,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # enchanted creature deals damage equal to its power to any
         # other target. Whenever enchanted creature is dealt damage,
         # it deals that much damage to each opponent."
-        # No printed P/T bonus (stand-in placeholder +3/+0 dropped).
+        # No P/T bonus — real card grants none.
         make_aura(
             "Pain for All", "{2}{R}",
             triggered_abilities=(

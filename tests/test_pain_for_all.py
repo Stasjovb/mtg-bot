@@ -5,7 +5,9 @@ from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 from mtg_bot.effects import PainForAllDamageEchoEffect, PainForAllETBEffect
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import (
+    GameState, Player, Zone, effective_power, effective_toughness,
+)
 
 
 class _PickFirstAgent(Agent):
@@ -124,3 +126,20 @@ def test_pain_for_all_printing_has_both_triggers():
     triggers = {ab.trigger for ab in p.triggered_abilities}
     assert "etb" in triggers
     assert "enchanted_creature_dealt_damage" in triggers
+
+
+def test_pain_for_all_grants_no_pump():
+    """Printed oracle has no P/T bonus — pin the un-pumped reality."""
+    p = EOE_SPELLS["Pain for All"]
+    assert p.equipment_bonuses == (0, 0, frozenset())
+
+
+def test_attached_bear_keeps_printed_pt():
+    """A 2/2 bear enchanted by Pain for All stays 2/2 — no pump bonus
+    from the aura. The ETB then deals exactly the bear's printed
+    power (2), not a bumped value."""
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
+    _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2

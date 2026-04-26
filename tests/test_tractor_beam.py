@@ -3,7 +3,7 @@
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import TractorBeamETBEffect
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import GameState, Player, Zone, effective_power, effective_toughness
 
 
 def _new_state():
@@ -55,3 +55,19 @@ def test_tractor_printing_has_etb():
     t = EOE_SPELLS["Tractor Beam"]
     triggers = {ab.trigger for ab in t.triggered_abilities}
     assert "etb" in triggers
+
+
+def test_tractor_beam_grants_no_pump():
+    """Printed oracle has no P/T bonus — pin the un-pumped reality."""
+    t = EOE_SPELLS["Tractor Beam"]
+    assert t.equipment_bonuses == (0, 0, frozenset())
+
+
+def test_attached_bear_keeps_printed_pt():
+    """A 2/2 bear enchanted by Tractor Beam stays 2/2 — no pump bonus
+    from the aura."""
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
+    _put(state, EOE_SPELLS["Tractor Beam"], attached_to=bear.id)
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2
