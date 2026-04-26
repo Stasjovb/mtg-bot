@@ -423,6 +423,10 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
     "whenever you sacrifice another creature or artifact" triggers on
     other permanents the sacrificed object's controller controls.
 
+    The fire path also routes "whenever you sacrifice an artifact"
+    triggers (Biotech Specialist) when the sacrificed object was an
+    artifact.
+
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
     """
@@ -440,7 +444,14 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
         if other.controller_id != controller_id:
             continue
         for i, ability in enumerate(other.printing.triggered_abilities):
-            if ability.trigger != "sacrifice_creature_or_artifact":
+            fires = (
+                ability.trigger == "sacrifice_creature_or_artifact"
+                or (
+                    ability.trigger == "sacrifice_artifact"
+                    and was_artifact
+                )
+            )
+            if not fires:
                 continue
             push_triggered_ability(
                 state,

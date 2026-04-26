@@ -1094,6 +1094,47 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToTargetOpponent(Effect):
+    """This source deals ``amount`` damage to target opponent.
+
+    Matches oracle text like Biotech Specialist's "this creature deals 2
+    damage to target opponent." Damage routes through the player-damage
+    path (so lifelink and other modifiers on the source apply naturally
+    via _apply_damage).
+    """
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, pid = targets[0]
+        if kind != "player":
+            return
+        if pid == controller_id:
+            return
+        _apply_damage(state, ("player", pid), self.amount)
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to target opponent"
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentLosesNYouGainN(Effect):
     """Target opponent loses ``amount`` life; the ability's controller
     gains ``amount`` life. Matches Susurian Voidborn's

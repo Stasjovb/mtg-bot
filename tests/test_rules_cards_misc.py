@@ -1342,6 +1342,60 @@ def test_kav_landseeker_has_menace():
     assert "menace" in EOE_CREATURES["Kav Landseeker"].keywords
 
 
+def test_biotech_specialist_sacrifice_artifact_damages_opponent():
+    """Oracle: 'Whenever you sacrifice an artifact, this creature deals 2
+    damage to target opponent.' Sacrificing the Lander it creates should
+    fire the trigger and deal 2 to the opponent."""
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.turn import sacrifice
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    state = _arena()
+    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[1].agent = RandomAgent(rng=random.Random(0))
+    spec = state.new_object(
+        EOE_CREATURES["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(spec)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(lander)
+    starting_life = state.players[1].life
+    sacrifice(state, lander)
+    # Trigger landed on the stack — resolve it.
+    assert state.stack
+    resolve_top_of_stack(state)
+    assert state.players[1].life == starting_life - 2
+
+
+def test_biotech_specialist_sacrifice_creature_does_not_fire_artifact_trigger():
+    """Sacrificing a non-artifact creature should not fire the artifact-
+    sacrifice trigger."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import sacrifice
+
+    state = _arena()
+    spec = state.new_object(
+        EOE_CREATURES["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(spec)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    starting_life = state.players[1].life
+    sacrifice(state, bear)
+    # No artifact-sacrifice trigger landed on the stack.
+    assert not [
+        item for item in state.stack
+        if "sacrifice" in (item.label or "")
+    ]
+    assert state.players[1].life == starting_life
+
+
 def test_exosuit_savior_bounces_own_permanent():
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
 

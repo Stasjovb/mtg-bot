@@ -727,6 +727,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         count=1,
                     ),
                 ),
+                TriggeredAbility(
+                    trigger="sacrifice_artifact",
+                    effect=DealDamageToTargetOpponent(amount=2),
+                ),
             ),
         ),
         # Kav Landseeker: {3}{R} 4/3 Menace. ETB create a Lander token
