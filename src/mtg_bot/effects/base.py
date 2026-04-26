@@ -75,6 +75,13 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     Stage-3 scope: no source-tracking (so deathtouch on a pinger wouldn't
     mark its target lethal yet — that'd layer in when we thread damage
     sources through the ETB / ability pipeline).
+
+    For damage to a creature, also fires
+    ``enchanted_creature_dealt_damage`` triggers on attached auras
+    (Cryoshatter, Pain for All) — mirrors the combat-damage path in
+    ``combat.py``. The aura's TriggeredAbility effects resolve
+    immediately, with the aura set as ``state.resolving_source`` and the
+    damage amount in ``state.resolving_combat_damage_amount``.
     """
     kind, target_id = target
     if kind == "player":
@@ -87,6 +94,10 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             obj.damage += amount
             obj.damaged_this_turn = True
             state.log.append(f"{obj.printing.name} takes {amount} damage")
+            # Lazy-imported to avoid an effects <-> combat import cycle.
+            from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
+
+            _fire_enchanted_dealt_damage_triggers(state, obj, amount)
 
 
 

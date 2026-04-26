@@ -3056,6 +3056,109 @@ def test_tap_permanent_does_not_fire_aura_trigger_for_other_hosts():
     assert cryo.attached_to == bear.id
 
 
+def test_cryoshatter_destroys_host_when_dealt_combat_damage():
+    """Cryoshatter's "or is dealt damage" half: a Wild Bear (2/2)
+    blocking another creature takes combat damage, fires the aura's
+    enchanted_creature_dealt_damage trigger, and is destroyed.
+
+    Drives damage through ``_resolve_damage_step`` (combat damage)
+    rather than _apply_damage (direct damage) so this exercises the
+    combat-damage path of the trigger plumbing.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import _resolve_damage_step
+    from mtg_bot.turn import state_based_actions
+
+    state = _arena()
+    # Defending bear (P1) with Cryoshatter attached, controlled by P0.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    # Attacker (P0) — a vanilla Wild Bear deals 2.
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(attacker)
+    attacker.attacking = True
+    attacker.blocked_by = [bear.id]
+    # Drive a single damage step. The Cryoshatter trigger destroys the
+    # bear immediately (resolves inline), so SBAs after are a no-op for
+    # the bear.
+    _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
+    state_based_actions(state)
+    # Bear is destroyed by Cryoshatter's dealt-damage trigger.
+    assert bear not in state.battlefield
+    assert bear in state.players[1].graveyard
+    # Aura follows host off the battlefield.
+    assert cryo not in state.battlefield
+    assert cryo in state.players[0].graveyard
+
+
+def test_cryoshatter_destroys_host_when_dealt_direct_damage():
+    """Cryoshatter's dealt-damage half also fires for non-combat damage:
+    a "deal N damage to target creature" effect routed through
+    ``_apply_damage`` triggers the aura the same way combat damage does.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import DealDamageAnyTarget
+    from mtg_bot.turn import state_based_actions
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    # Lightning-Bolt-shaped effect: 1 damage to the bear via _apply_damage.
+    DealDamageAnyTarget(amount=1).resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    state_based_actions(state)
+    # Bear destroyed by Cryoshatter (1 damage is sublethal vs 2 toughness,
+    # so the destruction comes from the aura trigger, not SBA lethal damage).
+    assert bear not in state.battlefield
+    assert bear in state.players[1].graveyard
+    assert cryo not in state.battlefield
+    assert cryo in state.players[0].graveyard
+
+
+def test_cryoshatter_no_op_when_no_damage_dealt():
+    """Cryoshatter's dealt-damage trigger does NOT fire when nothing
+    deals damage to the host. Without a damage event, the bear survives
+    indefinitely (only the -5/-0 P/T modifier applies, and a 2/2 with
+    -5/-0 is still tracked as a creature with negative power; SBAs only
+    kill it via lethal damage / zero-toughness, neither of which apply).
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.turn import state_based_actions
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(bear)
+    cryo = state.new_object(
+        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    cryo.attached_to = bear.id
+    state.battlefield.append(cryo)
+    # No damage, no tapping — just run SBAs.
+    state_based_actions(state)
+    assert bear in state.battlefield
+    assert cryo in state.battlefield
+    assert cryo.attached_to == bear.id
+
+
 def test_meltstriders_resolve_grants_buff_and_menace():
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_toughness, effective_keywords
