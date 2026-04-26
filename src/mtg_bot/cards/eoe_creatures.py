@@ -459,11 +459,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Specimen Freighter: {5}{U} 4/7 Spacecraft. ETB return up to
-        # two target creatures to their owners' hands. Station 9+ flying.
-        # Simplified: dropped the "non-Spacecraft" target restriction
-        # (target filter complexity), and dropped the "9+ | whenever this
-        # attacks, create a copy of target permanent" tiered trigger.
+        # Specimen Freighter: {5}{U} 4/7 Spacecraft. ETB return up to two
+        # target non-Spacecraft creatures to their owners' hands. Station
+        # 9+ flying. Whenever this Spacecraft attacks, defending player
+        # mills four cards (modeled as "each opponent mills 4" — exact in
+        # 2-player). Spacecraft can only attack while stationed/animated,
+        # so the attack trigger naturally only fires under that condition.
         make_spacecraft(
             "Specimen Freighter", "{5}{U}", 4, 7,
             station_threshold=9,
@@ -471,7 +472,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=ReturnUpToNTargetCreaturesToOwnersHands(max_n=2),
+                    effect=ReturnUpToNTargetCreaturesToOwnersHands(
+                        max_n=2, exclude_spacecraft=True,
+                    ),
+                ),
+                TriggeredAbility(
+                    trigger="attacks",
+                    effect=EachOpponentMillsCards(amount=4),
                 ),
             ),
         ),

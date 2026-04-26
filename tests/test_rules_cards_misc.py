@@ -2741,6 +2741,63 @@ def test_return_up_to_n_empty_targets_is_noop():
     e.resolve(state, controller_id=0, targets=(("creature", 99999),))
 
 
+def test_specimen_freighter_etb_excludes_spacecraft_targets():
+    """Oracle: 'return up to two target NON-SPACECRAFT creatures.'"""
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    # Stationed enemy Spacecraft (counts as a creature) — oracle excludes
+    # it from the bounce target list.
+    rival = state.new_object(
+        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(rival)
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(freighter)
+    etb = next(
+        ab for ab in freighter.printing.triggered_abilities
+        if ab.trigger == "etb"
+    )
+    state.resolving_source = freighter
+    legal = etb.effect.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    assert bear.id in target_ids
+    assert rival.id not in target_ids
+
+
+def test_specimen_freighter_attacks_trigger_mills_4_from_each_opponent():
+    """Oracle: 'Whenever this Spacecraft attacks, defending player mills
+    four cards.' Modeled as 'each opponent mills 4' (exact in 2-player)."""
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    # Stack opponent's library with enough cards to mill.
+    for _ in range(8):
+        c = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=1, zone=Zone.LIBRARY,
+        )
+        state.players[1].library.append(c)
+    freighter = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(freighter)
+    attacks_ability = next(
+        ab for ab in freighter.printing.triggered_abilities
+        if ab.trigger == "attacks"
+    )
+    before_lib = len(state.players[1].library)
+    before_grave = len(state.players[1].graveyard)
+    attacks_ability.effect.resolve(state, controller_id=0)
+    assert len(state.players[1].library) == before_lib - 4
+    assert len(state.players[1].graveyard) == before_grave + 4
+
+
 def test_multi_target_cast_path_through_cast_spell():
     """Casting Specimen Freighter via _cast_spell walks the multi-target
     pipeline: picks up to two bears from opponent's board."""

@@ -567,11 +567,12 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
     """Return up to ``max_n`` target creatures to their owners' hands.
 
     Matches Specimen Freighter's "return up to two target non-Spacecraft
-    creatures to their owners' hands". We drop the "non-Spacecraft"
-    filter for simplicity — any creature is targetable.
+    creatures to their owners' hands". Set ``exclude_spacecraft=True`` to
+    enforce the non-Spacecraft filter at target-selection time.
     """
 
     max_n: int = 2
+    exclude_spacecraft: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -586,6 +587,7 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            and (not self.exclude_spacecraft or not o.printing.is_spacecraft)
         ]
 
     def resolve(
@@ -1646,6 +1648,39 @@ class DefendingPlayerLosesHalfLifeRoundedUp(Effect):
 
     def describe(self) -> str:
         return "defending player loses half their life, rounded up"
+
+
+
+@dataclass(frozen=True)
+class EachOpponentMillsCards(Effect):
+    """Each opponent puts the top ``amount`` cards of their library into
+    their graveyard. Used as the 2-player simplification of "defending
+    player mills N" attack triggers (Specimen Freighter).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            milled = 0
+            for _ in range(self.amount):
+                if not p.library:
+                    break
+                card = p.library.pop(0)
+                card.zone = Zone.GRAVEYARD
+                p.graveyard.append(card)
+                milled += 1
+            state.log.append(f"P{p.id} mills {milled} cards")
+
+    def describe(self) -> str:
+        return f"defending player mills {self.amount} cards"
 
 
 

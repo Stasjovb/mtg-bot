@@ -71,6 +71,7 @@ from mtg_bot.effects.generic import (
     EachOpponentDiscards,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentLosesLife,
+    EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     EachPlayerDraws,
     ExileAllArtifactsWithManaValueAtMost,
