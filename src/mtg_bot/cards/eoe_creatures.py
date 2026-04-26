@@ -2369,10 +2369,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Weftstalker Ardent: {2}{R} 3/2. Whenever another creature or
-        # artifact you control enters, this creature deals 1 damage to
-        # each opponent. Dropped: Warp {R} (would work but printed text
-        # is the main card; skipping to keep the change tight).
+        # Weftstalker Ardent: {2}{R} 3/2 + Warp {R}. Whenever another
+        # creature or artifact you control enters, this creature deals
+        # 1 damage to each opponent.
         make_creature(
             "Weftstalker Ardent", "{2}{R}", 3, 2,
             triggered_abilities=(
