@@ -1196,10 +1196,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # - "Whenever one or more creatures you control with +1/+1
         #   counters on them deal combat damage to a player, draw a
         #   card."
-        # Simplification: the second, combat-damage-observer trigger
-        # needs a "your creature with counter dealt damage to player"
-        # observer — not modeled yet, so dropped. The first (etb +
-        # attacks) is fully restored.
+        # The second trigger uses the aggregated firing path
+        # ``your_counter_creature_combat_damage_to_player_aggregated``:
+        # combat.py groups the per-source damage list into a set of
+        # (controller, target_player) pairs where at least one source
+        # with +1/+1 counters dealt damage, and fires this trigger ONCE
+        # per pair — so two counter-bearing attackers hitting the same
+        # player still draw only one card.
         make_creature(
             "Haliya, Ascendant Cadet", "{2}{G}{W}{W}", 3, 3,
             legendary=True,
@@ -1211,6 +1214,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     trigger="attacks",
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+                ),
+                TriggeredAbility(
+                    trigger=(
+                        "your_counter_creature_combat_damage_"
+                        "to_player_aggregated"
+                    ),
+                    effect=DrawCards(amount=1),
                 ),
             ),
         ),

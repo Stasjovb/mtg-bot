@@ -424,6 +424,10 @@ class TriggeredAbility:
                 "Whenever a creature you control deals combat damage "
                 "to a player"
             ),
+            "your_counter_creature_combat_damage_to_player_aggregated": (
+                "Whenever one or more creatures you control with +1/+1 "
+                "counters on them deal combat damage to a player"
+            ),
             "creature_deals_combat_damage_to_you": (
                 "Whenever a creature deals combat damage to you"
             ),

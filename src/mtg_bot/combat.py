@@ -441,6 +441,12 @@ def _fire_combat_damage_to_player_triggers(
     - "whenever a creature you control deals combat damage to a player"
       observer triggers (Starwinder's draw-that-many).
 
+    After the per-source pass, an aggregated observer pass fires the
+    ``your_counter_creature_combat_damage_to_player_aggregated``
+    trigger ONCE per (controller, target_player) pair where at least
+    one source carrying a +1/+1 counter (controlled by ``controller``)
+    hit ``target_player`` — Haliya, Ascendant Cadet's draw-a-card.
+
     The source's-own trigger goes on the stack as a StackItem with the
     damage amount stashed in ``combat_damage_amount`` so the effect can
     still read "that many" when it eventually resolves. Targets are
@@ -548,6 +554,51 @@ def _fire_combat_damage_to_player_triggers(
                     combat_damage_amount=amount,
                     fixed_targets=(("player", attacker_controller_id),),
                 )
+
+    # Aggregated observer: "whenever one or more creatures you control
+    # with +1/+1 counters on them deal combat damage to a player"
+    # (Haliya, Ascendant Cadet). Build the set of (controller,
+    # target_player) pairs where at least one source carrying a
+    # +1/+1 counter, controlled by ``controller``, hit ``target_player``;
+    # then fire each matching trigger ONCE per pair (regardless of how
+    # many qualifying sources damaged the player). Source-with-counter
+    # state is snapshotted at lookup time from the live battlefield
+    # entry, matching how the per-source observers above resolve.
+    aggregated_pairs: set[tuple[int, int]] = set()
+    for source_id, target_player, _amount in sources_hit_player:
+        source = next(
+            (o for o in state.battlefield if o.id == source_id), None
+        )
+        if source is None:
+            continue  # source died; can't read counters
+        if source.plus_one_counters <= 0:
+            continue
+        aggregated_pairs.add((source.controller_id, target_player))
+    for controller_id, target_player in aggregated_pairs:
+        for obs in list(state.battlefield):
+            if obs.controller_id != controller_id:
+                continue
+            for i, ability in enumerate(obs.printing.triggered_abilities):
+                if ability.trigger != (
+                    "your_counter_creature_combat_damage_"
+                    "to_player_aggregated"
+                ):
+                    continue
+                if not should_fire_trigger(state, obs.id, i, ability):
+                    continue
+                state.log.append(
+                    f"{obs.printing.name}'s aggregated counter-creature-"
+                    f"damage-to-player trigger fires (P{target_player} was "
+                    f"hit)"
+                )
+                state.resolving_source = obs
+                try:
+                    ability.effect.resolve(
+                        state, obs.controller_id,
+                        (("player", target_player),),
+                    )
+                finally:
+                    state.resolving_source = None
 
 
 def clear_combat_state(state: GameState) -> None:
