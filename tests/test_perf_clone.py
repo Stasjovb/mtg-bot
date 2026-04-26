@@ -26,8 +26,19 @@ import copy
 import random
 import time
 
+import pytest
+
 from mtg_bot.agents import RandomAgent
 from mtg_bot.simulate import simulate_game
+
+
+# Run this module in its own pytest invocation. After ~2000 preceding
+# tests, the 500-iteration deepcopy loop access-violates intermittently
+# inside Python's C-level _reconstruct path — heap/stack pressure that
+# doesn't reproduce when the test runs alone. Default `pytest tests/`
+# skips it via the `isolated` marker; run it explicitly with
+# `scripts/run_isolated_tests.py` or `pytest -m isolated`.
+pytestmark = pytest.mark.isolated
 
 
 # Lots of iterations to drive variance down. Total runtime ~1-2s

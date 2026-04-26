@@ -41,6 +41,11 @@
   sweep tests. The crash is not reproducible in isolation and no local code
   change fixes it. If pytest exits with an access violation, run
   `scripts/run_tests.py` instead — it retries on segfault.)
+- Tests marked `@pytest.mark.isolated` (currently `tests/test_perf_clone.py`)
+  are skipped by the default `pytest` invocation — they're sensitive to
+  accumulated interpreter state from preceding tests and only run reliably
+  alone. Run them with `scripts/run_isolated_tests.py` (own subprocess, no
+  coverage), or directly: `pytest -m isolated --override-ini=addopts= --no-cov`.
 - Run browser-driven E2E tests (opt-in, skipped by default):
   `MTG_BOT_E2E=1 .venv/Scripts/python.exe -m pytest tests/test_e2e.py`
   First time only: `.venv/Scripts/python.exe -m pip install playwright`

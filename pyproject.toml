@@ -40,7 +40,15 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=mtg_bot --cov-report=term-missing --cov-fail-under=95"
+# Skip tests marked ``isolated`` by default — they're sensitive to
+# accumulated interpreter state from preceding tests (deepcopy stack
+# pressure, MCTS C-frame depth) and only run reliably in their own
+# pytest invocation. Run them explicitly with `scripts/run_isolated_tests.py`
+# or `pytest -m isolated`.
+addopts = "--cov=mtg_bot --cov-report=term-missing --cov-fail-under=95 -m 'not isolated'"
+markers = [
+    "isolated: test must run alone (e.g. perf benchmarks; full suite triggers C-level flakes)",
+]
 
 [tool.coverage.run]
 source = ["mtg_bot"]
