@@ -907,6 +907,39 @@ def test_susurian_dirgecraft_forces_opponent_sac():
     assert sac_count == 1
 
 
+def test_susurian_dirgecraft_grants_flying_at_7():
+    """Regression: printed text grants Flying at 7+ (not Menace).
+    Audit-found bug — earlier impl had a copy-paste 'menace' value."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    c = EOE_CREATURES["Susurian Dirgecraft"]
+    assert c.is_spacecraft
+    assert c.station_threshold == 7
+    assert c.stationed_keywords == frozenset({"flying"})
+    assert "menace" not in c.stationed_keywords
+
+
+def test_susurian_dirgecraft_flies_when_stationed():
+    """Behaviour test: once charge_counters reach the station threshold,
+    effective_keywords includes flying."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import effective_keywords
+
+    state = _arena()
+    ship = state.new_object(
+        EOE_CREATURES["Susurian Dirgecraft"],
+        owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(ship)
+    # Below threshold — no flying yet.
+    ship.charge_counters = 6
+    assert "flying" not in effective_keywords(state, ship)
+    # At/above threshold — flying granted.
+    ship.charge_counters = 7
+    assert "flying" in effective_keywords(state, ship)
+
+
 def test_each_opponent_sac_with_only_tokens_is_noop():
     from mtg_bot.effects import EachOpponentSacrificesCreature
     from mtg_bot.cards import TOKEN_PRINTINGS

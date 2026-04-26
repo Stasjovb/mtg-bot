@@ -511,12 +511,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         # Susurian Dirgecraft: {4}{B} 4/3 Spacecraft. ETB each opponent
         # sacrifices a nontoken creature of their choice. Station 7+ for
-        # Menace (simplified to just Menace when stationed — real card has
-        # additional abilities we skip).
+        # Flying.
         make_spacecraft(
             "Susurian Dirgecraft", "{4}{B}", 4, 3,
             station_threshold=7,
-            stationed_keywords={"menace"},
+            stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
