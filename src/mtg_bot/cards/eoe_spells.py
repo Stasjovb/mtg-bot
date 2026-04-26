@@ -805,9 +805,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Divert Disaster", "{1}{U}",
             effect=CounterTargetSpell(),
         ),
-        make_instant(  # Lost in Space — drops bounce-to-library; ships as Surveil 1.
+        # Lost in Space `{3}{U}` — "Target artifact or creature's owner
+        # puts it on their choice of the top or bottom of their library.
+        # Surveil 1."
+        make_instant(
             "Lost in Space", "{3}{U}",
-            effect=Surveil(amount=1),
+            effect=Sequence(effects=(
+                OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(),
+                Surveil(amount=1),
+            )),
         ),
         make_instant(  # Unravel — drops the draw-card rider; ships as plain counter.
             "Unravel", "{1}{U}{U}",

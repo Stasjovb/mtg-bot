@@ -166,6 +166,7 @@ from mtg_bot.effects import (
     FocusFireEffect,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     SelfMill,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,

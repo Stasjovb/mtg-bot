@@ -402,6 +402,102 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
 
 
 @dataclass(frozen=True)
+class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
+    """Target artifact or creature's owner puts it on their choice of the
+    top or bottom of their library.
+
+    Matches Lost in Space's main effect. The OWNER (not the spell's
+    controller) makes the top-vs-bottom decision via their agent's
+    ``choose_mode`` hook. Tokens cease to exist when bounced (rule
+    704.5d) — they'd briefly land in the library, but a non-trivial
+    state-based action removes them. Combat / counter state is cleared
+    on the way off the battlefield as in other bounce effects.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact or o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is None:
+            return
+        if not (obj.printing.is_artifact or obj.printing.is_creature):
+            return
+        owner = state.player_by_id(obj.owner_id)
+        # Owner picks top vs bottom via their agent's choose_mode.
+        # Default to top when no agent is seated (e.g., in unit tests).
+        if owner.agent is not None:
+            choice = owner.agent.choose_mode(
+                state, owner.id,
+                ["top of library", "bottom of library"],
+            )
+        else:
+            choice = 0
+        choice = 0 if choice not in (0, 1) else choice
+
+        # Strip the permanent off the battlefield with the same
+        # housekeeping as other bounce-style effects.
+        state.battlefield.remove(obj)
+        obj.damage = 0
+        obj.marked_lethal = False
+        obj.tapped = False
+        obj.attacking = False
+        obj.blocking = None
+        obj.blocked_by = []
+        obj.cast_via_warp = False
+        obj.plus_one_counters = 0
+        obj.charge_counters = 0
+        obj.temp_power_bonus = 0
+        obj.temp_toughness_bonus = 0
+        obj.temp_keywords = frozenset()
+        obj.attached_to = None
+        if not obj.printing.is_land:
+            state.permanent_left_battlefield_this_turn = True
+        if obj.printing.is_token:
+            state.log.append(
+                f"{obj.printing.name} token ceases to exist (bounced)"
+            )
+            return
+        obj.zone = Zone.LIBRARY
+        if choice == 0:
+            owner.library.insert(0, obj)
+            destination = "top"
+        else:
+            owner.library.append(obj)
+            destination = "bottom"
+        state.log.append(
+            f"{obj.printing.name} put on the {destination} of "
+            f"P{owner.id}'s library"
+        )
+
+    def describe(self) -> str:
+        return (
+            "target artifact or creature's owner puts it on their "
+            "choice of the top or bottom of their library"
+        )
+
+
+
+@dataclass(frozen=True)
 class AttachToTargetCreatureYouControl(Effect):
     """Attach the source (Equipment) to target creature the controller
     controls. Matches the common ETB trigger on EoE Equipment.

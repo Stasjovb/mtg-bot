@@ -4861,6 +4861,304 @@ def test_emergency_eject_describe_and_noop_paths():
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
 
+# --------------------------------------------------------------------------
+# Lost in Space — bounce target artifact/creature to top or bottom of
+# its owner's library (owner chooses), then surveil 1.
+# --------------------------------------------------------------------------
+
+
+def _lost_in_space_arena():
+    """Build a 2-player arena with P0 holding a castable Lost in Space and
+    enough mana ({3}{U}) to cast it. P0 and P1 both have a non-trivial
+    library so surveil has something to look at. Returns the state and
+    the Lost in Space hand card.
+    """
+    from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS
+
+    state = _arena()
+    # 4 lands for {3}{U}. Three Plains for generic + one Island for {U}.
+    for _ in range(3):
+        land = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        state.battlefield.append(land)
+    island = state.new_object(
+        BASIC_LANDS["Island"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(island)
+    lis = state.new_object(
+        EOE_SPELLS["Lost in Space"], owner_id=0, zone=Zone.HAND
+    )
+    state.players[0].hand.append(lis)
+    # Stock both libraries so the surveil step has cards to examine.
+    _stock_library(state, 0, count=10)
+    _stock_library(state, 1, count=10)
+    return state, lis
+
+
+class _ChooseModeAgent:
+    """Tiny agent stub used by the Lost in Space tests. ``mode`` controls
+    choose_mode (0 = top, 1 = bottom). ``surveil`` controls whether
+    the controller mills surveiled cards.
+
+    Implements just enough of the agent surface area to drive a single
+    Lost in Space cast / resolution flow."""
+
+    def __init__(self, mode=0, surveil_keep=True):
+        self.mode = mode
+        self.surveil_keep = surveil_keep
+
+    def choose_action(self, state, player_id, legal):
+        # Prefer the first non-pass action — the test driver always
+        # sets up exactly one castable Lost in Space.
+        for a in legal:
+            if not isinstance(a, PassPriority):
+                return a
+        return PassPriority()
+
+    def choose_target(self, state, player_id, legal_targets):
+        return legal_targets[0] if legal_targets else None
+
+    def choose_mode(self, state, player_id, mode_descriptions):
+        return self.mode
+
+    def choose_surveil(self, state, player_id, top_card_id):
+        # surveil_keep=True → never mill (return False = "keep").
+        return not self.surveil_keep
+
+    def choose_discard(self, state, player_id, hand_card_ids):
+        return hand_card_ids[0]
+
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        return legal_object_ids[0] if legal_object_ids else None
+
+
+def test_lost_in_space_resolves_owner_picks_top():
+    """End-to-end cast: P0 targets P1's creature; P1 (the owner) picks
+    'top'; creature ends up on top of P1's library and is no longer
+    on the battlefield. Surveil 1 also runs."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+
+    state, lis = _lost_in_space_arena()
+    state.players[0].agent = _ChooseModeAgent(mode=0)
+    # P1 is the owner — their agent decides top vs bottom.
+    state.players[1].agent = _ChooseModeAgent(mode=0)
+
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+
+    _cast_spell(state, 0, lis.id)
+    # The cast should have selected P1's creature as the target.
+    assert state.stack and state.stack[-1].targets == (
+        ("permanent", victim.id),
+    )
+    resolve_top_of_stack(state)
+
+    # Victim is off the battlefield and on top of P1's library.
+    assert victim not in state.battlefield
+    assert state.players[1].library[0] is victim
+    assert victim.zone == Zone.LIBRARY
+    # Lost in Space went to the caster's graveyard.
+    assert lis in state.players[0].graveyard
+    # Surveil 1 ran (log entry from Surveil's resolve).
+    assert any("surveils 1" in entry for entry in state.log)
+
+
+def test_lost_in_space_resolves_owner_picks_bottom():
+    """Same setup as above but P1 picks 'bottom' — creature lands at
+    the end of P1's library."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+
+    state, lis = _lost_in_space_arena()
+    state.players[0].agent = _ChooseModeAgent(mode=0)
+    state.players[1].agent = _ChooseModeAgent(mode=1)
+
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+
+    _cast_spell(state, 0, lis.id)
+    resolve_top_of_stack(state)
+
+    assert victim not in state.battlefield
+    # Bottom = end of the list.
+    assert state.players[1].library[-1] is victim
+    assert victim.zone == Zone.LIBRARY
+
+
+def test_lost_in_space_not_castable_without_legal_target():
+    """With no artifacts or creatures on the battlefield, Lost in Space
+    cannot be cast — it shouldn't appear in legal_actions / legal_moves.
+    """
+    state, lis = _lost_in_space_arena()
+    state.players[0].agent = _ChooseModeAgent(mode=0)
+    state.players[1].agent = _ChooseModeAgent(mode=0)
+    # No artifacts or creatures — only lands on the battlefield.
+    assert all(
+        not (o.printing.is_artifact or o.printing.is_creature)
+        for o in state.battlefield
+    )
+
+    actions = legal_moves(state)
+    assert not any(
+        isinstance(a, CastSpell) and a.card_id == lis.id for a in actions
+    )
+
+
+def test_lost_in_space_castable_when_artifact_target_exists():
+    """An opponent's artifact (no creatures) is a legal target — the
+    spell becomes castable."""
+    from mtg_bot.cards import TOKEN_PRINTINGS
+
+    state, lis = _lost_in_space_arena()
+    state.players[0].agent = _ChooseModeAgent(mode=0)
+    state.players[1].agent = _ChooseModeAgent(mode=0)
+    # Drop an opponent-owned artifact (Lander token is artifact, not creature).
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+
+    actions = legal_moves(state)
+    assert any(
+        isinstance(a, CastSpell) and a.card_id == lis.id for a in actions
+    )
+
+
+def test_lost_in_space_target_required_and_describe():
+    """Sanity: the new effect requires a target, lists artifacts/creatures
+    only, and has a sensible describe()."""
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.cards import BASIC_LANDS
+
+    e = OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    assert e.requires_target() is True
+    assert "artifact or creature" in e.describe()
+    assert "top or bottom" in e.describe()
+
+    state = _arena()
+    # A land is NOT a legal target.
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(forest)
+    creature = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(creature)
+
+    legal = e.legal_targets(state, controller_id=0)
+    assert ("permanent", creature.id) in legal
+    assert ("permanent", forest.id) not in legal
+
+
+def test_lost_in_space_token_target_ceases_to_exist():
+    """Token bounced 'to library' ceases to exist (rule 704.5d)."""
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    state = _arena()
+    state.players[0].agent = _ChooseModeAgent(mode=0)
+    state.players[1].agent = _ChooseModeAgent(mode=0)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(lander)
+    lib_size_before = len(state.players[1].library)
+
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary().resolve(
+        state, controller_id=0,
+        targets=(("permanent", lander.id),),
+    )
+
+    assert lander not in state.battlefield
+    # Token did NOT enter the library.
+    assert len(state.players[1].library) == lib_size_before
+    assert any(
+        "ceases to exist" in entry for entry in state.log
+    )
+
+
+def test_lost_in_space_noop_paths():
+    """Defensive resolves: empty targets, wrong kind, missing id,
+    non-artifact non-creature target → no-op."""
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    state = _arena()
+    e = OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    # No targets → silent.
+    e.resolve(state, controller_id=0, targets=())
+    # Wrong kind → silent.
+    e.resolve(state, controller_id=0, targets=(("creature", 999),))
+    # Missing id → silent.
+    e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
+    # Non-artifact non-creature target (a land) → silent (defensive guard).
+    forest = state.new_object(
+        BASIC_LANDS["Forest"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(forest)
+    e.resolve(state, controller_id=0, targets=(("permanent", forest.id),))
+    assert forest in state.battlefield
+
+
+def test_lost_in_space_owner_with_no_agent_defaults_to_top():
+    """When the owner has no agent (test scaffolding), default to
+    placing the target on the top of the library."""
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    state = _arena()
+    # P1 has no agent; that's our default state from _arena().
+    assert state.players[1].agent is None
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary().resolve(
+        state, controller_id=0,
+        targets=(("permanent", victim.id),),
+    )
+    # Defaulted to top (insert at index 0).
+    assert state.players[1].library[0] is victim
+
+
+def test_lost_in_space_agent_returning_invalid_mode_normalizes_to_top():
+    """If the agent returns an out-of-range mode index, fall back to top."""
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    state = _arena()
+
+    class _BadAgent(_ChooseModeAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            return 42  # bogus; effect should normalize to top.
+
+    state.players[1].agent = _BadAgent()
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(victim)
+
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary().resolve(
+        state, controller_id=0,
+        targets=(("permanent", victim.id),),
+    )
+    assert state.players[1].library[0] is victim
+
+
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
