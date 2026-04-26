@@ -26,7 +26,7 @@ pops the answer from the queue and the effect resolves with the
 search-chosen value. A second pause-point during the same resolution
 adds another queue entry; the third replay reaches farther; etc.
 
-Covers all 10 decision-making callbacks on ``Agent``:
+Covers all decision-making callbacks on ``Agent``:
 
 - ``ResolutionTargetDecision``             (← ``agent.choose_target``)
 - ``ResolutionDiscardDecision``            (← ``agent.choose_discard``)
@@ -41,6 +41,7 @@ Covers all 10 decision-making callbacks on ``Agent``:
 - ``ResolutionCardFromOpponentHandDecision``
                          (← ``agent.choose_card_from_opponent_hand``)
 - ``ResolutionDevourLandsDecision``      (← ``agent.choose_devour_lands``)
+- ``ResolutionYesNoDecision``              (← ``agent.choose_yes_no``)
 
 All decision types are frozen dataclasses so they're hashable (the
 search protocol's ``Decision`` contract) and cheaply comparable.
@@ -135,6 +136,15 @@ class ResolutionCardFromOpponentHandDecision:
     CASTER chooses which card from the opponent's revealed hand."""
 
     card_id: int
+
+
+@dataclass(frozen=True)
+class ResolutionYesNoDecision:
+    """Answer to an ``agent.choose_yes_no`` callback for "may"
+    abilities — the controller decides whether to take the optional
+    action. ``yes=True`` means take it; ``yes=False`` declines."""
+
+    yes: bool
 
 
 @dataclass(frozen=True)

@@ -109,3 +109,68 @@ def test_selfcraft_printing_has_etb():
     triggers = {ab.trigger for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert m.is_artifact
+
+
+# -----------------------
+# may-decision (choose_yes_no)
+# -----------------------
+
+
+class _NoSacAgent(Agent):
+    """Declines the optional sacrifice but still picks first target."""
+
+    def choose_target(self, state, player_id, legal_targets):
+        return legal_targets[0] if legal_targets else None
+
+    def choose_sacrifice(self, state, player_id, legal_ids):
+        return legal_ids[0] if legal_ids else None
+
+    def choose_yes_no(self, state, player_id, prompt):
+        return False
+
+
+def test_selfcraft_etb_declined_by_yes_no_agent():
+    """When the controller's agent declines via choose_yes_no, no
+    artifact is sacrificed, no counter is placed, and no card is drawn.
+    """
+    state = _new_state(_NoSacAgent())
+    _stock_library(state, 0, 3)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    mechan = state.new_object(
+        EOE_CREATURES["Selfcraft Mechan"], 0, Zone.HAND,
+    )
+    put_into_battlefield(state, mechan, controller_id=0)
+    while state.stack:
+        resolve_top_of_stack(state)
+    # Mechan is still on the battlefield (not sacrificed).
+    assert mechan in state.battlefield
+    # Bear got no counter, no card drawn.
+    assert bear.plus_one_counters == 0
+    assert len(state.players[0].hand) == 0
+
+
+def test_selfcraft_default_agent_says_yes():
+    """Default ``Agent.choose_yes_no`` returns True, so an agent that
+    doesn't override it preserves the legacy "may → always yes"
+    behavior — sacrifice happens, counter applied, card drawn."""
+    # _PickFirstAgent inherits the base True default.
+    state = _new_state(_PickFirstAgent())
+    _stock_library(state, 0, 3)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    mechan = state.new_object(
+        EOE_CREATURES["Selfcraft Mechan"], 0, Zone.HAND,
+    )
+    put_into_battlefield(state, mechan, controller_id=0)
+    while state.stack:
+        resolve_top_of_stack(state)
+    # Mechan got sacrificed — same printing-level invariant as the
+    # original behavior.
+    assert mechan not in state.battlefield
+    assert bear.plus_one_counters == 1
+    assert len(state.players[0].hand) == 1

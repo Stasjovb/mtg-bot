@@ -41,6 +41,30 @@ def test_random_agent_choose_devour_lands_returns_empty():
     assert a.choose_devour_lands(None, 0, [1, 2, 3]) == []
 
 
+def test_random_agent_choose_yes_no_is_a_coin_flip():
+    """RandomAgent flips a coin per the rng — over many calls with a
+    seeded rng we expect a roughly even split, and individual results
+    are bools."""
+    import random as _random
+
+    a = RandomAgent(rng=_random.Random(0))
+    results = [a.choose_yes_no(None, 0, "?") for _ in range(200)]
+    assert all(isinstance(r, bool) for r in results)
+    # Loose split sanity — both outcomes appear.
+    assert any(results) and not all(results)
+
+
+def test_base_agent_choose_yes_no_default_is_true():
+    """Base ``Agent.choose_yes_no`` returns True so existing
+    "may → always yes" cards keep working with un-overridden agents."""
+    from mtg_bot.agents import Agent
+
+    class _Bare(Agent):
+        pass
+
+    assert _Bare().choose_yes_no(None, 0, "Take it?") is True
+
+
 def test_famished_worldsire_devour_zero_lands_sacrificed():
     """With _NoDevourAgent, the creature enters with its printed P/T."""
     state = _new_state(_NoDevourAgent())

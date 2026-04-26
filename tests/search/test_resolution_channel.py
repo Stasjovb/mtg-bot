@@ -329,6 +329,33 @@ def test_queue_hit_returns_no_lands_on_devour_decline():
     assert result == []
 
 
+def test_empty_queue_pauses_on_choose_yes_no():
+    from mtg_bot.search.resolution_channel import KIND_YES_NO
+    agent = ResolutionChannelAgent()
+    with pytest.raises(_ResolutionPause) as excinfo:
+        agent.choose_yes_no(None, 0, prompt="Take the may?")
+    assert excinfo.value.kind == KIND_YES_NO
+    assert excinfo.value.options == (True, False)
+
+
+def test_queue_hit_returns_yes_on_choose_yes_no():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionYesNoDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionYesNoDecision(yes=True))
+    assert agent.choose_yes_no(None, 0, "Take the may?") is True
+
+
+def test_queue_hit_returns_no_on_choose_yes_no():
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionYesNoDecision,
+    )
+    agent = ResolutionChannelAgent()
+    agent.push_answer(ResolutionYesNoDecision(yes=False))
+    assert agent.choose_yes_no(None, 0, "Take the may?") is False
+
+
 # ---------------------------------------------------------------------
 # Still-delegated callbacks: combat declarations + choose_action
 # (all 10 decision callbacks are now exposed as resolution decisions,

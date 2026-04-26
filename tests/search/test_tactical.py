@@ -124,6 +124,14 @@ def test_choose_devour_lands_takes_no_lands():
     assert agent.choose_devour_lands(s, 0, [10, 11, 12]) == []
 
 
+def test_choose_yes_no_takes_the_optional_action():
+    """Default tactical says yes — preserves the legacy
+    "may → always yes" semantics that many cards rely on."""
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_yes_no(s, 0, "Take the may action?") is True
+
+
 def test_defaults_cover_every_base_agent_method():
     """Every abstract method on Agent has a concrete override in
     DefaultTacticalAgent — otherwise mid-resolution callbacks would

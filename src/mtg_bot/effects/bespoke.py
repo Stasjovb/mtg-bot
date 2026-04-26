@@ -197,10 +197,10 @@ class SelfcraftMechanETBEffect(Effect):
     """Selfcraft Mechan's ETB: "You may sacrifice an artifact. When you
     do, put a +1/+1 counter on target creature and draw a card."
 
-    Simplification: "may" is treated as yes whenever an artifact exists
-    to sacrifice (consistent with other OptionalSac effects). If the
-    controller has no artifact, the whole rider fizzles. Target creature
-    is selected via the agent's choose_target before resolve (via the
+    The "may" is exposed via ``agent.choose_yes_no`` — if the controller
+    declines (or has no artifact), the entire reflexive rider does
+    nothing: no sacrifice, no counter, no draw. Target creature is
+    selected via the agent's ``choose_target`` before resolve (via the
     standard target-selection pipeline).
     """
 
@@ -230,6 +230,15 @@ class SelfcraftMechanETBEffect(Effect):
         if not artifacts:
             state.log.append(
                 f"Selfcraft Mechan: no artifact to sacrifice — fizzles"
+            )
+            return
+        # Optional "may sacrifice an artifact" — controller decides.
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, "Sacrifice an artifact?"
+        ):
+            state.log.append(
+                f"P{controller_id} declines to sacrifice an artifact "
+                f"(Selfcraft Mechan)"
             )
             return
         # Agent picks which artifact to sacrifice.

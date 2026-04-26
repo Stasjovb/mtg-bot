@@ -37,6 +37,7 @@ from mtg_bot.search.resolution_decisions import (
     ResolutionModeDecision, ResolutionSacrificeDecision,
     ResolutionShockLifeDecision, ResolutionSurveilDecision,
     ResolutionTargetDecision, ResolutionXDecision,
+    ResolutionYesNoDecision,
 )
 from mtg_bot.search.tactical import DefaultTacticalAgent
 
@@ -53,6 +54,7 @@ KIND_SHOCK_LIFE = "shock_life"
 KIND_CARD_FROM_LIBRARY = "card_from_library"
 KIND_CARD_FROM_OPPONENT_HAND = "card_from_opponent_hand"
 KIND_DEVOUR_LANDS = "devour_lands"
+KIND_YES_NO = "yes_no"
 
 
 class _ResolutionPause(Exception):
@@ -239,6 +241,15 @@ class ResolutionChannelAgent(Agent):
             options=options,
         )
         return list(answer.land_ids)
+
+    def choose_yes_no(self, state, player_id, prompt):
+        answer = self._next_queue_entry(
+            expect=ResolutionYesNoDecision,
+            kind=KIND_YES_NO,
+            player_id=player_id,
+            options=(True, False),
+        )
+        return answer.yes
 
     # -----------------------------------------------------------------
     # Non-exposed callbacks → tactical fallback

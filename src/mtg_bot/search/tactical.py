@@ -99,3 +99,9 @@ class DefaultTacticalAgent(Agent):
         # for search; future tactical policy can pick by analysing the
         # cards in hand or pending costs on the stack.
         return options[0]
+
+    def choose_yes_no(self, state, player_id, prompt):
+        # Take the optional action by default — preserves the existing
+        # "may → always yes" behavior that many cards in the codebase
+        # rely on. Deterministic for MCTS.
+        return True

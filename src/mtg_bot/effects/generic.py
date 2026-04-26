@@ -1334,11 +1334,12 @@ class DoubleTargetCreaturesPowerUEOT(Effect):
 
 @dataclass(frozen=True)
 class DiscardHandThenDrawN(Effect):
-    """Discard every card in your hand, then draw ``amount`` cards.
+    """"You may discard your hand. If you do, draw ``amount`` cards."
 
     Matches Vaultguard Trooper's conditional end-step ability. Acts
-    on the CONTROLLER's hand. No agent decision — the card is always
-    accepted (consistent with our other "may do X" simplifications).
+    on the CONTROLLER's hand. The "may" is exposed via
+    ``agent.choose_yes_no`` — if the controller declines, the hand is
+    untouched and nothing is drawn.
     """
 
     amount: int = 2
@@ -1350,6 +1351,16 @@ class DiscardHandThenDrawN(Effect):
         from mtg_bot.game import Zone
 
         p = state.player_by_id(controller_id)
+        # Optional "may discard your hand" — controller decides.
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Discard your hand to draw {self.amount}?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines to discard hand "
+                f"(DiscardHandThenDrawN)"
+            )
+            return
         # Discard every card.
         discarded_count = 0
         while p.hand:

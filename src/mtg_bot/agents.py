@@ -157,6 +157,23 @@ class Agent:
         Implementations must return a value from ``options``."""
         return options[0]
 
+    def choose_yes_no(
+        self,
+        state: "GameState",
+        player_id: int,
+        prompt: str,
+    ) -> bool:
+        """Generic yes/no decision point — for "may" abilities where the
+        controller chooses whether to take the optional action.
+
+        Default: ``True`` (take the action). Many cards in the codebase
+        encode "may → always yes" simplifications and depend on this
+        baseline; only cards that explicitly call this callback give
+        the controller a real choice. Override on a per-agent basis to
+        get smarter behavior, or pass an override-equipped agent in
+        tests to exercise the no-branch."""
+        return True
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -233,3 +250,7 @@ class RandomAgent(Agent):
 
     def choose_mana_color(self, state, player_id, options):
         return self.rng.choice(options)
+
+    def choose_yes_no(self, state, player_id, prompt):
+        # Coin flip — true to the random-action baseline.
+        return self.rng.random() < 0.5

@@ -153,3 +153,96 @@ def test_perigee_beckoner_warp_cost_is_one_black():
     """Verify we corrected to the printed warp cost {1}{B}."""
     p = EOE_CREATURES["Perigee Beckoner"]
     assert p.warp_cost_str == "{1}{B}"
+
+
+# -----------------------
+# Vaultguard Trooper "may" decision (choose_yes_no)
+# -----------------------
+
+
+class _NoDiscardAgent(Agent):
+    """Declines the optional discard."""
+
+    def choose_yes_no(self, state, player_id, prompt):
+        return False
+
+
+def test_vaultguard_trooper_declined_by_yes_no_agent():
+    """When the controller's agent says no to the optional discard,
+    the hand stays intact and no cards are drawn."""
+    state = _new_state(_NoDiscardAgent())
+    state.active_player_idx = 0
+    p = state.players[0]
+    vg = state.new_object(
+        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+    )
+    vg.tapped = True
+    state.battlefield.append(vg)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    bear.tapped = True
+    state.battlefield.append(bear)
+    # Hand: 2 cards. Library: 3 cards.
+    hand_cards = []
+    for _ in range(2):
+        c = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
+        p.hand.append(c)
+        hand_cards.append(c)
+    library_cards = []
+    for _ in range(3):
+        c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+        p.library.append(c)
+        library_cards.append(c)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    # Hand untouched, no cards drawn — exactly the cards we put in.
+    assert p.hand == hand_cards
+    assert p.library == library_cards
+    # And nothing landed in the graveyard from this trigger.
+    assert all(c not in p.graveyard for c in hand_cards)
+
+
+def test_vaultguard_trooper_default_agent_says_yes():
+    """Default ``Agent.choose_yes_no`` returns True, so an agent that
+    doesn't override it preserves the existing "may → always yes"
+    behavior — hand discarded, two cards drawn."""
+    state = _new_state(_PickFirstAgent())
+    state.active_player_idx = 0
+    p = state.players[0]
+    vg = state.new_object(
+        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+    )
+    vg.tapped = True
+    state.battlefield.append(vg)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    bear.tapped = True
+    state.battlefield.append(bear)
+    for _ in range(2):
+        c = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
+        p.hand.append(c)
+    for _ in range(3):
+        c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+        p.library.append(c)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    # Discarded the 2 Forests, drew 2 Plains.
+    assert len(p.hand) == 2
+    assert all(c.printing.name == "Plains" for c in p.hand)
+
+
+def test_discard_hand_then_draw_n_declined():
+    """Direct effect-level test — agent declines → hand untouched,
+    no draw, no graveyard movement."""
+    state = _new_state(_NoDiscardAgent())
+    p = state.players[0]
+    hand_card = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
+    p.hand.append(hand_card)
+    library_card = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
+    p.library.append(library_card)
+    DiscardHandThenDrawN(amount=2).resolve(state, 0, ())
+    assert p.hand == [hand_card]
+    assert p.library == [library_card]
+    assert hand_card not in p.graveyard
