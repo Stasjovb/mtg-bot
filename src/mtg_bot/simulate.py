@@ -347,6 +347,9 @@ def run_turn(
     """Run one turn. ``on_snapshot`` (if set) fires after each step.
     ``priority_on_snapshot`` (if set) fires additionally at priority
     boundaries inside each step's priority loop."""
+    state.log.append(
+        f"--- Turn {state.turn_number}: P{state.active_player_idx} ---"
+    )
     for step in STEP_ORDER:
         run_step(state, step, priority_on_snapshot=priority_on_snapshot)
         if on_snapshot is not None:

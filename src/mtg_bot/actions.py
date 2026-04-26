@@ -28,6 +28,12 @@ def _format_log_targets(state: GameState, targets: tuple) -> str:
         if kind == "player":
             parts.append(f"Player {tid}")
             continue
+        if kind == "stack":
+            # Counter-spell-style targets: ``tid`` is a stack INDEX,
+            # not an object id. Resolve via state.stack[index].
+            if 0 <= tid < len(state.stack):
+                parts.append(state.stack[tid].source.printing.name)
+                continue
         obj = next((o for o in state.battlefield if o.id == tid), None)
         if obj is not None:
             parts.append(obj.printing.name)
