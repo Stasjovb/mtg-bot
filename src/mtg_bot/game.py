@@ -471,6 +471,24 @@ def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
     return 1 + extra
 
 
+def _counter_doubling_factor(state: GameState, obj: GameObject) -> int:
+    """Return 2^N where N is the number of Loading-Zone-style counter
+    doublers active for ``obj``. Loading Zone's scope: counters being
+    put on a creature, Spacecraft, or Planet you control. The "Planet"
+    type isn't modeled yet, so we apply on creatures and Spacecraft.
+    Returns 1 when ``obj`` is outside that scope or no doublers are in
+    play.
+    """
+    if not (obj.printing.is_creature or obj.printing.is_spacecraft):
+        return 1
+    doublers = sum(
+        1 for o in state.battlefield
+        if o.controller_id == obj.controller_id
+        and o.printing.is_counter_doubler
+    )
+    return 2 ** doublers
+
+
 def add_plus_one_counters(
     state: GameState, obj: GameObject, amount: int
 ) -> int:
@@ -489,20 +507,42 @@ def add_plus_one_counters(
     """
     if amount <= 0:
         return 0
-    effective = amount
-    if obj.printing.is_creature or obj.printing.is_spacecraft:
-        doublers = sum(
-            1 for o in state.battlefield
-            if o.controller_id == obj.controller_id
-            and o.printing.is_counter_doubler
-        )
-        effective = amount * (2 ** doublers)
+    effective = amount * _counter_doubling_factor(state, obj)
     obj.plus_one_counters += effective
     if obj.printing.is_creature and effective > 0:
         from mtg_bot.turn import fire_counters_added_to_your_creature_triggers
         fire_counters_added_to_your_creature_triggers(
             state, obj.controller_id, effective,
         )
+    return effective
+
+
+def add_charge_counters(
+    state: GameState, obj: GameObject, amount: int
+) -> int:
+    """Add ``amount`` charge counters to ``obj``. Charge counters are
+    Spacecraft-only in the EoE engine, so doubling via Loading Zone
+    applies (Spacecraft is in scope). Returns the effective count
+    actually added.
+    """
+    if amount <= 0:
+        return 0
+    effective = amount * _counter_doubling_factor(state, obj)
+    obj.charge_counters += effective
+    return effective
+
+
+def add_stun_counters(
+    state: GameState, obj: GameObject, amount: int
+) -> int:
+    """Add ``amount`` stun counters to ``obj``, applying Loading Zone
+    doubling when ``obj`` is in scope (creature/Spacecraft). Returns
+    the effective count actually added.
+    """
+    if amount <= 0:
+        return 0
+    effective = amount * _counter_doubling_factor(state, obj)
+    obj.stun_counters += effective
     return effective
 
 

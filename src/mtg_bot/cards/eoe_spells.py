@@ -693,9 +693,12 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # "If one or more counters would be put on a creature,
         # Spacecraft, or Planet you control, twice that many of each
         # of those kinds of counters are put on it instead."
-        # Simplification: only +1/+1 counters on creatures/Spacecraft
-        # you control get doubled. Other counter kinds (charge, stun,
-        # loyalty) aren't doubled; the "Planet" type isn't modeled.
+        # The doubling is gated through ``_counter_doubling_factor``
+        # in game.py, which is consulted by ``add_plus_one_counters``,
+        # ``add_charge_counters``, and ``add_stun_counters``. The
+        # "Planet" type isn't modeled yet (no Planet-typed permanents
+        # in the EoE pool we care about), so the scope is narrowed to
+        # creature/Spacecraft.
         make_enchantment(
             "Loading Zone", "{3}{G}",
             warp="{G}",

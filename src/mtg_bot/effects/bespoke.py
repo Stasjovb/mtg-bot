@@ -1811,7 +1811,8 @@ class SystemsOverrideEffect(Effect):
             f"UEOT; untaps + gains haste"
         )
         if obj.printing.is_spacecraft:
-            obj.charge_counters += 10
+            from mtg_bot.game import add_charge_counters
+            add_charge_counters(state, obj, 10)
             state.log.append(
                 f"{obj.printing.name} gets 10 charge counters "
                 f"(now {obj.charge_counters})"

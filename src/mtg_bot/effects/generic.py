@@ -4174,9 +4174,10 @@ class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
         )
         if obj is None or not obj.printing.is_spacecraft:
             return
-        obj.charge_counters += self.amount
+        from mtg_bot.game import add_charge_counters
+        added = add_charge_counters(state, obj, self.amount)
         state.log.append(
-            f"{obj.printing.name} gets {self.amount} charge counters "
+            f"{obj.printing.name} gets {added} charge counters "
             f"(now {obj.charge_counters})"
         )
 
@@ -4215,10 +4216,11 @@ class PutChargeCountersOnSelf(Effect):
         n = state.resolving_x_value if self.amount_from_x else self.amount
         if n <= 0:
             return
-        source.charge_counters += n
+        from mtg_bot.game import add_charge_counters
+        added = add_charge_counters(state, source, n)
         state.log.append(
-            f"{source.printing.name} gets {n} charge counter"
-            f"{'s' if n != 1 else ''} (now {source.charge_counters})"
+            f"{source.printing.name} gets {added} charge counter"
+            f"{'s' if added != 1 else ''} (now {source.charge_counters})"
         )
 
     def describe(self) -> str:
@@ -4367,7 +4369,8 @@ class TapTargetOpponentPermanentAndStunIt(Effect):
             return
         if not obj.tapped:
             tap_permanent(state, obj)
-        obj.stun_counters += 1
+        from mtg_bot.game import add_stun_counters
+        add_stun_counters(state, obj, 1)
         state.log.append(
             f"{obj.printing.name} tapped and gains a stun counter "
             f"(now {obj.stun_counters})"
@@ -4413,7 +4416,8 @@ class PutStunCounterOnTappedCreature(Effect):
         )
         if obj is None or not obj.tapped:
             return
-        obj.stun_counters += 1
+        from mtg_bot.game import add_stun_counters
+        add_stun_counters(state, obj, 1)
         state.log.append(
             f"{obj.printing.name} gets a stun counter "
             f"(now {obj.stun_counters})"

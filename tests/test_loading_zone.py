@@ -202,3 +202,76 @@ def test_loading_zone_also_doubles_spacecraft_counters():
     state.battlefield.append(zone)
     add_plus_one_counters(state, ship, 1)
     assert ship.plus_one_counters == 2
+
+
+# -----------------------
+# Charge counters (Spacecraft) — Loading Zone now doubles these too
+# -----------------------
+
+
+def test_loading_zone_doubles_charge_counters_on_spacecraft():
+    """Oracle: 'twice that many of EACH of those kinds of counters'.
+    Charge counters on a Spacecraft are now doubled by Loading Zone."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import add_charge_counters
+
+    state = _new_state()
+    ship = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(ship)
+    zone = state.new_object(
+        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(zone)
+    added = add_charge_counters(state, ship, 3)
+    assert added == 6
+    assert ship.charge_counters == 6
+
+
+# -----------------------
+# Stun counters — Loading Zone now doubles these too
+# -----------------------
+
+
+def test_loading_zone_doubles_stun_counters_on_creature():
+    """Stun counters on a creature qualify for Loading Zone doubling."""
+    from mtg_bot.game import add_stun_counters
+
+    state = _new_state()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    zone = state.new_object(
+        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(zone)
+    added = add_stun_counters(state, bear, 1)
+    assert added == 2
+    assert bear.stun_counters == 2
+
+
+def test_add_charge_counters_helper_zero_is_noop():
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.game import add_charge_counters
+
+    state = _new_state()
+    ship = state.new_object(
+        EOE_CREATURES["Specimen Freighter"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(ship)
+    assert add_charge_counters(state, ship, 0) == 0
+    assert ship.charge_counters == 0
+
+
+def test_add_stun_counters_helper_zero_is_noop():
+    from mtg_bot.game import add_stun_counters
+
+    state = _new_state()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    assert add_stun_counters(state, bear, 0) == 0
+    assert bear.stun_counters == 0

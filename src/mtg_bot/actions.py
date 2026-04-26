@@ -1320,9 +1320,10 @@ def _activate_station(
 
     from mtg_bot.turn import tap_permanent
 
-    added = effective_power(state, crew)
+    from mtg_bot.game import add_charge_counters
+    crew_power = effective_power(state, crew)
     tap_permanent(state, crew)
-    spacecraft.charge_counters += added
+    added = add_charge_counters(state, spacecraft, crew_power)
     state.log.append(
         f"{crew.printing.name} stations {spacecraft.printing.name} "
         f"(+{added} counters, now {spacecraft.charge_counters})"
