@@ -788,16 +788,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         #   • Search your library for an artifact card, reveal it, put it
         #     into your hand, then shuffle.
         #   • Return target artifact card from your graveyard to your hand.
-        # Simplification: modeled as "choose one" (not both) via
-        # ModalChooseOne; dropping the "or both" clause.
+        # Modeled with ModalChooseOne(or_both=True) so the controller may
+        # resolve both modes (in agent-chosen order) or either one alone.
         make_instant(
             "Scour for Scrap", "{3}{U}",
-            effect=ModalChooseOne(modes=(
-                SearchLibraryForCard(
-                    filter_name="artifact", may_fail=True,
+            effect=ModalChooseOne(
+                modes=(
+                    SearchLibraryForCard(
+                        filter_name="artifact", may_fail=True,
+                    ),
+                    ReturnTargetArtifactCardFromYourGraveyardToHand(),
                 ),
-                ReturnTargetArtifactCardFromYourGraveyardToHand(),
-            )),
+                or_both=True,
+            ),
         ),
         # Sorceries — remaining ones shipped as minimal approximations.
         # Zero Point Ballad `{X}{B}` — full effect: destroy creatures

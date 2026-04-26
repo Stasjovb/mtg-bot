@@ -718,6 +718,13 @@ class ModalChooseOne(Effect):
     """A "choose one" spell or ability effect. Delegates mode pick to the
     controller's agent via ``choose_mode``, then resolves that mode.
 
+    With ``or_both=True``, oracle text reads "Choose one or both" — the
+    controller may pick either mode alone or both modes. The agent is
+    asked via ``choose_modes`` (plural) for the ordered list of modes to
+    resolve; modes resolve in that order (per CR 700.2d, "the controller
+    of a modal spell or ability chooses the order in which the modes are
+    resolved").
+
     Currently supports modes that are EITHER untargeted OR require a
     single target; the chosen mode's ``legal_targets`` is surfaced through
     the spell-cast pipeline via ``requires_target``.
@@ -730,6 +737,7 @@ class ModalChooseOne(Effect):
     """
 
     modes: tuple[Effect, ...]
+    or_both: bool = False
 
     def requires_target(self) -> bool:
         # Castability gate: the spell should be castable as long as ANY
@@ -743,6 +751,18 @@ class ModalChooseOne(Effect):
         if not any_targeted:
             return (0, 0)
         all_targeted = all(m.requires_target() for m in self.modes)
+        if self.or_both:
+            # "Choose one or both": at most one target per targeted
+            # mode (we don't model multi-target sub-modes). When every
+            # mode is targeted, picking both modes needs one target
+            # apiece — max_t equals the count of targeted modes. min_t
+            # is 0 when any mode is untargeted (you can pick only that
+            # mode); 1 when every mode is targeted (you must resolve
+            # at least one mode and that mode needs a target).
+            targeted_count = sum(
+                1 for m in self.modes if m.requires_target()
+            )
+            return (1 if all_targeted else 0, targeted_count)
         # min_t=0 for mixed modes (you might pick the untargeted mode);
         # min_t=min-of-targeted-modes when every mode needs a target.
         # max_t=max across modes — supports multi-target modes (e.g.
@@ -783,6 +803,9 @@ class ModalChooseOne(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         p = state.player_by_id(controller_id)
+        if self.or_both:
+            self._resolve_or_both(state, controller_id, targets, p)
+            return
         if p.agent is None:
             idx = 0
         else:
@@ -810,8 +833,67 @@ class ModalChooseOne(Effect):
             return
         chosen.resolve(state, controller_id, targets)
 
+    def _resolve_or_both(
+        self,
+        state: "GameState",
+        controller_id: int,
+        targets: tuple[Target, ...],
+        p,
+    ) -> None:
+        """Resolve a "Choose one or both" modal effect. Asks the agent
+        for an ordered list of mode indices via ``choose_modes`` (plural)
+        and resolves each in turn, dispatching legal targets per mode.
+
+        Target dispatch: for each chosen mode that requires a target,
+        we consume the first remaining target whose value appears in
+        that mode's ``legal_targets``. A mode that requires a target but
+        has no legal target available silently fizzles (logged), matching
+        the single-mode fizzle path.
+        """
+        if p.agent is None:
+            order = [0]
+        else:
+            order = p.agent.choose_modes(
+                state, controller_id, [m.describe() for m in self.modes]
+            )
+        # Sanitise: keep unique, in-range indices preserving order.
+        seen: set[int] = set()
+        clean: list[int] = []
+        for idx in order:
+            if 0 <= idx < len(self.modes) and idx not in seen:
+                clean.append(idx)
+                seen.add(idx)
+        if not clean:
+            # Empty / all-invalid pick → default to mode 0 so the spell
+            # still does something (matches the agent-absent default).
+            clean = [0]
+        state.log.append(
+            f"modal: P{controller_id} chooses mode(s) "
+            f"{clean} ({', '.join(self.modes[i].describe() for i in clean)})"
+        )
+        remaining = list(targets)
+        for idx in clean:
+            mode = self.modes[idx]
+            if mode.requires_target():
+                legal = mode.legal_targets(state, controller_id)
+                picked = None
+                for t in remaining:
+                    if t in legal:
+                        picked = t
+                        break
+                if picked is None:
+                    state.log.append(
+                        f"modal fizzle: mode {idx} requires a legal target"
+                    )
+                    continue
+                remaining.remove(picked)
+                mode.resolve(state, controller_id, (picked,))
+            else:
+                mode.resolve(state, controller_id, ())
+
     def describe(self) -> str:
-        return " OR ".join(m.describe() for m in self.modes)
+        joiner = " AND/OR " if self.or_both else " OR "
+        return joiner.join(m.describe() for m in self.modes)
 
 
 

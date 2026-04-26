@@ -196,10 +196,12 @@ def test_modal_choose_one_all_targeted_modes():
 
 
 def test_scour_for_scrap_modal_resolves_search_mode():
-    """Agent picks mode 0 → searches library for an artifact."""
+    """Agent picks mode 0 → searches library for an artifact.
+    Scour for Scrap is "Choose one or both" — agents drive mode picks
+    via ``choose_modes`` (plural) rather than ``choose_mode``."""
     class AlwaysModeZero(Agent):
-        def choose_mode(self, state, player_id, mode_descriptions):
-            return 0
+        def choose_modes(self, state, player_id, mode_descriptions):
+            return [0]
 
         def choose_card_from_library(self, state, player_id, option_ids):
             return option_ids[0] if option_ids else None
@@ -223,10 +225,12 @@ def test_scour_for_scrap_modal_resolves_search_mode():
 
 
 def test_scour_for_scrap_modal_resolves_graveyard_mode():
-    """Agent picks mode 1 → returns target artifact from graveyard."""
+    """Agent picks mode 1 → returns target artifact from graveyard.
+    Scour for Scrap is "Choose one or both" — agents drive mode picks
+    via ``choose_modes`` (plural) rather than ``choose_mode``."""
     class AlwaysModeOne(Agent):
-        def choose_mode(self, state, player_id, mode_descriptions):
-            return 1
+        def choose_modes(self, state, player_id, mode_descriptions):
+            return [1]
 
         def choose_target(self, state, player_id, legal_targets):
             return legal_targets[0] if legal_targets else None

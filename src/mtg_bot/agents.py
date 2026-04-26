@@ -87,6 +87,21 @@ class Agent:
         chosen mode. Default: 0 (first mode)."""
         raise NotImplementedError
 
+    def choose_modes(
+        self,
+        state: "GameState",
+        player_id: int,
+        mode_descriptions: list[str],
+    ) -> list[int]:
+        """For modal "choose one or both" (or "choose any number") spells
+        and abilities, return an ordered list of mode indices to resolve.
+        The list order is the resolution order (CR 700.2d).
+
+        Base implementation returns ``[0]`` — the first mode only —
+        which preserves backwards-compat for any agent that hasn't
+        opted into multi-mode picks."""
+        return [0]
+
     def choose_pay_shock_life(
         self,
         state: "GameState",
@@ -224,6 +239,20 @@ class RandomAgent(Agent):
 
     def choose_mode(self, state, player_id, mode_descriptions):
         return self.rng.randrange(len(mode_descriptions))
+
+    def choose_modes(self, state, player_id, mode_descriptions):
+        # Pick a random non-empty subset of modes in a random order.
+        n = len(mode_descriptions)
+        if n == 0:
+            return []
+        # Each mode included independently with p=0.5; if the subset is
+        # empty, force-include one mode (modal spells always resolve at
+        # least one).
+        picked = [i for i in range(n) if self.rng.random() < 0.5]
+        if not picked:
+            picked = [self.rng.randrange(n)]
+        self.rng.shuffle(picked)
+        return picked
 
     def choose_pay_shock_life(self, state, player_id, life_cost):
         # Simple heuristic: pay the life if we have healthy buffer,

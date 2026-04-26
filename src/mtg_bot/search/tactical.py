@@ -76,6 +76,11 @@ class DefaultTacticalAgent(Agent):
     def choose_mode(self, state, player_id, mode_descriptions):
         return 0
 
+    def choose_modes(self, state, player_id, mode_descriptions):
+        # Deterministic: first mode only. Matches choose_mode's
+        # first-legal default.
+        return [0]
+
     def choose_pay_shock_life(self, state, player_id, life_cost):
         # Decline paying life — enter tapped. Conservative.
         return False
