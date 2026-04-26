@@ -915,15 +915,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 granted_keywords=frozenset({"indestructible"}),
             ),
         ),
-        # Full Bore — +3/+2 UEOT on target creature you control.
-        # Simplified: drops the "if it was cast for its warp cost, also
-        # gains trample and haste UEOT" rider (warp-cast detection would
-        # be easy to add but the rider rarely matters in a mono-red deck).
+        # Full Bore — +3/+2 UEOT on target creature you control. If that
+        # creature was cast for its warp cost, it also gains trample and
+        # haste UEOT.
         make_instant(
             "Full Bore", "{R}",
             effect=PumpTargetCreatureUntilEOT(
                 power_bonus=3, toughness_bonus=2,
                 you_control_only=True,
+                granted_keywords_if_warp_cast=frozenset({"trample", "haste"}),
             ),
         ),
         # Seedship Impact — destroy artifact/enchantment; if MV ≤ 2,

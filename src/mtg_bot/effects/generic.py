@@ -2177,6 +2177,10 @@ class PumpTargetCreatureUntilEOT(Effect):
     granted_keywords: frozenset[str] = frozenset()
     you_control_only: bool = False  # restrict to "target creature you control"
     opponents_only: bool = False  # restrict to "an opponent controls"
+    # Extra keywords granted UEOT only when the target was cast for its
+    # warp cost (oracle: "If that creature was cast for its warp cost, it
+    # also gains X"). Generic — any future card with the same rider uses it.
+    granted_keywords_if_warp_cast: frozenset[str] = frozenset()
 
     def requires_target(self) -> bool:
         return True
@@ -2208,13 +2212,16 @@ class PumpTargetCreatureUntilEOT(Effect):
             return
         obj.temp_power_bonus += self.power_bonus
         obj.temp_toughness_bonus += self.toughness_bonus
-        if self.granted_keywords:
-            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+        granted = self.granted_keywords
+        if self.granted_keywords_if_warp_cast and obj.cast_via_warp:
+            granted = granted | self.granted_keywords_if_warp_cast
+        if granted:
+            obj.temp_keywords = obj.temp_keywords | granted
         state.log.append(
             f"{obj.printing.name} gets "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
-            + (f" and gains {', '.join(sorted(self.granted_keywords))}"
-               if self.granted_keywords else "")
+            + (f" and gains {', '.join(sorted(granted))}"
+               if granted else "")
         )
 
     def describe(self) -> str:

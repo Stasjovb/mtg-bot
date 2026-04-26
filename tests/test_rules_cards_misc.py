@@ -2938,7 +2938,7 @@ def test_dark_endurance_pumps_and_protects():
 
 def test_full_bore_pumps_own_creature():
     from mtg_bot.cards import EOE_SPELLS
-    from mtg_bot.game import effective_power, effective_toughness
+    from mtg_bot.game import effective_power, effective_toughness, effective_keywords
 
     state = _arena()
     ally = state.new_object(
@@ -2950,6 +2950,51 @@ def test_full_bore_pumps_own_creature():
     )
     assert effective_power(state, ally) == 5  # 2 + 3
     assert effective_toughness(state, ally) == 4  # 2 + 2
+    # Hard-cast target: no trample / haste rider.
+    kw = effective_keywords(state, ally)
+    assert "trample" not in kw
+    assert "haste" not in kw
+
+
+def test_full_bore_warp_cast_target_also_gains_trample_and_haste():
+    """Oracle: 'If that creature was cast for its warp cost, it also gains
+    trample and haste until end of turn.'"""
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_keywords
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    ally.cast_via_warp = True
+    state.battlefield.append(ally)
+    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+        state, 0, (("creature", ally.id),)
+    )
+    kw = effective_keywords(state, ally)
+    assert "trample" in kw
+    assert "haste" in kw
+
+
+def test_full_bore_warp_rider_cleans_up_at_end_of_turn():
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import run_cleanup_step
+
+    state = _arena()
+    ally = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    ally.cast_via_warp = True
+    state.battlefield.append(ally)
+    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+        state, 0, (("creature", ally.id),)
+    )
+    assert "haste" in effective_keywords(state, ally)
+    run_cleanup_step(state)
+    kw = effective_keywords(state, ally)
+    assert "trample" not in kw
+    assert "haste" not in kw
 
 
 def test_cryoshatter_aura_attaches_and_debuffs():
