@@ -376,15 +376,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # Auras — ship as simplified "enchant creature, small bonus" placeholders.
         # Hardlight Containment `{W}` Aura — Enchant artifact you
         # control. ETB exile target creature an opponent controls until
-        # this Aura leaves the battlefield.
-        # Simplification: the printed "Enchanted permanent has ward {1}"
-        # static is dropped (equipment-granted wards aren't modeled);
-        # granted_keywords=() to avoid unintended side bonuses.
+        # this Aura leaves the battlefield. Enchanted permanent has
+        # ward {1} (wired via attached_grants_ward — see
+        # game.effective_ward_cost and actions._apply_ward_check).
         make_aura(
             "Hardlight Containment", "{W}",
             aura_enchant_type="artifact",
             power_bonus=0, toughness_bonus=0,
             granted_keywords=frozenset(),
+            attached_grants_ward="{1}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",

@@ -1053,7 +1053,7 @@ def _apply_ward_check(
     state: GameState, caster_id: int,
     targets: tuple[tuple[str, int], ...],
 ) -> bool:
-    """Apply Ward at cast time. For each creature target controlled by an
+    """Apply Ward at cast time. For each permanent target controlled by an
     opponent with Ward {cost}, the caster auto-pays the cost by tapping
     additional lands. If they can't pay, the spell is countered and this
     returns True.
@@ -1061,9 +1061,18 @@ def _apply_ward_check(
     Simplified: no pay-or-counter decision — caster always pays if they
     can. No player-choice surface; Ward is essentially an additional mana
     cost on top of the spell's printed cost.
+
+    Looks at permanent-shaped target kinds (``creature``, ``permanent``,
+    ``artifact``, etc.) — anything that resolves to a battlefield object.
+    Skips ``player`` and ``stack`` targets. The effective ward cost
+    aggregates printed ward and any ward riders granted by attached
+    Auras/Equipment (Hardlight Containment).
     """
+    from mtg_bot.game import effective_ward_cost
+
+    _NON_PERMANENT_KINDS = {"player", "stack", "spell", "card"}
     for kind, tid in targets:
-        if kind != "creature":
+        if kind in _NON_PERMANENT_KINDS:
             continue
         obj = next((o for o in state.battlefield if o.id == tid), None)
         if obj is None:
@@ -1108,19 +1117,19 @@ def _apply_ward_check(
                 f"to pay Ward for {obj.printing.name}"
             )
             continue
-        ward = obj.printing.ward_cost
+        ward, ward_str = effective_ward_cost(state, obj)
         if ward is None:
             continue
         if can_pay_cost(state, caster_id, ward):
             auto_tap_for_cost(state, caster_id, ward)
             state.log.append(
-                f"P{caster_id} pays Ward {obj.printing.ward_cost_str} "
+                f"P{caster_id} pays Ward {ward_str} "
                 f"for {obj.printing.name}"
             )
         else:
             state.log.append(
                 f"Spell countered by {obj.printing.name}'s Ward "
-                f"{obj.printing.ward_cost_str} (unpaid)"
+                f"{ward_str} (unpaid)"
             )
             return True
     return False

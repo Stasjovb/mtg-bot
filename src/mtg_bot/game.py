@@ -322,6 +322,50 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     )
 
 
+def effective_ward_cost(
+    state: GameState, obj: GameObject
+) -> tuple["ManaCost | None", str]:  # noqa: F821
+    """Return ``(ward_cost, ward_cost_str)`` currently in effect on
+    ``obj`` — the printed ward stacked with any ward riders granted by
+    Auras/Equipment attached to it (Hardlight Containment's "Enchanted
+    permanent has ward {1}").
+
+    Multiple ward instances stack additively (CR 702.21d "Multiple
+    instances of ward on the same object are each separate triggered
+    abilities."). This implementation aggregates them into a single
+    additional cost since the simplified ward model auto-pays the whole
+    sum at cast time. Returns ``(None, "")`` when nothing has ward.
+    """
+    from mtg_bot.cards.base import ManaCost  # local: avoid cycle
+
+    parts: list[tuple[ManaCost, str]] = []
+    if obj.printing.ward_cost is not None:
+        parts.append((obj.printing.ward_cost, obj.printing.ward_cost_str))
+    for source in state.battlefield:
+        if source.attached_to != obj.id:
+            continue
+        granted = source.printing.attached_grants_ward_cost
+        if granted is None:
+            continue
+        parts.append((granted, source.printing.attached_grants_ward_str))
+    if not parts:
+        return None, ""
+    if len(parts) == 1:
+        return parts[0]
+    # Sum components across all ward instances. ManaCost stores generic
+    # as an int and per-color counts in a (color, n) tuple — combine both.
+    generic = sum(c.generic for c, _ in parts)
+    x_pips = sum(c.x_pips for c, _ in parts)
+    color_totals: dict[str, int] = {}
+    for c, _ in parts:
+        for color, n in c.colored:
+            color_totals[color] = color_totals.get(color, 0) + n
+    colored = tuple(sorted(color_totals.items()))
+    total = ManaCost(generic=generic, colored=colored, x_pips=x_pips)
+    label = " + ".join(s for _, s in parts if s)
+    return total, label
+
+
 def _dynamic_base_pt(
     state: GameState, obj: GameObject
 ) -> tuple[int, int] | None:

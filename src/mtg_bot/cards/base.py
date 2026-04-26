@@ -373,6 +373,13 @@ class CardPrinting:
     # choice, no pay-or-counter trigger on the stack.
     ward_cost: ManaCost | None = None
     ward_cost_str: str = ""
+    # "Enchanted/equipped permanent has ward {cost}." Aura/Equipment grant.
+    # When this printing is attached to another permanent, the enchanted
+    # permanent gains ward {cost} on top of any printed ward. Combined by
+    # game.effective_ward_cost and read by actions._apply_ward_check.
+    # Hardlight Containment's "Enchanted permanent has ward {1}" rider.
+    attached_grants_ward_cost: ManaCost | None = None
+    attached_grants_ward_str: str = ""
     # "You may play an additional land on each of your turns." Non-zero
     # value contributes to the land-per-turn cap via legal_actions.
     # Icetill Explorer has this at 1.
@@ -960,6 +967,7 @@ def make_aura(
     aura_enchant_type: str = "creature",
     attached_prevents_untap: bool = False,
     replaces_first_tokens_with_copies: bool = False,
+    attached_grants_ward: str | None = None,
 ) -> CardPrinting:
     """Build an Enchantment — Aura card that attaches to a creature.
 
@@ -967,6 +975,9 @@ def make_aura(
     continuous bonus granted to the enchanted creature; we reuse the
     Equipment bonus machinery (equipment_bonuses) so effective_* helpers
     pick them up automatically.
+
+    ``attached_grants_ward`` (e.g. ``"{1}"``) wires the "Enchanted
+    permanent has ward {cost}" rider — Hardlight Containment.
 
     Simplified Aura behavior: cast-time target must be a creature; on
     resolution the Aura enters attached to that target (or goes to the
@@ -991,6 +1002,11 @@ def make_aura(
         aura_enchant_type=aura_enchant_type,
         attached_prevents_untap=attached_prevents_untap,
         replaces_first_tokens_with_copies=replaces_first_tokens_with_copies,
+        attached_grants_ward_cost=(
+            parse_mana_cost(attached_grants_ward)
+            if attached_grants_ward else None
+        ),
+        attached_grants_ward_str=attached_grants_ward or "",
     )
 
 
