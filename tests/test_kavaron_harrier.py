@@ -3,6 +3,7 @@ Robot token + end-of-combat sacrifice."""
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import clear_combat_state, declare_attackers
 from mtg_bot.effects import KavaronHarrierAttackEffect
 from mtg_bot.game import GameState, Player, Zone
@@ -88,6 +89,7 @@ def test_harrier_attack_fires_and_token_dies_at_eoc():
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
     declare_attackers(state, [harrier.id])
+    drain_stack(state)
     # Robot token now on bf.
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1

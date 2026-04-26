@@ -4,7 +4,7 @@ Oracle: Whenever an opponent plays a land, you may put a land card
 from your hand onto the battlefield.
 """
 
-from mtg_bot.actions import PlayLand, apply_action
+from mtg_bot.actions import PlayLand, apply_action, drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SPECIAL_GUESTS_EOE
 from mtg_bot.effects import (
@@ -74,6 +74,7 @@ def test_opponent_plays_land_fires_burgeoning_under_controller():
 
     # Simulate the firing that actions.play_land would trigger.
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     # Forest should now be on the battlefield under P0's control.
     assert forest in state.battlefield
@@ -91,6 +92,7 @@ def test_burgeoning_controller_own_land_drop_does_not_trigger():
 
     # P0 plays a land themselves — Burgeoning shouldn't fire for P0.
     fire_opponent_plays_land_triggers(state, land_controller_id=0)
+    drain_stack(state)
 
     assert forest not in state.battlefield
     assert forest.zone == Zone.HAND
@@ -103,6 +105,7 @@ def test_agent_declining_is_legal():
     forest = _give_land_in_hand(state, 0, "Forest")
 
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     assert forest in state.player_by_id(0).hand
     assert forest not in state.battlefield
@@ -115,6 +118,7 @@ def test_no_lands_in_hand_does_nothing():
     _give_burgeoning(state, controller_id=0)
 
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     assert not any(o.printing.is_land for o in state.battlefield)
 
@@ -131,6 +135,7 @@ def test_play_land_integrates_with_burgeoning():
     p0_forest = _give_land_in_hand(state, 0, "Forest")
 
     apply_action(state, 1, PlayLand(card_id=p1_forest.id))
+    drain_stack(state)
 
     # P1's land played normally.
     assert p1_forest in state.battlefield
@@ -170,6 +175,7 @@ def test_burgeoning_dropped_land_fires_landfall():
 
     log_before = len(state.log)
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
     new_log = state.log[log_before:]
     # Landfall should have fired — check for its message pattern.
     assert any("landfall" in line.lower() for line in new_log), new_log
@@ -189,6 +195,7 @@ def test_burgeoning_dropped_land_does_not_re_fire_opponent_plays_land():
     # which drops a Forest. That drop must NOT re-fire for P1's
     # Burgeoning.
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     # P0's Forest dropped. P1's Forest stayed in hand (no recursive
     # re-fire).

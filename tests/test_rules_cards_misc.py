@@ -322,13 +322,16 @@ def test_elegy_acolyte_void_creates_robot():
     state.battlefield.append(acolyte)
     assert "lifelink" in acolyte.printing.keywords
 
+    from mtg_bot.actions import drain_stack
     # Void inactive → no token.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert not any(o.printing.name == "Robot" for o in state.battlefield)
 
     # Void active → Robot token joins the battlefield.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
     assert robots[0].controller_id == 0
@@ -349,6 +352,8 @@ def test_remnant_elemental_landfall_pumps():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert elem.temp_power_bonus == 2
 
 
@@ -367,6 +372,8 @@ def test_icecave_crasher_trample_plus_landfall():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert crasher.temp_power_bonus == 1
 
 
@@ -399,6 +406,7 @@ def test_blooming_stinger_grants_deathtouch():
 def test_seedship_agrarian_tap_creates_lander():
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
+    from mtg_bot.actions import drain_stack
 
     state = _arena()
     agr = state.new_object(
@@ -406,6 +414,7 @@ def test_seedship_agrarian_tap_creates_lander():
     )
     state.battlefield.append(agr)
     tap_permanent(state, agr)
+    drain_stack(state)
     landers = [o for o in state.battlefield if o.printing.name == "Lander"]
     assert len(landers) == 1
 
@@ -424,6 +433,8 @@ def test_seedship_agrarian_landfall_counter():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert agr.plus_one_counters == 1
 
 
@@ -580,6 +591,8 @@ def test_flight_deck_coordinator_gains_life_with_two_tapped():
 
     life_before = state.players[0].life
     run_beginning_of_end_step_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert state.players[0].life == life_before + 2
 
 
@@ -1487,6 +1500,8 @@ def test_eusocial_engineering_landfall_makes_robot():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
 
@@ -1752,9 +1767,11 @@ def test_frontline_war_rager_conditional_counter():
         EOE_CREATURES["Frontline War-Rager"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(rager)
+    from mtg_bot.actions import drain_stack
     # Only one tapped creature → no counter.
     rager.tapped = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert rager.plus_one_counters == 0
     # Add a second tapped creature.
     mate = state.new_object(
@@ -1763,6 +1780,7 @@ def test_frontline_war_rager_conditional_counter():
     mate.tapped = True
     state.battlefield.append(mate)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert rager.plus_one_counters == 1
 
 
@@ -1894,11 +1912,13 @@ def test_second_spell_trigger_fires_once_per_turn():
     _cast_spell(state, 0, first.id)
     resolve_top_of_stack(state)
     assert op.plus_one_counters == 0
-    # Cast second spell — trigger fires on the cast (before resolution).
+    # Cast second spell — trigger goes on stack above the spell; resolve
+    # the trigger first to apply the counter.
     second = state.players[0].hand[0]
     _cast_spell(state, 0, second.id)
+    resolve_top_of_stack(state)  # second-spell trigger
     assert op.plus_one_counters == 1
-    resolve_top_of_stack(state)
+    resolve_top_of_stack(state)  # spell
 
 
 def test_second_spell_counter_resets_across_turns():
@@ -1984,7 +2004,7 @@ def test_brightspear_zealot_power_boost_requires_two_spells():
 
 
 def test_oreplate_pangolin_artifact_enters_trigger():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -1997,6 +2017,7 @@ def test_oreplate_pangolin_artifact_enters_trigger():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, lander, 0)
+    drain_stack(state)
     assert pang.plus_one_counters == 1
 
     # An opponent's artifact entering shouldn't trigger.
@@ -2004,6 +2025,7 @@ def test_oreplate_pangolin_artifact_enters_trigger():
         TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, enemy_art, 1)
+    drain_stack(state)
     assert pang.plus_one_counters == 1  # unchanged
 
 
@@ -2022,7 +2044,7 @@ def test_pangolin_doesnt_trigger_on_itself():
 
 
 def test_mechan_assembler_fires_once_per_turn():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -2035,6 +2057,7 @@ def test_mechan_assembler_fires_once_per_turn():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, art1, 0)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
     # Second artifact enters → should NOT create another token (once/turn).
@@ -2042,6 +2065,7 @@ def test_mechan_assembler_fires_once_per_turn():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, art2, 0)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1  # still just one
 
@@ -2104,6 +2128,7 @@ def test_nanoform_sentinel_no_agent_just_taps():
 def test_nanoform_sentinel_untaps_once_per_turn():
     from mtg_bot.agents import RandomAgent
     import random
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
@@ -2120,10 +2145,12 @@ def test_nanoform_sentinel_untaps_once_per_turn():
     state.battlefield.append(tapped_ally)
     # Tap Nanoform Sentinel — should fire the trigger, untapping ally.
     tap_permanent(state, ns)
+    drain_stack(state)
     assert tapped_ally.tapped is False
 
 
 def test_meltstrider_eulogist_counter_dies_triggers_draw():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
@@ -2141,6 +2168,7 @@ def test_meltstrider_eulogist_counter_dies_triggers_draw():
     state.battlefield.append(victim)
     hand_before = len(state.players[0].hand)
     move_off_battlefield(state, victim, destination="graveyard")
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before + 1
 
 
@@ -2186,6 +2214,7 @@ def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
 
 
 def test_lightless_evangel_counter_on_sacrifice():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import sacrifice
 
@@ -2200,6 +2229,7 @@ def test_lightless_evangel_counter_on_sacrifice():
     )
     state.battlefield.append(lander)
     sacrifice(state, lander)
+    drain_stack(state)
     assert le.plus_one_counters == 1
 
 
@@ -2289,6 +2319,8 @@ def test_sunstar_expansionist_landfall_pumps_self():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert se.temp_power_bonus == 1
 
 
@@ -2526,6 +2558,7 @@ def test_auxiliary_boosters_etb_creates_and_attaches():
 def test_hylderblade_void_reattaches_at_end_step():
     from mtg_bot.agents import RandomAgent
     import random
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
 
@@ -2541,10 +2574,12 @@ def test_hylderblade_void_reattaches_at_end_step():
     state.battlefield.append(hyl)
     # Void inactive → no re-attach.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert hyl.attached_to is None
     # Activate Void.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert hyl.attached_to == ally.id
 
 
@@ -2992,11 +3027,13 @@ def test_cryoshatter_destroys_host_when_host_becomes_tapped():
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
+    from mtg_bot.actions import drain_stack
     # Sanity: both on the battlefield, neither is in a graveyard yet.
     assert bear in state.battlefield
     assert cryo in state.battlefield
     # Tap the bear via tap_permanent — this is the trigger source.
     tap_permanent(state, bear)
+    drain_stack(state)
     # Bear was destroyed.
     assert bear not in state.battlefield
     assert bear in state.players[1].graveyard
@@ -3123,6 +3160,7 @@ def test_cryoshatter_destroys_host_when_dealt_direct_damage():
     DealDamageAnyTarget(amount=1).resolve(
         state, controller_id=0, targets=(("creature", bear.id),)
     )
+    _drain_stack(state)
     state_based_actions(state)
     # Bear destroyed by Cryoshatter (1 damage is sublethal vs 2 toughness,
     # so the destruction comes from the aura trigger, not SBA lethal damage).
@@ -3516,7 +3554,7 @@ def test_shock_land_without_agent_enters_normal():
 
 
 def test_weftstalker_ardent_pings_opponent_on_creature_enter():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
@@ -3531,11 +3569,12 @@ def test_weftstalker_ardent_pings_opponent_on_creature_enter():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, mate, 0)
+    drain_stack(state)
     assert state.players[1].life == p1_life_before - 1
 
 
 def test_haliya_gains_life_on_creature_enter():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
@@ -3549,6 +3588,7 @@ def test_haliya_gains_life_on_creature_enter():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, mate, 0)
+    drain_stack(state)
     assert state.players[0].life == life_before + 1
 
 
@@ -3833,6 +3873,7 @@ def test_sunset_saboteur_attacks_trigger_fires():
     )
     state.battlefield.append(enemy)
     declare_attackers(state, [sab.id])
+    _drain_stack(state)
     assert enemy.plus_one_counters == 1
 
 
@@ -4289,6 +4330,7 @@ def test_comet_crawler_attacks_may_sac_pumps():
     )
     state.battlefield.append(fodder)
     declare_attackers(state, [crawler.id])
+    _drain_stack(state)
     # Fodder sacrificed; crawler pumped.
     assert fodder not in state.battlefield
     assert effective_power(state, crawler) == 4  # 2 + 2
@@ -4363,7 +4405,9 @@ def test_swarm_culler_becomes_tapped_may_sac_for_draw():
     )
     state.battlefield.append(fodder)
     hand_before = len(state.players[0].hand)
+    from mtg_bot.actions import drain_stack
     tap_permanent(state, culler)
+    drain_stack(state)
     # Fodder sacrificed, hand grew by 1 (drawn card).
     assert fodder not in state.battlefield
     assert len(state.players[0].hand) == hand_before + 1
@@ -4867,7 +4911,7 @@ def test_lashwhip_cost_reduction_with_three_enemy_creatures():
 
 
 def test_mm_menon_artifact_enters_triggers_counter_on_target():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -4890,6 +4934,7 @@ def test_mm_menon_artifact_enters_triggers_counter_on_target():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, lander, 0)
+    drain_stack(state)
     # Some creature (ally or mm itself) got a +1/+1 counter.
     total_counters = sum(
         o.plus_one_counters for o in state.battlefield
@@ -5133,7 +5178,7 @@ def test_stun_counter_keeps_creature_tapped_one_turn():
 
 def test_cryogen_relic_etb_and_leaves_draw():
     from mtg_bot.cards import EOE_CREATURES
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import drain_stack, put_into_battlefield
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -5143,11 +5188,13 @@ def test_cryogen_relic_etb_and_leaves_draw():
     )
     hand_before = len(state.players[0].hand)
     put_into_battlefield(state, relic, 0)
-    # After ETB: hand changes by -1 (relic left hand) + 1 (drew a card).
-    assert len(state.players[0].hand) == hand_before
+    drain_stack(state)
+    # ETB trigger drew 1 card.
+    assert len(state.players[0].hand) == hand_before + 1
     # Destroy it — leaves trigger draws another card.
     hand_before_destroy = len(state.players[0].hand)
     destroy(state, relic)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before_destroy + 1
 
 
@@ -5194,7 +5241,7 @@ def test_put_stun_counter_noop_paths():
 def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
 
     state = _arena()
@@ -5209,6 +5256,7 @@ def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
         EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, moxite, 0)
+    drain_stack(state)
     # A Munitions token should have been created.
     munitions = [
         o for o in state.battlefield if o.printing.name == "Munitions"
@@ -5329,13 +5377,16 @@ def test_kavaron_skywarden_void_eot_counter():
     # Sanity: reach keyword on printing.
     assert "reach" in warden.printing.keywords
 
+    from mtg_bot.actions import drain_stack
     # Void inactive → no change.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert warden.plus_one_counters == 0
 
     # Void active → +1/+1 counter added.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert warden.plus_one_counters == 1
 
 
@@ -5352,16 +5403,19 @@ def test_voidforged_titan_fires_only_when_void_active():
     )
     state.battlefield.append(titan)
 
+    from mtg_bot.actions import drain_stack
     # Void NOT active → no draw/life change.
     hand_before = len(state.players[0].hand)
     life_before = state.players[0].life
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before
     assert state.players[0].life == life_before
 
     # Flip void active (a nonland permanent left the battlefield this turn).
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert len(state.players[0].hand) == hand_before + 1
     assert state.players[0].life == life_before - 1
 

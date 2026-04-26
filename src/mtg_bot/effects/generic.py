@@ -1552,11 +1552,12 @@ class ChangeControllerToCombatDamageSource(Effect):
     """Contested War Zone: "Whenever a creature deals combat damage to
     you, that creature's controller gains control of this land."
 
-    Reads ``state.resolving_combat_damage_source_controller_id`` set
-    by _fire_combat_damage_to_player_triggers and mutates
-    ``source.controller_id`` to that value. Permanent continuous
-    effect (not UEOT); the new controller keeps the land until
-    another control-change effect overrides it.
+    The combat-damage-to-you trigger is pushed onto the stack with
+    ``fixed_targets=(("player", attacker_controller_id),)`` so the new
+    controller is plumbed through ``targets`` rather than via the
+    ``resolving_combat_damage_source_controller_id`` slot. Permanent
+    continuous effect (not UEOT); the new controller keeps the land
+    until another control-change effect overrides it.
     """
 
     def resolve(
@@ -1564,10 +1565,10 @@ class ChangeControllerToCombatDamageSource(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         source = state.resolving_source
-        if source is None:
+        if source is None or not targets:
             return
-        new_cid = state.resolving_combat_damage_source_controller_id
-        if new_cid is None or new_cid == source.controller_id:
+        kind, new_cid = targets[0]
+        if kind != "player" or new_cid == source.controller_id:
             return
         old_cid = source.controller_id
         source.controller_id = new_cid

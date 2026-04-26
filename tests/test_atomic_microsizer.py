@@ -3,6 +3,7 @@ until end of turn, plus equipped_creature_attacks trigger plumbing."""
 
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers, declare_blockers
 from mtg_bot.effects import AtomicMicrosizerAttackEffect
 from mtg_bot.game import (
@@ -104,6 +105,7 @@ def test_equipment_attacks_trigger_fires():
     # Opponent has a creature to target.
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     declare_attackers(state, [bear.id])
+    drain_stack(state)
     # PickFirst chooses first legal target — either bear or enemy.
     # Either way, the effect applies to exactly one of them.
     targets_with_override = [

@@ -1,6 +1,6 @@
 """Tests for Susurian Voidborn + Alpharael Dreaming Acolyte."""
 
-from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
+from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -97,6 +97,7 @@ def test_susurian_fires_when_other_creature_dies():
     )
     state.battlefield.append(bear)
     destroy(state, bear)
+    drain_stack(state)
     # Trigger fires: opponent loses 1, you gain 1.
     assert state.players[0].life == 21
     assert state.players[1].life == 19
@@ -110,6 +111,7 @@ def test_susurian_fires_on_its_own_death():
     )
     state.battlefield.append(susurian)
     destroy(state, susurian)
+    drain_stack(state)
     assert state.players[0].life == 21
     assert state.players[1].life == 19
 
@@ -141,6 +143,7 @@ def test_susurian_also_fires_on_your_artifact_dying():
     robot = state.new_object(TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(robot)
     sacrifice(state, robot)
+    drain_stack(state)
     assert state.players[0].life == 21
 
 

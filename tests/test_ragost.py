@@ -3,7 +3,7 @@ grant, sacrifice-a-Food activated ability, and per-end-step
 if-gained-life untap trigger."""
 
 from mtg_bot import legal_moves
-from mtg_bot.actions import ActivateAbility, apply_action
+from mtg_bot.actions import ActivateAbility, apply_action, drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import GainLife, IfGainedLifeThisTurnUntapSelf
@@ -200,6 +200,7 @@ def test_ragost_untaps_at_own_end_step_if_gained_life():
     ragost.tapped = True
     state.players[0].life_gained_this_turn = 2
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert ragost.tapped is False
 
 
@@ -209,6 +210,7 @@ def test_ragost_stays_tapped_without_life_gain():
     ragost.tapped = True
     # No life gained.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert ragost.tapped is True
 
 
@@ -222,6 +224,7 @@ def test_ragost_untaps_on_opponents_end_step_too():
     # Switch active player to opponent's turn.
     state.active_player_idx = 1
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert ragost.tapped is False
 
 
@@ -277,6 +280,7 @@ def test_each_end_step_observer_does_not_duplicate_own_fire():
     # Count untaps via logs.
     log_before = len(state.log)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Just one untap event for Ragost.
     untap_logs = [
         s for s in state.log[log_before:]

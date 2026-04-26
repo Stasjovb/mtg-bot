@@ -565,6 +565,7 @@ def test_skittermaw_does_not_fire_when_void_inactive():
 
 
 def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
@@ -574,10 +575,12 @@ def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
     # A creature died earlier this turn — Void is active.
     state.permanent_left_battlefield_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert skitter.plus_one_counters == 1
 
 
 def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
@@ -586,6 +589,7 @@ def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
     skitter = state.battlefield[0]
     state.spell_warped_this_turn = True
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert skitter.plus_one_counters == 1
 
 
@@ -608,6 +612,7 @@ def test_skittermaw_only_fires_on_its_controllers_end_step():
 def test_void_end_step_trigger_stacks_across_turns():
     """Over multiple turns with Void active each time, Skittermaw piles up
     counters — sanity that counters persist across turns."""
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, run_cleanup_step
 
@@ -618,6 +623,7 @@ def test_void_end_step_trigger_stacks_across_turns():
     for _ in range(3):
         state.permanent_left_battlefield_this_turn = True
         run_beginning_of_end_step_triggers(state)
+        drain_stack(state)
         run_cleanup_step(state)  # resets Void flags for next turn
     assert skitter.plus_one_counters == 3
 
@@ -748,6 +754,7 @@ def test_hymn_of_the_faller_void_mode_draws_extra():
 
 
 def test_gravpack_monoist_dies_creates_tapped_robot_token():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
@@ -755,6 +762,7 @@ def test_gravpack_monoist_dies_creates_tapped_robot_token():
     state = _arena(p0_battlefield=[grav])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
+    drain_stack(state)
     # Monoist went to graveyard AND fired its dies trigger
     assert obj in state.players[0].graveyard
     tokens = [
@@ -784,6 +792,7 @@ def test_dies_trigger_does_not_fire_when_exiled_instead():
 
 
 def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import state_based_actions
 
@@ -792,6 +801,7 @@ def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
     obj = state.battlefield[0]
     obj.damage = 2  # lethal for 2/1
     state_based_actions(state)
+    drain_stack(state)
     assert obj not in state.battlefield
     # Dies trigger fired during the SBA → Robot token appeared.
     tokens = [
@@ -802,6 +812,7 @@ def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
 
 
 def test_dies_trigger_fires_in_combat_full_flow():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import resolve_combat_damage
     from mtg_bot.turn import state_based_actions
@@ -816,11 +827,14 @@ def test_dies_trigger_fires_in_combat_full_flow():
     # Monoist attacks, drake blocks.
     state.step = Step.DECLARE_ATTACKERS
     apply(state, DeclareAttackers(attacker_ids=frozenset({attacker.id})), player_id=0)
+    drain_stack(state)
     state.step = Step.DECLARE_BLOCKERS
     apply(state, DeclareBlockers(assignments=((blocker.id, attacker.id),)), player_id=1)
+    drain_stack(state)
     state.step = Step.COMBAT_DAMAGE
     resolve_combat_damage(state, defending_player_id=1)
     state_based_actions(state)
+    drain_stack(state)
     # Monoist 2/1 vs Drake 2/3: Monoist takes 2 (dies), Drake takes 2 (lives).
     assert attacker not in state.battlefield
     assert blocker in state.battlefield

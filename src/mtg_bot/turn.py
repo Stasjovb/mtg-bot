@@ -205,176 +205,112 @@ def move_off_battlefield(
 def _fire_your_creature_or_artifact_dies_triggers(
     state: GameState, dead: "GameObject"
 ) -> None:
-    """Fire "whenever this or another creature or artifact you control
+    """Push "whenever this or another creature or artifact you control
     dies" triggers on all permanents the dead object's controller
-    controls. The source of this observer trigger INCLUDES the
-    dearly-departed (Susurian Voidborn: "this creature or another ...
-    you control dies") — since ``dead`` has already been moved off the
-    battlefield by the caller, we explicitly include it as a candidate
-    observer so its own trigger fires too.
-
-    Effects with targets get one via choose_target; if no legal
-    targets, the trigger fizzles.
+    controls onto the stack. The source of this observer trigger
+    INCLUDES the dearly-departed (Susurian Voidborn: "this creature or
+    another ... you control dies") — since ``dead`` has already been
+    moved off the battlefield by the caller, we explicitly include it
+    as a candidate observer so its own trigger fires too.
     """
+    from mtg_bot.actions import push_triggered_ability
+
     controller_id = dead.controller_id
-    # dead itself + live battlefield (dead is not in state.battlefield
-    # by the time we get here — it was moved in move_off_battlefield).
     candidates: list = [dead] + [
         o for o in state.battlefield if o.controller_id == controller_id
     ]
     for obs in candidates:
-        # Filter battlefield-controlled entries by controller (dead
-        # already passes since we only add it above when relevant).
         if obs is not dead and obs.controller_id != controller_id:
             continue
         for i, ability in enumerate(obs.printing.triggered_abilities):
             if ability.trigger != "your_creature_or_artifact_dies":
                 continue
-            if not should_fire_trigger(state, obs.id, i, ability):
-                continue
-            state.log.append(
-                f"{obs.printing.name}'s creature-or-artifact-dies "
-                f"trigger fires"
+            push_triggered_ability(
+                state,
+                source=obs,
+                ability=ability,
+                ability_index=i,
+                controller_id=controller_id,
+                label="creature-or-artifact-dies",
             )
-            state.resolving_source = obs
-            controller = state.player_by_id(controller_id)
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            try:
-                if effect.requires_target():
-                    legal = effect.legal_targets(state, controller_id)
-                    if not legal:
-                        state.log.append(
-                            f"{obs.printing.name}'s trigger fizzles "
-                            f"(no legal targets)"
-                        )
-                        continue
-                    if controller.agent is not None:
-                        chosen = controller.agent.choose_target(
-                            state, controller_id, legal
-                        )
-                        if chosen is not None:
-                            targets = (chosen,)
-                effect.resolve(state, controller_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def fire_counters_added_to_your_creature_triggers(
     state: GameState, controller_id: int, amount: int
 ) -> None:
-    """Fire "whenever you put one or more +1/+1 counters on a creature
-    you control, ..." observer triggers. ``amount`` is the effective
-    count added (post-doubling). Effect receives the amount via
-    state.resolving_counter_amount for "you may draw that many" riders.
+    """Push "whenever you put one or more +1/+1 counters on a creature
+    you control, ..." observer triggers onto the stack. ``amount`` is
+    the effective count added (post-doubling). The amount is carried in
+    the StackItem and exposed at resolve time via
+    ``state.resolving_counter_amount`` for "you may draw that many"
+    riders (Terrasymbiosis).
     """
-    state.resolving_counter_amount = amount
-    try:
-        for obs in list(state.battlefield):
-            if obs.controller_id != controller_id:
+    from mtg_bot.actions import push_triggered_ability
+
+    for obs in list(state.battlefield):
+        if obs.controller_id != controller_id:
+            continue
+        for i, ability in enumerate(obs.printing.triggered_abilities):
+            if ability.trigger != "counters_added_to_your_creature":
                 continue
-            for i, ability in enumerate(obs.printing.triggered_abilities):
-                if ability.trigger != (
-                    "counters_added_to_your_creature"
-                ):
-                    continue
-                if not should_fire_trigger(state, obs.id, i, ability):
-                    continue
-                state.log.append(
-                    f"{obs.printing.name}'s counters-added observer "
-                    f"fires (amount {amount})"
-                )
-                state.resolving_source = obs
-                try:
-                    ability.effect.resolve(state, controller_id, ())
-                finally:
-                    state.resolving_source = None
-    finally:
-        state.resolving_counter_amount = 0
+            push_triggered_ability(
+                state,
+                source=obs,
+                ability=ability,
+                ability_index=i,
+                controller_id=controller_id,
+                label=f"counters-added (amount {amount})",
+                counter_amount=amount,
+            )
 
 
 def _fire_another_creature_dies_or_exiled_triggers(
     state: GameState, dead: "GameObject"
 ) -> None:
-    """Fire "whenever another creature you control dies or is put into
-    exile" observer triggers. Iterates the dying creature's controller's
-    battlefield; the dead object is already moved off so it's naturally
-    excluded (matches the "another" qualifier). Effects requiring a
-    target use the standard agent target-selection path.
+    """Push "whenever another creature you control dies or is put into
+    exile" observer triggers onto the stack. Iterates the dying
+    creature's controller's battlefield; the dead object is already
+    moved off so it's naturally excluded (matches "another").
     """
+    from mtg_bot.actions import push_triggered_ability
+
     controller_id = dead.controller_id
-    controller = state.player_by_id(controller_id)
     for obs in list(state.battlefield):
         if obs.controller_id != controller_id:
             continue
         for i, ability in enumerate(obs.printing.triggered_abilities):
             if ability.trigger != "another_creature_you_control_dies_or_exiled":
                 continue
-            if not should_fire_trigger(state, obs.id, i, ability):
-                continue
-            state.log.append(
-                f"{obs.printing.name}'s another-creature-dies-or-exiled "
-                f"trigger fires"
+            push_triggered_ability(
+                state,
+                source=obs,
+                ability=ability,
+                ability_index=i,
+                controller_id=controller_id,
+                label="another-creature-dies-or-exiled",
             )
-            state.resolving_source = obs
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            try:
-                if effect.requires_target():
-                    legal = effect.legal_targets(state, controller_id)
-                    if not legal:
-                        state.log.append(
-                            f"{obs.printing.name}'s trigger fizzles "
-                            f"(no legal targets)"
-                        )
-                        continue
-                    if controller.agent is not None:
-                        chosen = controller.agent.choose_target(
-                            state, controller_id, legal
-                        )
-                        if chosen is not None:
-                            targets = (chosen,)
-                effect.resolve(state, controller_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def _fire_leaves_battlefield_triggers(
     state: GameState, obj: "GameObject"
 ) -> None:
-    """Run "when this leaves the battlefield" triggers on ``obj`` after
-    it's already been moved. resolving_source exposes the dearly
-    departed for effects that need it. Resolves target selection via
-    the controller's agent for targeted inner effects."""
-    controller = state.player_by_id(obj.controller_id)
-    for ability in obj.printing.triggered_abilities:
+    """Push "when this leaves the battlefield" triggers on ``obj`` onto
+    the stack after it's already been moved. resolving_source exposes
+    the dearly departed during resolution.
+    """
+    from mtg_bot.actions import push_triggered_ability
+
+    for i, ability in enumerate(obj.printing.triggered_abilities):
         if ability.trigger != "leaves_battlefield":
             continue
-        state.log.append(
-            f"{obj.printing.name}'s leaves-battlefield ability triggers"
+        push_triggered_ability(
+            state,
+            source=obj,
+            ability=ability,
+            ability_index=i,
+            controller_id=obj.controller_id,
+            label="leaves-battlefield",
         )
-        state.resolving_source = obj
-        effect = ability.effect
-        targets: tuple[tuple[str, int], ...] = ()
-        if effect.requires_target():
-            legal = effect.legal_targets(state, obj.controller_id)
-            if not legal:
-                state.resolving_source = None
-                state.log.append(
-                    f"{obj.printing.name}'s leaves-battlefield trigger "
-                    f"fizzles (no legal targets)"
-                )
-                continue
-            if controller.agent is not None:
-                chosen = controller.agent.choose_target(
-                    state, obj.controller_id, legal
-                )
-                if chosen is not None:
-                    targets = (chosen,)
-        try:
-            effect.resolve(state, obj.controller_id, targets)
-        finally:
-            state.resolving_source = None
 
 
 def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
@@ -404,29 +340,27 @@ def fire_opponent_discards_triggers(
     ``"opponent_discards_a_card"``. Called after any single-card
     discard event.
 
-    Simplification: Fires directly (no stack). The discarding player's
-    id is exposed via a target ``("player", id)`` so effects like
-    Entropic Battlecruiser's 1+ trigger can damage them.
+    Triggers go on the stack via push_triggered_ability with the
+    discarding player exposed as ``("player", id)`` in targets so
+    effects like Entropic Battlecruiser's 1+ trigger can damage them.
     """
+    from mtg_bot.actions import push_triggered_ability
+
     for obs in list(state.battlefield):
         if obs.controller_id == discarding_player_id:
             continue
         for i, ability in enumerate(obs.printing.triggered_abilities):
             if ability.trigger != "opponent_discards_a_card":
                 continue
-            if not should_fire_trigger(state, obs.id, i, ability):
-                continue
-            state.log.append(
-                f"{obs.printing.name}'s opponent-discards trigger fires"
+            push_triggered_ability(
+                state,
+                source=obs,
+                ability=ability,
+                ability_index=i,
+                controller_id=obs.controller_id,
+                label="opponent-discards",
+                fixed_targets=(("player", discarding_player_id),),
             )
-            state.resolving_source = obs
-            try:
-                ability.effect.resolve(
-                    state, obs.controller_id,
-                    (("player", discarding_player_id),),
-                )
-            finally:
-                state.resolving_source = None
 
 
 def should_fire_trigger(
@@ -434,11 +368,23 @@ def should_fire_trigger(
 ) -> bool:
     """True if ``ability`` on the permanent with id ``source_id`` may fire.
 
-    Honors both ``ability.tier_threshold`` (EoE Spacecraft tier gate:
-    source must have at least that many charge counters) and
-    ``ability.once_per_turn`` (records fire in state.once_per_turn_fired
-    to prevent a second fire this turn).
+    Honors three independent gates:
+
+    - ``ability.requires_void``: EoE Void rider — only fires while
+      ``is_void_active(state)`` (a non-land permanent left the
+      battlefield this turn or a spell was warped this turn).
+    - ``ability.tier_threshold``: EoE Spacecraft tier gate — source must
+      have at least that many charge counters.
+    - ``ability.once_per_turn``: records the fire in
+      ``state.once_per_turn_fired`` so the trigger fires at most once
+      per turn. Eager record matches MTG semantics: the ability has
+      "triggered" the moment its event happens, even if it later fails
+      to find legal targets and fizzles off the stack.
     """
+    from mtg_bot.game import is_void_active
+
+    if getattr(ability, "requires_void", False) and not is_void_active(state):
+        return False
     tier = getattr(ability, "tier_threshold", 0)
     if tier > 0:
         source = next((o for o in state.battlefield if o.id == source_id), None)
@@ -461,6 +407,8 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
     """
+    from mtg_bot.actions import push_triggered_ability
+
     controller_id = obj.controller_id
     was_creature = obj.printing.is_creature
     was_artifact = obj.printing.is_artifact
@@ -475,16 +423,14 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
         for i, ability in enumerate(other.printing.triggered_abilities):
             if ability.trigger != "sacrifice_creature_or_artifact":
                 continue
-            if not should_fire_trigger(state, other.id, i, ability):
-                continue
-            state.log.append(
-                f"{other.printing.name}'s sacrifice-trigger fires"
+            push_triggered_ability(
+                state,
+                source=other,
+                ability=ability,
+                ability_index=i,
+                controller_id=controller_id,
+                label="sacrifice",
             )
-            state.resolving_source = other
-            try:
-                ability.effect.resolve(state, controller_id, ())
-            finally:
-                state.resolving_source = None
 
 
 def destroy(state: GameState, obj: "GameObject") -> bool:
@@ -508,59 +454,34 @@ def destroy(state: GameState, obj: "GameObject") -> bool:
 
 
 def tap_permanent(state: GameState, obj: "GameObject") -> None:
-    """Tap ``obj`` and fire any of its "becomes_tapped" triggered abilities.
+    """Tap ``obj`` and push any of its "becomes_tapped" triggered abilities
+    onto the stack.
 
-    Also fires "enchanted_permanent_becomes_tapped" triggers on any Aura
+    Also pushes "enchanted_permanent_becomes_tapped" triggers on any Aura
     attached to ``obj`` — this is how Cryoshatter ("when enchanted
-    creature becomes tapped, destroy it") works. The aura is the trigger
-    source (state.resolving_source), and effects that need to know about
-    the host follow ``aura.attached_to``.
+    creature becomes tapped, destroy it") works.
 
     If the object is already tapped, this is a no-op (no re-trigger).
-    Current EoE cards using this trigger are untargeted — if a future card
-    requires a target we'd add the same target-selection branch used in
-    run_beginning_of_combat_triggers.
     """
+    from mtg_bot.actions import push_triggered_ability
+
     if obj.tapped:
         return
     obj.tapped = True
     for i, ability in enumerate(obj.printing.triggered_abilities):
         if ability.trigger != "becomes_tapped":
             continue
-        if not should_fire_trigger(state, obj.id, i, ability):
-            continue
-        state.log.append(
-            f"{obj.printing.name}'s becomes-tapped ability triggers"
+        push_triggered_ability(
+            state,
+            source=obj,
+            ability=ability,
+            ability_index=i,
+            controller_id=obj.controller_id,
+            label="becomes-tapped",
         )
-        state.resolving_source = obj
-        # Handle optional targeting for becomes-tapped (Nanoform Sentinel
-        # needs "another target permanent").
-        effect = ability.effect
-        targets: tuple[tuple[str, int], ...] = ()
-        if effect.requires_target():
-            controller = state.player_by_id(obj.controller_id)
-            legal = effect.legal_targets(state, obj.controller_id)
-            if not legal:
-                state.resolving_source = None
-                state.log.append(
-                    f"{obj.printing.name}'s becomes-tapped trigger fizzles "
-                    f"(no legal targets)"
-                )
-                continue
-            if controller.agent is not None:
-                chosen = controller.agent.choose_target(
-                    state, obj.controller_id, legal
-                )
-                if chosen is not None:
-                    targets = (chosen,)
-        try:
-            effect.resolve(state, obj.controller_id, targets)
-        finally:
-            state.resolving_source = None
     # Auras attached to ``obj`` whose oracle text is
     # "whenever enchanted permanent becomes tapped, ..." (Cryoshatter).
-    # Snapshot the attached list so an aura's effect destroying the host
-    # (which sends the aura to the graveyard) can't perturb iteration.
+    # Snapshot to avoid mid-iteration surprises.
     for aura in list(state.battlefield):
         if not aura.printing.is_aura:
             continue
@@ -569,83 +490,45 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
         for i, ability in enumerate(aura.printing.triggered_abilities):
             if ability.trigger != "enchanted_permanent_becomes_tapped":
                 continue
-            if not should_fire_trigger(state, aura.id, i, ability):
-                continue
-            state.log.append(
-                f"{aura.printing.name}'s enchanted-permanent-becomes-tapped "
-                f"ability triggers"
+            push_triggered_ability(
+                state,
+                source=aura,
+                ability=ability,
+                ability_index=i,
+                controller_id=aura.controller_id,
+                label="enchanted-permanent-becomes-tapped",
             )
-            state.resolving_source = aura
-            ac_id = aura.controller_id
-            controller = state.player_by_id(ac_id)
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            try:
-                if effect.requires_target():
-                    legal = effect.legal_targets(state, ac_id)
-                    if not legal:
-                        state.log.append(
-                            f"{aura.printing.name}'s trigger fizzles "
-                            f"(no legal targets)"
-                        )
-                        continue
-                    if controller.agent is not None:
-                        chosen = controller.agent.choose_target(
-                            state, ac_id, legal
-                        )
-                        if chosen is not None:
-                            targets = (chosen,)
-                effect.resolve(state, ac_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
-    """Fire "Landfall — whenever a land you control enters" triggers on
-    permanents the new land's controller controls.
+    """Push "Landfall — whenever a land you control enters" triggers onto
+    the stack for permanents the new land's controller controls.
 
     Called from every code path that puts a land onto the battlefield
-    (PlayLand, SearchLibraryForBasicLandTapped, etc.). For effects
-    with targets, the controller's agent selects via choose_target;
-    if no legal target exists, the trigger fizzles.
+    (PlayLand, SearchLibraryForBasicLandTapped, etc.). Honors
+    etb_trigger_multiplier by pushing N times.
     """
+    from mtg_bot.actions import push_triggered_ability
     from mtg_bot.game import etb_trigger_multiplier
 
     controller = new_land.controller_id
-    p = state.player_by_id(controller)
     firings = etb_trigger_multiplier(state, controller)
     # Snapshot to avoid mid-iteration surprises if a trigger ETBs something.
     for obj in list(state.battlefield):
         if obj.controller_id != controller:
             continue
-        for ability in obj.printing.triggered_abilities:
+        for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "landfall":
                 continue
             for _ in range(firings):
-                state.log.append(
-                    f"{obj.printing.name}'s landfall triggers"
+                push_triggered_ability(
+                    state,
+                    source=obj,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=controller,
+                    label="landfall",
                 )
-                state.resolving_source = obj
-                targets: tuple[tuple[str, int], ...] = ()
-                try:
-                    effect = ability.effect
-                    if effect.requires_target():
-                        legal = effect.legal_targets(state, controller)
-                        if not legal:
-                            state.log.append(
-                                f"{obj.printing.name}'s landfall trigger "
-                                f"fizzles (no legal targets)"
-                            )
-                            continue
-                        if p.agent is not None:
-                            chosen = p.agent.choose_target(
-                                state, controller, legal
-                            )
-                            if chosen is not None:
-                                targets = (chosen,)
-                    effect.resolve(state, controller, targets)
-                finally:
-                    state.resolving_source = None
 
 
 def fire_opponent_plays_land_triggers(
@@ -657,47 +540,54 @@ def fire_opponent_plays_land_triggers(
     Called from ``actions.play_land`` only (NOT from effects that
     merely put a land onto the battlefield — "plays a land" is the
     land-drop action per 305.1). For each opposing player we scan
-    their permanents and resolve every matching trigger under that
-    opponent's control (so Burgeoning's "you may put a land from your
-    hand onto the battlefield" targets the enchantment's controller).
+    their permanents and push every matching trigger onto the stack
+    under that opponent's control (so Burgeoning's "you may put a land
+    from your hand onto the battlefield" resolves under the enchantment's
+    controller).
     """
+    from mtg_bot.actions import push_triggered_ability
+
     for p in state.players:
         if p.id == land_controller_id:
             continue
         for obj in list(state.battlefield):
             if obj.controller_id != p.id:
                 continue
-            for ability in obj.printing.triggered_abilities:
+            for i, ability in enumerate(obj.printing.triggered_abilities):
                 if ability.trigger != "opponent_plays_land":
                     continue
-                state.log.append(
-                    f"{obj.printing.name}'s opponent-plays-land trigger fires"
+                push_triggered_ability(
+                    state,
+                    source=obj,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=p.id,
+                    label="opponent-plays-land",
                 )
-                state.resolving_source = obj
-                try:
-                    ability.effect.resolve(state, p.id, ())
-                finally:
-                    state.resolving_source = None
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
-    """Run "dies" triggered abilities on ``dead``, then fire any
-    "creature_you_control_with_counter_dies" triggers on other permanents
-    the dying creature's controller controls.
+    """Push "dies" triggered abilities of ``dead`` onto the stack, then
+    push any "creature_you_control_with_counter_dies" triggers on other
+    permanents the dying creature's controller controls.
 
-    Fires directly (no stack) for consistency with other trigger events
-    in this engine. Source is exposed via state.resolving_source for
-    effects that need it.
+    The dead object is no longer on the battlefield by the time this
+    runs; ``state.resolving_source`` will point to it during resolution
+    so effects can read its former state.
     """
-    for ability in dead.printing.triggered_abilities:
+    from mtg_bot.actions import push_triggered_ability
+
+    for i, ability in enumerate(dead.printing.triggered_abilities):
         if ability.trigger != "dies":
             continue
-        state.log.append(f"{dead.printing.name}'s dies ability triggers")
-        state.resolving_source = dead
-        try:
-            ability.effect.resolve(state, dead.controller_id, ())
-        finally:
-            state.resolving_source = None
+        push_triggered_ability(
+            state,
+            source=dead,
+            ability=ability,
+            ability_index=i,
+            controller_id=dead.controller_id,
+            label="dies",
+        )
     # "Whenever a creature you control with a +1/+1 counter on it dies" —
     # only fires if the dying creature actually had a +1/+1 counter.
     if dead.plus_one_counters > 0:
@@ -708,27 +598,21 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             for i, ability in enumerate(obj.printing.triggered_abilities):
                 if ability.trigger != "creature_you_control_with_counter_dies":
                     continue
-                if not should_fire_trigger(state, obj.id, i, ability):
-                    continue
-                state.log.append(
-                    f"{obj.printing.name}'s counter-creature-dies "
-                    f"trigger fires"
+                push_triggered_ability(
+                    state,
+                    source=obj,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=controller,
+                    label="counter-creature-dies",
                 )
-                state.resolving_source = obj
-                try:
-                    ability.effect.resolve(state, controller, ())
-                finally:
-                    state.resolving_source = None
 
 
 def run_beginning_of_upkeep_triggers(state: GameState) -> None:
-    """Fire "At the beginning of your upkeep" triggered abilities.
+    """Push "At the beginning of your upkeep" triggered abilities onto
+    the stack for permanents the active player controls."""
+    from mtg_bot.actions import push_triggered_ability
 
-    Fires for permanents the active player controls — the oracle
-    wording is "your upkeep", so only that player's triggers go on the
-    (implicit, resolve-immediately) stack. No-stack resolution matches
-    the engine's other beginning-of-X trigger handlers.
-    """
     ap_id = state.active_player().id
     for obj in list(state.battlefield):
         if obj.controller_id != ap_id:
@@ -736,40 +620,21 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
         for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "beginning_of_upkeep":
                 continue
-            if not should_fire_trigger(state, obj.id, i, ability):
-                continue
-            targets: tuple[tuple[str, int], ...] = ()
-            effect = ability.effect
-            if effect.requires_target():
-                legal = effect.legal_targets(state, ap_id)
-                if not legal:
-                    state.log.append(
-                        f"{obj.printing.name}'s beginning-of-upkeep "
-                        f"trigger fizzles (no legal targets)"
-                    )
-                    continue
-                controller = state.player_by_id(ap_id)
-                chosen = controller.agent.choose_target(state, ap_id, legal)
-                if chosen is None:
-                    continue
-                targets = (chosen,)
-            state.log.append(
-                f"{obj.printing.name}'s beginning-of-upkeep ability triggers"
+            push_triggered_ability(
+                state,
+                source=obj,
+                ability=ability,
+                ability_index=i,
+                controller_id=ap_id,
+                label="beginning-of-upkeep",
             )
-            state.resolving_source = obj
-            try:
-                effect.resolve(state, ap_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:
-    """Fire "At the beginning of combat on your turn" triggered abilities.
+    """Push "At the beginning of combat on your turn" triggered abilities
+    onto the stack for permanents the active player controls."""
+    from mtg_bot.actions import push_triggered_ability
 
-    Targets are selected via the controller's agent just like ETBs. Fires
-    as a turn-based action (no stack) for consistency with our other
-    trigger events.
-    """
     ap_id = state.active_player().id
     for obj in list(state.battlefield):
         if obj.controller_id != ap_id:
@@ -777,32 +642,14 @@ def run_beginning_of_combat_triggers(state: GameState) -> None:
         for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "beginning_of_combat":
                 continue
-            if not should_fire_trigger(state, obj.id, i, ability):
-                continue
-            # Target selection mirrors _trigger_etb_abilities.
-            targets: tuple[tuple[str, int], ...] = ()
-            effect = ability.effect
-            if effect.requires_target():
-                legal = effect.legal_targets(state, ap_id)
-                if not legal:
-                    state.log.append(
-                        f"{obj.printing.name}'s beginning-of-combat "
-                        f"trigger fizzles (no legal targets)"
-                    )
-                    continue
-                controller = state.player_by_id(ap_id)
-                chosen = controller.agent.choose_target(state, ap_id, legal)
-                if chosen is None:
-                    continue
-                targets = (chosen,)
-            state.log.append(
-                f"{obj.printing.name}'s beginning-of-combat ability triggers"
+            push_triggered_ability(
+                state,
+                source=obj,
+                ability=ability,
+                ability_index=i,
+                controller_id=ap_id,
+                label="beginning-of-combat",
             )
-            state.resolving_source = obj
-            try:
-                effect.resolve(state, ap_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def run_delayed_end_step_triggers(state: GameState) -> None:
@@ -888,7 +735,7 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
 
 
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
-    """Fire end-step triggers for the current end step.
+    """Push end-step triggers for the current end step onto the stack.
 
     Handles two trigger types:
     - ``beginning_of_end_step`` — fires only on the active player's
@@ -898,19 +745,13 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
       step regardless of which player controls the source (Ragost's
       "At the beginning of each end step, if you gained life this
       turn, untap Ragost").
-
-    EoE "Void —" abilities carry a requires_void flag and only fire
-    when is_void_active(state). Simplified model: triggers fire
-    directly (no stack).
     """
-    from mtg_bot.game import is_void_active
+    from mtg_bot.actions import push_triggered_ability
 
     ap_id = state.active_player().id
     candidates = list(state.battlefield)
-    void_is_active = is_void_active(state)
-    ap = state.player_by_id(ap_id)
     for obj in candidates:
-        for ability in obj.printing.triggered_abilities:
+        for i, ability in enumerate(obj.printing.triggered_abilities):
             is_each = ability.trigger == "beginning_of_each_end_step"
             is_yours = (
                 ability.trigger == "beginning_of_end_step"
@@ -918,39 +759,18 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
             )
             if not (is_each or is_yours):
                 continue
-            if ability.requires_void and not void_is_active:
-                continue
-            state.log.append(
-                f"{obj.printing.name}'s end-step ability triggers"
-            )
-            state.resolving_source = obj
-            # Target selection (mirrors _trigger_etb_abilities).
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
             # Each-end-step triggers resolve under the SOURCE's
             # controller, not the active player. Standard end-step
             # triggers resolve under the active player.
             ctrl_id = obj.controller_id if is_each else ap_id
-            ctrl = state.player_by_id(ctrl_id)
-            if effect.requires_target():
-                legal = effect.legal_targets(state, ctrl_id)
-                if not legal:
-                    state.resolving_source = None
-                    state.log.append(
-                        f"{obj.printing.name}'s end-step trigger fizzles "
-                        f"(no legal targets)"
-                    )
-                    continue
-                if ctrl.agent is not None:
-                    chosen = ctrl.agent.choose_target(
-                        state, ctrl_id, legal
-                    )
-                    if chosen is not None:
-                        targets = (chosen,)
-            try:
-                effect.resolve(state, ctrl_id, targets)
-            finally:
-                state.resolving_source = None
+            push_triggered_ability(
+                state,
+                source=obj,
+                ability=ability,
+                ability_index=i,
+                controller_id=ctrl_id,
+                label="end-step",
+            )
 
 
 def run_end_step_warp_exile(state: GameState) -> None:

@@ -49,7 +49,7 @@ def can_block(
 
 
 def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
-    from mtg_bot.turn import tap_permanent, should_fire_trigger
+    from mtg_bot.turn import tap_permanent
 
     for oid in attacker_ids:
         obj = next(
@@ -72,45 +72,23 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
                 obj.controller_id
             ).attacked_with_spacecraft_this_turn = True
         # Fire "whenever this creature attacks" triggers on the attacker.
-        _fire_attacks_triggers(state, obj, should_fire_trigger)
+        _fire_attacks_triggers(state, obj)
 
 
-def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> None:
-    from mtg_bot.game import is_void_active
+def _fire_attacks_triggers(state: GameState, attacker) -> None:
+    from mtg_bot.actions import push_triggered_ability
 
     for i, ability in enumerate(attacker.printing.triggered_abilities):
         if ability.trigger != "attacks":
             continue
-        if ability.requires_void and not is_void_active(state):
-            continue
-        if not should_fire_trigger(state, attacker.id, i, ability):
-            continue
-        state.log.append(
-            f"{attacker.printing.name}'s attacks trigger fires"
+        push_triggered_ability(
+            state,
+            source=attacker,
+            ability=ability,
+            ability_index=i,
+            controller_id=attacker.controller_id,
+            label="attacks",
         )
-        state.resolving_source = attacker
-        controller = state.player_by_id(attacker.controller_id)
-        effect = ability.effect
-        targets: tuple[tuple[str, int], ...] = ()
-        if effect.requires_target():
-            legal = effect.legal_targets(state, attacker.controller_id)
-            if not legal:
-                state.resolving_source = None
-                state.log.append(
-                    f"{attacker.printing.name}'s attacks trigger "
-                    f"fizzles (no legal targets)"
-                )
-                continue
-            if controller.agent is not None:
-                chosen = controller.agent.choose_target(
-                    state, attacker.controller_id, legal
-                )
-                if chosen is not None:
-                    targets = (chosen,)
-        try:
-            effect.resolve(state, attacker.controller_id, targets)
-        finally:
-            state.resolving_source = None
     # Auras/Equipment attached to the attacker: fire their
     # "whenever enchanted/equipped creature attacks" triggers.
     # Matches Chorale of the Void (aura) and Atomic Microsizer (eq).
@@ -128,41 +106,20 @@ def _fire_attacks_triggers(state: GameState, attacker, should_fire_trigger) -> N
         for i, ability in enumerate(attached.printing.triggered_abilities):
             if ability.trigger != wanted:
                 continue
-            if not should_fire_trigger(state, attached.id, i, ability):
-                continue
-            state.log.append(
-                f"{attached.printing.name}'s attached-attacks trigger "
-                f"fires"
+            push_triggered_ability(
+                state,
+                source=attached,
+                ability=ability,
+                ability_index=i,
+                controller_id=attached.controller_id,
+                label="attached-attacks",
             )
-            state.resolving_source = attached
-            ac_id = attached.controller_id
-            controller = state.player_by_id(ac_id)
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            try:
-                if effect.requires_target():
-                    legal = effect.legal_targets(state, ac_id)
-                    if not legal:
-                        state.log.append(
-                            f"{attached.printing.name}'s trigger "
-                            f"fizzles (no legal targets)"
-                        )
-                        continue
-                    if controller.agent is not None:
-                        chosen = controller.agent.choose_target(
-                            state, ac_id, legal
-                        )
-                        if chosen is not None:
-                            targets = (chosen,)
-                effect.resolve(state, ac_id, targets)
-            finally:
-                state.resolving_source = None
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     """``assignments`` maps blocker id → attacker id."""
+    from mtg_bot.actions import push_triggered_ability
     from mtg_bot.game import effective_keywords
-    from mtg_bot.turn import should_fire_trigger
 
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
@@ -184,16 +141,14 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
                 continue
             if "flying" not in attacker_kws:
                 continue
-            if not should_fire_trigger(state, blocker.id, i, ability):
-                continue
-            state.log.append(
-                f"{blocker.printing.name}'s blocks-flying trigger fires"
+            push_triggered_ability(
+                state,
+                source=blocker,
+                ability=ability,
+                ability_index=i,
+                controller_id=blocker.controller_id,
+                label="blocks-flying",
             )
-            state.resolving_source = blocker
-            try:
-                ability.effect.resolve(state, blocker.controller_id, ())
-            finally:
-                state.resolving_source = None
 
 
 def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
@@ -412,7 +367,7 @@ def _fire_enchanted_dealt_damage_triggers(
     state.resolving_combat_damage_amount for effects that want to
     read it (e.g., Pain for All's echo-damage-to-each-opponent).
     """
-    from mtg_bot.turn import should_fire_trigger
+    from mtg_bot.actions import push_triggered_ability
 
     for aura in list(state.battlefield):
         if aura.attached_to != obj.id:
@@ -422,18 +377,15 @@ def _fire_enchanted_dealt_damage_triggers(
         for i, ability in enumerate(aura.printing.triggered_abilities):
             if ability.trigger != "enchanted_creature_dealt_damage":
                 continue
-            if not should_fire_trigger(state, aura.id, i, ability):
-                continue
-            state.log.append(
-                f"{aura.printing.name}'s dealt-damage trigger fires"
+            push_triggered_ability(
+                state,
+                source=aura,
+                ability=ability,
+                ability_index=i,
+                controller_id=aura.controller_id,
+                label="enchanted-creature-dealt-damage",
+                combat_damage_amount=amount,
             )
-            state.resolving_source = aura
-            state.resolving_combat_damage_amount = amount
-            try:
-                ability.effect.resolve(state, aura.controller_id, ())
-            finally:
-                state.resolving_source = None
-                state.resolving_combat_damage_amount = 0
 
 
 def _fire_combat_damage_to_player_triggers(
@@ -459,8 +411,7 @@ def _fire_combat_damage_to_player_triggers(
     During those immediate resolutions,
     ``state.resolving_combat_damage_amount`` carries the damage amount.
     """
-    from mtg_bot.actions import _format_log_targets
-    from mtg_bot.game import StackItem
+    from mtg_bot.actions import push_triggered_ability
     from mtg_bot.turn import should_fire_trigger
 
     for source_id, target_player, amount in sources_hit_player:
@@ -474,63 +425,14 @@ def _fire_combat_damage_to_player_triggers(
         for i, ability in enumerate(source.printing.triggered_abilities):
             if ability.trigger != "combat_damage_to_player":
                 continue
-            if not should_fire_trigger(state, source.id, i, ability):
-                continue
-            controller_id = source.controller_id
-            effect = ability.effect
-            targets: tuple[tuple[str, int], ...] = ()
-            min_t, max_t = effect.target_count_range()
-            if max_t > 0:
-                state.resolving_source = source
-                state.resolving_combat_damage_amount = amount
-                try:
-                    legal = effect.legal_targets(state, controller_id)
-                finally:
-                    state.resolving_source = None
-                    state.resolving_combat_damage_amount = 0
-                if not legal and min_t > 0:
-                    state.log.append(
-                        f"{source.printing.name}'s "
-                        f"combat-damage-to-player trigger has no legal "
-                        f"targets; trigger fizzles"
-                    )
-                    continue
-                controller = state.player_by_id(controller_id)
-                chosen_list: list[tuple[str, int]] = []
-                remaining = list(legal)
-                for _ in range(max_t):
-                    if not remaining:
-                        break
-                    if controller.agent is None:  # pragma: no cover
-                        break
-                    pick = controller.agent.choose_target(
-                        state, controller_id, remaining
-                    )
-                    if pick is None or pick not in remaining:
-                        break
-                    chosen_list.append(pick)
-                    remaining.remove(pick)
-                if len(chosen_list) < min_t:  # pragma: no cover
-                    state.log.append(
-                        f"{source.printing.name}'s "
-                        f"combat-damage-to-player trigger had no target "
-                        f"chosen; trigger fizzles"
-                    )
-                    continue
-                targets = tuple(chosen_list)
-            state.stack.append(
-                StackItem(
-                    source=source,
-                    controller_id=controller_id,
-                    ability=ability,
-                    targets=targets,
-                    combat_damage_amount=amount,
-                )
-            )
-            state.log.append(
-                f"{source.printing.name}'s combat-damage-to-player "
-                f"trigger goes on the stack"
-                + _format_log_targets(state, targets)
+            push_triggered_ability(
+                state,
+                source=source,
+                ability=ability,
+                ability_index=i,
+                controller_id=source.controller_id,
+                label="combat-damage-to-player",
+                combat_damage_amount=amount,
             )
 
         # Observer: "whenever a nontoken artifact creature you control
@@ -549,22 +451,16 @@ def _fire_combat_damage_to_player_triggers(
                         "combat_damage_to_player"
                     ):
                         continue
-                    if not should_fire_trigger(state, obs.id, i, ability):
-                        continue
-                    state.log.append(
-                        f"{obs.printing.name}'s artifact-creature-damage "
-                        f"trigger fires (P{target_player} was hit)"
+                    push_triggered_ability(
+                        state,
+                        source=obs,
+                        ability=ability,
+                        ability_index=i,
+                        controller_id=obs.controller_id,
+                        label="artifact-creature-damage",
+                        combat_damage_amount=amount,
+                        fixed_targets=(("player", target_player),),
                     )
-                    state.resolving_source = obs
-                    state.resolving_combat_damage_amount = amount
-                    try:
-                        ability.effect.resolve(
-                            state, obs.controller_id,
-                            (("player", target_player),),
-                        )
-                    finally:
-                        state.resolving_source = None
-                        state.resolving_combat_damage_amount = 0
 
         # Observer: "whenever a creature you control deals combat
         # damage to a player" — Starwinder.
@@ -576,27 +472,24 @@ def _fire_combat_damage_to_player_triggers(
                     "your_creature_combat_damage_to_player"
                 ):
                     continue
-                if not should_fire_trigger(state, obs.id, i, ability):
-                    continue
-                state.log.append(
-                    f"{obs.printing.name}'s creature-damage-to-player "
-                    f"trigger fires (P{target_player} took {amount})"
+                push_triggered_ability(
+                    state,
+                    source=obs,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=obs.controller_id,
+                    label="creature-damage-to-player",
+                    combat_damage_amount=amount,
+                    fixed_targets=(("player", target_player),),
                 )
-                state.resolving_source = obs
-                state.resolving_combat_damage_amount = amount
-                try:
-                    ability.effect.resolve(
-                        state, obs.controller_id,
-                        (("player", target_player),),
-                    )
-                finally:
-                    state.resolving_source = None
-                    state.resolving_combat_damage_amount = 0
 
         # Observer: "whenever a creature deals combat damage to you" —
-        # fires on permanents the hit player controls. Used by
-        # Contested War Zone's "that creature's controller gains
-        # control of this land".
+        # fires on permanents the hit player controls. Used by Contested
+        # War Zone's "that creature's controller gains control of this
+        # land". This observer needs the attacker's *controller* exposed
+        # at resolution, which we plumb via the StackItem's targets:
+        # convention is fixed_targets=(("player", source_controller),)
+        # so the effect can read the new controller id from item.targets.
         attacker_controller_id = source.controller_id
         for obs in list(state.battlefield):
             if obs.controller_id != target_player:
@@ -604,24 +497,16 @@ def _fire_combat_damage_to_player_triggers(
             for i, ability in enumerate(obs.printing.triggered_abilities):
                 if ability.trigger != "creature_deals_combat_damage_to_you":
                     continue
-                if not should_fire_trigger(state, obs.id, i, ability):
-                    continue
-                state.log.append(
-                    f"{obs.printing.name}'s combat-damage-to-you trigger "
-                    f"fires (P{target_player} was hit by "
-                    f"{source.printing.name})"
+                push_triggered_ability(
+                    state,
+                    source=obs,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=obs.controller_id,
+                    label="combat-damage-to-you",
+                    combat_damage_amount=amount,
+                    fixed_targets=(("player", attacker_controller_id),),
                 )
-                state.resolving_source = obs
-                state.resolving_combat_damage_amount = amount
-                state.resolving_combat_damage_source_controller_id = (
-                    attacker_controller_id
-                )
-                try:
-                    ability.effect.resolve(state, obs.controller_id, ())
-                finally:
-                    state.resolving_source = None
-                    state.resolving_combat_damage_amount = 0
-                    state.resolving_combat_damage_source_controller_id = None
 
 
 def clear_combat_state(state: GameState) -> None:

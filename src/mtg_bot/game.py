@@ -553,6 +553,11 @@ class StackItem:
     # even though the ability resolves after the damage step ends.
     # 0 for non-combat-damage triggers and for spells.
     combat_damage_amount: int = 0
+    # Counter amount carried by a counters-added-to-creature observer
+    # trigger. Mirrored to state.resolving_counter_amount during
+    # resolution so effects like Terrasymbiosis ("draw that many cards")
+    # can read the count even though the ability resolves later.
+    counter_amount: int = 0
 
 
 @dataclass

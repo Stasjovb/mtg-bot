@@ -2,6 +2,7 @@
 (Real card also has Affinity for Slivers — that cost reduction is
 still dropped.)"""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
@@ -33,6 +34,7 @@ def test_hivepool_creates_two_slivers_on_upkeep():
     state = _new_state()
     _put(state, EOE_SPELLS["Thrumming Hivepool"])
     run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
     slivers = [o for o in state.battlefield if o.printing.name == "Sliver"]
     assert len(slivers) == 2
 

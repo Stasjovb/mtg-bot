@@ -4,6 +4,7 @@ enchanted_creature_attacks trigger on auras."""
 
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
     ChoraleReanimateDefenderGraveCreatureEffect,
@@ -117,6 +118,7 @@ def test_aura_on_attacker_fires_enchanted_attacks_trigger():
     # My bear attacks → Chorale's trigger should reanimate enemy bear
     # under my control.
     declare_attackers(state, [my_bear.id])
+    drain_stack(state)
     assert enemy_bear in state.battlefield
     assert enemy_bear.controller_id == 0
     assert enemy_bear.tapped
@@ -132,6 +134,7 @@ def test_chorale_end_step_sacrifice_integration():
     )
     # Void inactive → end step sacrifices Chorale.
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     assert aura not in state.battlefield
 
 

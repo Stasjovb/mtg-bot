@@ -7,6 +7,7 @@ from mtg_bot.cards import (
     EOE_SPELLS,
     SYNTHETIC_CREATURES,
 )
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
     DiscardSelf,
@@ -106,6 +107,7 @@ def test_fire_opponent_discards_triggers_fires_entropic():
     bc.charge_counters = 1  # 1+ tier active
     state.battlefield.append(bc)
     fire_opponent_discards_triggers(state, discarding_player_id=1)
+    drain_stack(state)
     assert state.players[1].life == 17
 
 
@@ -117,6 +119,7 @@ def test_fire_opponent_discards_triggers_tier_below_does_not_fire():
     bc.charge_counters = 0  # below 1+ tier
     state.battlefield.append(bc)
     fire_opponent_discards_triggers(state, discarding_player_id=1)
+    drain_stack(state)
     assert state.players[1].life == 20
 
 
@@ -131,6 +134,7 @@ def test_fire_opponent_discards_skips_same_player_permanents():
     state.battlefield.append(bc)
     # P0 is the discarder — bc is under P0, so no trigger.
     fire_opponent_discards_triggers(state, discarding_player_id=0)
+    drain_stack(state)
     assert state.players[0].life == 20
 
 
@@ -146,6 +150,7 @@ def test_discard_self_fires_observer_trigger():
     card = state.new_object(BASIC_LANDS["Forest"], 1, Zone.HAND)
     p1.hand.append(card)
     DiscardSelf(amount=1).resolve(state, 1, ())
+    drain_stack(state)
     # P1 discarded — Entropic (P0) triggers → P1 loses 3 life.
     assert p1.life == 17
 
@@ -162,6 +167,7 @@ def test_each_opponent_discards_fires_observer_trigger():
     card = state.new_object(BASIC_LANDS["Forest"], 1, Zone.HAND)
     p1.hand.append(card)
     EachOpponentDiscards(count=1).resolve(state, 0, ())
+    drain_stack(state)
     assert p1.life == 17
     assert card in p1.graveyard
 
@@ -182,6 +188,7 @@ def test_entropic_battlecruiser_attack_trigger_cascades_life_loss():
     card = state.new_object(BASIC_LANDS["Forest"], 1, Zone.HAND)
     p1.hand.append(card)
     declare_attackers(state, [bc.id])
+    drain_stack(state)
     # P1 discarded 1 card (from attack trigger); 1+ trigger fires →
     # P1 loses 3 life.
     assert p1.life == 17
@@ -198,6 +205,7 @@ def test_entropic_attack_trigger_empty_hand_loses_3_life():
     state.battlefield.append(bc)
     # P1 has empty hand.
     declare_attackers(state, [bc.id])
+    drain_stack(state)
     # Can't discard → loses 3 life (no 1+ trigger since no discard).
     assert state.players[1].life == 17
 

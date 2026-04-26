@@ -2,7 +2,7 @@
 deathtouch to other creatures you control, plus the new exclude_source
 flag on PumpCreaturesYouControlUntilEOT."""
 
-from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
+from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers
@@ -104,6 +104,7 @@ def test_vondam_attacks_pumps_other_creatures():
     ally.summoning_sick = False
     state.battlefield.append(ally)
     declare_attackers(state, [vondam.id])
+    drain_stack(state)
     assert ally.temp_power_bonus == 1
     assert "deathtouch" in effective_keywords(state, ally)
     assert vondam.temp_power_bonus == 0

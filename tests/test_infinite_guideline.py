@@ -1,6 +1,6 @@
 """Tests for Infinite Guideline Station's multicolored-count triggers."""
 
-from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
+from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -148,6 +148,7 @@ def test_infinite_guideline_station_attack_trigger_draws():
     ship.summoning_sick = False
     state.battlefield.append(ship)
     declare_attackers(state, [ship.id])
+    drain_stack(state)
     assert drawn in p.hand
 
 

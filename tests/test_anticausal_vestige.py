@@ -1,6 +1,7 @@
 """Tests for Anticausal Vestige's leaves-battlefield draw + may-put
 permanent from hand ETB."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import AnticausalVestigeLeavesEffect
@@ -109,6 +110,7 @@ def test_vestige_leaves_battlefield_fires_trigger():
     state.battlefield.append(vestige)
     lib_before = len(state.players[0].library)
     destroy(state, vestige)
+    drain_stack(state)
     # Leaves trigger fired; at minimum library is smaller by one card
     # (drawn, then possibly put onto battlefield per the rider).
     assert len(state.players[0].library) == lib_before - 1

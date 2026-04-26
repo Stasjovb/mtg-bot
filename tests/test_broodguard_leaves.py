@@ -1,5 +1,6 @@
 """Tests for Broodguard Elite's leaves-battlefield counter transfer."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
@@ -31,6 +32,7 @@ def test_broodguard_transfer_counters_on_death():
     )
     state.battlefield.append(bear)
     destroy(state, broodguard)
+    drain_stack(state)
     # Bear now has the 3 counters.
     assert bear.plus_one_counters == 3
 

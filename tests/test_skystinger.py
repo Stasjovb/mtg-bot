@@ -2,6 +2,7 @@
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_blockers
 from mtg_bot.game import GameState, Player, Zone, effective_power
 
@@ -31,6 +32,7 @@ def test_skystinger_pumps_when_blocking_flier():
     flier.temp_keywords = flier.temp_keywords | frozenset({"flying"})
     flier.attacking = True
     declare_blockers(state, {stinger.id: flier.id})
+    drain_stack(state)
     # Skystinger gets +5/+0 UEOT.
     assert stinger.temp_power_bonus == 5
     assert stinger.temp_toughness_bonus == 0

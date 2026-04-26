@@ -234,6 +234,7 @@ def test_dual_sun_adepts_double_strike_deals_damage_twice():
 
 
 def test_edge_rover_dies_each_player_creates_a_lander():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
@@ -241,6 +242,7 @@ def test_edge_rover_dies_each_player_creates_a_lander():
     state = _arena(p0_battlefield=[rover])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
+    drain_stack(state)
     # Both P0 and P1 should have a Lander token now
     p0_landers = [
         o for o in state.battlefield
@@ -282,6 +284,8 @@ def test_landfall_fires_when_you_play_a_land():
     forest = state.players[0].hand[0]
 
     apply(state, PlayLand(forest.id), player_id=0)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Landfall triggered: +1/+1 + vigilance + haste UEOT to P0's creatures.
     assert effective_power(state, bear) == 3
     assert "haste" in effective_keywords(state, bear)
@@ -333,7 +337,8 @@ def test_landfall_also_fires_from_lander_library_search():
 
     god = next(o for o in state.battlefield if o.printing.name == "Glacier Godmaw")
     apply(state, ActivateAbility(source_id=lander.id, ability_index=0), player_id=0)
-    resolve_top_of_stack(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Landfall should have pumped Godmaw +1/+1 when the Forest entered
     assert effective_power(state, god) == 7
 
@@ -410,6 +415,8 @@ def test_molecular_modifier_pumps_on_beginning_of_combat():
     for p in state.players:
         p.agent = RandomAgent(rng=random.Random(0))
     run_beginning_of_combat_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
 
     # Some creature you control got +1/+0 first strike (random target of
     # Modifier or Bear — both qualify).
@@ -448,6 +455,8 @@ def test_molecular_modifier_self_targets_when_solo():
     for p in state.players:
         p.agent = RandomAgent(rng=random.Random(0))
     run_beginning_of_combat_triggers(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     mod_obj = state.battlefield[0]
     assert mod_obj.temp_power_bonus == 1
 
@@ -680,6 +689,7 @@ def test_tragic_trajectory_void_mode_minus_10_10_kills():
 
 
 def test_beamsaw_prospector_dies_creates_lander_for_controller_only():
+    from mtg_bot.actions import drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
@@ -687,6 +697,7 @@ def test_beamsaw_prospector_dies_creates_lander_for_controller_only():
     state = _arena(p0_battlefield=[prospector])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
+    drain_stack(state)
     landers = [o for o in state.battlefield if o.printing is TOKEN_PRINTINGS["Lander"]]
     assert len(landers) == 1
     assert landers[0].controller_id == 0
@@ -721,6 +732,8 @@ def test_eumidian_terrabotanist_gains_life_on_landfall():
     )
     forest = state.players[0].hand[0]
     apply(state, PlayLand(forest.id), player_id=0)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert state.players[0].life == 16
 
 
@@ -940,6 +953,8 @@ def test_starfighter_pilot_surveils_when_tapped_by_attacking():
 
     state.step = Step.DECLARE_ATTACKERS
     apply(state, DeclareAttackers(attacker_ids=frozenset({obj.id})))
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Pilot tapped via attack → becomes_tapped triggers → surveil 1 resolved
     assert obj.tapped
     assert any("surveils" in e for e in state.log)

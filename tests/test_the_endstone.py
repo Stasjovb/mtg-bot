@@ -4,6 +4,7 @@ from mtg_bot.actions import (
     CastSpell,
     PlayLand,
     apply_action,
+    drain_stack,
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
@@ -64,6 +65,7 @@ def test_endstone_draws_when_playing_a_land():
     p.library.append(drawn)
     # Play the land.
     apply_action(state, 0, PlayLand(forest.id))
+    drain_stack(state)
     # The Endstone's trigger drew a card.
     assert drawn in p.hand
 
@@ -86,7 +88,8 @@ def test_endstone_draws_when_casting_a_spell():
     drawn = state.new_object(BASIC_LANDS["Island"], 0, Zone.LIBRARY)
     p.library.append(drawn)
     apply_action(state, 0, CastSpell(bear.id))
-    # Trigger fires immediately after the spell goes on the stack.
+    drain_stack(state)
+    # Trigger drew a card after the spell went on the stack.
     assert drawn in p.hand
 
 
@@ -100,6 +103,7 @@ def test_endstone_end_step_life_halving():
     )
     state.battlefield.append(endstone)
     run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
     # Standard starting life = 20, half rounded up = 10.
     assert p.life == 10
 

@@ -3,6 +3,7 @@
 from mtg_bot.actions import (
     ActivateAbility,
     apply_action,
+    drain_stack,
     put_into_battlefield,
     resolve_top_of_stack,
 )
@@ -75,6 +76,7 @@ def test_nutrient_block_draws_on_leave_battlefield():
     drawn = state.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
     p.library.append(drawn)
     sacrifice(state, nb)
+    drain_stack(state)
     assert drawn in p.hand
 
 

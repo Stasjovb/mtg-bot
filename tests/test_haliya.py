@@ -1,6 +1,6 @@
 """Tests for Haliya, Ascendant Cadet's ETB + attacks triggers."""
 
-from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
+from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers
@@ -48,6 +48,7 @@ def test_haliya_attack_puts_counter_on_target():
     )
     state.battlefield.append(bear)
     declare_attackers(state, [haliya.id])
+    drain_stack(state)
     # Attacks trigger fires, some creature gets a counter.
     assert haliya.plus_one_counters + bear.plus_one_counters >= 1
 

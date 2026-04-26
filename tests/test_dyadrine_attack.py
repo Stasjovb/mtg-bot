@@ -6,6 +6,7 @@ from mtg_bot.cards import (
     EOE_SPELLS,
     SYNTHETIC_CREATURES,
 )
+from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import DyadrineAttackEffect
 from mtg_bot.game import GameState, Player, Zone
@@ -117,6 +118,7 @@ def test_dyadrine_full_attack_trigger_flow():
     drawn = state.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
     p.library.append(drawn)
     declare_attackers(state, [dyadrine.id])
+    drain_stack(state)
     # Attack trigger fired: counters decremented, card drawn, Robot made.
     assert drawn in p.hand
     robots = [

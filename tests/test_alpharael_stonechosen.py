@@ -1,7 +1,7 @@
 """Tests for Alpharael, Stonechosen — Ward-discard-random and
 Void-gated half-life attack."""
 
-from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+from mtg_bot.actions import _cast_spell, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers
@@ -108,6 +108,7 @@ def test_alpharael_attack_halves_life_when_void_active():
     # Force Void active: mark a permanent left battlefield this turn.
     state.permanent_left_battlefield_this_turn = True
     declare_attackers(state, [alpha.id])
+    drain_stack(state)
     # P1 at 20 → loses 10 → at 10.
     assert state.players[1].life == 10
 
@@ -122,6 +123,7 @@ def test_alpharael_attack_does_nothing_when_void_inactive():
     # Void inactive (no permanent-left, no spell-warped).
     life_before = state.players[1].life
     declare_attackers(state, [alpha.id])
+    drain_stack(state)
     assert state.players[1].life == life_before
 
 

@@ -1,6 +1,7 @@
 """Tests for Terrasymbiosis — counters-added-to-your-creature observer
 + once-per-turn draw."""
 
+from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DrawCardsEqualToResolvingCounterAmount
@@ -67,6 +68,7 @@ def test_terrasymbiosis_fires_when_counter_added_to_own_creature():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 3)
     add_plus_one_counters(state, bear, 1)
+    drain_stack(state)
     assert len(state.players[0].hand) == 1
 
 
@@ -76,6 +78,7 @@ def test_terrasymbiosis_draws_multiple_when_multiple_counters():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 5)
     add_plus_one_counters(state, bear, 3)
+    drain_stack(state)
     assert len(state.players[0].hand) == 3
 
 
@@ -85,7 +88,9 @@ def test_terrasymbiosis_once_per_turn():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 5)
     add_plus_one_counters(state, bear, 1)
+    drain_stack(state)
     add_plus_one_counters(state, bear, 2)
+    drain_stack(state)
     # Second add should NOT draw — once per turn.
     assert len(state.players[0].hand) == 1
 

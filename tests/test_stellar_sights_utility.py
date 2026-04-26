@@ -6,6 +6,7 @@ Burnwillows, Mana Confluence)."""
 from mtg_bot import legal_moves
 from mtg_bot.actions import (
     ActivateAbility, apply_action, auto_tap_for_cost, can_pay_cost,
+    drain_stack,
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
@@ -106,6 +107,7 @@ def test_grove_tapping_grants_life_to_each_opponent():
     state = _new_state()
     grove = _put(state, STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"])
     auto_tap_for_cost(state, 0, parse_mana_cost("{R}"))
+    drain_stack(state)
     assert grove.tapped
     assert state.players[1].life == 21
     assert state.players[0].life == 20  # own life unchanged
