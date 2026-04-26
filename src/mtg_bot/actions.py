@@ -1103,6 +1103,7 @@ def _activate_ability(
     if (
         ability.cost.sacrifice_another_creature_or_artifact
         or ability.cost.sacrifice_another_artifact_or_land
+        or ability.cost.sacrifice_another_artifact
     ):
         from mtg_bot.turn import sacrifice as _sacrifice
 
@@ -1110,9 +1111,12 @@ def _activate_ability(
         if ability.cost.sacrifice_another_creature_or_artifact:
             def _is_valid_sac(o):
                 return o.printing.is_creature or o.printing.is_artifact
-        else:
+        elif ability.cost.sacrifice_another_artifact_or_land:
             def _is_valid_sac(o):
                 return o.printing.is_artifact or o.printing.is_land
+        else:
+            def _is_valid_sac(o):
+                return o.printing.is_artifact
         options = [
             o for o in state.battlefield
             if o.controller_id == player_id

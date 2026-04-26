@@ -139,6 +139,9 @@ class ActivationCost:
     # "Sacrifice another artifact or land" — as above but with a land
     # filter. Matches Slagdrill Scrapper.
     sacrifice_another_artifact_or_land: bool = False
+    # "Sacrifice another artifact" — strict artifact-only filter.
+    # Matches Memorial Vault. Cannot be the source itself.
+    sacrifice_another_artifact: bool = False
     # "Remove a +1/+1 counter from a creature you control" — Sunstar
     # Chaplain's activated ability. Fails if no such creature exists.
     remove_plus_one_counter_from_your_creature: bool = False
@@ -182,6 +185,8 @@ class ActivationCost:
             parts.append("Sacrifice another creature or artifact")
         if self.sacrifice_another_artifact_or_land:
             parts.append("Sacrifice another artifact or land")
+        if self.sacrifice_another_artifact:
+            parts.append("Sacrifice another artifact")
         if self.remove_plus_one_counter_from_your_creature:
             parts.append("Remove a +1/+1 counter from a creature you control")
         if self.sacrifice_food:

@@ -155,4 +155,7 @@ def test_memorial_vault_printing_has_activated_ability():
     assert len(v.activated_abilities) == 1
     cost = v.activated_abilities[0].cost
     assert cost.tap_self
-    assert cost.sacrifice_another_creature_or_artifact
+    # Oracle: "Sacrifice another artifact" — strict artifact-only cost,
+    # not the wider creature-or-artifact variant.
+    assert cost.sacrifice_another_artifact
+    assert not cost.sacrifice_another_creature_or_artifact

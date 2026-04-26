@@ -507,19 +507,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Memorial Vault `{3}{R}` Artifact. Real oracle: "{T},
-        # Sacrifice another artifact: Exile the top X cards of your
-        # library, where X is one plus the mana value of the
-        # sacrificed artifact. You may play those cards this turn."
-        # Simplification: uses sacrifice_another_creature_or_artifact
-        # (slightly wider than oracle's "another artifact").
+        # Memorial Vault `{3}{R}` Artifact. Oracle: "{T}, Sacrifice
+        # another artifact: Exile the top X cards of your library,
+        # where X is one plus the mana value of the sacrificed
+        # artifact. You may play those cards this turn." Modeled with
+        # the strict ``sacrifice_another_artifact`` cost (artifact-only
+        # filter), so creatures and lands are excluded; X is read from
+        # the most-recently-graveyarded artifact at resolution time.
         make_artifact(
             "Memorial Vault", "{3}{R}",
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
                         tap_self=True,
-                        sacrifice_another_creature_or_artifact=True,
+                        sacrifice_another_artifact=True,
                     ),
                     effect=MemorialVaultActivatedEffect(),
                 ),

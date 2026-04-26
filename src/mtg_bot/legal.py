@@ -369,6 +369,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_another:
                     continue
+            if ability.cost.sacrifice_another_artifact:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and o2.printing.is_artifact
+                )
+                if not has_another:
+                    continue
             if ability.cost.remove_plus_one_counter_from_your_creature:
                 has_counter_creature = any(
                     o2 for o2 in state.battlefield

@@ -446,19 +446,12 @@ class MemorialVaultActivatedEffect(Effect):
     your library, where X is one plus the mana value of the sacrificed
     artifact. You may play those cards this turn."
 
-    The ``sacrifice_another_creature_or_artifact`` ActivationCost
-    handles the artifact sac (caveat: it also accepts creatures since
-    that's the only existing 'sacrifice another' cost in the engine —
-    slight widening of the oracle). The sacrificed object's CMC is
-    captured from state.log order before we fire — the ActivationCost
-    fires BEFORE the effect, so we read the most-recently-sacrificed
-    artifact's mana value via resolving_additional_cost_choice_id if
-    we extended it. Simpler: compute X from a fresh scan of the
-    graveyard for the most-recently-added artifact this resolution.
-
-    Simplification: X defaults to 2 (representative average) when we
-    can't determine the exact sacrifice. Accurate X-tracking would
-    require threading sac info through ActivationCost payment.
+    The ``sacrifice_another_artifact`` ActivationCost (artifact-only
+    filter) pays the cost, so the most-recently-graveyarded artifact
+    in the controller's graveyard at resolution time is exactly the
+    one we just sacrificed. X = 1 + that artifact's mana value. The
+    cost gate guarantees an artifact is present; the X=1 fallback only
+    matters if defensive code is ever called without the cost paid.
     """
 
     def resolve(
@@ -467,10 +460,11 @@ class MemorialVaultActivatedEffect(Effect):
     ) -> None:
         from mtg_bot.game import Zone
 
-        # Heuristic for X: scan controller's graveyard for the most
-        # recently added artifact — that's the one we just sacrificed.
+        # X reads the most-recently-graveyarded artifact's mana value.
+        # Cost payment runs immediately before resolve, so this is the
+        # artifact we just sacrificed.
         p = state.player_by_id(controller_id)
-        x = 2
+        x = 1
         for c in reversed(p.graveyard):
             if c.printing.is_artifact:
                 x = 1 + c.printing.mana_cost.total
