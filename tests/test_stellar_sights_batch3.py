@@ -147,11 +147,67 @@ def test_recording_agent_falls_back_to_first_when_pick_unavailable():
     assert agent.last_options == ["U", "B"]
 
 
-def test_meteor_crater_taps_for_any_color():
-    state = _new_state()
+def test_meteor_crater_options_are_colors_of_controlled_permanents():
+    """Oracle: 'Choose a color of a permanent you control.' With a
+    blue-cost creature on the battlefield, the option set is {U}; the
+    minted coin matches that color."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES, EOE_CREATURES
+
+    agent = _RecordingColorAgent()
+    state = _new_state(agent=agent)
+    # An Island contributes nothing (lands have no mana cost / are
+    # colorless). A blue creature like Steelswarm Operator ({1}{U})
+    # contributes U.
+    _put(state, BASIC_LANDS["Island"])
+    op = state.new_object(
+        EOE_CREATURES["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(op)
     mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
     apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
-    assert state.players[0].mana_pool[0].color == "any"
+    assert agent.last_options == ["U"]
+    assert state.players[0].mana_pool[0].color == "U"
+
+
+def test_meteor_crater_no_colored_permanents_falls_back_to_colorless():
+    """Defensive path: with only lands and colorless artifacts in play,
+    the option set is empty and the effect mints a single colorless
+    {C} coin so the ability still produces something."""
+    state = _new_state()
+    _put(state, BASIC_LANDS["Forest"])  # land — colorless
+    # Lander token (artifact, no colored cost) — colorless.
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(lander)
+    mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
+    apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
+    assert state.players[0].mana_pool[0].color == "C"
+
+
+def test_meteor_crater_unions_multiple_colors():
+    """Two differently-colored creatures in play → union of their
+    color sets is offered to the agent."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    agent = _RecordingColorAgent(pick="W")
+    state = _new_state(agent=agent)
+    blue = state.new_object(
+        EOE_CREATURES["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(blue)
+    # Find any white creature in EOE_CREATURES.
+    white_card = next(
+        p for p in EOE_CREATURES.values()
+        if "W" in p.mana_cost.colors and p.is_creature
+    )
+    white = state.new_object(white_card, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(white)
+    mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
+    apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
+    assert set(agent.last_options or []) >= {"U", "W"}
+    assert state.players[0].mana_pool[0].color == "W"
 
 
 def test_power_depot_mana_is_artifact_restricted():

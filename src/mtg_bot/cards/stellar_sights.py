@@ -506,13 +506,15 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         ),
     ),
     # Meteor Crater: {T}: Choose a color of a permanent you control.
-    # Add one mana of that color. Simplified to "any" coin.
+    # Add one mana of that color. Honored via
+    # AddOneManaOfChosenPermanentColor — the controller's permanents'
+    # color set is computed at resolve time and the agent picks one.
     "Meteor Crater": make_utility_land(
         "Meteor Crater",
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
-                effect=AddManaToPool(produces=(("any", 1),)),
+                effect=AddOneManaOfChosenPermanentColor(),
                 is_mana_ability=True,
             ),
         ),

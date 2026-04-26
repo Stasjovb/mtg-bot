@@ -29,6 +29,7 @@ from mtg_bot.effects.generic import (
     AddManaToPool,
     AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
+    AddOneManaOfChosenPermanentColor,
     AttachToTargetCreatureYouControl,
     BecomeLandCreatureUEOT,
     BecomesCopyOfTargetLand,

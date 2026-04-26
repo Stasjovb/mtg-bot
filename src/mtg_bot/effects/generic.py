@@ -1765,6 +1765,59 @@ class AddOneManaFromControlledLandsProductions(Effect):
 
 
 @dataclass(frozen=True)
+class AddOneManaOfChosenPermanentColor(Effect):
+    """Meteor Crater: "{T}: Choose a color of a permanent you control.
+    Add one mana of that color."
+
+    On resolution, walk the controller's battlefield and union the
+    colors of every permanent they control (per ``mana_cost.colors``).
+    Lands and other colorless permanents contribute nothing — colors
+    come from colored mana symbols in the cost (rule 105.2). Ask the
+    agent to pick one color from the union via ``choose_mana_color``,
+    then mint one ``ManaCoin`` of that color.
+
+    Defensive fallback: if the controller has no colored permanents
+    (e.g., only lands and colorless artifacts), mint a single ``"C"``
+    colorless coin so the ability still produces *something*.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        options: set[str] = set()
+        for o in state.battlefield:
+            if o.controller_id != controller_id:
+                continue
+            options |= set(o.printing.mana_cost.colors)
+        if not options:
+            color = "C"
+        else:
+            sorted_options = sorted(options)
+            if p.agent is not None:
+                color = p.agent.choose_mana_color(
+                    state, controller_id, sorted_options,
+                )
+            else:
+                color = sorted_options[0]
+            if color not in options:
+                color = sorted_options[0]
+        p.mana_pool.append(ManaCoin(color=color))
+        state.log.append(
+            f"P{controller_id} adds {color} to mana pool"
+        )
+
+    def describe(self) -> str:
+        return (
+            "add one mana of a color of a permanent you control"
+        )
+
+
+
+@dataclass(frozen=True)
 class ControlTargetOpponentNextTurn(Effect):
     """The Dominion Bracelet: "You control target opponent during
     their next turn."
