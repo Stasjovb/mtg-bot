@@ -1471,6 +1471,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # your hand onto the battlefield tapped."
         make_creature(
             "Anticausal Vestige", "{6}", 7, 5,
+            subtypes=("Eldrazi",),
             warp="{4}",
             triggered_abilities=(
                 TriggeredAbility(
