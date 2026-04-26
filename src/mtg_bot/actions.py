@@ -141,33 +141,71 @@ def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
     return coin.color == color
 
 
-def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
+def _coin_satisfies_context(
+    coin: "ManaCoin", spell_kind: "str | frozenset[str]",
+) -> bool:
     """True if ``coin``'s spend restriction is compatible with a
-    payment for ``spell_kind``. Known spell_kind values:
-      - "spell" (default): only unrestricted coins.
-      - "artifact_spell": unrestricted or "artifact_spell"-tagged.
-      - "colorless_eldrazi_spell": unrestricted or
-        "colorless_eldrazi"-tagged (Eldrazi Temple's second mana
-        ability). Set when casting a spell that is a colorless
-        Eldrazi (``"Eldrazi" in subtypes`` and no colored pips).
-      - "colorless_eldrazi_ability": unrestricted or
-        "colorless_eldrazi"-tagged. Set when activating an ability
-        on a colorless-Eldrazi permanent.
-      - "artifact_activation": unrestricted or
-        "artifact_activation"-tagged. Set when activating an
-        ability on an artifact source (Steelswarm Operator's
-        second mana ability: "Spend this mana only to activate
-        abilities of artifact sources").
+    payment in the given context.
+
+    ``spell_kind`` is either a single string (legacy callers) or a
+    frozenset of context tags. A single string is treated as a
+    one-element set. The coin satisfies the context if its restriction
+    is None (unrestricted) or matches at least one of the tags below.
+
+    Known context tags:
+      - "spell" (default): only unrestricted coins satisfy.
+      - "artifact_spell": adds coins tagged "artifact_spell".
+        Set when casting a spell whose printed types include Artifact
+        (Steelswarm Operator / Power Depot's first mana ability).
+      - "artifact_activation": adds coins tagged "artifact_activation".
+        Set when activating an ability on an artifact source
+        (Steelswarm Operator's second mana ability: "Spend this mana
+        only to activate abilities of artifact sources").
+      - "colorless_eldrazi_spell" / "colorless_eldrazi_ability": adds
+        coins tagged "colorless_eldrazi" (Eldrazi Temple's second mana
+        ability). Set when casting a colorless Eldrazi or activating an
+        ability on a colorless-Eldrazi permanent.
+      - "legendary_spell": adds coins tagged "legendary_spell". Set
+        when casting a legendary spell (Plaza of Heroes's second mana
+        ability — "Spend this mana only to cast a legendary spell").
+      - "legendary_permanent_ability": adds coins tagged
+        "legendary_permanent_ability". Set when activating an ability
+        on a legendary permanent (Plaza of Heroes's third mana ability
+        — "Add one mana of any color among legendary permanents you
+        control"; we read that as "spend only to activate abilities of
+        legendary permanents you control", matching how Eldrazi
+        Temple's parallel "among colorless Eldrazi" line is modeled).
       - "activated_ability": unrestricted only (a generic
         non-artifact ability activation).
     """
     if coin.spend_restriction is None:
         return True
-    if spell_kind == "artifact_spell" and coin.spend_restriction == "artifact_spell":
+    if isinstance(spell_kind, str):
+        kinds: frozenset[str] = frozenset({spell_kind})
+    else:
+        kinds = spell_kind
+    if (
+        coin.spend_restriction == "artifact_spell"
+        and "artifact_spell" in kinds
+    ):
         return True
-    if spell_kind in (
-        "colorless_eldrazi_spell", "colorless_eldrazi_ability"
-    ) and coin.spend_restriction == "colorless_eldrazi":
+    if (
+        coin.spend_restriction == "colorless_eldrazi"
+        and (
+            "colorless_eldrazi_spell" in kinds
+            or "colorless_eldrazi_ability" in kinds
+        )
+    ):
+        return True
+    if (
+        coin.spend_restriction == "legendary_spell"
+        and "legendary_spell" in kinds
+    ):
+        return True
+    if (
+        coin.spend_restriction == "legendary_permanent_ability"
+        and "legendary_permanent_ability" in kinds
+    ):
         return True
     if (
         spell_kind == "artifact_activation"
@@ -179,11 +217,15 @@ def _coin_satisfies_context(coin: "ManaCoin", spell_kind: str) -> bool:
 
 def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
-    spell_kind: str = "spell",
+    spell_kind: "str | frozenset[str]" = "spell",
 ) -> bool:
     """Check whether the player can pay ``cost`` by consuming floating
     mana in their pool (respecting spend restrictions for ``spell_kind``)
     then tapping untapped lands.
+
+    ``spell_kind`` accepts a single string (legacy) or a frozenset of
+    context tags — see ``_coin_satisfies_context`` for the supported
+    tags.
     """
     p = state.player_by_id(player_id)
     usable_pool = [
@@ -397,12 +439,16 @@ def _choose_and_apply_x(
 
 def auto_tap_for_cost(
     state: GameState, player_id: int, cost: ManaCost,
-    spell_kind: str = "spell",
+    spell_kind: "str | frozenset[str]" = "spell",
 ) -> list[GameObject]:
     """Pay ``cost`` by consuming floating mana first (respecting spend
     restrictions for ``spell_kind``), then tapping lands for the
     remainder. Returns the list of lands tapped. Mutates the pool
     and the tapped lands.
+
+    ``spell_kind`` accepts a single string (legacy) or a frozenset of
+    context tags — see ``_coin_satisfies_context`` for the supported
+    tags.
     """
     p = state.player_by_id(player_id)
     lands = _untapped_lands(state, player_id)
@@ -754,9 +800,13 @@ def _cast_spell(
     if cast_for_free:
         cost = ManaCost(generic=0, colored=(), x_pips=0)
         x_value = 0
-    spell_kind = (
-        "artifact_spell" if card.printing.is_artifact else "spell"
-    )
+    # Build the set of spend-restriction context tags for this cast.
+    # A spell can match more than one (e.g., a legendary artifact
+    # spell satisfies both "artifact_spell" and "legendary_spell"
+    # restrictions on coins in the pool).
+    spell_kinds: set[str] = {"spell"}
+    if card.printing.is_artifact:
+        spell_kinds.add("artifact_spell")
     # Eldrazi Temple's second mana ability produces coins usable only
     # for colorless-Eldrazi costs. Detect colorless-Eldrazi casts here
     # ("Eldrazi" in subtypes + no colored pips in the printed cost).
@@ -764,8 +814,14 @@ def _cast_spell(
         "Eldrazi" in card.printing.subtypes
         and not card.printing.mana_cost.colored
     ):
-        spell_kind = "colorless_eldrazi_spell"
-    auto_tap_for_cost(state, player_id, cost, spell_kind=spell_kind)
+        spell_kinds.add("colorless_eldrazi_spell")
+    # Plaza of Heroes's second mana ability produces coins usable only
+    # to cast a legendary spell.
+    if card.printing.is_legendary:
+        spell_kinds.add("legendary_spell")
+    auto_tap_for_cost(
+        state, player_id, cost, spell_kind=frozenset(spell_kinds),
+    )
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -1123,20 +1179,27 @@ def _activate_ability(
                 colored=mana.colored,
                 x_pips=0,
             )
+        # Build the set of activation-context spend-restriction tags.
         # Eldrazi Temple's second mana ability lets the colorless
         # Eldrazi owner pay for activations on their Eldrazi.
         # Steelswarm Operator's second mana ability lets the
-        # controller pay for activations on artifact sources.
-        ability_spell_kind = "spell"
+        # controller pay for activations on artifact sources. Plaza of
+        # Heroes's third mana ability ("among legendary permanents you
+        # control") is read as "spend only to activate abilities of
+        # legendary permanents you control".
+        ability_spell_kinds: set[str] = {"spell"}
         if (
             "Eldrazi" in source.printing.subtypes
             and not source.printing.mana_cost.colored
         ):
-            ability_spell_kind = "colorless_eldrazi_ability"
-        elif source.printing.is_artifact:
-            ability_spell_kind = "artifact_activation"
+            ability_spell_kinds.add("colorless_eldrazi_ability")
+        if source.printing.is_artifact:
+            ability_spell_kinds.add("artifact_activation")
+        if source.printing.is_legendary:
+            ability_spell_kinds.add("legendary_permanent_ability")
         auto_tap_for_cost(
-            state, player_id, mana, spell_kind=ability_spell_kind,
+            state, player_id, mana,
+            spell_kind=frozenset(ability_spell_kinds),
         )
 
     # Tap-self (if cost requires it).

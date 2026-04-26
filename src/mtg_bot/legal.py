@@ -29,6 +29,26 @@ def _is_sorcery_timing(state: GameState, player_id: int) -> bool:
     )
 
 
+def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
+    """Build the set of spend-restriction context tags for casting
+    ``card``. Mirrors the logic in ``actions._cast_spell``: a card may
+    satisfy multiple coin restrictions at once (e.g., a legendary
+    artifact spell satisfies both "artifact_spell" and "legendary_spell"
+    coin tags).
+    """
+    kinds: set[str] = {"spell"}
+    if card.printing.is_artifact:
+        kinds.add("artifact_spell")
+    if (
+        "Eldrazi" in card.printing.subtypes
+        and not card.printing.mana_cost.colored
+    ):
+        kinds.add("colorless_eldrazi_spell")
+    if card.printing.is_legendary:
+        kinds.add("legendary_spell")
+    return frozenset(kinds)
+
+
 def _targets_are_satisfiable(
     state: GameState, player_id: int, card: GameObject
 ) -> bool:
@@ -133,8 +153,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         )
         if not instant_speed:
             continue
+        spell_kinds = _spell_kinds_for_card(card)
         if can_pay_cost(
-            state, player_id, _effective_cost(card, card.printing.mana_cost)
+            state, player_id, _effective_cost(card, card.printing.mana_cost),
+            spell_kind=spell_kinds,
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
             # Kicked variant: can_pay the combined cost.
@@ -143,6 +165,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 _cost_plus_kicker(
                     card, _effective_cost(card, card.printing.mana_cost)
                 ),
+                spell_kind=spell_kinds,
             ):
                 actions.append(CastSpell(card.id, kicked=True))
         if (
@@ -150,6 +173,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
+                spell_kind=spell_kinds,
             )
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
@@ -209,9 +233,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if card.printing.is_instant:
             continue
         if _is_sorcery_speed_spell(card):
+            spell_kinds = _spell_kinds_for_card(card)
             if can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.mana_cost),
+                spell_kind=spell_kinds,
             ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
                 actions.append(CastSpell(card.id))
                 if card.printing.kicker_cost is not None and can_pay_cost(
@@ -221,6 +247,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                             card, card.printing.mana_cost
                         ),
                     ),
+                    spell_kind=spell_kinds,
                 ):
                     actions.append(CastSpell(card.id, kicked=True))
             if (
@@ -258,6 +285,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
+                spell_kind=_spell_kinds_for_card(card),
             )
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
@@ -283,6 +311,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.mana_cost),
+            spell_kind=_spell_kinds_for_card(card),
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
@@ -314,11 +343,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             ):
                 actions.append(PlayLand(card.id))
             continue
+        spell_kinds = _spell_kinds_for_card(card)
         if card.printing.is_instant:
             # Instant speed — always castable if cost payable.
             if can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.mana_cost),
+                spell_kind=spell_kinds,
             ) and _targets_are_satisfiable(state, player_id, card):
                 actions.append(CastSpell(card.id))
             continue
@@ -328,6 +359,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.mana_cost),
+            spell_kind=spell_kinds,
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
@@ -374,21 +406,23 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if ability.cost.mana is not None:
                 from mtg_bot.actions import _effective_ability_mana_cost
                 effective_mana = _effective_ability_mana_cost(state, obj, ability)
-                # Match the spell_kind tagging used by _activate_ability
-                # so artifact-restricted coins are seen as payable for
-                # artifact-source ability activations (and similarly for
-                # colorless-Eldrazi Temple's gate on Eldrazi activations).
-                ability_spell_kind = "spell"
+                # Activation spend-restriction context: combine all the
+                # tags this source qualifies for so coins with any of
+                # those restrictions are usable. Mirrors
+                # actions._activate_ability.
+                ability_kinds: set[str] = {"spell"}
                 if (
                     "Eldrazi" in obj.printing.subtypes
                     and not obj.printing.mana_cost.colored
                 ):
-                    ability_spell_kind = "colorless_eldrazi_ability"
-                elif obj.printing.is_artifact:
-                    ability_spell_kind = "artifact_activation"
+                    ability_kinds.add("colorless_eldrazi_ability")
+                if obj.printing.is_artifact:
+                    ability_kinds.add("artifact_activation")
+                if obj.printing.is_legendary:
+                    ability_kinds.add("legendary_permanent_ability")
                 if not can_pay_cost(
                     state, player_id, effective_mana,
-                    spell_kind=ability_spell_kind,
+                    spell_kind=frozenset(ability_kinds),
                 ):
                     continue
             if ability.cost.tap_self:

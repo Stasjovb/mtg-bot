@@ -182,9 +182,13 @@ def test_lotus_field_taps_for_three_of_chosen_color_green():
 def test_plaza_of_heroes_metadata():
     p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
     assert "Legendary" in p.supertypes
-    assert len(p.activated_abilities) == 1
-    ability = p.activated_abilities[0]
-    assert ability.cost.sacrifice_self is True
+    # Plaza has four activated abilities: three mana abilities
+    # (baseline {C}, legendary-spell-restricted any, legendary-
+    # permanent-ability-restricted any) plus the {3},{T},Sacrifice
+    # flagship pump.
+    assert len(p.activated_abilities) == 4
+    flagship = p.activated_abilities[3]
+    assert flagship.cost.sacrifice_self is True
 
 
 def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
@@ -195,7 +199,7 @@ def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
         _put(state, BASIC_LANDS["Mountain"])
     bear = _put(state, make_creature("Test Bear", "{1}{G}", 2, 2))
     apply_action(
-        state, 0, ActivateAbility(source_id=plaza.id, ability_index=0),
+        state, 0, ActivateAbility(source_id=plaza.id, ability_index=3),
     )
     while state.stack:
         resolve_top_of_stack(state)

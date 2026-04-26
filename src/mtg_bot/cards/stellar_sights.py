@@ -691,24 +691,50 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    # Plaza of Heroes: {T}: Add {C}. {T}: Add one mana of any color
-    # (spend only for a legendary spell). {T}: Add one mana of any
-    # color among legendary permanents you control. {3},{T}, Exile
-    # this land: Target legendary creature gains hexproof and
-    # indestructible UEOT.
+    # Plaza of Heroes: {T}: Add {C}. {T}: Add one mana of any color.
+    # Spend this mana only to cast a legendary spell. {T}: Add one
+    # mana of any color among legendary permanents you control.
+    # {3},{T}, Exile this land: Target legendary creature gains
+    # hexproof and indestructible UEOT.
     #
-    # Simplification: the two mana abilities with spend restrictions
-    # ("only for legendary spells" + "among legendary permanents you
-    # control") are dropped — both would need spend_restriction
-    # plumbing tied to card characteristics and legendary-permanent
-    # tracking. The flagship activated ability (grant hexproof +
-    # indestructible UEOT) is restored, but without the "target
-    # LEGENDARY creature" filter — targets any creature. Exile-self
-    # is modeled as sacrifice-self (close enough; only matters if an
-    # effect cares about Plaza being in the graveyard vs. exile).
+    # Implementation: the two restricted mana abilities are now wired.
+    # The second produces an "any" coin tagged
+    # ``"legendary_spell"`` — _coin_satisfies_context accepts that for
+    # a "legendary_spell" cast context, set in _cast_spell when
+    # ``card.printing.is_legendary``. The third produces an "any"
+    # coin tagged ``"legendary_permanent_ability"`` — accepted in a
+    # "legendary_permanent_ability" activation context, set in
+    # _activate_ability when the source permanent is legendary.
+    #
+    # Simplification: the flagship activated ability (grant hexproof +
+    # indestructible UEOT) does not filter targets to legendary
+    # creatures — it accepts any creature. Exile-self is modeled as
+    # sacrifice-self (close enough; only matters if an effect cares
+    # about Plaza being in the graveyard vs. exile).
     "Plaza of Heroes": make_utility_land(
         "Plaza of Heroes", legendary=True,
         activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 1),),
+                    spend_restriction="legendary_spell",
+                ),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 1),),
+                    spend_restriction="legendary_permanent_ability",
+                ),
+                is_mana_ability=True,
+            ),
             ActivatedAbility(
                 cost=ActivationCost(
                     mana=parse_mana_cost("{3}"),

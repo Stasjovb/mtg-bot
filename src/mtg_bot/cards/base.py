@@ -588,6 +588,10 @@ class CardPrinting:
         return self.is_land and "Basic" in self.supertypes
 
     @property
+    def is_legendary(self) -> bool:
+        return "Legendary" in self.supertypes
+
+    @property
     def is_token(self) -> bool:
         return "Token" in self.supertypes
 

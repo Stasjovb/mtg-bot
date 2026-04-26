@@ -764,12 +764,22 @@ class ManaCoin:
     requirements.
 
     ``spend_restriction`` gates what the coin can pay for. None =
-    unrestricted. Known values: "artifact_spell" (Steelswarm Operator's
-    first mana ability — "Spend this mana only to cast an artifact
-    spell"); "artifact_activation" (Steelswarm Operator's second mana
-    ability — "Spend this mana only to activate abilities of artifact
-    sources"); "colorless_eldrazi" (Eldrazi Temple's second mana
-    ability).
+    unrestricted. Known values:
+      - "artifact_spell" — Steelswarm Operator / Power Depot
+        ("Spend this mana only to cast an artifact spell").
+      - "artifact_activation" — Steelswarm Operator's second mana
+        ability ("Spend this mana only to activate abilities of
+        artifact sources").
+      - "colorless_eldrazi" — Eldrazi Temple's second mana ability
+        ("Spend this mana only to cast colorless Eldrazi spells or
+        activate abilities of colorless Eldrazi").
+      - "legendary_spell" — Plaza of Heroes's second mana ability
+        ("Spend this mana only to cast a legendary spell").
+      - "legendary_permanent_ability" — Plaza of Heroes's third mana
+        ability ("Add one mana of any color among legendary
+        permanents you control").
+    See ``actions._coin_satisfies_context`` for how each tag matches
+    a payment context.
     """
 
     color: str
