@@ -2217,8 +2217,15 @@ def test_melded_moxite_etb_loot_and_sac_for_robot():
     import random
     from mtg_bot.cards import EOE_CREATURES
 
+    # Use a deterministic yes-agent so the new optional "may discard"
+    # gate (audit-found bug fix) takes the loot path. RandomAgent's
+    # coin-flip choose_yes_no would make this test flaky.
+    class _YesAgent(RandomAgent):
+        def choose_yes_no(self, state, player_id, prompt):
+            return True
+
     state = _arena()
-    state.players[0].agent = RandomAgent(rng=random.Random(0))
+    state.players[0].agent = _YesAgent(rng=random.Random(0))
     _stock_library(state, 0, count=5)
     # Pre-seed a card in hand so the discard has something to discard.
     discard_fodder = state.new_object(

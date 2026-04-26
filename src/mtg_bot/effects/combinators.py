@@ -407,6 +407,65 @@ class OptionalSacAnotherForPumpSelfUEOT(Effect):
 
 
 @dataclass(frozen=True)
+class OptionalDiscardCardThenDrawN(Effect):
+    """"You may discard a card. If you do, draw ``amount`` cards."
+
+    Matches Melded Moxite's printed ETB rider. Distinct from
+    ``DiscardHandThenDrawN`` (Vaultguard Trooper) in two ways:
+
+    1. The discard is singular ("a card"), not the entire hand.
+    2. "If you do" is gated on whether a card was actually discarded,
+       so an empty hand makes the rider fizzle entirely — even an
+       agent that says yes can't satisfy "if you do" with no card to
+       toss.
+
+    The "may" is exposed via ``Agent.choose_yes_no``; the default base
+    Agent returns True (matching the codebase's "may → always yes"
+    convention). Once yes, ``DiscardSelf(amount=1)`` picks WHICH card
+    via ``choose_discard``; if the hand is empty the discard is a
+    no-op and the dependent draw is skipped.
+    """
+
+    amount: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic import DiscardSelf, DrawCards
+
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Discard a card to draw {self.amount}?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines optional discard "
+                f"(OptionalDiscardCardThenDrawN)"
+            )
+            return
+        if not p.hand:
+            state.log.append(
+                f"P{controller_id} has empty hand; can't discard, "
+                f"draw skipped"
+            )
+            return
+        before = len(p.graveyard)
+        DiscardSelf(amount=1).resolve(state, controller_id, ())
+        if len(p.graveyard) == before:
+            # Defensive: discard didn't fire (shouldn't happen with a
+            # non-empty hand, but matches "if you do" semantics).
+            return
+        DrawCards(amount=self.amount).resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            f"you may discard a card; if you do, draw {self.amount} cards"
+        )
+
+
+
+@dataclass(frozen=True)
 class OptionalSacLandOrLanderForBasicLandRamp(Effect):
     """"You may sacrifice a land or Lander. If you do, search your
     library for up to ``land_count`` basic land cards, put them onto

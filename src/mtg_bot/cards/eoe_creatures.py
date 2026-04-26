@@ -2223,20 +2223,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Melded Moxite: {1}{R} Artifact. ETB loot (discard 1 → draw 2);
-        # {3}, Sac: create a tapped 2/2 Robot token. Simplification: the
-        # real card's ETB is "you MAY discard; if you do, draw two" — we
-        # make it unconditional, so an empty-hand cast still draws 2
-        # (slightly stronger than printed). Agents always prefer looting.
+        # Melded Moxite: {1}{R} Artifact. Oracle ETB: "you may discard a
+        # card. If you do, draw two cards." {3}, Sac: create a tapped 2/2
+        # Robot token. The "may" is gated through Agent.choose_yes_no via
+        # OptionalDiscardCardThenDrawN — declining skips both the discard
+        # and the dependent draw. Empty hand also fizzles (can't discard
+        # → "if you do" not satisfied → no draw).
         make_artifact(
             "Melded Moxite", "{1}{R}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=Sequence(effects=(
-                        DiscardSelf(amount=1),
-                        DrawCards(amount=2),
-                    )),
+                    effect=OptionalDiscardCardThenDrawN(amount=2),
                 ),
             ),
             activated_abilities=(

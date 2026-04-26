@@ -159,6 +159,7 @@ from mtg_bot.effects import (
     EachOpponentDiscardsOrLosesLife,
     FamishedWorldsireETBEffect,
     PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
+    OptionalDiscardCardThenDrawN,
     OptionalSacLandOrLanderForBasicLandRamp,
     OptionalPutCreatureFromHandOntoBattlefield,
     OptionalPutLandFromHandOntoBattlefield,
