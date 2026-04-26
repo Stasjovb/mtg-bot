@@ -95,6 +95,7 @@ from mtg_bot.effects import (
     IfGainedLifeThisTurnUntapSelf,
     LoseLife,
     PutCardFromGraveyardOnBottomOfLibrary,
+    PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PutPlusOneCounterOnOpponentsCreature,
     PumpSelfUntilEOT,

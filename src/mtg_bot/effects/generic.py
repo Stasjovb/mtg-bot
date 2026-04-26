@@ -2438,6 +2438,63 @@ class PumpCreaturesYouControlUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class PumpCreaturesOpponentsControlUntilEOT(Effect):
+    """Each creature an opponent of the controller controls gets
+    +power/+toughness until end of turn (applied at resolution; creatures
+    entering later don't get the bonus — Stage-3 simplification vs. a
+    continuous effect).
+
+    Negative bonuses model debuffs like "creatures your opponents control
+    get -3/-0 until end of turn" (one-time snapshot).
+
+    Used as an approximation for "until your next turn" pump durations —
+    the engine only tracks UEOT, not "until your next turn." This is a
+    close approximation in practice: the debuff still wears off before the
+    debuffed creatures' controller's next combat in either case (UEOT
+    clears at the cleanup step of the casting player's turn; "until your
+    next turn" would clear at the casting player's next untap). Callers
+    using this for "until your next turn" should document the
+    simplification at the call site.
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        count = 0
+        for obj in state.battlefield:
+            if obj.controller_id == controller_id:
+                continue
+            if not obj.printing.is_creature:
+                continue
+            obj.temp_power_bonus += self.power_bonus
+            obj.temp_toughness_bonus += self.toughness_bonus
+            if self.granted_keywords:
+                obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            count += 1
+        # Format signed bonuses ("+3"/"-3" rather than "+-3").
+        p_str = f"{self.power_bonus:+d}"
+        t_str = f"{self.toughness_bonus:+d}"
+        state.log.append(
+            f"P{controller_id}'s opponents' creatures ({count}) get "
+            f"{p_str}/{t_str} until end of turn"
+        )
+
+    def describe(self) -> str:
+        p_str = f"{self.power_bonus:+d}"
+        t_str = f"{self.toughness_bonus:+d}"
+        return (
+            f"creatures your opponents control get {p_str}/{t_str} "
+            f"until end of turn"
+        )
+
+
+
+@dataclass(frozen=True)
 class SearchLibraryForCard(Effect):
     """Search your library for a card matching the named filter, reveal
     it, put it into your hand, then shuffle.

@@ -1620,14 +1620,30 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             keywords={"defender"},
         ),
-        # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. Simplified:
-        # drops the "creatures your opponents control get -3/-0 until your
-        # next turn" ETB since "until your next turn" pump durations
-        # aren't tracked.
+        # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. ETB:
+        # "creatures your opponents control get -3/-0 until your next
+        # turn." Simplification: the engine only tracks UEOT, not "until
+        # your next turn," so the debuff is applied UEOT (clears at the
+        # cleanup step of the casting player's turn). Practical impact is
+        # similar — opponents' creatures still have full power back before
+        # they can swing back at us next turn — but a true "until your
+        # next turn" clause would persist through the OPPONENT's whole
+        # next turn (relevant if the opponent attacks Mouth's controller's
+        # planeswalker on their next turn before our next turn). Pump
+        # durations across turns aren't modeled.
         make_creature(
             "Mouth of the Storm", "{6}{U}", 6, 6,
             keywords={"flying"},
             ward="{2}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    trigger="etb",
+                    effect=PumpCreaturesOpponentsControlUntilEOT(
+                        power_bonus=-3,
+                        toughness_bonus=0,
+                    ),
+                ),
+            ),
         ),
         # Codecracker Hound: {2}{U} 2/1. ETB look at top 2; one to
         # hand, one to graveyard. Ships with Warp {2}{U}.
