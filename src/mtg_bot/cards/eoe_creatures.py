@@ -531,9 +531,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Pinnacle Kill-Ship: {7} 7/7 Spacecraft. ETB deals 10 damage to
-        # up to one target creature. Station 7+ flying. Simplification:
-        # we treat "up to one target" as a required target — trigger
-        # fizzles if there are no creatures on the battlefield.
+        # up to one target creature. Station 7+ flying.
         make_spacecraft(
             "Pinnacle Kill-Ship", "{7}", 7, 7,
             station_threshold=7,
@@ -541,7 +539,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=DealDamageToTargetCreature(amount=10),
+                    effect=DealDamageToTargetCreature(amount=10, optional=True),
                 ),
             ),
         ),

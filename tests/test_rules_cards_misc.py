@@ -809,6 +809,23 @@ def test_pinnacle_kill_ship_etb_deals_damage():
     assert target.damage == 10
 
 
+def test_pinnacle_kill_ship_etb_target_is_optional_no_creatures():
+    """Oracle: 'up to one target creature.' With no creatures on the
+    battlefield, the trigger still goes on the stack and resolves as a
+    no-op (target_count_range = (0, 1) → empty targets allowed)."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    ship_p = EOE_CREATURES["Pinnacle Kill-Ship"]
+    etb = next(
+        ab for ab in ship_p.triggered_abilities if ab.trigger == "etb"
+    )
+    assert etb.effect.target_count_range() == (0, 1)
+    assert etb.effect.requires_target() is False
+    # Resolving with no targets is a no-op (no exception).
+    state = _arena()
+    etb.effect.resolve(state, 0, ())
+
+
 def test_warmaker_gunship_damage_scales_with_artifacts():
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 

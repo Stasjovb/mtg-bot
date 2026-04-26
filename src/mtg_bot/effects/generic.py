@@ -5361,13 +5361,18 @@ class DealDamageToTargetCreature(Effect):
 
     Matches oracle text like "~ deals N damage to target creature" (Bombard).
     Unlike DealDamageToOpponentCreature this can target your own creatures
-    too.
+    too. Set ``optional=True`` for "up to one target creature" oracle text:
+    the effect resolves as a no-op when no target is chosen / available.
     """
 
     amount: int
+    optional: bool = False
 
     def requires_target(self) -> bool:
-        return True
+        return not self.optional
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -5390,7 +5395,8 @@ class DealDamageToTargetCreature(Effect):
         _apply_damage(state, targets[0], self.amount)
 
     def describe(self) -> str:
-        return f"deals {self.amount} damage to target creature"
+        prefix = "up to one target" if self.optional else "target"
+        return f"deals {self.amount} damage to {prefix} creature"
 
 
 
