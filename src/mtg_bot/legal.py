@@ -57,12 +57,22 @@ def _additional_costs_payable(
         if not have_sac:
             return False
     if card.printing.additional_cost_choose_your_creature:
-        have_creature = any(
+        # "Choose a creature you control or a warped creature card you
+        # own in exile." Either source satisfies the cost.
+        have_battlefield = any(
             o for o in state.battlefield
             if o.controller_id == player_id and o.printing.is_creature
         )
-        if not have_creature:
-            return False
+        if not have_battlefield:
+            p = state.player_by_id(player_id)
+            have_exiled = any(
+                o for o in p.exile
+                if o.owner_id == player_id
+                and o.warped
+                and o.printing.is_creature
+            )
+            if not have_exiled:
+                return False
     return True
 
 

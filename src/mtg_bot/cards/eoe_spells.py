@@ -724,10 +724,10 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # you control or a warped creature card you own in exile.
         # Close Encounter deals damage equal to the power of the chosen
         # creature or card to target creature."
-        # Simplification: the "warped creature card in exile" branch
-        # of the additional-cost pick is dropped; the cost is
-        # "designate a creature you control". Still a significant
-        # improvement over the plain 3-damage shipped version.
+        # Both branches of the additional cost are honored — see the
+        # ``additional_cost_choose_your_creature`` plumbing in
+        # ``actions._cast_spell`` and the exile fallback in
+        # ``CloseEncounterEffect.resolve``.
         make_instant(
             "Close Encounter", "{1}{G}",
             effect=CloseEncounterEffect(),

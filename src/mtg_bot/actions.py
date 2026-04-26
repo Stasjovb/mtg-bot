@@ -724,15 +724,22 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
-    # Additional cost: designate a creature you control (Close
-    # Encounter). Ungated by sacrifice/tap — just a choice. The chosen
-    # id lands on the StackItem for the effect to read at resolve.
+    # Additional cost: designate a creature you control or a warped
+    # creature card you own in exile (Close Encounter). Ungated by
+    # sacrifice/tap — just a choice. The chosen id lands on the StackItem
+    # for the effect to read at resolve.
     additional_cost_choice_id: int | None = None
     if card.printing.additional_cost_choose_your_creature:
         options = [
             o for o in state.battlefield
             if o.controller_id == player_id and o.printing.is_creature
         ]
+        options.extend(
+            o for o in p.exile
+            if o.owner_id == player_id
+            and o.warped
+            and o.printing.is_creature
+        )
         if options:
             chosen_id = options[0].id
             if p.agent is not None:

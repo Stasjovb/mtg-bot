@@ -192,3 +192,110 @@ def test_close_encounter_describe():
     text = CloseEncounterEffect().describe()
     assert "power" in text
     assert "target creature" in text
+
+
+# --------------------------------------------------------------------------
+# Warped-creature-card-in-exile branch of the additional cost
+# --------------------------------------------------------------------------
+
+
+def test_close_encounter_warped_exile_satisfies_cost_with_no_battlefield_creature():
+    """Even with no creature you control, a warped creature card you own
+    in exile is enough to pay Close Encounter's additional cost."""
+    state = _new_state()
+    p = state.players[0]
+    for _ in range(2):
+        l = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
+        state.battlefield.append(l)
+    # Warped Wild Bear in p0's exile.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.EXILE,
+    )
+    bear.warped = True
+    p.exile.append(bear)
+    # Opponent has a creature to target.
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(victim)
+    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    p.hand.append(close)
+    acts = legal_actions(state, 0)
+    cast_acts = [
+        a for a in acts
+        if isinstance(a, CastSpell) and a.card_id == close.id
+    ]
+    assert cast_acts, "warped exile card should satisfy the additional cost"
+
+
+def test_close_encounter_warped_exile_deals_damage_equal_to_printed_power():
+    """When the designated additional cost is a warped exiled creature
+    card, damage equals the card's printed power (the card isn't on the
+    battlefield, so continuous effects don't apply)."""
+    state = _new_state(_ChooseOpponentCreatureAgent())
+    p = state.players[0]
+    for _ in range(2):
+        l = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
+        state.battlefield.append(l)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.EXILE,
+    )
+    bear.warped = True
+    p.exile.append(bear)
+    victim = state.new_object(
+        SYNTHETIC_CREATURES["Great Wurm"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(victim)
+    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    p.hand.append(close)
+    apply_action(state, 0, CastSpell(close.id))
+    resolve_top_of_stack(state)
+    # Wild Bear's printed power is 2, so the Wurm takes 2.
+    assert victim.damage == 2
+
+
+def test_close_encounter_unwarped_exile_card_does_not_satisfy_cost():
+    """An exiled creature card that isn't *warped* doesn't qualify."""
+    state = _new_state()
+    p = state.players[0]
+    for _ in range(2):
+        l = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
+        state.battlefield.append(l)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.EXILE,
+    )
+    # Note: bear.warped left False (e.g., a card exiled by another effect).
+    p.exile.append(bear)
+    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    p.hand.append(close)
+    acts = legal_actions(state, 0)
+    cast_acts = [
+        a for a in acts
+        if isinstance(a, CastSpell) and a.card_id == close.id
+    ]
+    assert cast_acts == []
+
+
+def test_close_encounter_opponents_warped_exile_does_not_satisfy_cost():
+    """Oracle: 'a warped creature card *you own* in exile.' An opponent's
+    warped exile card doesn't qualify even if it's visible."""
+    state = _new_state()
+    p = state.players[0]
+    opp = state.players[1]
+    for _ in range(2):
+        l = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
+        state.battlefield.append(l)
+    # Warped Wild Bear, but owned by p1.
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.EXILE,
+    )
+    bear.warped = True
+    opp.exile.append(bear)
+    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    p.hand.append(close)
+    acts = legal_actions(state, 0)
+    cast_acts = [
+        a for a in acts
+        if isinstance(a, CastSpell) and a.card_id == close.id
+    ]
+    assert cast_acts == []

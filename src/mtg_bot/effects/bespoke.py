@@ -1386,12 +1386,13 @@ class CloseEncounterEffect(Effect):
     creature or card to target creature."
 
     Reads state.resolving_additional_cost_choice_id to know which
-    creature the caster designated, then deals damage equal to that
-    creature's effective power to the chosen target creature.
+    creature/card the caster designated, then deals damage equal to
+    that creature's or card's power to the chosen target creature.
 
-    Simplification: the "warped creature card you own in exile" half
-    is dropped — the additional-cost pick is restricted to creatures
-    you control, which is almost always available when casting this.
+    For a battlefield-creature pick, uses ``effective_power`` (the
+    designation's current power, including any pumps). For an exiled
+    warped creature card, uses the card's printed power — the card
+    isn't on the battlefield so continuous effects don't apply.
     """
 
     def requires_target(self) -> bool:
@@ -1423,15 +1424,23 @@ class CloseEncounterEffect(Effect):
         chosen = next(
             (o for o in state.battlefield if o.id == chosen_id), None
         )
-        if chosen is None:
-            # The designated creature left the battlefield before this
-            # resolved (e.g., destroyed in response) — oracle says the
-            # spell still deals damage equal to its power from when it
-            # was designated. We don't track a P/T snapshot at cost-pay
-            # time, so fall back to 0.
-            amount = 0
-        else:
+        if chosen is not None:
             amount = effective_power(state, chosen)
+        else:
+            # Look in the caster's exile for a warped creature card —
+            # that's the other branch of the additional cost.
+            p = state.player_by_id(controller_id)
+            chosen = next(
+                (o for o in p.exile if o.id == chosen_id), None
+            )
+            if chosen is not None:
+                amount = chosen.printing.power or 0
+            else:
+                # The designated creature left the battlefield before
+                # this resolved (e.g., destroyed in response) — we
+                # don't track a P/T snapshot at cost-pay time, so
+                # fall back to 0.
+                amount = 0
         _apply_damage(state, targets[0], amount)
 
     def describe(self) -> str:
