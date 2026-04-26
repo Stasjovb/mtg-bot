@@ -182,6 +182,7 @@ from mtg_bot.effects.bespoke import (
     ConsultTheStarChartsEffect,
     CutPropulsionEffect,
     DepressurizeEffect,
+    DiplomaticRelationsEffect,
     DyadrineAttackEffect,
     FamishedWorldsireETBEffect,
     FocusFireEffect,

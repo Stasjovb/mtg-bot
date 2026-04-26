@@ -129,6 +129,7 @@ from mtg_bot.effects import (
     DepressurizeEffect,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     CutPropulsionEffect,
+    DiplomaticRelationsEffect,
     DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
     ExileAllArtifactsWithManaValueAtMost,

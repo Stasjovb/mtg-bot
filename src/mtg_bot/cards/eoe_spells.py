@@ -760,13 +760,15 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             effect=CloseEncounterEffect(),
             additional_cost_choose_your_creature=True,
         ),
-        make_instant(  # Diplomatic Relations — simplified to +1/+0+vigilance pump-only.
+        # Diplomatic Relations `{2}{G}` Instant:
+        # "Target creature you control gets +1/+0 and gains vigilance
+        # until end of turn. It deals damage equal to its power to
+        # target creature an opponent controls."
+        # Two-target spell — see DiplomaticRelationsEffect for the
+        # disjoint-filter target shape.
+        make_instant(
             "Diplomatic Relations", "{2}{G}",
-            effect=PumpTargetCreatureUntilEOT(
-                power_bonus=1, toughness_bonus=0,
-                granted_keywords=frozenset({"vigilance"}),
-                you_control_only=True,
-            ),
+            effect=DiplomaticRelationsEffect(),
         ),
         # Scour for Scrap `{3}{U}` Instant — "Choose one or both":
         #   • Search your library for an artifact card, reveal it, put it

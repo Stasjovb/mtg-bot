@@ -2241,3 +2241,117 @@ class CutPropulsionEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class DiplomaticRelationsEffect(Effect):
+    """Diplomatic Relations `{2}{G}` Instant:
+    "Target creature you control gets +1/+0 and gains vigilance until end
+    of turn. It deals damage equal to its power to target creature an
+    opponent controls."
+
+    Two-target spell with disjoint filters. To let the existing flat
+    target-pick pipeline validate each slot independently, we expose the
+    two slots as distinct kinds:
+
+    - ``("my_creature", id)`` — the pumped friendly creature (slot 0)
+    - ``("creature",   id)`` — the opponent's creature taking damage (slot 1)
+
+    ``legal_targets`` returns a flat list mixing both kinds. The agent
+    picks twice; ``resolve`` then locates one entry of each kind and
+    applies pump-then-damage. The damage amount is the pumped creature's
+    effective power AT RESOLUTION (i.e., +1 already applied).
+
+    If either slot has no legal candidates, ``legal_targets`` returns
+    ``[]`` so the cast-time gate (``_targets_are_satisfiable``) refuses
+    the spell entirely — mirroring MTG's "if you can't choose a legal
+    target for each, you can't cast" rule.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        mine = [
+            ("my_creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+        ]
+        theirs = [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id != controller_id
+        ]
+        # Both slots must be satisfiable; if either side is empty the
+        # spell cannot be cast.
+        if not mine or not theirs:
+            return []
+        return mine + theirs
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        # Locate one entry per slot. Order is agent-dependent so we
+        # search by kind rather than index.
+        my_target = next(
+            ((k, t) for (k, t) in targets if k == "my_creature"), None
+        )
+        opp_target = next(
+            ((k, t) for (k, t) in targets if k == "creature"), None
+        )
+        # Pump the friendly creature first if it's still on the battlefield
+        # and still controlled by the caster (target re-validation: if it
+        # left or changed control, that target is illegal and skipped per
+        # rule 608.2b).
+        my_obj = None
+        if my_target is not None:
+            my_obj = next(
+                (o for o in state.battlefield if o.id == my_target[1]),
+                None,
+            )
+            if my_obj is not None and my_obj.controller_id == controller_id:
+                my_obj.temp_power_bonus += 1
+                my_obj.temp_keywords = my_obj.temp_keywords | frozenset(
+                    {"vigilance"}
+                )
+                state.log.append(
+                    f"{my_obj.printing.name} gets +1/+0 and gains "
+                    f"vigilance until end of turn"
+                )
+            else:
+                my_obj = None
+        # Damage component: requires both an opponent's-creature target
+        # AND a still-living, still-controlled friendly creature whose
+        # power we read.
+        if opp_target is None or my_obj is None:
+            return
+        opp_obj = next(
+            (o for o in state.battlefield if o.id == opp_target[1]),
+            None,
+        )
+        if opp_obj is None or opp_obj.controller_id == controller_id:
+            return
+        amount = effective_power(state, my_obj)
+        state.log.append(
+            f"{my_obj.printing.name} deals {amount} damage to "
+            f"{opp_obj.printing.name} (Diplomatic Relations)"
+        )
+        _apply_damage(state, ("creature", opp_obj.id), amount)
+
+    def describe(self) -> str:
+        return (
+            "target creature you control gets +1/+0 and gains vigilance "
+            "until end of turn; it deals damage equal to its power to "
+            "target creature an opponent controls"
+        )
+
+
+
