@@ -19,6 +19,7 @@ from mtg_bot.search import (
     AttackerDecision, BlockerDecision, Budget, MCTS,
     MtgGameStateAdapter, ProgressiveWidening, RandomRolloutEvaluator,
 )
+from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.simulate import setup_game
 from mtg_bot.turn import Step
 
@@ -139,6 +140,76 @@ def test_mcts_with_progressive_widening_through_combat():
     )
     pick = mcts.choose(adapter, adapter.active_player())
     assert pick in adapter.legal_decisions()
+
+
+def test_mcts_blocks_lethal_attacker_with_idle_blocker():
+    """Regression: with combat decisions exposed in production, MCTS
+    must actually choose to block when blocking is the obviously
+    correct move. Setup: P0 attacks with a 2/2 Wild Bear; P1 has an
+    idle 2/2 Wild Bear and is at 1 life so taking the hit loses the
+    game outright. MCTS (with the production heuristic evaluator)
+    should pick the BlockerDecision that names the attacker, not the
+    "don't block" option that lets the bear through for lethal.
+
+    Prior to exposing combat decisions in the production adapters,
+    the bot literally never blocked because MCTS never saw a
+    BlockerDecision in ``legal_decisions`` — this test pins that
+    fix."""
+    state = setup_game(
+        [RandomAgent(), RandomAgent()], ["G", "R"], seed=42,
+    )
+    p0_bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    p0_bear.summoning_sick = False
+    state.battlefield.append(p0_bear)
+    p1_bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    p1_bear.summoning_sick = False
+    state.battlefield.append(p1_bear)
+    # P1 at 1 life — unblocked 2/2 = lethal, blocking = trade and survive.
+    state.players[1].life = 1
+    adapter = MtgGameStateAdapter(state, expose_combat_decisions=True)
+
+    _drive_through_priority_until_step(adapter, Step.DECLARE_ATTACKERS)
+    # P0 commits to the attack.
+    while adapter.combat_phase == "attackers":
+        attack = next(
+            d for d in adapter.legal_decisions()
+            if isinstance(d, AttackerDecision) and d.attack
+        )
+        adapter.apply(attack)
+
+    _drive_through_priority_until_step(adapter, Step.DECLARE_BLOCKERS)
+    assert adapter.combat_phase == "blockers"
+    assert adapter.active_player() == 1  # P1 is the defender
+
+    # Sanity-check: BlockerDecision options exist and include both
+    # "block" and "don't block" — i.e. MCTS is genuinely making a
+    # choice between blocking and not blocking, not picking from a
+    # degenerate single-option list.
+    legal = adapter.legal_decisions()
+    assert any(
+        isinstance(d, BlockerDecision) and d.attacker_id is not None
+        for d in legal
+    )
+    assert any(
+        isinstance(d, BlockerDecision) and d.attacker_id is None
+        for d in legal
+    )
+
+    mcts = MCTS(
+        evaluator=MtgHeuristicEvaluator(),
+        budget_factory=lambda: Budget(max_nodes=32),
+        rng=random.Random(0),
+    )
+    pick = mcts.choose(adapter, adapter.active_player())
+    assert isinstance(pick, BlockerDecision)
+    assert pick.attacker_id is not None, (
+        "MCTS at low budget should block a lethal 2/2 attacker with "
+        "an idle 2/2 blocker, but chose 'no block' instead"
+    )
 
 
 def test_mcts_drives_adapter_past_combat_phase():

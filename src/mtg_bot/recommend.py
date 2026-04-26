@@ -249,7 +249,9 @@ def recommend_from_state(
             priority_player_id=engine_state.priority_player_idx,
         )
 
-    adapter = MtgGameStateAdapter(engine_state.clone())
+    adapter = MtgGameStateAdapter(
+        engine_state.clone(), expose_combat_decisions=True,
+    )
     if adapter.is_terminal():
         return _finalize_engine(
             recs=[],

@@ -313,7 +313,7 @@ def _generate_one_game_data(
             ["G", "R"],
             seed=engine_seed,
         )
-    adapter = MtgGameStateAdapter(engine)
+    adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {
         0: p0_factory(base_seed + 100 * game_idx),
         1: p1_factory(base_seed + 100 * game_idx + 50),
