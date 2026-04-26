@@ -1316,6 +1316,50 @@ def test_fallers_faithful_damaged_target_no_draw():
     assert len(state.players[1].library) == p1_lib_before
 
 
+def test_fallers_faithful_etb_target_is_optional():
+    """Oracle: 'up to one OTHER target creature.' With no creatures on
+    the battlefield (other than the trigger source), the trigger
+    resolves as a no-op rather than fizzling on lack of targets."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    ff_p = EOE_CREATURES["Faller's Faithful"]
+    etb = next(
+        ab for ab in ff_p.triggered_abilities if ab.trigger == "etb"
+    )
+    assert etb.effect.target_count_range() == (0, 1)
+    assert etb.effect.requires_target() is False
+    state = _arena()
+    # Empty battlefield — no legal targets.
+    legal = etb.effect.legal_targets(state, controller_id=0)
+    assert legal == []
+    # Empty resolve is a clean no-op.
+    etb.effect.resolve(state, 0, ())
+
+
+def test_fallers_faithful_excludes_self_target():
+    """The 'other' clause: Faller's Faithful itself is not a legal
+    target of its own ETB trigger."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    ff = state.new_object(
+        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(ff)
+    etb = next(
+        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+    )
+    state.resolving_source = ff
+    legal = etb.effect.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    assert bear.id in target_ids
+    assert ff.id not in target_ids
+
+
 def test_damaged_this_turn_clears_at_cleanup():
     """The damaged_this_turn flag is per-turn and clears at cleanup —
     a turn-1 damage event must not bleed into turn 2's bookkeeping.

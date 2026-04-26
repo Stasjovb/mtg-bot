@@ -3069,18 +3069,33 @@ class DestroyTargetCreature(Effect):
     # whether they're currently animated as creatures). Matches oracle
     # text "destroy target creature or Spacecraft" — Embrace Oblivion.
     or_spacecraft: bool = False
+    # When True, "up to one target creature" semantics — the destroy
+    # is optional and the spell/ability resolves silently if no target
+    # is chosen. Matches Faller's Faithful's "up to one other target".
+    optional: bool = False
+    # When True, the trigger source is excluded from its own legal
+    # targets — needed for "another target" / "other target" oracle
+    # phrasings. Reads state.resolving_source.
+    exclude_self: bool = False
 
     def requires_target(self) -> bool:
-        return True
+        return not self.optional
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        source = state.resolving_source if self.exclude_self else None
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature
-            or (self.or_spacecraft and o.printing.is_spacecraft)
+            if (
+                o.printing.is_creature
+                or (self.or_spacecraft and o.printing.is_spacecraft)
+            )
+            and (source is None or o.id != source.id)
         ]
 
     def resolve(

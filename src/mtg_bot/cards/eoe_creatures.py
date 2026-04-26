@@ -1896,14 +1896,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Faller's Faithful: {2}{B} 3/1. ETB destroy target creature; if
-        # that creature wasn't dealt damage this turn, its controller
-        # draws two cards. Simplification: oracle says "up to one other
-        # target creature" — we keep destruction required (no opt-out)
-        # and ignore the "other" qualifier (irrelevant in practice
-        # because Faithful entering itself isn't a legal target either
-        # way for our targeting). The "wasn't dealt damage this turn"
-        # rider is honored via GameObject.damaged_this_turn.
+        # Faller's Faithful: {2}{B} 3/1. ETB up to one OTHER target
+        # creature is destroyed; if that creature wasn't dealt damage
+        # this turn, its controller draws two cards. Both clauses now
+        # honored — ``optional=True`` allows the trigger to resolve as
+        # a no-op when there's no good target, and ``exclude_self=True``
+        # filters Faller's Faithful itself out of its own legal-target
+        # list (would normally be impossible since the source isn't on
+        # the battlefield at target-pick time, but oracle-faithful).
         make_creature(
             "Faller's Faithful", "{2}{B}", 3, 1,
             triggered_abilities=(
@@ -1911,6 +1911,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     trigger="etb",
                     effect=DestroyTargetCreature(
                         draw_if_undamaged_amount=2,
+                        optional=True,
+                        exclude_self=True,
                     ),
                 ),
             ),
