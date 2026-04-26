@@ -62,6 +62,14 @@ class GameObject:
     # Vault activated). Cleared at cleanup. legal_actions honors it
     # for cast-from-exile at normal cost.
     playable_from_exile_this_turn: bool = False
+    # Persistent cast-from-exile permission gated on the controller
+    # controlling a Kavu. Set on cards exiled by Possibility
+    # Technician's ETB / Kavu observer trigger ("for as long as that
+    # card remains exiled, you may play it if you control a Kavu").
+    # NOT cleared at cleanup — persists until the card leaves exile.
+    # legal_actions honors it for cast-from-exile at normal cost when
+    # the controller currently controls at least one Kavu.
+    play_from_exile_requires_kavu: bool = False
     # Base P/T override ("has base power and toughness 1/1 until end of
     # turn") — Atomic Microsizer. None = use printed P/T. Cleared at
     # cleanup.

@@ -1016,20 +1016,33 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Possibility Technician `{2}{R}` 3/3 Creature. Warp `{R}`.
-        # Real oracle: "Whenever this creature or another Kavu you
+        # Possibility Technician `{2}{R}` 3/3 Kavu Artificer. Warp
+        # `{R}`. Oracle: "Whenever this creature or another Kavu you
         # control enters, exile the top card of your library. For as
         # long as that card remains exiled, you may play it if you
-        # control a Kavu." Stand-in comment was stale (non-oracle).
-        # Simplifications: (a) Kavu-scoped observer trigger narrowed
-        # to self-ETB only; (b) "for as long as" persistence narrowed
-        # to this-turn-only via the impulse-cast flag.
+        # control a Kavu."
+        # Wiring:
+        #   - ``etb`` trigger covers "this creature ... enters".
+        #   - ``kavu_you_control_enters`` trigger covers "another Kavu
+        #     you control enters" (fired by put_into_battlefield's
+        #     _fire_kavu_enters_triggers helper, which excludes the
+        #     entering object so this trigger doesn't double-fire on
+        #     the Technician's own ETB).
+        #   - Persistence is modelled by
+        #     ``play_from_exile_requires_kavu`` on the exiled card —
+        #     legal_actions surfaces it across turns while the
+        #     controller controls a Kavu.
         make_creature(
             "Possibility Technician", "{2}{R}", 3, 3,
             warp="{R}",
+            subtypes=("Kavu", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
+                    effect=PossibilityTechnicianETBEffect(),
+                ),
+                TriggeredAbility(
+                    trigger="kavu_you_control_enters",
                     effect=PossibilityTechnicianETBEffect(),
                 ),
             ),

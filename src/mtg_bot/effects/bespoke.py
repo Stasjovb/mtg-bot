@@ -739,15 +739,19 @@ class WeftwalkingETBEffect(Effect):
 
 @dataclass(frozen=True)
 class PossibilityTechnicianETBEffect(Effect):
-    """Possibility Technician's ETB (simplified): "Exile the top card
-    of your library. You may play it this turn."
+    """Possibility Technician's ETB-and-Kavu-observer effect: "Exile
+    the top card of your library. For as long as that card remains
+    exiled, you may play it if you control a Kavu."
 
-    Real oracle has a wider trigger ("this creature or another Kavu
-    you control enters") and a persistence clause ("for as long as
-    that card remains exiled, you may play it if you control a Kavu"
-    — effectively permanent while the exiled pile is respected).
-    Our engine has impulse-cast as a this-turn-only flag, so we use
-    that — after this turn, the exiled card stays exiled and unplayable.
+    Wired by the printing as both an ``etb`` trigger (this creature)
+    and a ``kavu_you_control_enters`` observer trigger (another Kavu),
+    matching the printed oracle's "this creature or another Kavu you
+    control enters". Persistence is modelled with the
+    ``play_from_exile_requires_kavu`` flag on the exiled card —
+    legal_actions surfaces a CastSpell/PlayLand for it whenever the
+    controller currently controls at least one Kavu, and the flag is
+    NOT cleared at end of turn (so the cast remains available across
+    turns until the card leaves exile or the Kavu count drops to 0).
     """
 
     def resolve(
@@ -761,17 +765,18 @@ class PossibilityTechnicianETBEffect(Effect):
             return
         top = p.library.pop(0)
         top.zone = Zone.EXILE
-        top.playable_from_exile_this_turn = True
+        top.play_from_exile_requires_kavu = True
         p.exile.append(top)
         state.log.append(
             f"Possibility Technician: P{controller_id} exiles "
-            f"{top.printing.name} (playable this turn)"
+            f"{top.printing.name} (playable while controller "
+            f"controls a Kavu)"
         )
 
     def describe(self) -> str:
         return (
-            "exile the top card of your library; you may play it this "
-            "turn"
+            "exile the top card of your library; for as long as that "
+            "card remains exiled, you may play it if you control a Kavu"
         )
 
 

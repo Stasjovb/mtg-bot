@@ -401,6 +401,9 @@ class TriggeredAbility:
             "creature_or_artifact_enters_you_control": (
                 "Whenever another creature or artifact you control enters"
             ),
+            "kavu_you_control_enters": (
+                "Whenever this creature or another Kavu you control enters"
+            ),
             "attacks": "Whenever ~ attacks",
             "leaves_battlefield": "When ~ leaves the battlefield",
             "nontoken_artifact_enters_you_control": (

@@ -472,6 +472,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
             )
         p.exile.remove(card)
         card.playable_from_exile_this_turn = False
+        card.play_from_exile_requires_kavu = False
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
     # "Enters tapped" covers Planets + most non-basic utility lands.
@@ -628,13 +629,19 @@ def _cast_spell(
             )
     else:
         # Cast from exile: legal for (a) cards previously exiled by warp
-        # (warped=True), or (b) cards marked impulse-playable this turn
-        # (playable_from_exile_this_turn=True). Both pay normal cost.
+        # (warped=True), (b) cards marked impulse-playable this turn
+        # (playable_from_exile_this_turn=True), or (c) cards exiled by
+        # Possibility Technician (play_from_exile_requires_kavu=True),
+        # provided the controller still controls a Kavu. All pay
+        # normal cost. (legal_actions enforces the Kavu-control gate
+        # on (c); the predicate here just authorizes the cast site.)
         card = next(
             (
                 c for c in p.exile
                 if c.id == card_id and (
-                    c.warped or c.playable_from_exile_this_turn
+                    c.warped
+                    or c.playable_from_exile_this_turn
+                    or c.play_from_exile_requires_kavu
                 )
             ),
             None,
@@ -644,6 +651,7 @@ def _cast_spell(
             p.exile.remove(card)
             card.warped = False
             card.playable_from_exile_this_turn = False
+            card.play_from_exile_requires_kavu = False
             card.cast_via_warp = False
         else:
             # Cast from top of library (Mm'menon grant). Legal only
@@ -1550,6 +1558,7 @@ def put_into_battlefield(
     obj.controller_id = controller_id
     obj.tapped = False
     obj.summoning_sick = True
+    # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's
     # state sees the counters already in place.
@@ -1619,6 +1628,8 @@ def put_into_battlefield(
         _fire_artifact_enters_triggers(state, obj)
     if obj.printing.is_creature or obj.printing.is_artifact:
         _fire_creature_or_artifact_enters_triggers(state, obj)
+    if obj.printing.is_creature and "Kavu" in obj.printing.subtypes:
+        _fire_kavu_enters_triggers(state, obj)
 
 
 def _apply_devour(
@@ -1658,6 +1669,48 @@ def _apply_devour(
             f"{obj.printing.name} devours {sacrificed} land(s) and "
             f"enters with {counters} +1/+1 counters"
         )
+
+
+def _fire_kavu_enters_triggers(
+    state: GameState, new_obj: "GameObject"
+) -> None:
+    """Fire "whenever this creature or another Kavu you control enters"
+    triggers on permanents the controller controls. Possibility
+    Technician's observer ability — fires for the entering Kavu itself
+    as well as every other Kavu the controller controls (so the
+    Technician's own ETB also fires once via this path when a separate
+    Kavu enters under it). The "this creature" half is already covered
+    by the standard ETB trigger that fires the same effect; this helper
+    handles the "another Kavu" half by also firing on permanents OTHER
+    than ``new_obj``.
+
+    Caller already restricted ``new_obj`` to creatures with the "Kavu"
+    subtype.
+    """
+    from mtg_bot.game import etb_trigger_multiplier
+    from mtg_bot.turn import should_fire_trigger
+
+    controller = new_obj.controller_id
+    firings = etb_trigger_multiplier(state, controller)
+    for obj in list(state.battlefield):
+        if obj.id == new_obj.id:
+            continue  # self-ETB handled by the standard ``etb`` trigger
+        if obj.controller_id != controller:
+            continue
+        for i, ability in enumerate(obj.printing.triggered_abilities):
+            if ability.trigger != "kavu_you_control_enters":
+                continue
+            if not should_fire_trigger(state, obj.id, i, ability):
+                continue
+            for _ in range(firings):
+                state.log.append(
+                    f"{obj.printing.name}'s Kavu-enters trigger fires"
+                )
+                state.resolving_source = obj
+                try:
+                    ability.effect.resolve(state, controller, ())
+                finally:
+                    state.resolving_source = None
 
 
 def _fire_creature_or_artifact_enters_triggers(

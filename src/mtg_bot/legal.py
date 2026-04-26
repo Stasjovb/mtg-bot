@@ -240,11 +240,20 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             actions.append(CastSpell(card.id))
 
     # Impulse-cast: cards in exile marked playable_from_exile_this_turn
-    # (Territorial Bruntar landfall, Memorial Vault activated). These
-    # pay normal mana cost and respect sorcery-speed rules. Lands use
-    # PlayLand; non-land permanents / sorceries use CastSpell.
+    # (Territorial Bruntar landfall, Memorial Vault activated) — or
+    # marked play_from_exile_requires_kavu (Possibility Technician),
+    # which persists until the card leaves exile but is gated on the
+    # controller currently controlling a Kavu. Both pay normal mana
+    # cost and respect sorcery-speed rules. Lands use PlayLand;
+    # non-land permanents / sorceries use CastSpell.
+    controls_kavu = any(
+        o.controller_id == player_id and "Kavu" in o.printing.subtypes
+        for o in state.battlefield
+    )
     for card in p.exile:
-        if not card.playable_from_exile_this_turn:
+        impulse = card.playable_from_exile_this_turn
+        kavu_gate = card.play_from_exile_requires_kavu and controls_kavu
+        if not (impulse or kavu_gate):
             continue
         if card.warped:
             continue  # already handled above
