@@ -864,6 +864,10 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_base_pt_override = None
         obj.temp_is_creature = False
         obj.temp_subtype = None
+        # UEOT-granted abilities from manland animations (Lavaclaw,
+        # Wandering Fumarole, Raging Ravine) wear off at cleanup. Note
+        # ``temp_triggered_abilities`` is already cleared above.
+        obj.temp_activated_abilities = ()
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
         # Revert "gain control until end of turn" effects.

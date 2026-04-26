@@ -472,9 +472,12 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         ),
     ),
     # Lavaclaw Reaches: enters tapped, {T}: B or R, {1}{B}{R}: → 2/2
-    # B/R Elemental UEOT. Real oracle also grants "{X}: +X/+0 UEOT"
-    # while animated — not modeled (the granted-activated-while-
-    # animated-UEOT pattern isn't supported yet).
+    # B/R Elemental UEOT WITH "{X}: This creature gets +X/+0 UEOT".
+    # The granted X-pump activates only while animated (it's exposed
+    # via temp_activated_abilities, which the cleanup step clears).
+    # X-cost activated abilities are supported by the engine
+    # (_choose_and_apply_x in actions.py) and the resolved X is read
+    # from state.resolving_x_value by PumpSelfXPowerUEOT.
     "Lavaclaw Reaches": make_utility_land(
         "Lavaclaw Reaches",
         produces=frozenset({"B", "R"}),
@@ -485,7 +488,18 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
                     mana=parse_mana_cost("{1}{B}{R}"),
                     mana_str="{1}{B}{R}",
                 ),
-                effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+                effect=BecomeLandCreatureUEOT(
+                    power=2, toughness=2,
+                    granted_activated_abilities=(
+                        ActivatedAbility(
+                            cost=ActivationCost(
+                                mana=parse_mana_cost("{X}"),
+                                mana_str="{X}",
+                            ),
+                            effect=PumpSelfXPowerUEOT(),
+                        ),
+                    ),
+                ),
             ),
         ),
     ),
@@ -742,9 +756,11 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         ),
     ),
     # Raging Ravine: enters tapped, {T}: R or G, {2}{R}{G}: → 3/3
-    # R/G Elemental UEOT. Real oracle also grants "when this attacks,
-    # put a +1/+1 counter on it" while animated — not modeled (see
-    # Lavaclaw note).
+    # R/G Elemental UEOT WITH "Whenever this creature attacks, put a
+    # +1/+1 counter on it." The granted attacks-trigger fires only
+    # while animated (exposed via temp_triggered_abilities; cleared at
+    # cleanup; iterated by combat._fire_attacks_triggers alongside
+    # printed triggers).
     "Raging Ravine": make_utility_land(
         "Raging Ravine",
         produces=frozenset({"R", "G"}),
@@ -755,7 +771,15 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
                     mana=parse_mana_cost("{2}{R}{G}"),
                     mana_str="{2}{R}{G}",
                 ),
-                effect=BecomeLandCreatureUEOT(power=3, toughness=3),
+                effect=BecomeLandCreatureUEOT(
+                    power=3, toughness=3,
+                    granted_triggered_abilities=(
+                        TriggeredAbility(
+                            trigger="attacks",
+                            effect=PutPlusOneCounterOnSelf(amount=1),
+                        ),
+                    ),
+                ),
             ),
         ),
     ),
@@ -925,8 +949,11 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         ),
     ),
     # Wandering Fumarole: enters tapped, {T}: U or R, {2}{U}{R}: → 1/4
-    # U/R Elemental UEOT. Real oracle also grants "{0}: Switch P/T
-    # UEOT" while animated — not modeled (see Lavaclaw note).
+    # U/R Elemental UEOT WITH "{0}: Switch this creature's power and
+    # toughness until end of turn." The granted free-cost P/T-swap
+    # activation is exposed via temp_activated_abilities and cleared
+    # at cleanup. The {0} cost makes it freely re-activatable; each
+    # activation re-reads temp_base_pt_override so toggling works.
     "Wandering Fumarole": make_utility_land(
         "Wandering Fumarole",
         produces=frozenset({"U", "R"}),
@@ -937,7 +964,15 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
                     mana=parse_mana_cost("{2}{U}{R}"),
                     mana_str="{2}{U}{R}",
                 ),
-                effect=BecomeLandCreatureUEOT(power=1, toughness=4),
+                effect=BecomeLandCreatureUEOT(
+                    power=1, toughness=4,
+                    granted_activated_abilities=(
+                        ActivatedAbility(
+                            cost=ActivationCost(),
+                            effect=SwitchSourcePowerToughnessUEOT(),
+                        ),
+                    ),
+                ),
             ),
         ),
     ),

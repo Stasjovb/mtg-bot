@@ -11,7 +11,7 @@ from mtg_bot.cards import CardPrinting
 
 if TYPE_CHECKING:
     from mtg_bot.agents import Agent
-    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects import ActivatedAbility, TriggeredAbility
     from mtg_bot.turn import Step
 
 
@@ -112,13 +112,21 @@ class GameObject:
     extended_temp_expires_at_player_id: Optional[int] = None
     # UEOT triggered abilities granted by other effects (e.g. Requiem
     # Monolith's "Whenever this creature is dealt damage, you draw that
-    # many cards and lose that much life"). Stored as a tuple so the
-    # field is frozen-friendly and additive grants stack. Fire helpers
-    # iterate this alongside ``printing.triggered_abilities``; the
-    # ``should_fire_trigger`` once-per-turn ledger uses synthetic
-    # ``("temp", i)`` indices to avoid colliding with printed-ability
-    # indices. Cleared at cleanup.
+    # many cards and lose that much life", Raging Ravine's "Whenever
+    # this creature attacks, put a +1/+1 counter on it"). Cleared at
+    # cleanup. Fire helpers iterate this alongside
+    # ``printing.triggered_abilities``; the once-per-turn ledger uses
+    # synthetic indices (``("temp", i)`` or a 1000+ offset depending on
+    # call site) to avoid colliding with printed-ability indices.
     temp_triggered_abilities: "tuple[TriggeredAbility, ...]" = ()
+    # Granted activated abilities that exist only "while animated" — a
+    # manland's UEOT activation can fold per-card abilities here (e.g.
+    # Lavaclaw Reaches' "{X}: This creature gets +X/+0 UEOT", Wandering
+    # Fumarole's "{0}: Switch P/T UEOT"). Cleared at cleanup. Read by
+    # ``effective_activated_abilities`` and surfaced to legal_actions /
+    # _activate_ability via the same index space (printed first, then
+    # static-grant, then equipment-grant, then temp_*).
+    temp_activated_abilities: "tuple[ActivatedAbility, ...]" = ()
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.
@@ -461,6 +469,11 @@ def effective_activated_abilities(
             continue
         if o.printing.grants_control_opponent_ability_when_equipped:
             base.append(DOMINION_BRACELET_GRANTED_ABILITY)
+    # UEOT-granted activated abilities (manland animations: Lavaclaw
+    # Reaches' X-pump, Wandering Fumarole's P/T swap). Appended at the
+    # end so printed-ability indices stay stable.
+    if obj.temp_activated_abilities:
+        base.extend(obj.temp_activated_abilities)
     return tuple(base)
 
 

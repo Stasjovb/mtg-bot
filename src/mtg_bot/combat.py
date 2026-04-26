@@ -142,7 +142,20 @@ def _fire_exalted_pumps(state: GameState) -> None:
 def _fire_attacks_triggers(state: GameState, attacker) -> None:
     from mtg_bot.actions import push_triggered_ability
 
-    for i, ability in enumerate(attacker.printing.triggered_abilities):
+    # Walk printed triggers first (their indices stay stable), then any
+    # UEOT-granted triggers (Raging Ravine animation). Granted triggers
+    # use a 1000-offset ability_index so the once_per_turn ledger key
+    # ``(source_id, ability_index)`` cannot collide with a printed-
+    # ability index. None of the wired-in granted triggers are
+    # once-per-turn, so the offset is purely defensive.
+    enumerated: list[tuple[int, "object"]] = list(
+        enumerate(attacker.printing.triggered_abilities)
+    )
+    enumerated.extend(
+        (1000 + i, ab)
+        for i, ab in enumerate(attacker.temp_triggered_abilities)
+    )
+    for i, ability in enumerated:
         if ability.trigger != "attacks":
             continue
         push_triggered_ability(

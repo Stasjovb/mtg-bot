@@ -3840,10 +3840,11 @@ class BecomeLandCreatureUEOT(Effect):
     keywords via temp_keywords. Also optionally sets temp_unblockable
     (Creeping Tar Pit: "It can't be blocked this turn").
 
-    Does NOT model per-manland granted triggered/activated abilities
-    that fire only while the land is a creature (Lavaclaw's X-pump,
-    Raging Ravine's attacks-counter, Wandering Fumarole's P/T swap).
-    Documented per-card as a simplification.
+    Per-manland abilities granted "while animated" are folded in via
+    ``granted_activated_abilities`` (Lavaclaw Reaches' X-pump, Wandering
+    Fumarole's P/T swap) and ``granted_triggered_abilities`` (Raging
+    Ravine's "whenever this attacks, +1/+1 counter"). Both clear at
+    cleanup with the rest of the temp_* fields.
     """
 
     power: int = 0
@@ -3855,6 +3856,13 @@ class BecomeLandCreatureUEOT(Effect):
     # ``GameObject.temp_subtype`` and cleared at cleanup. Read by
     # target filters (e.g. PumpTargetCreatureUntilEOT.target_subtype).
     granted_subtype: str | None = None
+    # Activated / triggered abilities granted UEOT to the source while
+    # animated. Appended to ``temp_activated_abilities`` /
+    # ``temp_triggered_abilities``; cleared at cleanup. Used by manlands
+    # whose printed text grants per-card abilities only while the land
+    # is a creature (Lavaclaw Reaches, Wandering Fumarole, Raging Ravine).
+    granted_activated_abilities: tuple = ()
+    granted_triggered_abilities: tuple = ()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -3873,6 +3881,16 @@ class BecomeLandCreatureUEOT(Effect):
             source.temp_unblockable = True
         if self.granted_subtype is not None:
             source.temp_subtype = self.granted_subtype
+        if self.granted_activated_abilities:
+            source.temp_activated_abilities = (
+                source.temp_activated_abilities
+                + tuple(self.granted_activated_abilities)
+            )
+        if self.granted_triggered_abilities:
+            source.temp_triggered_abilities = (
+                source.temp_triggered_abilities
+                + tuple(self.granted_triggered_abilities)
+            )
         kw_note = (
             f" with {', '.join(sorted(self.granted_keywords))}"
             if self.granted_keywords else ""
@@ -3892,6 +3910,82 @@ class BecomeLandCreatureUEOT(Effect):
             f"until end of turn, this land becomes a "
             f"{self.power}/{self.toughness} creature{kws}{unb}; "
             f"it's still a land"
+        )
+
+
+@dataclass(frozen=True)
+class PumpSelfXPowerUEOT(Effect):
+    """Source gets +X/+0 until end of turn, where X comes from
+    ``state.resolving_x_value`` (set by the X-cost activation pipeline
+    in ``_activate_ability``).
+
+    Wires Lavaclaw Reaches' granted "{X}: This creature gets +X/+0 UEOT"
+    while animated.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        x = state.resolving_x_value
+        if x <= 0:
+            return
+        source.temp_power_bonus += x
+        state.log.append(
+            f"{source.printing.name} gets +{x}/+0 until end of turn"
+        )
+
+    def describe(self) -> str:
+        return "this creature gets +X/+0 until end of turn"
+
+
+@dataclass(frozen=True)
+class SwitchSourcePowerToughnessUEOT(Effect):
+    """Switch the source's base power and toughness until end of turn.
+
+    Implementation: reads the source's current effective power /
+    toughness (so existing pumps and counters are accounted for in the
+    swap) and writes a temp_base_pt_override of (T, P) — the swapped
+    pair — while zeroing the temp_*_bonus fields contributed BY the
+    swap so it composes additively with later pumps.
+
+    Simplification: only the BASE pair is swapped. +1/+1 counters and
+    static-anthem bonuses are not "swapped" per se — they continue to
+    add equally to both sides via existing P/T plumbing — so for the
+    common Wandering Fumarole case (no counters, no buffs) the result
+    is exact: 1/4 → 4/1.
+
+    Wires Wandering Fumarole's granted "{0}: Switch this creature's
+    power and toughness until end of turn" while animated. The {0}
+    cost means the ability is freely re-activatable, which lets the
+    swap toggle back and forth — handled correctly because each
+    activation re-reads the current base override.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        if source.temp_base_pt_override is not None:
+            p, t = source.temp_base_pt_override
+        else:
+            p = source.printing.power or 0
+            t = source.printing.toughness or 0
+        source.temp_base_pt_override = (t, p)
+        state.log.append(
+            f"{source.printing.name}'s power and toughness are switched "
+            f"({p}/{t} -> {t}/{p}) until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "switch this creature's power and toughness until end of turn"
         )
 
 
