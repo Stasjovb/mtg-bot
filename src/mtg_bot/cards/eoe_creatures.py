@@ -2098,9 +2098,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             equip_cost="{3}",
         ),
         # Thaumaton Torpedo: {1} Artifact. {6}, {T}, Sacrifice: Destroy
-        # target nonland permanent. Simplified: drops the "{3} less if
-        # you attacked with a Spacecraft this turn" cost-reduction
-        # rider (cost modification not yet modeled).
+        # target nonland permanent. The activation cost is reduced by
+        # {3} if the controller attacked with a Spacecraft this turn —
+        # implemented via ActivatedAbility.cost_reductions, which
+        # _effective_ability_mana_cost folds into the generic portion
+        # before payment (and which legal_actions sees for affordability).
         make_artifact(
             "Thaumaton Torpedo", "{1}",
             activated_abilities=(
@@ -2111,6 +2113,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         sacrifice_self=True,
                     ),
                     effect=DestroyTargetNonlandPermanent(),
+                    cost_reductions=(
+                        CostReduction(
+                            amount=3,
+                            condition="attacked_with_spacecraft_this_turn",
+                        ),
+                    ),
                 ),
             ),
         ),

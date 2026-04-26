@@ -250,48 +250,67 @@ def apply_cost_reductions(
     cost = base_cost
     cost = _apply_external_cost_reductions(state, caster_id, cost)
     for rule in printing.cost_reductions:
-        reduction = 0
-        if rule.condition == "another_spell_cast_this_turn":
-            if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
-                reduction = rule.amount
-        elif rule.condition == "attacked_with_spacecraft_this_turn":
-            if state.player_by_id(
-                caster_id
-            ).attacked_with_spacecraft_this_turn:
-                reduction = rule.amount
-        elif rule.condition == "void_active":
-            from mtg_bot.game import is_void_active
-
-            if is_void_active(state):
-                reduction = rule.amount
-        elif rule.condition == "opponents_control_three_or_more_creatures":
-            opp_creatures = sum(
-                1 for o in state.battlefield
-                if o.controller_id != caster_id and o.printing.is_creature
-            )
-            if opp_creatures >= 3:
-                reduction = rule.amount
-        elif rule.condition == "per_differently_named_land":
-            if rule.per_land_group:
-                names: set[str] = set()
-                for o in state.battlefield:
-                    if (
-                        o.controller_id == caster_id
-                        and o.printing.is_land
-                    ):
-                        names.add(o.printing.name)
-                reduction = rule.amount * len(names)
-        else:
-            state.log.append(
-                f"unknown cost-reduction condition {rule.condition!r}; "
-                f"treating as no reduction"
-            )
+        reduction = _evaluate_cost_reduction(rule, state, caster_id)
         if reduction > 0:
             cost = cost.reduced(reduction)
             state.log.append(
                 f"cost reduced by {reduction} ({rule.condition})"
             )
     return cost
+
+
+def _evaluate_cost_reduction(
+    rule, state: GameState, caster_id: int,
+) -> int:
+    """Resolve a single ``CostReduction`` rule to a generic-mana amount
+    against current game state. Shared by spell-cast cost reductions
+    (``apply_cost_reductions``) and ability-cost reductions
+    (``_effective_ability_mana_cost``).
+    """
+    if rule.condition == "another_spell_cast_this_turn":
+        if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
+            return rule.amount
+    elif rule.condition == "attacked_with_spacecraft_this_turn":
+        if state.player_by_id(
+            caster_id
+        ).attacked_with_spacecraft_this_turn:
+            return rule.amount
+    elif rule.condition == "void_active":
+        from mtg_bot.game import is_void_active
+
+        if is_void_active(state):
+            return rule.amount
+    elif rule.condition == "opponents_control_three_or_more_creatures":
+        opp_creatures = sum(
+            1 for o in state.battlefield
+            if o.controller_id != caster_id and o.printing.is_creature
+        )
+        if opp_creatures >= 3:
+            return rule.amount
+    elif rule.condition == "control_creature_with_plus_one_counter":
+        if any(
+            o.controller_id == caster_id
+            and o.printing.is_creature
+            and o.plus_one_counters > 0
+            for o in state.battlefield
+        ):
+            return rule.amount
+    elif rule.condition == "per_differently_named_land":
+        if rule.per_land_group:
+            names: set[str] = set()
+            for o in state.battlefield:
+                if (
+                    o.controller_id == caster_id
+                    and o.printing.is_land
+                ):
+                    names.add(o.printing.name)
+            return rule.amount * len(names)
+    else:
+        state.log.append(
+            f"unknown cost-reduction condition {rule.condition!r}; "
+            f"treating as no reduction"
+        )
+    return 0
 
 
 def _apply_external_cost_reductions(
@@ -1026,14 +1045,19 @@ def _effective_ability_mana_cost(
     state: GameState, source: "GameObject", ability,
 ) -> ManaCost:
     """Return the mana portion of ``ability.cost`` after applying any
-    ability-level cost reductions. Two reduction kinds are honored:
+    ability-level cost reductions:
 
-    * The Dominion Bracelet's "costs {X} less, where X is this
-      creature's power" (flag ``mana_reduced_by_source_power``).
-    * Conditional ``CostReduction`` rules listed on
-      ``ability.cost_reductions``. Conditions are checked against the
-      source's controller / battlefield state. Currently supports
-      ``"control_creature_with_plus_one_counter"`` (Starport Security).
+      - The Dominion Bracelet's "costs {X} less, where X is this
+        creature's power" (flag ``mana_reduced_by_source_power``).
+      - Conditional ``CostReduction`` rules attached to the ability via
+        ``ActivatedAbility.cost_reductions``. Routed through the same
+        ``_evaluate_cost_reduction`` helper that spell-cost reductions
+        use, so any condition value supported there works here too
+        (currently: ``"another_spell_cast_this_turn"``,
+        ``"attacked_with_spacecraft_this_turn"`` (Thaumaton Torpedo),
+        ``"void_active"``, ``"opponents_control_three_or_more_creatures"``,
+        ``"per_differently_named_land"``,
+        ``"control_creature_with_plus_one_counter"`` (Starport Security)).
 
     Clamps the generic portion at zero.
     """
@@ -1047,22 +1071,14 @@ def _effective_ability_mana_cost(
         if reduction > 0:
             cost = cost.reduced(reduction)
     for rule in getattr(ability, "cost_reductions", ()):
-        reduction = 0
-        if rule.condition == "control_creature_with_plus_one_counter":
-            if any(
-                o.controller_id == source.controller_id
-                and o.printing.is_creature
-                and o.plus_one_counters > 0
-                for o in state.battlefield
-            ):
-                reduction = rule.amount
-        else:
-            state.log.append(
-                f"unknown ability cost-reduction condition "
-                f"{rule.condition!r}; treating as no reduction"
-            )
+        reduction = _evaluate_cost_reduction(
+            rule, state, source.controller_id,
+        )
         if reduction > 0:
             cost = cost.reduced(reduction)
+            state.log.append(
+                f"ability cost reduced by {reduction} ({rule.condition})"
+            )
     return cost
 
 

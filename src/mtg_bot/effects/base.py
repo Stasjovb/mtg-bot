@@ -216,6 +216,14 @@ class ActivatedAbility:
     ``is_mana_ability=True`` short-circuits the stack: the effect
     resolves immediately on activation (real MTG rule 605 — mana
     abilities don't use the stack). Pair with an AddManaToPool effect.
+
+    ``cost_reductions`` applies conditional generic-mana reductions to
+    THIS ability's mana cost (analogous to ``CardPrinting.cost_reductions``
+    for spell casts). Used by Thaumaton Torpedo's "this ability costs
+    {3} less to activate if you attacked with a Spacecraft this turn".
+    Walked by ``_effective_ability_mana_cost``; stored as a tuple of
+    ``CostReduction`` (typed via ``Any`` here to dodge the cards-module
+    import cycle).
     """
 
     cost: ActivationCost
@@ -226,7 +234,9 @@ class ActivatedAbility:
     # Mirrors CardPrinting.cost_reductions but applied at activation
     # time by actions._effective_ability_mana_cost. Matches Starport
     # Security's "this ability costs {2} less to activate if you
-    # control a creature with a +1/+1 counter on it."
+    # control a creature with a +1/+1 counter on it." and Thaumaton
+    # Torpedo's "this ability costs {3} less to activate if you
+    # attacked with a Spacecraft this turn."
     cost_reductions: tuple["CostReduction", ...] = ()
 
     def describe(self) -> str:

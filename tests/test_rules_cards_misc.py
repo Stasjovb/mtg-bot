@@ -2988,6 +2988,75 @@ def test_thaumaton_torpedo_destroys_nonland_permanent():
     assert victim not in state.battlefield
 
 
+def test_thaumaton_torpedo_full_cost_when_no_spacecraft_attack():
+    """Without a Spacecraft attack this turn, the activation costs
+    the printed {6}."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    torpedo = state.new_object(
+        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(torpedo)
+    ability = torpedo.printing.activated_abilities[0]
+    assert state.players[0].attacked_with_spacecraft_this_turn is False
+    eff = _effective_ability_mana_cost(state, torpedo, ability)
+    assert eff.generic == 6
+
+
+def test_thaumaton_torpedo_reduced_cost_after_spacecraft_attack():
+    """After the controller has attacked with a Spacecraft this turn,
+    the activation costs {3} less, i.e. {3}."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+    from mtg_bot.cards import EOE_CREATURES
+
+    state = _arena()
+    torpedo = state.new_object(
+        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(torpedo)
+    ability = torpedo.printing.activated_abilities[0]
+    state.players[0].attacked_with_spacecraft_this_turn = True
+    eff = _effective_ability_mana_cost(state, torpedo, ability)
+    assert eff.generic == 3
+
+
+def test_thaumaton_torpedo_cost_reduction_floors_at_zero():
+    """A cost reduction larger than the printed generic floors at 0
+    rather than going negative — matches ManaCost.reduced()'s clamp."""
+    from mtg_bot.actions import _effective_ability_mana_cost
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.cards.base import ActivationCost, CostReduction, parse_mana_cost
+    from mtg_bot.effects import ActivatedAbility, DestroyTargetNonlandPermanent
+
+    state = _arena()
+    torpedo = state.new_object(
+        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(torpedo)
+    # Build a synthetic ability with a tiny generic cost {1} and a
+    # {3}-less reduction; verify the result clamps at 0 instead of -2.
+    ability = ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{1}"), mana_str="{1}",
+            tap_self=True, sacrifice_self=True,
+        ),
+        effect=DestroyTargetNonlandPermanent(),
+        cost_reductions=(
+            CostReduction(
+                amount=3, condition="attacked_with_spacecraft_this_turn",
+            ),
+        ),
+    )
+    state.players[0].attacked_with_spacecraft_this_turn = True
+    eff = _effective_ability_mana_cost(state, torpedo, ability)
+    assert eff.generic == 0
+
+
 def test_destroy_target_nonland_permanent_noop_paths():
     from mtg_bot.effects import DestroyTargetNonlandPermanent
     from mtg_bot.cards import BASIC_LANDS
