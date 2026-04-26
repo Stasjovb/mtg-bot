@@ -1046,14 +1046,21 @@ function renderLog(body, snap) {
     body.appendChild(d);
   });
   // Scroll the current step's entries into view (the highlighted
-  // band). With the full log this matters more — without it we'd
-  // jump to the bottom and bury the user under future events.
+  // band). Important: scope scrolling to the log body's own
+  // overflow rather than calling scrollIntoView, which would scroll
+  // the document and push the fixed bottom controls off-screen on
+  // desktop. We compute the target's position relative to the body
+  // via getBoundingClientRect (independent of offsetParent quirks)
+  // and center it inside the visible region.
   if (fullLog && currentLogSize !== undefined) {
     const target = body.children[Math.max(0, currentLogSize - 1)];
-    // scrollIntoView is missing in jsdom (and some older browsers);
-    // a no-op fallback is fine for tests.
-    if (target && typeof target.scrollIntoView === 'function') {
-      target.scrollIntoView({ block: 'center' });
+    if (target && typeof body.getBoundingClientRect === 'function') {
+      const tr = target.getBoundingClientRect();
+      const br = body.getBoundingClientRect();
+      const targetTopInBody = tr.top - br.top + body.scrollTop;
+      body.scrollTop = targetTopInBody
+        - body.clientHeight / 2
+        + target.offsetHeight / 2;
     }
   } else {
     body.scrollTop = body.scrollHeight;
