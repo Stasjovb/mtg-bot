@@ -1728,7 +1728,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=ReturnTargetPermanentYouControlToOwnersHand(),
+                    effect=ReturnTargetPermanentYouControlToOwnersHand(
+                        optional=True, exclude_self=True,
+                    ),
                 ),
             ),
         ),

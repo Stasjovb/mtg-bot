@@ -339,20 +339,30 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
     """Target permanent you control goes back to its owner's hand.
 
     Matches Exosuit Savior's "return up to one other target permanent you
-    control to its owner's hand" (modeled as a required target; we don't
-    model "up to one" optionality). Lands are legal targets too.
+    control to its owner's hand". Set ``optional=True`` for "up to one"
+    semantics (resolves as no-op if no target chosen). Set
+    ``exclude_self=True`` for the "other" half (filters out the trigger
+    source via state.resolving_source). Lands are legal targets.
     """
 
+    optional: bool = False
+    exclude_self: bool = False
+
     def requires_target(self) -> bool:
-        return True
+        return not self.optional
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        source = state.resolving_source if self.exclude_self else None
         return [
             ("permanent", o.id)
             for o in state.battlefield
             if o.controller_id == controller_id
+            and (source is None or o.id != source.id)
         ]
 
     def resolve(

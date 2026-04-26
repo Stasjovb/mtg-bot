@@ -1365,6 +1365,56 @@ def test_exosuit_savior_bounces_own_permanent():
     assert plains in state.players[0].hand
 
 
+def test_exosuit_savior_target_is_optional_and_excludes_self():
+    """Oracle: 'return up to one OTHER target permanent you control to its
+    owner's hand.' Trigger lands on the stack with no target when only the
+    Savior itself is in play, and Savior is excluded from its own legal
+    targets."""
+    from mtg_bot.cards import EOE_CREATURES
+
+    savior_p = EOE_CREATURES["Exosuit Savior"]
+    etb = next(
+        ab for ab in savior_p.triggered_abilities if ab.trigger == "etb"
+    )
+    assert etb.effect.target_count_range() == (0, 1)
+    assert etb.effect.requires_target() is False
+
+    state = _arena()
+    savior = state.new_object(savior_p, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(savior)
+    state.resolving_source = savior
+    legal = etb.effect.legal_targets(state, controller_id=0)
+    # Only the Savior itself is on the battlefield → no legal targets
+    # because of the "other" filter.
+    assert legal == []
+    # Empty resolve is a clean no-op.
+    etb.effect.resolve(state, 0, ())
+    assert savior in state.battlefield
+
+
+def test_exosuit_savior_excludes_self_with_other_permanents():
+    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+
+    state = _arena()
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(plains)
+    savior = state.new_object(
+        EOE_CREATURES["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(savior)
+    etb = next(
+        ab for ab in savior.printing.triggered_abilities
+        if ab.trigger == "etb"
+    )
+    state.resolving_source = savior
+    legal = etb.effect.legal_targets(state, controller_id=0)
+    target_ids = {tid for _, tid in legal}
+    assert plains.id in target_ids
+    assert savior.id not in target_ids
+
+
 def test_return_target_permanent_you_control_rejects_opponent():
     from mtg_bot.effects import ReturnTargetPermanentYouControlToOwnersHand
 
