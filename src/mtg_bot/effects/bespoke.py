@@ -2463,4 +2463,89 @@ class PerigeeBeckonerDiesReturnTappedEffect(Effect):
         )
 
 
+@dataclass(frozen=True)
+class AlpharaelDreamingAcolyteDiscardEffect(Effect):
+    """Alpharael, Dreaming Acolyte's "discard" tail of the ETB clause:
+
+    "...Then discard two cards unless you discard an artifact card."
+
+    Templated as a "do X unless Y" choice — the controller may sub the
+    main discard (two cards, any) for a single artifact-card discard.
+    Implemented as a binary mode pick:
+
+    - Mode 0: discard one artifact card from hand. Only legal when the
+      controller has at least one artifact card in hand. The specific
+      artifact picked goes through ``choose_discard`` filtered to the
+      artifact subset.
+    - Mode 1: discard two cards (any), the standard fallback.
+
+    If the controller has no artifact card in hand, mode 0 is unavailable
+    and the effect always falls back to discarding two cards. The draw-
+    two portion of the printed clause is handled by the preceding
+    ``DrawCards(2)`` in the parent ``Sequence``; this effect only models
+    the "discard ... unless ..." rider.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_opponent_discards_triggers
+
+        p = state.player_by_id(controller_id)
+        if not p.hand:
+            return
+
+        artifact_ids = [c.id for c in p.hand if c.printing.is_artifact]
+        # If no artifact in hand, the "unless" branch is unavailable —
+        # fall through to the discard-two path.
+        use_artifact_dodge = False
+        if artifact_ids and p.agent is not None:
+            pick = p.agent.choose_mode(
+                state, controller_id,
+                ["discard an artifact card", "discard two cards"],
+            )
+            pick = max(0, min(pick, 1))
+            use_artifact_dodge = (pick == 0)
+
+        if use_artifact_dodge:
+            # Discard exactly one artifact card. Agent picks which via
+            # choose_discard restricted to the artifact-card subset.
+            chosen_id = p.agent.choose_discard(
+                state, controller_id, artifact_ids,
+            )
+            # Defensive: if the agent returns a non-artifact id (out of
+            # contract), fall back to the first artifact id rather than
+            # crashing — keeps the "unless" semantics intact.
+            if chosen_id not in artifact_ids:
+                chosen_id = artifact_ids[0]
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{p.id} discards {card.printing.name} "
+                f"(Alpharael artifact dodge)"
+            )
+            fire_opponent_discards_triggers(state, p.id)
+            return
+
+        # Fallback: discard two cards (any). Mirrors DiscardSelf(amount=2).
+        for _ in range(2):
+            if not p.hand:
+                break
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(f"P{p.id} discards {card.printing.name}")
+            fire_opponent_discards_triggers(state, p.id)
+
+    def describe(self) -> str:
+        return "discard two cards unless you discard an artifact card"
+
+
 

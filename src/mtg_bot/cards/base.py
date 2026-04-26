@@ -142,6 +142,7 @@ from mtg_bot.effects import (
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
     AllFatesScrollDrawEffect,
+    AlpharaelDreamingAcolyteDiscardEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
     AttachToTargetCreatureYouControl,

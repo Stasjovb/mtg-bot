@@ -1192,9 +1192,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # - "When Alpharael enters, draw two cards. Then discard two
         #   cards unless you discard an artifact card."
         # - "During your turn, Alpharael has deathtouch."
-        # Simplifications retained: the "unless you discard an artifact"
-        # dodge isn't modeled — the caster just discards two cards
-        # unconditionally.
+        # The "unless you discard an artifact" dodge is modeled by
+        # AlpharaelDreamingAcolyteDiscardEffect — the controller may
+        # substitute discarding a single artifact card for the two-card
+        # discard. Falls back to the two-card discard when no artifact
+        # is in hand or the agent declines the dodge.
         make_creature(
             "Alpharael, Dreaming Acolyte", "{1}{U}{B}", 2, 3,
             legendary=True,
@@ -1203,7 +1205,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     trigger="etb",
                     effect=Sequence(effects=(
                         DrawCards(amount=2),
-                        DiscardSelf(amount=2),
+                        AlpharaelDreamingAcolyteDiscardEffect(),
                     )),
                 ),
             ),

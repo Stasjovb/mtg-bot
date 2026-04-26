@@ -181,6 +181,7 @@ from mtg_bot.effects.combinators import (
 )
 from mtg_bot.effects.bespoke import (
     AllFatesScrollDrawEffect,
+    AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
