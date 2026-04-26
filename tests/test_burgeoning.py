@@ -258,6 +258,7 @@ def test_burgeoning_dropped_land_fires_landfall_observable():
     assert elem.temp_power_bonus == 0
 
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     # Burgeoning dropped P0's Forest -> landfall fired -> +2/+0.
     assert elem.temp_power_bonus == 2
@@ -279,6 +280,7 @@ def test_burgeoning_drop_does_not_double_fire_landfall():
     _give_land_in_hand(state, 0, "Forest")
 
     fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    drain_stack(state)
 
     # +2 (one fire), not +4 (double fire).
     assert elem.temp_power_bonus == 2
@@ -304,6 +306,7 @@ def test_burgeoning_chain_terminates_with_mutual_burgeonings():
     p1.hand.append(p1_extra)
 
     apply_action(state, 1, PlayLand(card_id=p1_forest.id))
+    drain_stack(state)
 
     # P1's actual play landed.
     assert p1_forest in state.battlefield
