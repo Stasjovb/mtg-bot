@@ -2258,17 +2258,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Cryoshatter: {U} Aura. Enchanted creature gets -5/-0 and
-        # "when this creature becomes tapped, destroy it." The
-        # becomes-tapped half is implemented via an
-        # ``enchanted_permanent_becomes_tapped`` aura trigger fired by
-        # ``tap_permanent``. Simplified: drops the "or is dealt damage"
-        # half of the compound trigger (no damage-trigger plumbing yet).
+        # "when enchanted creature becomes tapped or is dealt damage,
+        # destroy it." Both halves are implemented:
+        # - becomes-tapped: ``enchanted_permanent_becomes_tapped`` aura
+        #   trigger fired by ``tap_permanent`` in turn.py.
+        # - dealt-damage: ``enchanted_creature_dealt_damage`` aura
+        #   trigger fired by ``_fire_enchanted_dealt_damage_triggers``
+        #   in combat.py (for combat damage) and by ``_apply_damage``
+        #   in effects/base.py (for direct damage from spells/abilities).
         make_aura(
             "Cryoshatter", "{U}",
             power_bonus=-5, toughness_bonus=0,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="enchanted_permanent_becomes_tapped",
+                    effect=DestroyEnchantedPermanent(),
+                ),
+                TriggeredAbility(
+                    trigger="enchanted_creature_dealt_damage",
                     effect=DestroyEnchantedPermanent(),
                 ),
             ),
