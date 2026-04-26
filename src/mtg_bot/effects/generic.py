@@ -302,6 +302,7 @@ class ReturnTargetCreatureToOwnersHand(Effect):
         # Reset combat/damage state on the way off the battlefield
         obj.damage = 0
         obj.marked_lethal = False
+        obj.damaged_this_turn = False
         obj.tapped = False
         obj.attacking = False
         obj.blocking = None
@@ -371,6 +372,7 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
         state.battlefield.remove(obj)
         obj.damage = 0
         obj.marked_lethal = False
+        obj.damaged_this_turn = False
         obj.tapped = False
         obj.attacking = False
         obj.blocking = None
@@ -459,6 +461,7 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         state.battlefield.remove(obj)
         obj.damage = 0
         obj.marked_lethal = False
+        obj.damaged_this_turn = False
         obj.tapped = False
         obj.attacking = False
         obj.blocking = None
@@ -592,6 +595,7 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             state.battlefield.remove(obj)
             obj.damage = 0
             obj.marked_lethal = False
+            obj.damaged_this_turn = False
             obj.tapped = False
             obj.attacking = False
             obj.blocking = None
@@ -2740,7 +2744,15 @@ class DestroyTargetCreature(Effect):
 
     Matches oracle text like "destroy target creature" (Vote Out). The
     creature is moved to its owner's graveyard (tokens cease to exist).
+
+    Optional rider: ``draw_if_undamaged_amount`` adds a Faller's-Faithful-
+    style "if that creature wasn't dealt damage this turn, its controller
+    draws N cards" follow-up. The check is made BEFORE destruction because
+    leaving the battlefield clears the damaged_this_turn flag. The drawing
+    player is the destroyed creature's controller (per oracle text).
     """
+
+    draw_if_undamaged_amount: int = 0
 
     def requires_target(self) -> bool:
         return True
@@ -2758,7 +2770,7 @@ class DestroyTargetCreature(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import destroy
+        from mtg_bot.turn import destroy, draw_card
 
         if not targets:
             return
@@ -2770,11 +2782,29 @@ class DestroyTargetCreature(Effect):
         )
         if obj is None:
             return
+        # Snapshot the rider condition BEFORE destruction (move_off_
+        # battlefield clears damaged_this_turn).
+        was_undamaged = not obj.damaged_this_turn
+        victim_controller_id = obj.controller_id
         state.log.append(f"{obj.printing.name} is destroyed")
         destroy(state, obj)
+        if self.draw_if_undamaged_amount > 0 and was_undamaged:
+            for _ in range(self.draw_if_undamaged_amount):
+                draw_card(state, victim_controller_id)
+            state.log.append(
+                f"P{victim_controller_id} draws "
+                f"{self.draw_if_undamaged_amount} "
+                f"(target wasn't dealt damage this turn)"
+            )
 
     def describe(self) -> str:
-        return "destroy target creature"
+        base = "destroy target creature"
+        if self.draw_if_undamaged_amount > 0:
+            return (
+                f"{base}; if it wasn't dealt damage this turn, its "
+                f"controller draws {self.draw_if_undamaged_amount} card(s)"
+            )
+        return base
 
 
 
