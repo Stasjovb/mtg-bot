@@ -385,6 +385,13 @@ class CardPrinting:
     # the controller's top-of-library card when it's an artifact and
     # this flag is present on any permanent they control.
     grants_cast_artifact_from_top_of_library: bool = False
+    # "The first spell each player casts during each of their turns
+    # may be cast without paying its mana cost." Weftwalking. When any
+    # permanent on the battlefield has this flag, legal_actions offers
+    # a free-cost CastSpell variant (cast_for_free=True) to the active
+    # player whenever they have not yet cast a spell this turn.
+    # _cast_spell skips cost payment when cast_for_free is True.
+    grants_first_spell_each_turn_free: bool = False
     # "Artifacts you control are Foods in addition to their other
     # types." Ragost, Deft Gastronaut. Consumed by
     # game.effective_subtypes to inject "Food" into artifact subtypes.
@@ -1004,6 +1011,7 @@ def make_enchantment(
     is_counter_doubler: bool = False,
     is_token_doubler: bool = False,
     restricts_noncreature_spells_to_one_per_turn: bool = False,
+    grants_first_spell_each_turn_free: bool = False,
     warp: str | None = None,
     grants_etb_counter_per_land_entered_this_turn: bool = False,
 ) -> CardPrinting:
@@ -1029,6 +1037,9 @@ def make_enchantment(
         is_token_doubler=is_token_doubler,
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells_to_one_per_turn
+        ),
+        grants_first_spell_each_turn_free=(
+            grants_first_spell_each_turn_free
         ),
         warp_cost=parse_mana_cost(warp) if warp else None,
         warp_cost_str=warp or "",

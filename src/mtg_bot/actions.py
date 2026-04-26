@@ -65,6 +65,12 @@ class CastSpell(Action):
     # If True, pay the card's kicker cost on top of its base cost.
     # Only legal when the card has a kicker_cost.
     kicked: bool = False
+    # If True, cast without paying any mana cost (Weftwalking's "first
+    # spell each player casts during each of their turns may be cast
+    # without paying its mana cost"). Mutually exclusive with use_warp
+    # and kicked. Targets/additional costs are still paid; only the
+    # mana cost is skipped.
+    cast_for_free: bool = False
 
 
 @dataclass(frozen=True)
@@ -435,6 +441,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
         _cast_spell(
             state, player_id, action.card_id,
             use_warp=action.use_warp, kicked=action.kicked,
+            cast_for_free=action.cast_for_free,
         )
         return
     if isinstance(action, DeclareAttackers):
@@ -575,6 +582,7 @@ def _offer_echoing_deeps_copy(
 def _cast_spell(
     state: GameState, player_id: int, card_id: int,
     use_warp: bool = False, kicked: bool = False,
+    cast_for_free: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -705,6 +713,13 @@ def _cast_spell(
             colored=cost.colored,
             x_pips=0,
         )
+    # "Cast without paying its mana cost" (Weftwalking's static
+    # alt-cast). Zero out the cost; auto_tap_for_cost still runs but
+    # has nothing to pay. Additional non-mana costs (sacrifices, etc.)
+    # are paid normally. X is treated as 0 (per CR 601.2f).
+    if cast_for_free:
+        cost = ManaCost(generic=0, colored=(), x_pips=0)
+        x_value = 0
     spell_kind = (
         "artifact_spell" if card.printing.is_artifact else "spell"
     )

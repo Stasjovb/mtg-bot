@@ -661,12 +661,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Enchantments — ship as empty or minimal.
-        # Weftwalking `{4}{U}{U}` Enchantment. Real oracle: "When this
+        # Weftwalking `{4}{U}{U}` Enchantment. Oracle: "When this
         # enchantment enters, if you cast it, shuffle your hand and
         # graveyard into your library, then draw seven cards. The
         # first spell each player casts during each of their turns may
-        # be cast without paying its mana cost." Simplification: the
-        # second (static, alt-cast) ability is NOT modeled.
+        # be cast without paying its mana cost." The second (static,
+        # alt-cast) ability is plumbed through the
+        # grants_first_spell_each_turn_free flag — legal_actions
+        # offers a CastSpell(cast_for_free=True) variant to the active
+        # player while they haven't cast a spell this turn and any
+        # battlefield permanent has this flag.
         make_enchantment(
             "Weftwalking", "{4}{U}{U}",
             triggered_abilities=(
@@ -675,6 +679,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=WeftwalkingETBEffect(),
                 ),
             ),
+            grants_first_spell_each_turn_free=True,
         ),
         # Sothera, the Supervoid `{2}{B}{B}` Legendary Enchantment.
         # Real oracle: "Whenever a creature you control dies, each

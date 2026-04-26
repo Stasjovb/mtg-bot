@@ -227,3 +227,143 @@ def test_persistent_flag_cleared_on_cast_from_exile():
     # the cast-from-exile path so a re-cast can't happen.
     assert target.play_from_exile_requires_kavu is False
     assert target not in state.players[0].exile
+
+
+# -----------------------
+# Weftwalking static: "first spell each turn may be cast for free"
+# -----------------------
+
+
+def test_weftwalking_printing_grants_first_spell_each_turn_free():
+    """The static second clause is plumbed via a flag on the printing
+    so legal_actions can detect a Weftwalking on the battlefield."""
+    w = EOE_SPELLS["Weftwalking"]
+    assert w.grants_first_spell_each_turn_free is True
+
+
+def test_legal_moves_offers_free_first_cast_when_weftwalking_in_play():
+    """With a Weftwalking on the battlefield and no spells cast yet
+    this turn, legal_actions should propose a CastSpell(cast_for_free=True)
+    variant for spells in hand — even ones whose normal mana cost the
+    player can't afford."""
+    from mtg_bot import legal_moves
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.cards import EOE_SPELLS
+    from tests._rules_helpers import _arena
+
+    bolt = EOE_SPELLS["Plasma Bolt"]  # {R} — needs a Mountain
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[EOE_SPELLS["Weftwalking"]],  # no lands
+    )
+    card = state.players[0].hand[0]
+    moves = legal_moves(state)
+    free_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and m.cast_for_free
+    ]
+    paid_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id
+        and not m.cast_for_free
+    ]
+    assert free_casts, (
+        "free-cast variant should be offered when Weftwalking is on bf"
+    )
+    # No lands → no payable variant.
+    assert not paid_casts
+
+
+def test_free_cast_skips_mana_payment_and_increments_spells_cast():
+    """Apply a cast_for_free CastSpell and verify no lands tap, no mana
+    is spent, and the spell still lands on the stack and bumps the
+    caster's spells_cast_this_turn counter."""
+    from mtg_bot import apply
+    from mtg_bot.actions import CastSpell, resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS
+    from tests._rules_helpers import _arena
+    import random
+
+    weftwalking = EOE_SPELLS["Weftwalking"]
+    nova = EOE_CREATURES["Nova Hellkite"]  # {3}{R}{R} normal — way too pricey
+    state = _arena(
+        p0_hand=[nova],
+        p0_battlefield=[weftwalking, BASIC_LANDS["Mountain"]],  # 1 land
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    card = state.players[0].hand[0]
+    mountain = next(
+        o for o in state.battlefield
+        if o.printing.name == "Mountain"
+    )
+    assert mountain.tapped is False
+
+    apply(state, CastSpell(card.id, cast_for_free=True))
+
+    # Spell is on the stack. Mountain was NOT tapped — free cast.
+    assert len(state.stack) == 1
+    assert mountain.tapped is False
+    # Caster's counter incremented (so subsequent free casts won't be
+    # offered until next turn).
+    assert state.players[0].spells_cast_this_turn == 1
+
+    # Resolve to ensure nothing blows up downstream.
+    resolve_top_of_stack(state)
+    assert card in state.battlefield
+
+
+def test_legal_moves_does_not_offer_free_cast_after_first_spell():
+    """Once a player has cast a spell this turn, the free-cast variant
+    should no longer be offered — only the first spell each turn is
+    eligible."""
+    from mtg_bot import legal_moves
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.cards import EOE_SPELLS
+    from tests._rules_helpers import _arena
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p0_hand=[bolt],
+        p0_battlefield=[EOE_SPELLS["Weftwalking"]],
+    )
+    # Simulate a prior cast this turn.
+    state.players[0].spells_cast_this_turn = 1
+    card = state.players[0].hand[0]
+    moves = legal_moves(state)
+    free_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and m.cast_for_free
+    ]
+    assert not free_casts, (
+        "free-cast must be offered only on the player's FIRST spell each turn"
+    )
+
+
+def test_legal_moves_does_not_offer_free_cast_to_nonactive_player():
+    """The free-cast applies during EACH PLAYER'S OWN TURN. While it is
+    P0's turn, P1 (the nonactive player) should not be offered the
+    free-cast variant for spells in their hand even if they have
+    priority to cast instants."""
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.legal import legal_actions
+    from tests._rules_helpers import _arena
+
+    bolt = EOE_SPELLS["Plasma Bolt"]
+    state = _arena(
+        p1_hand=[bolt],
+        p0_battlefield=[EOE_SPELLS["Weftwalking"]],
+    )
+    # Hand priority off to P1 (e.g. P0 cast and passed).
+    state.priority_player_idx = 1
+    card = state.players[1].hand[0]
+    moves = legal_actions(state, 1)
+    free_casts = [
+        m for m in moves
+        if isinstance(m, CastSpell) and m.card_id == card.id and m.cast_for_free
+    ]
+    assert not free_casts, (
+        "nonactive player should not get free-cast on the active player's turn"
+    )

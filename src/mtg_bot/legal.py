@@ -113,6 +113,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             x_pips=base_cost.x_pips,
         )
 
+    # Weftwalking-style "first spell each player casts during each of
+    # their turns may be cast without paying its mana cost." Only
+    # offered to the active player when they haven't yet cast a spell
+    # this turn AND any battlefield permanent grants it.
+    free_first_cast_active = (
+        state.players[state.active_player_idx].id == player_id
+        and p.spells_cast_this_turn == 0
+        and any(
+            o.printing.grants_first_spell_each_turn_free
+            for o in state.battlefield
+        )
+    )
+
     # Instant-speed-castable: instants AND any permanent spell with flash.
     for card in p.hand:
         instant_speed = (
@@ -143,6 +156,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and p.life > card.printing.warp_additional_life_cost
         ):
             actions.append(CastSpell(card.id, use_warp=True))
+        # Weftwalking free-cast variant. Skips the mana-cost payable
+        # check (it's free) but still gates on targets / additional
+        # non-mana costs.
+        if (
+            free_first_cast_active
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            actions.append(CastSpell(card.id, cast_for_free=True))
 
     if not _is_sorcery_timing(state, player_id):
         return actions
@@ -203,6 +225,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and p.life > card.printing.warp_additional_life_cost
             ):
                 actions.append(CastSpell(card.id, use_warp=True))
+            # Weftwalking free-cast variant for this sorcery-speed
+            # spell. Skips the mana-cost payable check (it's free)
+            # but still gates on targets / additional non-mana costs.
+            if (
+                free_first_cast_active
+                and _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                actions.append(CastSpell(card.id, cast_for_free=True))
 
     # Warp-cast from graveyard. Timeline Culler grants this; see
     # warp_castable_from_graveyard. Currently only sorcery-speed since
@@ -224,6 +255,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and p.life > card.printing.warp_additional_life_cost
         ):
             actions.append(CastSpell(card.id, use_warp=True))
+        # Weftwalking free-cast variant for sorcery-speed spells.
+        if (
+            free_first_cast_active
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            actions.append(CastSpell(card.id, cast_for_free=True))
 
     # Warp-exile recasts at sorcery speed (for creatures / sorceries).
     # Instants in warp-exile could be recast at instant speed, but we don't

@@ -684,14 +684,16 @@ class TractorBeamETBEffect(Effect):
 
 @dataclass(frozen=True)
 class WeftwalkingETBEffect(Effect):
-    """Weftwalking's ETB (simplified): "Shuffle your hand and graveyard
-    into your library, then draw seven cards."
+    """Weftwalking's ETB: "Shuffle your hand and graveyard into your
+    library, then draw seven cards."
 
     The real oracle gates the shuffle-and-draw on "if you cast it"
     (vs. put into play by some other means). Our engine only puts
     enchantments onto the battlefield via casting, so the gate is a
     no-op. The card's static "first spell each turn may be cast
-    without paying mana cost" is NOT implemented.
+    without paying mana cost" is modeled via the
+    ``grants_first_spell_each_turn_free`` printing flag, plumbed
+    through legal_actions and _cast_spell — see those modules.
     """
 
     def resolve(
