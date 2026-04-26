@@ -1112,9 +1112,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # "At the beginning of your end step, if you control two or
         # more tapped creatures, you may discard your hand. If you do,
         # draw two cards."
-        # Simplification: the "may" is always yes (consistent with
-        # other OptionalSac-style effects). The tapped-creatures
-        # threshold is honored via ConditionalOnTappedCreatures.
+        # The tapped-creatures threshold is honored via
+        # ConditionalOnTappedCreatures, and the "may" is gated through
+        # ``Agent.choose_yes_no`` inside ``DiscardHandThenDrawN`` — if
+        # the controller declines, the hand is untouched and the
+        # dependent draw doesn't fire ("If you do, draw two cards").
         make_creature(
             "Vaultguard Trooper", "{4}{R}", 5, 5,
             triggered_abilities=(

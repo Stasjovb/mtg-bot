@@ -144,6 +144,7 @@ class Agent:
         be a subset of ``land_ids``; others are ignored."""
         raise NotImplementedError
 
+<<<<<<< HEAD
     def choose_mana_color(
         self,
         state: "GameState",
@@ -159,21 +160,34 @@ class Agent:
         ``options`` is guaranteed non-empty by the caller."""
         return options[0]
 
+=======
+>>>>>>> dafe9cd (Vaultguard Trooper: gate discard on the printed "may" choice)
     def choose_yes_no(
         self,
         state: "GameState",
         player_id: int,
         prompt: str,
     ) -> bool:
+<<<<<<< HEAD
         """Generic yes/no decision point — for "may" abilities where the
         controller chooses whether to take the optional action.
+=======
+        """Generic yes/no decision for "may" abilities where the
+        controller chooses whether to take an optional action.
+>>>>>>> dafe9cd (Vaultguard Trooper: gate discard on the printed "may" choice)
 
         Default: ``True`` (take the action). Many cards in the codebase
         encode "may → always yes" simplifications and depend on this
         baseline; only cards that explicitly call this callback give
+<<<<<<< HEAD
         the controller a real choice. Override on a per-agent basis to
         get smarter behavior, or pass an override-equipped agent in
         tests to exercise the no-branch."""
+=======
+        the controller a real choice. Override on a per-agent basis
+        to get smarter behavior, or pass an override-equipped agent
+        in tests to exercise the no-branch."""
+>>>>>>> dafe9cd (Vaultguard Trooper: gate discard on the printed "may" choice)
         return True
 
 
@@ -250,9 +264,12 @@ class RandomAgent(Agent):
         # uniform random agent has no way to evaluate the tradeoff.
         return []
 
+<<<<<<< HEAD
     def choose_mana_color(self, state, player_id, options):
         return self.rng.choice(options)
 
+=======
+>>>>>>> dafe9cd (Vaultguard Trooper: gate discard on the printed "may" choice)
     def choose_yes_no(self, state, player_id, prompt):
         # Coin flip — true to the random-action baseline.
         return self.rng.random() < 0.5

@@ -1592,7 +1592,8 @@ class DiscardHandThenDrawN(Effect):
     Matches Vaultguard Trooper's conditional end-step ability. Acts
     on the CONTROLLER's hand. The "may" is exposed via
     ``agent.choose_yes_no`` — if the controller declines, the hand is
-    untouched and nothing is drawn.
+    untouched and nothing is drawn (the dependent "If you do" rider
+    does not fire).
     """
 
     amount: int = 2
