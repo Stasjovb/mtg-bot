@@ -2206,15 +2206,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         # Oreplate Pangolin: {1}{R} 2/2 Artifact Creature. "Whenever
         # another artifact you control enters, you may pay {1}. If you do,
-        # put a +1/+1 counter on this creature." Simplified: drop the
-        # optional {1} payment.
+        # put a +1/+1 counter on this creature." The "may" is treated as
+        # auto-yes whenever the controller can afford {1}, matching the
+        # OptionalSac/Kavaron Harrier precedent in this codebase.
         make_creature(
             "Oreplate Pangolin", "{1}{R}", 2, 2,
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="artifact_enters_you_control",
-                    effect=PutPlusOneCounterOnSelf(amount=1),
+                    effect=OptionalManaCostThenEffect(
+                        cost_str="{1}",
+                        inner_effect=PutPlusOneCounterOnSelf(amount=1),
+                    ),
                 ),
             ),
         ),

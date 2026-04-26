@@ -893,3 +893,47 @@ class ConditionalIfVoid(Effect):
 
 
 
+@dataclass(frozen=True)
+class OptionalManaCostThenEffect(Effect):
+    """"You may pay {cost}. If you do, [inner_effect]."
+
+    Wraps an inner Effect with an optional mana-cost gate. Following the
+    OptionalSac/Kavaron Harrier precedent in this codebase, the "may"
+    is treated as YES whenever the controller can afford ``cost_str``;
+    otherwise the trigger does nothing.
+
+    Used for triggers like Oreplate Pangolin's "Whenever another artifact
+    you control enters, you may pay {1}. If you do, put a +1/+1 counter
+    on this creature."
+    """
+
+    cost_str: str
+    inner_effect: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import auto_tap_for_cost, can_pay_cost
+        from mtg_bot.cards import parse_mana_cost
+
+        cost = parse_mana_cost(self.cost_str)
+        if not can_pay_cost(state, controller_id, cost):
+            source = state.resolving_source
+            name = source.printing.name if source is not None else "ability"
+            state.log.append(
+                f"{name}: P{controller_id} can't pay {self.cost_str}; "
+                f"trigger does nothing"
+            )
+            return
+        auto_tap_for_cost(state, controller_id, cost)
+        self.inner_effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"you may pay {self.cost_str}; if you do, "
+            f"{self.inner_effect.describe()}"
+        )
+
+
+

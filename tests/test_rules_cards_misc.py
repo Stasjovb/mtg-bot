@@ -2246,14 +2246,16 @@ def test_brightspear_zealot_power_boost_requires_two_spells():
 
 def test_oreplate_pangolin_artifact_enters_trigger():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, TOKEN_PRINTINGS
 
-    state = _arena()
+    state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],))
     pang = state.new_object(
         EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(pang)
-    # Another artifact enters via token creation → +1/+1 counter on pangolin.
+    # Another artifact enters via token creation → controller can pay
+    # {1} (one untapped Mountain), so the trigger pays and lands a
+    # +1/+1 counter on pangolin.
     lander = state.new_object(
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
@@ -2273,15 +2275,58 @@ def test_oreplate_pangolin_artifact_enters_trigger():
 def test_pangolin_doesnt_trigger_on_itself():
     """The trigger says 'another artifact' — self-entry shouldn't fire."""
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
 
-    state = _arena()
+    # Plenty of mana available — even so the self-entry must not put a
+    # counter, because the trigger says "another artifact".
+    state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],) * 3)
     pang = state.new_object(
         EOE_CREATURES["Oreplate Pangolin"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     put_into_battlefield(state, pang, 0)
     assert pang.plus_one_counters == 0
+
+
+def test_pangolin_skips_counter_when_cannot_pay_optional_one():
+    """No mana available → optional {1} can't be paid → no counter."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena()  # no lands → controller can't pay {1}
+    pang = state.new_object(
+        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(pang)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, lander, 0)
+    assert pang.plus_one_counters == 0
+
+
+def test_pangolin_taps_a_land_to_pay_optional_cost():
+    """When the trigger fires and pays {1}, an untapped land becomes tapped."""
+    from mtg_bot.actions import put_into_battlefield, drain_stack
+    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, TOKEN_PRINTINGS
+
+    state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],))
+    mountain = next(
+        o for o in state.battlefield
+        if o.controller_id == 0 and o.printing.name == "Mountain"
+    )
+    assert not mountain.tapped
+    pang = state.new_object(
+        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    state.battlefield.append(pang)
+    lander = state.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    put_into_battlefield(state, lander, 0)
+    drain_stack(state)
+    assert pang.plus_one_counters == 1
+    assert mountain.tapped  # paid {1} by tapping the Mountain
 
 
 def test_mechan_assembler_fires_once_per_turn():

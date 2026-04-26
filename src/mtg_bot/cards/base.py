@@ -169,6 +169,7 @@ from mtg_bot.effects import (
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
     FocusFireEffect,
+    OptionalManaCostThenEffect,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
