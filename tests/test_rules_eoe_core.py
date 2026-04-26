@@ -1044,3 +1044,62 @@ def test_cleanup_wipes_eot_pumps():
     assert effective_power(state, adept_obj) == 2  # back to base
 
 
+# --------------------------------------------------------------------------
+# Rule: COMBAT-DAMAGE-TO-PLAYER TRIGGERS — go on the stack so opponents can
+# respond at instant speed before the ability resolves.
+# --------------------------------------------------------------------------
+
+
+def test_illvoi_infiltrator_combat_damage_trigger_goes_on_stack():
+    """The "whenever this creature deals combat damage to a player"
+    trigger must go on the stack — not resolve immediately. The user
+    needs a window to respond at instant speed, and the log line must
+    name the trigger so it's clear where the eventual draw came from.
+    """
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import _resolve_damage_step
+
+    state = _arena()
+    # Stock P0's library so the eventual draw has somewhere to draw from.
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(
+                BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+            )
+        )
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+
+    hand_before = len(state.players[0].hand)
+    stack_before = len(state.stack)
+    _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
+
+    # The damage step is over but the draw has NOT happened yet — the
+    # trigger is sitting on the stack.
+    assert len(state.players[0].hand) == hand_before
+    assert len(state.stack) == stack_before + 1
+    top = state.stack[-1]
+    assert top.source.id == inf.id
+    assert top.ability is inf.printing.triggered_abilities[0]
+    assert top.combat_damage_amount == 1
+
+    # Log line names the trigger explicitly — this is the
+    # "X's combat-damage-to-player trigger goes on the stack" line the
+    # UI relies on to show players where the draw came from.
+    assert any(
+        "Illvoi Infiltrator's combat-damage-to-player trigger goes on "
+        "the stack" in line
+        for line in state.log
+    ), state.log
+
+    # Resolving the stack actually draws.
+    resolve_top_of_stack(state)
+    assert len(state.players[0].hand) == hand_before + 1
+    assert len(state.stack) == stack_before
+
+

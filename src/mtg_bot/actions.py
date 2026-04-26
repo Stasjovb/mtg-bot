@@ -1342,6 +1342,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.resolving_additional_cost_choice_id = (
             item.additional_cost_choice_id
         )
+        state.resolving_combat_damage_amount = item.combat_damage_amount
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
@@ -1349,6 +1350,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             state.resolving_x_value = 0
             state.resolving_kicked = False
             state.resolving_additional_cost_choice_id = None
+            state.resolving_combat_damage_amount = 0
         return
 
     # Spell resolution

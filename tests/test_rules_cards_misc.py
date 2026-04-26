@@ -2193,6 +2193,7 @@ def test_sunstar_expansionist_landfall_pumps_self():
 
 
 def test_illvoi_infiltrator_draws_on_combat_damage_to_player():
+    from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step
 
@@ -2206,7 +2207,12 @@ def test_illvoi_infiltrator_draws_on_combat_damage_to_player():
     # P1 is defending; no blockers.
     hand_before = len(state.players[0].hand)
     _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
-    # 1 damage to P1 → trigger fires → draw a card.
+    # The trigger now goes on the stack rather than resolving inline —
+    # opponents get a chance to respond before the draw happens.
+    assert len(state.stack) == 1
+    assert len(state.players[0].hand) == hand_before
+    # Resolve the stack: the draw lands.
+    resolve_top_of_stack(state)
     assert len(state.players[0].hand) == hand_before + 1
 
 

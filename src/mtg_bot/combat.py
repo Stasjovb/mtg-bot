@@ -424,18 +424,27 @@ def _fire_combat_damage_to_player_triggers(
     state: GameState, sources_hit_player: list[tuple[int, int, int]]
 ) -> None:
     """For each (source_id, target_player_id, amount) triple, fire:
-    - the source's own ``combat_damage_to_player`` triggers,
+    - the source's own ``combat_damage_to_player`` triggers (via the
+      stack — opponents get a chance to respond at instant speed),
     - observer triggers on other permanents whose controllers see one
       of their own (nontoken artifact) creatures dealing combat damage
       (Virulent Silencer), and
     - "whenever a creature you control deals combat damage to a player"
       observer triggers (Starwinder's draw-that-many).
 
-    Observer triggers receive the hit player via ``targets=(("player",
-    tid),)`` so the effect can act on that specific player. During
-    resolution, ``state.resolving_combat_damage_amount`` carries the
-    damage amount so effects can read "that many".
+    The source's-own trigger goes on the stack as a StackItem with the
+    damage amount stashed in ``combat_damage_amount`` so the effect can
+    still read "that many" when it eventually resolves. Targets are
+    picked at trigger time, matching the ETB-trigger flow.
+
+    Observer triggers (artifact-creature-damage, your-creature-damage,
+    creature-deals-combat-damage-to-you) currently still resolve
+    immediately; reaching for the stack on those is a separate concern.
+    During those immediate resolutions,
+    ``state.resolving_combat_damage_amount`` carries the damage amount.
     """
+    from mtg_bot.actions import _format_log_targets
+    from mtg_bot.game import StackItem
     from mtg_bot.turn import should_fire_trigger
 
     for source_id, target_player, amount in sources_hit_player:
@@ -444,22 +453,69 @@ def _fire_combat_damage_to_player_triggers(
         )
         if source is None:
             continue  # source died from simultaneous damage
-        # Source's own triggers.
+        # Source's own triggers — go on the stack so opponents get a
+        # window to respond at instant speed before the ability resolves.
         for i, ability in enumerate(source.printing.triggered_abilities):
             if ability.trigger != "combat_damage_to_player":
                 continue
             if not should_fire_trigger(state, source.id, i, ability):
                 continue
-            state.log.append(
-                f"{source.printing.name}'s combat-damage-to-player trigger"
+            controller_id = source.controller_id
+            effect = ability.effect
+            targets: tuple[tuple[str, int], ...] = ()
+            min_t, max_t = effect.target_count_range()
+            if max_t > 0:
+                state.resolving_source = source
+                state.resolving_combat_damage_amount = amount
+                try:
+                    legal = effect.legal_targets(state, controller_id)
+                finally:
+                    state.resolving_source = None
+                    state.resolving_combat_damage_amount = 0
+                if not legal and min_t > 0:
+                    state.log.append(
+                        f"{source.printing.name}'s "
+                        f"combat-damage-to-player trigger has no legal "
+                        f"targets; trigger fizzles"
+                    )
+                    continue
+                controller = state.player_by_id(controller_id)
+                chosen_list: list[tuple[str, int]] = []
+                remaining = list(legal)
+                for _ in range(max_t):
+                    if not remaining:
+                        break
+                    if controller.agent is None:  # pragma: no cover
+                        break
+                    pick = controller.agent.choose_target(
+                        state, controller_id, remaining
+                    )
+                    if pick is None or pick not in remaining:
+                        break
+                    chosen_list.append(pick)
+                    remaining.remove(pick)
+                if len(chosen_list) < min_t:  # pragma: no cover
+                    state.log.append(
+                        f"{source.printing.name}'s "
+                        f"combat-damage-to-player trigger had no target "
+                        f"chosen; trigger fizzles"
+                    )
+                    continue
+                targets = tuple(chosen_list)
+            state.stack.append(
+                StackItem(
+                    source=source,
+                    controller_id=controller_id,
+                    ability=ability,
+                    targets=targets,
+                    combat_damage_amount=amount,
+                )
             )
-            state.resolving_source = source
-            state.resolving_combat_damage_amount = amount
-            try:
-                ability.effect.resolve(state, source.controller_id, ())
-            finally:
-                state.resolving_source = None
-                state.resolving_combat_damage_amount = 0
+            state.log.append(
+                f"{source.printing.name}'s combat-damage-to-player "
+                f"trigger goes on the stack"
+                + _format_log_targets(state, targets)
+            )
 
         # Observer: "whenever a nontoken artifact creature you control
         # deals combat damage to a player".

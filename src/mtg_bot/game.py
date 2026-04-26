@@ -541,6 +541,13 @@ class StackItem:
     # don't have such a cost. Mirrored to
     # state.resolving_additional_cost_choice_id during resolution.
     additional_cost_choice_id: Optional[int] = None
+    # Combat damage amount carried by a combat-damage-triggered ability
+    # while it sits on the stack. Mirrored to
+    # state.resolving_combat_damage_amount during resolution so effects
+    # like DrawCardsEqualToResolvingCombatDamage can read "that many"
+    # even though the ability resolves after the damage step ends.
+    # 0 for non-combat-damage triggers and for spells.
+    combat_damage_amount: int = 0
 
 
 @dataclass
