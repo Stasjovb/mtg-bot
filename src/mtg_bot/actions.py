@@ -491,6 +491,12 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     state.log.append(f"P{player_id} plays {card.printing.name}")
+    # ETB triggers on the land itself (Command Bridge's
+    # sacrifice-unless-tap rider). Push them on the stack like any
+    # other ETB. Mirrors put_into_battlefield's call site for
+    # creatures/artifacts. Lands go through _play_land, not
+    # put_into_battlefield, so we have to call this here.
+    _trigger_etb_abilities(state, card)
     fire_landfall_triggers(state, card)
     # "Whenever an opponent plays a land" triggers (Burgeoning) —
     # specifically the land-drop action, not any ETB. Fires under each

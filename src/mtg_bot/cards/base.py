@@ -59,6 +59,7 @@ from mtg_bot.effects import (
     PossibilityTechnicianETBEffect,
     TerritorialBruntarLandfallEffect,
     TractorBeamETBEffect,
+    SacrificeSelfUnlessTapPermanent,
     SacrificeSelfUnlessVoidActive,
     WeftwalkingETBEffect,
     PinnacleStarcageETBEffect,

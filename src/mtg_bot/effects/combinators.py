@@ -16,6 +16,83 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class SacrificeSelfUnlessTapPermanent(Effect):
+    """ETB rider: "sacrifice this unless you tap an untapped permanent
+    you control." Reads ``state.resolving_source`` for the source
+    permanent (typically a land like Command Bridge).
+
+    Resolution:
+      - Build the set of legal "alternative cost" picks: untapped
+        permanents the controller controls, EXCLUDING the source itself.
+      - If the set is empty, the source is sacrificed (no choice).
+      - Otherwise the controller's agent picks one via
+        ``choose_target`` with kind ``"untapped_permanent"``. Returning
+        None (or no agent) declines and the source is sacrificed; any
+        valid pick taps that permanent and the source stays.
+
+    Note: the source might already be tapped (Command Bridge enters
+    tapped before its ETB resolves) — the source is excluded from the
+    pickable set regardless.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice, tap_permanent
+
+        source = state.resolving_source
+        if source is None:
+            return
+        candidates = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and not o.tapped
+            and o.id != source.id
+        ]
+        if not candidates:
+            state.log.append(
+                f"{source.printing.name}: no untapped permanent to "
+                f"tap — sacrificed"
+            )
+            _sacrifice(state, source)
+            return
+        legal = [("untapped_permanent", o.id) for o in candidates]
+        p = state.player_by_id(controller_id)
+        chosen = None
+        if p.agent is not None:
+            chosen = p.agent.choose_target(state, controller_id, legal)
+        if chosen is None or chosen[0] != "untapped_permanent":
+            state.log.append(
+                f"{source.printing.name}: declined to tap a permanent "
+                f"— sacrificed"
+            )
+            _sacrifice(state, source)
+            return
+        target = next(
+            (o for o in candidates if o.id == chosen[1]), None
+        )
+        if target is None:
+            state.log.append(
+                f"{source.printing.name}: chosen permanent missing "
+                f"— sacrificed"
+            )
+            _sacrifice(state, source)
+            return
+        state.log.append(
+            f"P{controller_id} taps {target.printing.name} to keep "
+            f"{source.printing.name}"
+        )
+        tap_permanent(state, target)
+
+    def describe(self) -> str:
+        return (
+            "sacrifice this unless you tap an untapped permanent you control"
+        )
+
+
+
+@dataclass(frozen=True)
 class SacrificeSelfUnlessVoidActive(Effect):
     """End-step effect: "Sacrifice this unless Void is active." Reads
     state.resolving_source to find the sacrificing permanent. Matches

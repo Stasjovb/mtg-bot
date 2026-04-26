@@ -6,9 +6,13 @@ live in ``stellar_sights.py``.
 
 from __future__ import annotations
 
+from mtg_bot.effects import (
+    ActivatedAbility, ActivationCost, AddManaToPool,
+    SacrificeSelfUnlessTapPermanent, TriggeredAbility,
+)
 from mtg_bot.cards.base import (
     CardPrinting, make_basic_land, make_colorless_land, make_planet_land,
-    make_shock_land,
+    make_shock_land, make_utility_land,
 )
 
 
@@ -49,11 +53,28 @@ UTILITY_LANDS: dict[str, CardPrinting] = {
     # "{5},{T}: create a Robot token" activated abilities (tap-X-things
     # cost + Robot-token activated not worth wiring for one card).
     "Secluded Starforge": make_colorless_land("Secluded Starforge"),
-    # Command Bridge: simplified to just a {T}: Add {C} utility land.
-    # Dropped: "enters tapped + sac-unless-tap-permanent" ETB (ETB
-    # replacement with an alt cost isn't modeled) and the "tap for
-    # any color" rider.
-    "Command Bridge": make_colorless_land("Command Bridge"),
+    # Command Bridge: enters tapped; "When this land enters, sacrifice
+    # it unless you tap an untapped permanent you control"; {T}: add
+    # one mana of any color. The any-color tap is via an explicit
+    # mana ActivatedAbility (mirrors Gemstone Caverns/All-Fates Scroll
+    # pattern). The ETB rider runs through SacrificeSelfUnlessTapPermanent
+    # which delegates the tap-or-sac choice to the controller's agent.
+    "Command Bridge": make_utility_land(
+        "Command Bridge",
+        enters_tapped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                trigger="etb", effect=SacrificeSelfUnlessTapPermanent(),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    ),
 }
 
 
