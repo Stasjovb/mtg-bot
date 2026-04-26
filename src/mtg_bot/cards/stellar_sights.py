@@ -362,19 +362,30 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    # Grove of the Burnwillows: `{T}: Add {C}. {T}: Add {R} or {G}.
-    # Each opponent gains 1 life.` Modeled as produces={R,G} + a
-    # becomes-tapped trigger granting 1 to each opp. Simplification:
-    # the lifegain fires on every tap (including generic-only use),
-    # which is slightly over-broad compared to the printed two-mode
-    # mana ability.
+    # Grove of the Burnwillows: {T}: Add {C}. {T}: Add {R} or {G}.
+    # Each opponent gains 1 life. The lifegain rider is on the SECOND
+    # ability ONLY (the {R}/{G} tap), NOT on every tap — modeled as
+    # two separate activated mana abilities. The R/G one bundles
+    # AddNManaOfChosenColor + GrantLifeToEachOpponent in a Sequence
+    # so a single activation produces both halves.
     "Grove of the Burnwillows": make_utility_land(
         "Grove of the Burnwillows",
-        produces=frozenset({"R", "G"}),
-        triggered_abilities=(
-            TriggeredAbility(
-                trigger="becomes_tapped",
-                effect=GrantLifeToEachOpponent(amount=1),
+        produces=frozenset({"C", "R", "G"}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=Sequence(effects=(
+                    AddNManaOfChosenColor(
+                        amount=1, options=("R", "G"),
+                    ),
+                    GrantLifeToEachOpponent(amount=1),
+                )),
+                is_mana_ability=True,
             ),
         ),
     ),

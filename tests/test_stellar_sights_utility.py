@@ -98,19 +98,44 @@ def test_mana_confluence_not_legal_when_would_kill_you():
 # -----------------------
 
 
-def test_grove_of_the_burnwillows_produces_r_and_g():
+def test_grove_of_the_burnwillows_produces_c_r_and_g():
+    """Oracle has TWO mana abilities — {T}: Add {C} and {T}: Add {R} or
+    {G}. Both colors plus C are advertised in ``produces``."""
     g = STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"]
-    assert g.produces == frozenset({"R", "G"})
+    assert g.produces == frozenset({"C", "R", "G"})
 
 
-def test_grove_tapping_grants_life_to_each_opponent():
+def test_grove_colored_activation_grants_life_to_each_opponent():
+    """Activating the {T}: Add {R} or {G} mana ability resolves the
+    bundled GrantLifeToEachOpponent(amount=1) rider — each opponent
+    gains 1, controller's life unchanged."""
     state = _new_state()
     grove = _put(state, STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"])
-    auto_tap_for_cost(state, 0, parse_mana_cost("{R}"))
+    # ability_index=1 is the colored mana ability with the rider.
+    apply_action(
+        state, 0, ActivateAbility(source_id=grove.id, ability_index=1),
+    )
     drain_stack(state)
     assert grove.tapped
     assert state.players[1].life == 21
-    assert state.players[0].life == 20  # own life unchanged
+    assert state.players[0].life == 20
+
+
+def test_grove_colorless_activation_does_not_grant_life():
+    """Activating the {T}: Add {C} ability has NO lifegain rider —
+    opponents stay at base life. Audit fix: previously the impl fired
+    lifegain on every tap (becomes_tapped trigger), which over-fired
+    on the {C} ability."""
+    state = _new_state()
+    grove = _put(state, STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"])
+    # ability_index=0 is the {T}: Add {C} mana ability (no rider).
+    apply_action(
+        state, 0, ActivateAbility(source_id=grove.id, ability_index=0),
+    )
+    drain_stack(state)
+    assert grove.tapped
+    assert state.players[1].life == 20  # NO lifegain
+    assert state.players[0].life == 20
 
 
 def test_grant_life_effect_describe():
