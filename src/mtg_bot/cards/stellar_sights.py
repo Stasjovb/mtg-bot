@@ -280,15 +280,18 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     # only to cast colorless Eldrazi spells or activate abilities of
     # colorless Eldrazi.
     #
-    # Gameplay-moot in our EoE pool — no Eldrazi cards exist — but
-    # the machinery is modeled faithfully: the second mana ability
-    # produces two coins tagged "colorless_eldrazi", which
-    # _coin_satisfies_context accepts for "colorless_eldrazi_spell"
-    # (set in _cast_spell when the spell is an Eldrazi with no
-    # colored pips) and "colorless_eldrazi_ability" (set in
-    # _activate_ability when the source is a colorless-Eldrazi
-    # permanent). With no Eldrazi in-pool the coins effectively sit
-    # in the mana pool until cleanup.
+    # The second mana ability produces two coins tagged
+    # "colorless_eldrazi", which ``_coin_satisfies_context`` accepts
+    # for "colorless_eldrazi_spell" (set in ``_cast_spell`` when the
+    # spell is an Eldrazi with no colored pips) and
+    # "colorless_eldrazi_ability" (set in ``_activate_ability`` when
+    # the source is a colorless-Eldrazi permanent). Anticausal Vestige
+    # is the EoE pool's only Eldrazi card (its missing Eldrazi
+    # subtype was restored in a recent fix), so the cast-side
+    # discount is actually exercisable in real games. The activation
+    # side has no in-pool target — Vestige has no activated mana-cost
+    # abilities — but is verified via synthetic creatures in
+    # tests/test_stellar_sights_final_two.py.
     "Eldrazi Temple": make_utility_land(
         "Eldrazi Temple",
         activated_abilities=(
