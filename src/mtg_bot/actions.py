@@ -175,6 +175,10 @@ def _coin_satisfies_context(
         control"; we read that as "spend only to activate abilities of
         legendary permanents you control", matching how Eldrazi
         Temple's parallel "among colorless Eldrazi" line is modeled).
+      - "land_activation": adds coins tagged "land_activation". Set
+        when activating an ability on a land source (Sunken Citadel's
+        second mana ability — "Spend this mana only to activate
+        abilities of land sources").
       - "activated_ability": unrestricted only (a generic
         non-artifact ability activation).
     """
@@ -187,6 +191,11 @@ def _coin_satisfies_context(
     if (
         coin.spend_restriction == "artifact_spell"
         and "artifact_spell" in kinds
+    ):
+        return True
+    if (
+        coin.spend_restriction == "artifact_activation"
+        and "artifact_activation" in kinds
     ):
         return True
     if (
@@ -208,8 +217,8 @@ def _coin_satisfies_context(
     ):
         return True
     if (
-        spell_kind == "artifact_activation"
-        and coin.spend_restriction == "artifact_activation"
+        coin.spend_restriction == "land_activation"
+        and "land_activation" in kinds
     ):
         return True
     return False
@@ -1197,6 +1206,8 @@ def _activate_ability(
             ability_spell_kinds.add("artifact_activation")
         if source.printing.is_legendary:
             ability_spell_kinds.add("legendary_permanent_ability")
+        if source.printing.is_land:
+            ability_spell_kinds.add("land_activation")
         auto_tap_for_cost(
             state, player_id, mana,
             spell_kind=frozenset(ability_spell_kinds),

@@ -778,6 +778,9 @@ class ManaCoin:
       - "legendary_permanent_ability" — Plaza of Heroes's third mana
         ability ("Add one mana of any color among legendary
         permanents you control").
+      - "land_activation" — Sunken Citadel's second mana ability
+        ("Spend this mana only to activate abilities of land
+        sources").
     See ``actions._coin_satisfies_context`` for how each tag matches
     a payment context.
     """

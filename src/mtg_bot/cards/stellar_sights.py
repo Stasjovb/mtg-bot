@@ -897,20 +897,30 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     ),
     # Sunken Citadel: Enters tapped. As it enters, choose a color.
     # {T}: Add one mana of the chosen color. {T}: Add two mana of the
-    # chosen color — spend only to activate land abilities.
+    # chosen color — spend only to activate abilities of land sources.
     #
-    # Simplifications: the "choose a color on ETB" and per-object
-    # color storage aren't modeled — Citadel taps for one "any"-color
-    # coin (strictly more flexible than oracle's locked-in color).
-    # The second "add two mana, spend only for land abilities" ability
-    # is dropped — its spend restriction would need new cost-payment
-    # plumbing tagged for land-activations.
+    # Simplification: the "choose a color on ETB" + per-object color
+    # storage isn't modeled — Citadel taps for "any"-color coins
+    # (strictly more flexible than oracle's locked-in color). The
+    # second mana ability now produces two "any"-color coins tagged
+    # "land_activation" — usable only to pay for activations on land
+    # sources (Strip Mine's {T}, sac cost, Mishra's Workshop's
+    # generic-only mana abilities, etc.). See
+    # ``actions._coin_satisfies_context`` for the tag plumbing.
     "Sunken Citadel": make_utility_land(
         "Sunken Citadel", subtypes_str="Cave", enters_tapped=True,
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
                 effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 2),),
+                    spend_restriction="land_activation",
+                ),
                 is_mana_ability=True,
             ),
         ),

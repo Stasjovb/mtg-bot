@@ -420,6 +420,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     ability_kinds.add("artifact_activation")
                 if obj.printing.is_legendary:
                     ability_kinds.add("legendary_permanent_ability")
+                if obj.printing.is_land:
+                    ability_kinds.add("land_activation")
                 if not can_pay_cost(
                     state, player_id, effective_mana,
                     spell_kind=frozenset(ability_kinds),
