@@ -29,6 +29,7 @@ from mtg_bot.cards.base import (
     CostReduction,
     DOMINION_BRACELET_GRANTED_ABILITY,
     ExternalCostReduction,
+    MMNEMON_BLUE_MANA_GRANTED_ABILITY,
     ManaCost,
     RAGOST_FOOD_GRANTED_ABILITY,
     cost,

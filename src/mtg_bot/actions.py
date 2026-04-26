@@ -179,6 +179,12 @@ def _coin_satisfies_context(
         when activating an ability on a land source (Sunken Citadel's
         second mana ability — "Spend this mana only to activate
         abilities of land sources").
+      - "cast_from_outside_hand": adds coins tagged
+        "cast_from_outside_hand" (Mm'menon, the Right Hand's grant —
+        "Spend this mana only to cast a spell from anywhere other than
+        your hand"). Set in ``_cast_spell`` when the spell is being
+        cast from a zone other than the caster's hand (graveyard,
+        exile, or top of library).
       - "activated_ability": unrestricted only (a generic
         non-artifact ability activation).
     """
@@ -219,6 +225,11 @@ def _coin_satisfies_context(
     if (
         coin.spend_restriction == "land_activation"
         and "land_activation" in kinds
+    ):
+        return True
+    if (
+        coin.spend_restriction == "cast_from_outside_hand"
+        and "cast_from_outside_hand" in kinds
     ):
         return True
     return False
@@ -817,6 +828,10 @@ def _cast_spell(
     # when a permanent grants it — from the top of the library
     # (Mm'menon, the Right Hand). We resolve the source zone up
     # front so the rest of the flow treats it uniformly.
+    # ``cast_from_outside_hand`` flags non-hand origins for the
+    # spend-restriction tag set composed below (Mm'menon's blue mana
+    # ability is usable only for these casts).
+    cast_from_outside_hand = False
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
         cost = (
@@ -851,6 +866,7 @@ def _cast_spell(
         # Warp-cast from the graveyard (Timeline Culler).
         card = grave_card
         cost = card.printing.warp_cost
+        cast_from_outside_hand = True
         p.graveyard.remove(card)
         card.cast_via_warp = True
         state.spell_warped_this_turn = True
@@ -882,6 +898,7 @@ def _cast_spell(
         )
         if card is not None:
             cost = card.printing.mana_cost
+            cast_from_outside_hand = True
             p.exile.remove(card)
             card.warped = False
             card.playable_from_exile_this_turn = False
@@ -903,6 +920,7 @@ def _cast_spell(
             ):
                 card = p.library.pop(0)
                 cost = card.printing.mana_cost
+                cast_from_outside_hand = True
                 card.cast_via_warp = False
             else:  # pragma: no cover - defensive (legal_actions gates)
                 raise ValueError(
@@ -977,6 +995,11 @@ def _cast_spell(
     # to cast a legendary spell.
     if card.printing.is_legendary:
         spell_kinds.add("legendary_spell")
+    # Mm'menon, the Right Hand's grant produces coins usable only for
+    # casts from outside the controller's hand (graveyard, exile, top
+    # of library — set above when we resolved the spell's source zone).
+    if cast_from_outside_hand:
+        spell_kinds.add("cast_from_outside_hand")
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
     )

@@ -479,6 +479,8 @@ def effective_activated_abilities(
 
     Current grants:
     - Ragost: artifacts you control gain {2}, {T}, Sac: gain 3 life.
+    - Mm'menon, the Right Hand: artifacts you control gain {T}: Add {U}
+      with the "cast_from_outside_hand" spend restriction.
     - The Dominion Bracelet: the equipped creature gains the
       control-opponent-next-turn activated ability.
 
@@ -487,7 +489,9 @@ def effective_activated_abilities(
     ``effective_land_produces``, not as an activated ability).
     """
     from mtg_bot.cards import (
-        DOMINION_BRACELET_GRANTED_ABILITY, RAGOST_FOOD_GRANTED_ABILITY,
+        DOMINION_BRACELET_GRANTED_ABILITY,
+        MMNEMON_BLUE_MANA_GRANTED_ABILITY,
+        RAGOST_FOOD_GRANTED_ABILITY,
     )
 
     # Magus: nonbasic land abilities suppressed while in play.
@@ -499,13 +503,26 @@ def effective_activated_abilities(
 
     base = list(obj.printing.activated_abilities)
     if obj.printing.is_artifact:
+        seen_ragost = False
+        seen_mmnemon = False
         for o in state.battlefield:
             if o.id == obj.id:
                 continue
             if o.controller_id != obj.controller_id:
                 continue
-            if o.printing.grants_food_ability_to_your_artifacts:
+            if (
+                not seen_ragost
+                and o.printing.grants_food_ability_to_your_artifacts
+            ):
                 base.append(RAGOST_FOOD_GRANTED_ABILITY)
+                seen_ragost = True
+            if (
+                not seen_mmnemon
+                and o.printing.grants_blue_mana_ability_to_your_artifacts
+            ):
+                base.append(MMNEMON_BLUE_MANA_GRANTED_ABILITY)
+                seen_mmnemon = True
+            if seen_ragost and seen_mmnemon:
                 break
     # Equipment-granted abilities: walk attached equipment.
     for o in state.battlefield:
@@ -825,6 +842,9 @@ class ManaCoin:
       - "land_activation" — Sunken Citadel's second mana ability
         ("Spend this mana only to activate abilities of land
         sources").
+      - "cast_from_outside_hand" — Mm'menon, the Right Hand's
+        artifact-grant mana ability ("Spend this mana only to cast a
+        spell from anywhere other than your hand").
     See ``actions._coin_satisfies_context`` for how each tag matches
     a payment context.
     """

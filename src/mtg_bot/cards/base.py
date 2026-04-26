@@ -427,6 +427,13 @@ class CardPrinting:
     # Consumed by game.effective_activated_abilities to append the
     # pre-built RAGOST_FOOD_GRANTED_ABILITY to artifact activations.
     grants_food_ability_to_your_artifacts: bool = False
+    # "Artifacts you control have '{T}: Add {U}. Spend this mana only
+    # to cast a spell from anywhere other than your hand.'" Mm'menon,
+    # the Right Hand's static-grants-activated-ability clause.
+    # Consumed by game.effective_activated_abilities to append the
+    # pre-built MMNEMON_BLUE_MANA_GRANTED_ABILITY to artifact
+    # activations.
+    grants_blue_mana_ability_to_your_artifacts: bool = False
     # Equipment flag. When this equipment is attached to a creature,
     # that creature gains an activated ability to control the next
     # turn of a target opponent (The Dominion Bracelet). The full
@@ -680,6 +687,7 @@ def make_creature(
     grants_cast_artifact_from_top_of_library: bool = False,
     grants_food_to_your_artifacts: bool = False,
     grants_food_ability_to_your_artifacts: bool = False,
+    grants_blue_mana_ability_to_your_artifacts: bool = False,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     external_cost_reductions: tuple[ExternalCostReduction, ...] = (),
@@ -725,6 +733,9 @@ def make_creature(
         grants_food_to_your_artifacts=grants_food_to_your_artifacts,
         grants_food_ability_to_your_artifacts=(
             grants_food_ability_to_your_artifacts
+        ),
+        grants_blue_mana_ability_to_your_artifacts=(
+            grants_blue_mana_ability_to_your_artifacts
         ),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
@@ -1276,6 +1287,22 @@ RAGOST_FOOD_GRANTED_ABILITY = ActivatedAbility(
         sacrifice_self=True,
     ),
     effect=GainLife(amount=3),
+)
+
+
+# Pre-built activated ability granted to artifacts by Mm'menon, the
+# Right Hand's static: "Artifacts you control have '{T}: Add {U}.
+# Spend this mana only to cast a spell from anywhere other than your
+# hand.'" The "outside-of-hand" spend restriction is enforced via the
+# ``"cast_from_outside_hand"`` coin tag — see
+# ``actions._coin_satisfies_context``.
+MMNEMON_BLUE_MANA_GRANTED_ABILITY = ActivatedAbility(
+    cost=ActivationCost(tap_self=True),
+    effect=AddManaToPool(
+        produces=(("U", 1),),
+        spend_restriction="cast_from_outside_hand",
+    ),
+    is_mana_ability=True,
 )
 
 

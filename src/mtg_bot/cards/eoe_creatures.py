@@ -916,16 +916,20 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # of your library. Artifacts you control have '{T}: Add {U}.
         # Spend this mana only to cast a spell from anywhere other
         # than your hand.'"
-        # Implemented: flying + cast-artifact-from-top-of-library.
-        # Dropped: (1) the "look at top any time" info ability (our
-        # engine doesn't gate information anyway), (2) the static
-        # artifacts-have-mana-ability clause (engine has no
-        # static-grants-activated-ability plumbing yet).
+        # Implemented: flying + cast-artifact-from-top-of-library +
+        # the artifacts-have-mana-ability static grant. The granted
+        # ability is appended in ``effective_activated_abilities`` and
+        # produces coins tagged ``cast_from_outside_hand``, which
+        # ``_coin_satisfies_context`` accepts only when the spell
+        # being paid for is being cast from a non-hand zone.
+        # Dropped: the "look at top any time" info ability (our engine
+        # doesn't gate information anyway).
         make_creature(  # Mm'menon, the Right Hand
             "Mm'menon, the Right Hand", "{3}{U}{U}", 3, 4,
             keywords={"flying"},
             legendary=True,
             grants_cast_artifact_from_top_of_library=True,
+            grants_blue_mana_ability_to_your_artifacts=True,
         ),
         # Alpharael, Stonechosen `{3}{B}{B}` 3/3 Legendary Creature.
         # Warp `{2}{B}`. Real oracle: "Ward—Discard a card at random.

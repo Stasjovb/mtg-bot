@@ -34,8 +34,11 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
     ``card``. Mirrors the logic in ``actions._cast_spell``: a card may
     satisfy multiple coin restrictions at once (e.g., a legendary
     artifact spell satisfies both "artifact_spell" and "legendary_spell"
-    coin tags).
+    coin tags). Reads ``card.zone`` to detect non-hand origins
+    (graveyard / exile / library top — Mm'menon's grant).
     """
+    from mtg_bot.game import Zone
+
     kinds: set[str] = {"spell"}
     if card.printing.is_artifact:
         kinds.add("artifact_spell")
@@ -46,6 +49,8 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
         kinds.add("colorless_eldrazi_spell")
     if card.printing.is_legendary:
         kinds.add("legendary_spell")
+    if card.zone != Zone.HAND:
+        kinds.add("cast_from_outside_hand")
     return frozenset(kinds)
 
 
