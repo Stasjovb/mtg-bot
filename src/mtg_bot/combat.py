@@ -39,11 +39,21 @@ def can_block(
 
     Flying: a creature with flying can only be blocked by creatures with flying
     or reach.
+
+    Conditional unblockable: a printing flagged with
+    ``unblockable_if_two_spells_cast_this_turn`` (Illvoi Infiltrator)
+    rejects all blocks while its controller has already cast two or more
+    spells this turn. This is a static printed clause checked at
+    block-declaration time, not a runtime ``temp_unblockable`` flag.
     """
     attacker_kws = effective_keywords(state, attacker)
     blocker_kws = effective_keywords(state, blocker)
     if "flying" in attacker_kws:
         if not ("flying" in blocker_kws or "reach" in blocker_kws):
+            return False
+    if attacker.printing.unblockable_if_two_spells_cast_this_turn:
+        controller = state.player_by_id(attacker.controller_id)
+        if controller.spells_cast_this_turn >= 2:
             return False
     return True
 
@@ -130,6 +140,15 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
                 f"{blocker.printing.name}'s block is ignored"
             )
             continue
+        if attacker.printing.unblockable_if_two_spells_cast_this_turn:
+            ac = state.player_by_id(attacker.controller_id)
+            if ac.spells_cast_this_turn >= 2:
+                state.log.append(
+                    f"{attacker.printing.name} can't be blocked "
+                    f"(2+ spells cast this turn) — "
+                    f"{blocker.printing.name}'s block is ignored"
+                )
+                continue
         blocker.blocking = attacker_id
         attacker.blocked_by.append(blocker_id)
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")

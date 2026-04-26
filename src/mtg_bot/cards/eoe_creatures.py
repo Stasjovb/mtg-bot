@@ -868,12 +868,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Illvoi Infiltrator: {2}{U} 1/3. Whenever this creature deals
-        # combat damage to a player, draw a card. Simplified: drops the
-        # "can't be blocked if you've cast 2+ spells this turn" clause
-        # (conditional unblockable not yet modeled).
+        # Illvoi Infiltrator: {2}{U} 1/3.
+        #   "This creature can't be blocked if you've cast two or more
+        #    spells this turn." — modeled via the printing-level flag
+        #    unblockable_if_two_spells_cast_this_turn, checked in
+        #    combat.can_block / combat.declare_blockers against the
+        #    controller's Player.spells_cast_this_turn counter.
+        #   "Whenever this creature deals combat damage to a player,
+        #    draw a card." — combat_damage_to_player trigger.
         make_creature(
             "Illvoi Infiltrator", "{2}{U}", 1, 3,
+            unblockable_if_two_spells_cast_this_turn=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="combat_damage_to_player",

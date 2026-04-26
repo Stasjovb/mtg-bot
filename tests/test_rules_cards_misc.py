@@ -2613,6 +2613,104 @@ def test_combat_damage_to_player_trigger_skips_when_blocked():
     assert len(state.players[0].hand) == hand_before  # no trigger
 
 
+def test_illvoi_infiltrator_blockable_when_fewer_than_two_spells_cast():
+    """can_block returns True (Illvoi blockable) when controller has cast
+    0 or 1 spells this turn — the conditional unblockable hasn't kicked in.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import can_block
+
+    state = _arena()
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+    blocker = state.new_object(
+        SYNTHETIC_CREATURES["Wall of Stone"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(blocker)
+    # 0 spells cast: blockable.
+    assert state.players[0].spells_cast_this_turn == 0
+    assert can_block(state, blocker, inf) is True
+    # 1 spell cast: still blockable (need 2+).
+    state.players[0].spells_cast_this_turn = 1
+    assert can_block(state, blocker, inf) is True
+
+
+def test_illvoi_infiltrator_unblockable_when_two_spells_cast():
+    """can_block returns False against Illvoi once its controller has cast
+    2 (or more) spells this turn.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import can_block
+
+    state = _arena()
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+    blocker = state.new_object(
+        SYNTHETIC_CREATURES["Wall of Stone"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(blocker)
+    state.players[0].spells_cast_this_turn = 2
+    assert can_block(state, blocker, inf) is False
+    # Higher counts also unblockable.
+    state.players[0].spells_cast_this_turn = 5
+    assert can_block(state, blocker, inf) is False
+    # Crucially: gated on the ATTACKER's controller, not the blocker's
+    # controller. Bumping P1's counter doesn't unblock anything.
+    state.players[0].spells_cast_this_turn = 0
+    state.players[1].spells_cast_this_turn = 5
+    assert can_block(state, blocker, inf) is True
+
+
+def test_illvoi_infiltrator_declare_blockers_drops_block_and_logs():
+    """End-to-end: declare_blockers itself ignores assigned blockers when
+    the conditional unblockable is active, and emits an explanatory log.
+    The infiltrator then connects for combat damage and queues its
+    draw-a-card trigger.
+    """
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import _resolve_damage_step, declare_blockers
+
+    state = _arena()
+    _stock_library(state, 0, count=5)
+    inf = state.new_object(
+        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(inf)
+    inf.attacking = True
+    blocker = state.new_object(
+        SYNTHETIC_CREATURES["Wall of Stone"], owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(blocker)
+    state.players[0].spells_cast_this_turn = 2
+    declare_blockers(state, {blocker.id: inf.id})
+    # The block was rejected — neither side recorded the assignment.
+    assert blocker.blocking is None
+    assert inf.blocked_by == []
+    assert any(
+        "can't be blocked (2+ spells cast this turn)" in line
+        for line in state.log
+    ), state.log
+    # Combat damage now hits the player and queues the draw trigger.
+    hand_before = len(state.players[0].hand)
+    _resolve_damage_step(state, defending_player_id=1, first_strike_step=False)
+    assert len(state.stack) == 1
+    resolve_top_of_stack(state)
+    assert len(state.players[0].hand) == hand_before + 1
+
+
 def test_thaumaton_torpedo_destroys_nonland_permanent():
     from mtg_bot.cards import EOE_CREATURES
 

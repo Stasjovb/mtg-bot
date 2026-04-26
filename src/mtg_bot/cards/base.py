@@ -496,6 +496,14 @@ class CardPrinting:
     # aren't rewritten, and already-animated manlands keep their
     # temp_is_creature state (no layers yet).
     nonbasic_lands_are_mountains: bool = False
+    # Conditional unblockable: "This creature can't be blocked if you've
+    # cast two or more spells this turn." (Illvoi Infiltrator). When True
+    # and the controller's Player.spells_cast_this_turn >= 2, combat.can_block
+    # rejects all blockers against this attacker. Differs from the
+    # ``temp_unblockable`` runtime flag (set by activated effects like
+    # Creeping Tar Pit / pump effects) — this is a static printed clause
+    # gated on a per-turn counter.
+    unblockable_if_two_spells_cast_this_turn: bool = False
     # Zone-change replacement: when this card would be put into a
     # graveyard from ANY zone the engine currently models, instead it
     # is shuffled into its owner's library. Consumed by
@@ -612,6 +620,7 @@ def make_creature(
     replaces_draw_with_extra_when_hand_at_most_one: bool = False,
     warp_additional_life_cost: int = 0,
     warp_castable_from_graveyard: bool = False,
+    unblockable_if_two_spells_cast_this_turn: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -659,6 +668,9 @@ def make_creature(
         ),
         warp_additional_life_cost=warp_additional_life_cost,
         warp_castable_from_graveyard=warp_castable_from_graveyard,
+        unblockable_if_two_spells_cast_this_turn=(
+            unblockable_if_two_spells_cast_this_turn
+        ),
     )
 
 
