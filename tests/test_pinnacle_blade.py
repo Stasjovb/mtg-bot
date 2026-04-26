@@ -19,10 +19,19 @@ from mtg_bot.cards import (
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 
 
-def _new_state():
+def _make_fixed_mode_agent(mode_idx: int = 0) -> RandomAgent:
+    """Build a RandomAgent that always picks ``mode_idx`` when
+    ``choose_mode`` is called. Mutating ``choose_mode`` on an instance
+    is enough — the dataclass init stays untouched."""
+    a = RandomAgent()
+    a.choose_mode = lambda state, player_id, mode_descriptions: mode_idx  # type: ignore[assignment]
+    return a
+
+
+def _new_state(agent_factory=RandomAgent):
     state = GameState()
-    state.players.append(Player(id=0, agent=RandomAgent()))
-    state.players.append(Player(id=1, agent=RandomAgent()))
+    state.players.append(Player(id=0, agent=agent_factory()))
+    state.players.append(Player(id=1, agent=agent_factory()))
     return state
 
 
@@ -151,7 +160,9 @@ def test_pinnacle_emissary_printing_has_trigger():
 
 
 def test_blade_of_the_swarm_enters_with_two_plus_one_counters():
-    state = _new_state()
+    # Pin mode 0 (the +1/+1-counters mode); without an explicit pick,
+    # RandomAgent could roll mode 1 (warp-bottom) and fizzle.
+    state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=0))
     blade = state.new_object(
         EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
     )
@@ -164,3 +175,109 @@ def test_blade_of_the_swarm_enters_with_two_plus_one_counters():
 def test_blade_of_the_swarm_has_warp():
     b = EOE_CREATURES["Blade of the Swarm"]
     assert b.warp_cost_str == "{1}{B}"
+
+
+# -----------------------
+# Blade of the Swarm modal ETB — both oracle modes
+# (Audit-found bug regression: the warp-bottom mode was previously
+# silently dropped.)
+# -----------------------
+
+
+def test_blade_of_the_swarm_etb_is_modal_with_two_modes():
+    """Printing-level shape check: the ETB trigger now wraps a
+    ModalChooseOne with exactly two modes."""
+    from mtg_bot.effects import (
+        ModalChooseOne,
+        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+        PutPlusOneCounterOnSelf,
+    )
+    blade = EOE_CREATURES["Blade of the Swarm"]
+    etb = next(a for a in blade.triggered_abilities if a.trigger == "etb")
+    assert isinstance(etb.effect, ModalChooseOne)
+    assert len(etb.effect.modes) == 2
+    assert isinstance(etb.effect.modes[0], PutPlusOneCounterOnSelf)
+    assert etb.effect.modes[0].amount == 2
+    assert isinstance(
+        etb.effect.modes[1],
+        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    )
+
+
+def test_blade_mode_1_puts_warped_exile_card_on_bottom_of_library():
+    """Mode 1: the targeted warped-exile card moves to the bottom of
+    its owner's library and its warp flag clears."""
+    state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=1))
+    # Seed P1's exile with a warped creature card (e.g. Hullcarver).
+    warped = state.new_object(
+        EOE_CREATURES["Hullcarver"], 1, Zone.EXILE,
+    )
+    warped.warped = True
+    state.players[1].exile.append(warped)
+    # Give P1 a known library bottom for bottom-of-library assertion.
+    sentinel = state.new_object(
+        EOE_CREATURES["Hullcarver"], 1, Zone.LIBRARY,
+    )
+    state.players[1].library.append(sentinel)
+
+    blade = state.new_object(
+        EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
+    )
+    put_into_battlefield(state, blade, controller_id=0)
+    while state.stack:
+        resolve_top_of_stack(state)
+
+    assert warped not in state.players[1].exile
+    assert state.players[1].library[-1] is warped, (
+        "warped card should sit at the bottom of its owner's library"
+    )
+    assert warped.warped is False, "warp flag clears once it's a library card"
+    assert warped.zone == Zone.LIBRARY
+    # Mode 0's effect (counters on Blade) was NOT taken.
+    assert blade.plus_one_counters == 0
+
+
+def test_blade_mode_1_fizzles_when_no_warped_exile_card_exists():
+    """No warped card anywhere means mode 1 has no legal target, so
+    the modal fizzles silently — Blade still entered, no counters,
+    no library shuffle, no crash."""
+    state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=1))
+    blade = state.new_object(
+        EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
+    )
+    put_into_battlefield(state, blade, controller_id=0)
+    while state.stack:
+        resolve_top_of_stack(state)
+
+    assert blade in state.battlefield
+    assert blade.plus_one_counters == 0
+    # Both players' libraries should be empty (no card was bottom-decked).
+    assert state.players[0].library == []
+    assert state.players[1].library == []
+
+
+def test_blade_mode_1_legal_targets_excludes_non_warped_exile_cards():
+    """The new effect's legal_targets filter accepts only exile cards
+    whose ``warped`` flag is True."""
+    from mtg_bot.effects import (
+        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    )
+    state = _new_state()
+    # Plain (non-warped) exile card.
+    plain = state.new_object(
+        EOE_CREATURES["Hullcarver"], 0, Zone.EXILE,
+    )
+    state.players[0].exile.append(plain)
+    # Warped card on the opponent's side (still legal — "any owner").
+    warped_opp = state.new_object(
+        EOE_CREATURES["Hullcarver"], 1, Zone.EXILE,
+    )
+    warped_opp.warped = True
+    state.players[1].exile.append(warped_opp)
+
+    legal = OwnerPutsTargetWarpedExileCardOnBottomOfLibrary().legal_targets(
+        state, controller_id=0,
+    )
+    legal_ids = {tid for kind, tid in legal if kind == "exile_card"}
+    assert warped_opp.id in legal_ids
+    assert plain.id not in legal_ids

@@ -931,22 +931,24 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Blade of the Swarm `{3}{B}` 3/1 Creature. Warp `{1}{B}`.
-        # Real oracle ETB: "Choose one —
+        # Oracle ETB: "Choose one —
         #   • Put two +1/+1 counters on this creature.
         #   • Put target exiled card with warp on the bottom of its
         #     owner's library."
-        # Simplification: the second mode (bottom a warped exile card)
-        # isn't implemented — we'd need a zone-aware target filter
-        # for warped-exile cards. We expose only the first mode via
-        # PutPlusOneCounterOnSelf; the modal machinery stays intact
-        # for future extension.
+        # Both modes wired via ModalChooseOne. The second mode uses the
+        # exile-zone target kind ``"exile_card"`` introduced for this
+        # card; the warp flag on GameObject is already set by
+        # run_end_step_warp_exile when warp-cast creatures exile.
         make_creature(
             "Blade of the Swarm", "{3}{B}", 3, 1,
             warp="{1}{B}",
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="etb",
-                    effect=PutPlusOneCounterOnSelf(amount=2),
+                    effect=ModalChooseOne(modes=(
+                        PutPlusOneCounterOnSelf(amount=2),
+                        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(),
+                    )),
                 ),
             ),
         ),

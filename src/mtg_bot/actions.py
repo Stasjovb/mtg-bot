@@ -36,6 +36,14 @@ def _format_log_targets(state: GameState, targets: tuple) -> str:
         if on_stack is not None:
             parts.append(on_stack.source.printing.name)
             continue
+        if kind == "exile_card":
+            in_exile = next(
+                (c for p in state.players for c in p.exile if c.id == tid),
+                None,
+            )
+            if in_exile is not None:
+                parts.append(f"{in_exile.printing.name} (exiled)")
+                continue
         parts.append(f"?{kind}#{tid}")
     return " targeting " + ", ".join(parts)
 

@@ -183,6 +183,7 @@ from mtg_bot.effects import (
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     SelfMill,
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,

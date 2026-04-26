@@ -541,6 +541,82 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
 
 
 @dataclass(frozen=True)
+class OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(Effect):
+    """Put target exiled card with warp on the bottom of its owner's library.
+
+    Matches mode 1 of Blade of the Swarm. Target pool is every card in
+    any player's exile zone whose ``warped`` flag is set (the flag is
+    raised when a warp-cast creature is exiled at the end step). The
+    chosen card is moved to the bottom of its owner's library and its
+    warp-related state is cleared (it's now a normal library card).
+
+    Sibling of ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``,
+    but without the top/bottom owner choice (always bottom) and sourcing
+    from exile rather than the battlefield. Targets carry kind
+    ``"exile_card"`` — distinct from "permanent" because the card isn't
+    on the battlefield and the cast pipeline shouldn't try to look it up
+    there.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        out: list[Target] = []
+        for p in state.players:
+            for c in p.exile:
+                if c.warped:
+                    out.append(("exile_card", c.id))
+        return out
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "exile_card":
+            return
+        # Locate the target across every player's exile.
+        obj = None
+        owner = None
+        for p in state.players:
+            for c in p.exile:
+                if c.id == target_id:
+                    obj = c
+                    owner = p
+                    break
+            if obj is not None:
+                break
+        if obj is None or owner is None:
+            return
+        # Re-check the warped flag at resolution — if something stripped
+        # it (or the card moved zones in response), the spell fizzles.
+        if not obj.warped:
+            return
+        owner.exile.remove(obj)
+        obj.warped = False
+        obj.zone = Zone.LIBRARY
+        owner.library.append(obj)
+        state.log.append(
+            f"{obj.printing.name} put on the bottom of P{owner.id}'s "
+            f"library (was warped in exile)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put target exiled card with warp on the bottom of "
+            "its owner's library"
+        )
+
+
+
+@dataclass(frozen=True)
 class AttachToTargetCreatureYouControl(Effect):
     """Attach the source (Equipment) to target creature the controller
     controls. Matches the common ETB trigger on EoE Equipment.
