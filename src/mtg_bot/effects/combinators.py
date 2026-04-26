@@ -222,7 +222,10 @@ class OptionalSacArtifactForEffect(Effect):
     Similar to OptionalSacAnotherForEffect but doesn't require a
     ``state.resolving_source`` for self-exclusion — the "another"
     clause isn't in the oracle text (Lithobraking: "you may sacrifice
-    an artifact"). Agent picks the sacrifice via ``choose_sacrifice``.
+    an artifact"). The "may" is honored via ``Agent.choose_yes_no``;
+    default base-Agent behavior is "True" so existing cards that relied
+    on "may → always yes" are unaffected. Once the controller agrees
+    to sacrifice, ``choose_sacrifice`` picks WHICH artifact.
     """
 
     inner_effect: Effect
@@ -238,6 +241,14 @@ class OptionalSacArtifactForEffect(Effect):
         if not options:
             return
         p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            "Sacrifice an artifact for the rider?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines optional artifact sacrifice"
+            )
+            return
         if p.agent is None:
             chosen = options[0]
         else:

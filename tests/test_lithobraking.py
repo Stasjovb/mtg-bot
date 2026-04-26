@@ -133,3 +133,61 @@ def test_optional_sac_artifact_no_agent_defaults_to_first():
     )
     effect.resolve(state, 0, ())
     assert artifact not in state.battlefield
+
+
+# -----------------------
+# choose_yes_no honored: "may" decision really gates the rider
+# -----------------------
+
+
+class _NoSacAgent(Agent):
+    """Declines every yes/no decision."""
+
+    def choose_yes_no(self, state, player_id, prompt):
+        return False
+
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        return legal_object_ids[0]
+
+
+def test_optional_sac_artifact_honors_no_yes_no_decline():
+    """Oracle: 'You may sacrifice an artifact.' The 'may' is real —
+    when the controller's agent says no, the artifact stays and the
+    inner effect doesn't fire."""
+    state = _new_state(_NoSacAgent())
+    artifact = state.new_object(
+        TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(artifact)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    effect = OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=2),
+    )
+    effect.resolve(state, 0, ())
+    # Artifact intact, no damage dealt.
+    assert artifact in state.battlefield
+    assert bear.damage == 0
+
+
+def test_lithobraking_decline_keeps_lander_and_skips_damage():
+    """End-to-end: declining the optional sac on Lithobraking leaves
+    the Lander (the just-created token) on the battlefield AND skips
+    the deals-2-damage rider."""
+    state = _new_state(_NoSacAgent())
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    lithobraking = EOE_SPELLS["Lithobraking"]
+    lithobraking.spell_effect.resolve(state, 0, ())
+    # Bear is undamaged.
+    assert bear.damage == 0
+    # The Lander created by the first half of the spell stuck around.
+    landers_on_bf = [
+        o for o in state.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 0
+    ]
+    assert len(landers_on_bf) == 1
