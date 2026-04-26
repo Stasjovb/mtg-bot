@@ -95,9 +95,10 @@ class DefaultTacticalAgent(Agent):
         return []
 
     def choose_mana_color(self, state, player_id, options):
-        # First option (W under the standard ordering). Deterministic
-        # for search; future tactical policy can pick by analysing the
-        # cards in hand or pending costs on the stack.
+        # First option (W under the standard ordering, or first sorted
+        # element when caller pre-sorts). Deterministic for search;
+        # future tactical policy can pick by analysing the cards in
+        # hand or pending costs on the stack.
         return options[0]
 
     def choose_yes_no(self, state, player_id, prompt):

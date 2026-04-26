@@ -132,6 +132,12 @@ def test_choose_yes_no_takes_the_optional_action():
     assert agent.choose_yes_no(s, 0, "Take the may action?") is True
 
 
+def test_choose_mana_color_picks_first_option():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_mana_color(s, 0, ["B", "G"]) == "B"
+
+
 def test_defaults_cover_every_base_agent_method():
     """Every abstract method on Agent has a concrete override in
     DefaultTacticalAgent — otherwise mid-resolution callbacks would

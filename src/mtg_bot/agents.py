@@ -151,10 +151,12 @@ class Agent:
         options: list[str],
     ) -> str:
         """For mana abilities like Lotus Field's "Add three mana of any
-        one color", pick exactly one color from ``options`` (e.g.
-        ``["W", "U", "B", "R", "G"]``). Default behavior in the base
-        ``Agent`` returns the first option; concrete agents override.
-        Implementations must return a value from ``options``."""
+        one color" or Reflecting Pool's "Add one mana of any type that
+        a land you control could produce", pick exactly one color from
+        ``options`` (e.g. ``["W", "U", "B", "R", "G"]``, or a constrained
+        subset). Default returns the first option; concrete agents
+        override. Implementations must return a value from ``options``;
+        ``options`` is guaranteed non-empty by the caller."""
         return options[0]
 
     def choose_yes_no(

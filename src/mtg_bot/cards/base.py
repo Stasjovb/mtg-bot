@@ -131,6 +131,7 @@ from mtg_bot.effects import (
     ExileAllArtifactsWithManaValueAtMost,
     AnticausalVestigeLeavesEffect,
     AddManaToPool,
+    AddOneManaFromControlledLandsProductions,
     AllFatesScrollDrawEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,

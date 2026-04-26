@@ -720,15 +720,19 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         ),
     ),
     # Reflecting Pool: {T}: Add one mana of any type that a land you
-    # control could produce. Simplified to "any" coin — the dynamic
-    # "type your lands could produce" is a wildcard in practice
-    # (our agents don't reason about conditional mana availability).
+    # control could produce. Computes the union of `printing.produces`
+    # across every land the controller has in play, asks the agent to
+    # pick one of those colors, and mints exactly one coin of the
+    # chosen color. Strictly more restrictive than an "any" coin —
+    # Pool can only produce colors a land you control can already
+    # produce. Falls back to {C} if (defensively) the controller has
+    # no lands or all their lands have empty produces sets.
     "Reflecting Pool": make_utility_land(
         "Reflecting Pool",
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
-                effect=AddManaToPool(produces=(("any", 1),)),
+                effect=AddOneManaFromControlledLandsProductions(),
                 is_mana_ability=True,
             ),
         ),
