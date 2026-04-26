@@ -143,6 +143,7 @@ from mtg_bot.effects.generic import (
     SacrificeNLandsYouControl,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
+    SearchLibraryForEquipmentToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     SelfMill,
     SetLifeToHalfStartingRoundedUp,

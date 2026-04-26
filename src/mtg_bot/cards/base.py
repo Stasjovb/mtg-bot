@@ -193,6 +193,7 @@ from mtg_bot.effects import (
     MillTargetPlayer,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
+    SearchLibraryForEquipmentToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     TakeExtraTurnAfterThisOne,
     SelfcraftMechanETBEffect,

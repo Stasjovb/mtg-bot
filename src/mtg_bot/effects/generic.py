@@ -3334,6 +3334,65 @@ class SearchLibraryForBasicLandTapped(Effect):
 
 
 @dataclass(frozen=True)
+class SearchLibraryForEquipmentToBattlefield(Effect):
+    """Search the controller's library for an Equipment card, put it
+    onto the battlefield (untapped, under the controller's control),
+    then shuffle.
+
+    Models Honored Knight-Captain's activated tutor: ``{4}{W}{W},
+    Sacrifice this creature: Search your library for an Equipment card,
+    put it onto the battlefield, then shuffle.``
+
+    The agent picks which Equipment via ``choose_card_from_library``.
+    If no Equipment exists in library, the search fails and a shuffle
+    still happens. The card enters via ``put_into_battlefield`` so any
+    ETB triggers (e.g., the auto-attach riders on EoE Equipment) fire
+    normally.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.library
+            if "Equipment" in c.printing.subtypes
+        ]
+        if not options:
+            state.log.append(
+                f"P{controller_id} searches but finds no Equipment"
+            )
+            shuffle_library(state, controller_id)
+            return
+        chosen_id = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options]
+            )
+        card = next(
+            (c for c in options if c.id == chosen_id), options[0],
+        )
+        p.library.remove(card)
+        state.log.append(
+            f"P{controller_id} fetches {card.printing.name} to "
+            f"battlefield (Honored Knight-Captain)"
+        )
+        put_into_battlefield(state, card, controller_id)
+        shuffle_library(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "search your library for an Equipment card, put it onto "
+            "the battlefield, then shuffle"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageEachOpponent(Effect):
     """Deal ``amount`` damage to each living opponent. Untargeted — mass
     burn half of Ruinous Rampage's choice.

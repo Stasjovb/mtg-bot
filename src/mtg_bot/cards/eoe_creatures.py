@@ -45,9 +45,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Honored Knight-Captain also has a {4}{W}{W}, Sacrifice: search
-        # your library for an Equipment activated ability — not yet
-        # implemented (no activated-ability or sacrifice framework).
+        # Honored Knight-Captain: ETB creates a 1/1 Human Soldier token.
+        # Activated ability ``{4}{W}{W}, Sacrifice this creature: Search
+        # your library for an Equipment card, put it onto the battle-
+        # field, then shuffle.``
         make_creature(
             "Honored Knight-Captain", "{1}{W}", 1, 1,
             triggered_abilities=(
@@ -57,6 +58,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         token_printing=TOKEN_PRINTINGS["Human Soldier"],
                         count=1,
                     ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{4}{W}{W}", sacrifice_self=True),
+                    effect=SearchLibraryForEquipmentToBattlefield(),
                 ),
             ),
         ),
