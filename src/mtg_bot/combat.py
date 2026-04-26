@@ -19,8 +19,23 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
         and is_creature_now(o)
         and not o.tapped
         and (not o.summoning_sick or "haste" in effective_keywords(state, o))
-        and "defender" not in effective_keywords(state, o)
+        and (
+            "defender" not in effective_keywords(state, o)
+            or _can_attack_through_defender(state, o)
+        )
     ]
+
+
+def _can_attack_through_defender(state: GameState, obj: GameObject) -> bool:
+    """Return True if a static ability lets ``obj`` attack despite having
+    defender. Currently models Mechan Shieldmate's "as long as an
+    artifact entered the battlefield under your control this turn,
+    this creature can attack as though it didn't have defender."
+    """
+    if not obj.printing.attack_bypass_if_artifact_entered_this_turn:
+        return False
+    p = state.player_by_id(obj.controller_id)
+    return p.artifacts_entered_under_your_control_this_turn > 0
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:

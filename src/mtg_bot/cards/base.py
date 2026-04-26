@@ -504,6 +504,16 @@ class CardPrinting:
     # Creeping Tar Pit / pump effects) — this is a static printed clause
     # gated on a per-turn counter.
     unblockable_if_two_spells_cast_this_turn: bool = False
+    # Static attack-restriction relaxation: while True, this creature's
+    # "defender" keyword is ignored for attack-eligibility on any turn
+    # in which an artifact has entered the battlefield under its
+    # controller's control (tracked on
+    # ``Player.artifacts_entered_under_your_control_this_turn``).
+    # Matches Mechan Shieldmate's "as long as an artifact entered the
+    # battlefield under your control this turn, this creature can
+    # attack as though it didn't have defender." Consumed in
+    # ``combat.eligible_attackers``.
+    attack_bypass_if_artifact_entered_this_turn: bool = False
     # Zone-change replacement: when this card would be put into a
     # graveyard from ANY zone the engine currently models, instead it
     # is shuffled into its owner's library. Consumed by
@@ -621,6 +631,7 @@ def make_creature(
     warp_additional_life_cost: int = 0,
     warp_castable_from_graveyard: bool = False,
     unblockable_if_two_spells_cast_this_turn: bool = False,
+    attack_bypass_if_artifact_entered_this_turn: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -670,6 +681,9 @@ def make_creature(
         warp_castable_from_graveyard=warp_castable_from_graveyard,
         unblockable_if_two_spells_cast_this_turn=(
             unblockable_if_two_spells_cast_this_turn
+        ),
+        attack_bypass_if_artifact_entered_this_turn=(
+            attack_bypass_if_artifact_entered_this_turn
         ),
     )
 

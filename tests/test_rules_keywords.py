@@ -198,6 +198,91 @@ def test_defender_can_still_block():
 
 
 # --------------------------------------------------------------------------
+# Rule: MECHAN SHIELDMATE — defender that can attack the turn an artifact
+# entered the battlefield under your control. Drives the static
+# ``attack_bypass_if_artifact_entered_this_turn`` flag and the per-player
+# ``artifacts_entered_under_your_control_this_turn`` counter.
+# --------------------------------------------------------------------------
+
+
+def test_mechan_shieldmate_cannot_attack_with_no_artifact_entering_this_turn():
+    """Baseline: with no artifact entering this turn, Defender still
+    blocks attack-eligibility — Mechan Shieldmate is a normal wall."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Mechan Shieldmate"]])
+    shieldmate = state.battlefield[0]
+    # _arena sets up battlefield directly, so the per-turn counter is 0.
+    assert state.players[0].artifacts_entered_under_your_control_this_turn == 0
+    assert shieldmate not in eligible_attackers(state, player_id=0)
+
+
+def test_mechan_shieldmate_can_attack_when_artifact_entered_this_turn():
+    """When ``put_into_battlefield`` runs for any artifact under the
+    same controller, Mechan Shieldmate becomes a legal attacker."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Mechan Shieldmate"]])
+    shieldmate = state.battlefield[0]
+    assert shieldmate not in eligible_attackers(state, player_id=0)
+    # Now resolve a fresh artifact entering under P0's control. We use
+    # Mechan Shieldmate itself as the entering printing — it doesn't
+    # matter that there are now two on the battlefield for this assertion;
+    # what matters is that put_into_battlefield bumps the per-turn counter.
+    new_obj = state.new_object(
+        EOE_CREATURES["Mechan Shieldmate"], owner_id=0, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, new_obj, controller_id=0)
+    assert state.players[0].artifacts_entered_under_your_control_this_turn == 1
+    # The original (non-summoning-sick) Shieldmate can now attack.
+    assert shieldmate in eligible_attackers(state, player_id=0)
+
+
+def test_mechan_shieldmate_attack_bypass_resets_at_cleanup():
+    """The per-turn artifact-entered counter resets at cleanup, so the
+    bypass only applies on the turn the artifact entered."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Mechan Shieldmate"]])
+    shieldmate = state.battlefield[0]
+    new_obj = state.new_object(
+        EOE_CREATURES["Mechan Shieldmate"], owner_id=0, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, new_obj, controller_id=0)
+    assert shieldmate in eligible_attackers(state, player_id=0)
+    # Now cleanup runs — counter should reset and Defender re-asserts.
+    run_cleanup_step(state)
+    assert state.players[0].artifacts_entered_under_your_control_this_turn == 0
+    assert shieldmate not in eligible_attackers(state, player_id=0)
+
+
+def test_mechan_shieldmate_attack_bypass_does_not_leak_across_controllers():
+    """The bypass keys on the *controller's* per-turn counter — an
+    artifact entering under the OPPONENT's control must not unlock
+    Mechan Shieldmate for its controller."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.combat import eligible_attackers
+
+    state = _arena(p0_battlefield=[EOE_CREATURES["Mechan Shieldmate"]])
+    shieldmate = state.battlefield[0]
+    # P1 (the opponent) gets an artifact entering under their control.
+    other_artifact = state.new_object(
+        EOE_CREATURES["Mechan Shieldmate"], owner_id=1, zone=Zone.HAND,
+    )
+    put_into_battlefield(state, other_artifact, controller_id=1)
+    assert state.players[0].artifacts_entered_under_your_control_this_turn == 0
+    assert state.players[1].artifacts_entered_under_your_control_this_turn == 1
+    # P0's Shieldmate is still walled — no bypass.
+    assert shieldmate not in eligible_attackers(state, player_id=0)
+
+
+# --------------------------------------------------------------------------
 # Rule: MENACE — can't be blocked by fewer than two creatures
 # --------------------------------------------------------------------------
 

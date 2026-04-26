@@ -624,6 +624,16 @@ class Player:
     # attacker this turn. Reset at cleanup. Drives the
     # "attacked_with_spacecraft_this_turn" cost-reduction condition.
     attacked_with_spacecraft_this_turn: bool = False
+    # Number of artifacts that entered the battlefield under this
+    # player's control this turn. Reset at cleanup. Incremented by
+    # ``actions.put_into_battlefield`` whenever an artifact (including
+    # artifact creatures and artifact tokens) enters under their
+    # control. Used by Mechan Shieldmate's "as long as an artifact
+    # entered the battlefield under your control this turn, this
+    # creature can attack as though it didn't have defender" — see
+    # ``CardPrinting.attack_bypass_if_artifact_entered_this_turn`` and
+    # ``combat.eligible_attackers``.
+    artifacts_entered_under_your_control_this_turn: int = 0
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None

@@ -1591,6 +1591,14 @@ def put_into_battlefield(
     # put-onto-battlefield effects that don't go through _play_land.
     if obj.printing.is_land:
         state.player_by_id(controller_id).lands_entered_this_turn += 1
+    if obj.printing.is_artifact:
+        # Track per-player "an artifact entered under your control
+        # this turn" for static-ability gates like Mechan Shieldmate's
+        # conditional attack-bypass for defenders. Counts artifact
+        # creatures and artifact tokens too. Reset at cleanup.
+        state.player_by_id(
+            controller_id
+        ).artifacts_entered_under_your_control_this_turn += 1
     _trigger_etb_abilities(state, obj)
     if obj.printing.is_artifact:
         _fire_artifact_enters_triggers(state, obj)

@@ -1652,13 +1652,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Mechan Shieldmate: {1}{U} 3/2 Artifact Creature — Robot Soldier
-        # with Defender. Simplified: drops the conditional "can attack
-        # as though it didn't have defender if an artifact entered this
-        # turn" clause (conditional defender-override not modeled).
+        # with Defender. The "as long as an artifact entered the
+        # battlefield under your control this turn, this creature can
+        # attack as though it didn't have defender" clause is modeled
+        # via the ``attack_bypass_if_artifact_entered_this_turn`` flag,
+        # which combat.eligible_attackers checks against
+        # Player.artifacts_entered_under_your_control_this_turn (which
+        # actions.put_into_battlefield increments and run_cleanup_step
+        # resets each turn).
         make_creature(
             "Mechan Shieldmate", "{1}{U}", 3, 2,
             artifact=True,
             keywords={"defender"},
+            attack_bypass_if_artifact_entered_this_turn=True,
         ),
         # Mouth of the Storm: {6}{U} 6/6 Flying, Ward {2}. ETB:
         # "creatures your opponents control get -3/-0 until your next
