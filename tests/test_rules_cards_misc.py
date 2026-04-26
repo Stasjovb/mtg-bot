@@ -2119,6 +2119,55 @@ def test_melded_moxite_etb_loot_and_sac_for_robot():
     assert robots[0].tapped is True
 
 
+def test_melded_moxite_activated_ability_cost_is_three_generic_and_sac():
+    """Audit regression: oracle cost is '{3}, Sacrifice this artifact'.
+
+    Lock in that the only activated ability costs exactly {3} generic plus
+    sacrificing the Moxite itself — no tap, no colored mana, no other
+    riders. A future refactor that changes either piece would break this.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+
+    moxite = EOE_CREATURES["Melded Moxite"]
+    assert len(moxite.activated_abilities) == 1
+    act = moxite.activated_abilities[0]
+    assert act.cost.mana_str == "{3}"
+    assert act.cost.mana.generic == 3
+    assert act.cost.mana.colored == ()
+    assert act.cost.mana.x_pips == 0
+    assert act.cost.sacrifice_self is True
+    assert act.cost.tap_self is False
+
+
+def test_melded_moxite_activated_creates_one_tapped_2_2_colorless_robot():
+    """Audit regression: token created by the activated ability matches
+    the printed rider — exactly one 2/2 colorless Robot artifact creature
+    token, entering tapped. Guards against any of: wrong count, wrong P/T,
+    accidentally adding a color, dropping the artifact card type, or the
+    'enters tapped' bit getting toggled off.
+    """
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects import CreateToken
+
+    moxite = EOE_CREATURES["Melded Moxite"]
+    act = moxite.activated_abilities[0]
+    assert isinstance(act.effect, CreateToken)
+    assert act.effect.count == 1
+    assert act.effect.tapped is True
+
+    tok = act.effect.token_printing
+    assert tok.name == "Robot"
+    assert tok.power == 2
+    assert tok.toughness == 2
+    assert "Token" in tok.supertypes
+    assert "Artifact" in tok.card_types
+    assert "Creature" in tok.card_types
+    assert "Robot" in tok.subtypes
+    # Colorless: no colored pips and no color identity bits in mana cost.
+    assert tok.mana_cost.colored == ()
+    assert tok.mana_cost.generic == 0
+
+
 def test_dubious_delicacy_etb_and_activated():
     from mtg_bot.cards import EOE_CREATURES
 
