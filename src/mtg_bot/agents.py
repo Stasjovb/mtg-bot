@@ -144,6 +144,19 @@ class Agent:
         be a subset of ``land_ids``; others are ignored."""
         raise NotImplementedError
 
+    def choose_mana_color(
+        self,
+        state: "GameState",
+        player_id: int,
+        options: list[str],
+    ) -> str:
+        """For mana abilities like Lotus Field's "Add three mana of any
+        one color", pick exactly one color from ``options`` (e.g.
+        ``["W", "U", "B", "R", "G"]``). Default behavior in the base
+        ``Agent`` returns the first option; concrete agents override.
+        Implementations must return a value from ``options``."""
+        return options[0]
+
 
 @dataclass
 class RandomAgent(Agent):
@@ -217,3 +230,6 @@ class RandomAgent(Agent):
         # lands for +1/+1 counters is usually a losing trade and a
         # uniform random agent has no way to evaluate the tradeoff.
         return []
+
+    def choose_mana_color(self, state, player_id, options):
+        return self.rng.choice(options)

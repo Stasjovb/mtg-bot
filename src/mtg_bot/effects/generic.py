@@ -1556,6 +1556,54 @@ class AddManaToPool(Effect):
 
 
 @dataclass(frozen=True)
+class AddNManaOfChosenColor(Effect):
+    """Add ``amount`` mana of a single color chosen by the controller
+    at resolution time.
+
+    Models oracle text like Lotus Field's "Add three mana of any one
+    color" — the player picks ONE of W/U/B/R/G and gets ``amount``
+    coins of that one color (not ``amount`` independent picks). This
+    is strictly less flexible than minting "any"-coloured wildcards,
+    so it is faithful to the printed clause.
+
+    The choice is delegated to ``Agent.choose_mana_color``. If the
+    controller has no agent seated (e.g. some unit-test setups), the
+    first color in ``options`` is used as a deterministic fallback.
+
+    Designed to be reusable for other "controller picks one color"
+    mana abilities (Reflecting Pool, Meteor Crater, Sunken Citadel),
+    though wiring those is left for a follow-up.
+    """
+
+    amount: int
+    options: tuple[str, ...] = ("W", "U", "B", "R", "G")
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        opts = list(self.options)
+        chosen = opts[0]
+        if p.agent is not None:
+            picked = p.agent.choose_mana_color(state, controller_id, opts)
+            if picked in opts:
+                chosen = picked
+        for _ in range(self.amount):
+            p.mana_pool.append(ManaCoin(color=chosen))
+        state.log.append(
+            f"P{controller_id} adds {chosen}x{self.amount} to mana pool "
+            f"(chosen color)"
+        )
+
+    def describe(self) -> str:
+        return f"add {self.amount} mana of any one color"
+
+
+
+@dataclass(frozen=True)
 class ControlTargetOpponentNextTurn(Effect):
     """The Dominion Bracelet: "You control target opponent during
     their next turn."

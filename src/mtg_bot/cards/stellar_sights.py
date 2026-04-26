@@ -454,10 +454,9 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
     # Lotus Field: Hexproof. Enters tapped. When it enters, sacrifice
     # two lands. {T}: Add three mana of any one color.
     #
-    # Simplification: oracle's "three of any ONE color" becomes three
-    # coins tagged "any" (each is a wildcard satisfying any colored
-    # requirement). Strictly more flexible than oracle — a small
-    # upside for the player — but correct for non-hybrid costs.
+    # The {T} ability uses AddNManaOfChosenColor: at resolution the
+    # controller's agent picks ONE of W/U/B/R/G via choose_mana_color
+    # and three coins of that single color are added to the pool.
     "Lotus Field": make_utility_land(
         "Lotus Field",
         keywords=frozenset({"hexproof"}),
@@ -471,7 +470,7 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
-                effect=AddManaToPool(produces=(("any", 3),)),
+                effect=AddNManaOfChosenColor(amount=3),
                 is_mana_ability=True,
             ),
         ),

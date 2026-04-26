@@ -37,6 +37,7 @@ from mtg_bot.effects import (
     UntapTargetLand,
     Sequence,
     AddManaToPool,
+    AddNManaOfChosenColor,
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
     CreateToken,

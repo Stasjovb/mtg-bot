@@ -15,16 +15,32 @@ from mtg_bot.turn import Step
 
 
 class _PickFirstAgent(Agent):
+    """Test agent that picks the first option for every callback.
+
+    ``forced_color`` lets a test pin the mana color for
+    AddNManaOfChosenColor — defaults to None (use first option).
+    """
+
+    def __init__(self, forced_color: str | None = None) -> None:
+        self.forced_color = forced_color
+
     def choose_target(self, state, player_id, legal_targets):
         return legal_targets[0] if legal_targets else None
 
     def choose_sacrifice(self, state, player_id, legal_ids):
         return legal_ids[0] if legal_ids else None
 
+    def choose_mana_color(self, state, player_id, options):
+        if self.forced_color is not None and self.forced_color in options:
+            return self.forced_color
+        return options[0]
 
-def _new_state():
+
+def _new_state(p0_color: str | None = None):
     state = GameState()
-    state.players.append(Player(id=0, agent=_PickFirstAgent()))
+    state.players.append(
+        Player(id=0, agent=_PickFirstAgent(forced_color=p0_color))
+    )
     state.players.append(Player(id=1, agent=_PickFirstAgent()))
     state.active_player_idx = 0
     state.priority_player_idx = 0
@@ -119,7 +135,9 @@ def test_lotus_field_etb_sacrifices_two_lands():
     assert lotus in state.battlefield
 
 
-def test_lotus_field_taps_for_three_any_mana():
+def test_lotus_field_taps_for_three_of_one_chosen_color_default():
+    """Default test agent picks the first color option (W); pool must
+    contain three W coins, none of any other color."""
     state = _new_state()
     lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
     apply_action(
@@ -127,7 +145,33 @@ def test_lotus_field_taps_for_three_any_mana():
     )
     pool = state.players[0].mana_pool
     assert len(pool) == 3
-    assert all(c.color == "any" for c in pool)
+    assert all(c.color == "W" for c in pool)
+    # Crucially, no "any" wildcard coins — Lotus Field is NOT five-color.
+    assert not any(c.color == "any" for c in pool)
+
+
+def test_lotus_field_taps_for_three_of_chosen_color_blue():
+    """Forcing the agent to pick U yields three U coins (single color,
+    not three independent picks)."""
+    state = _new_state(p0_color="U")
+    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    apply_action(
+        state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
+    )
+    pool = state.players[0].mana_pool
+    assert [c.color for c in pool] == ["U", "U", "U"]
+
+
+def test_lotus_field_taps_for_three_of_chosen_color_green():
+    """Different color choice → three G coins, none mixed in."""
+    state = _new_state(p0_color="G")
+    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    apply_action(
+        state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
+    )
+    pool = state.players[0].mana_pool
+    assert len(pool) == 3
+    assert all(c.color == "G" for c in pool)
 
 
 # -----------------------

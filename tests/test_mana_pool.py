@@ -9,7 +9,7 @@ from mtg_bot.actions import (
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.cards import parse_mana_cost
-from mtg_bot.effects import AddManaToPool
+from mtg_bot.effects import AddManaToPool, AddNManaOfChosenColor
 from mtg_bot.game import GameState, ManaCoin, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step
 
@@ -56,6 +56,56 @@ def test_add_mana_describe_restriction():
         produces=(("U", 1),), spend_restriction="artifact_spell",
     ).describe()
     assert "artifact_spell" in d
+
+
+# -----------------------
+# AddNManaOfChosenColor: controller picks ONE color, gets N coins of it
+# -----------------------
+
+
+def test_add_n_mana_of_chosen_color_uses_agent_pick():
+    state = _new_state()
+    # RandomAgent.choose_mana_color returns a uniform-random pick;
+    # seed the per-player RNG to lock the choice for the assertion.
+    state.players[0].agent.rng.seed(0)
+    AddNManaOfChosenColor(amount=3).resolve(state, 0, ())
+    pool = state.players[0].mana_pool
+    assert len(pool) == 3
+    colors = {c.color for c in pool}
+    assert len(colors) == 1, "all coins must be the same chosen color"
+    assert next(iter(colors)) in ("W", "U", "B", "R", "G")
+
+
+def test_add_n_mana_of_chosen_color_no_agent_falls_back_to_first():
+    """If a player has no agent seated, the first option is used."""
+    state = _new_state()
+    state.players[0].agent = None
+    AddNManaOfChosenColor(
+        amount=2, options=("R", "G"),
+    ).resolve(state, 0, ())
+    pool = state.players[0].mana_pool
+    assert [c.color for c in pool] == ["R", "R"]
+
+
+def test_add_n_mana_of_chosen_color_invalid_pick_falls_back():
+    """If an agent returns a value outside ``options``, the effect
+    falls back to the first option rather than minting a bogus color.
+    """
+
+    class _BogusAgent:
+        def choose_mana_color(self, state, player_id, options):
+            return "Q"  # not a real color, not in options
+
+    state = _new_state()
+    state.players[0].agent = _BogusAgent()
+    AddNManaOfChosenColor(amount=1).resolve(state, 0, ())
+    assert state.players[0].mana_pool[0].color == "W"
+
+
+def test_add_n_mana_of_chosen_color_describe():
+    assert AddNManaOfChosenColor(amount=3).describe() == (
+        "add 3 mana of any one color"
+    )
 
 
 # -----------------------

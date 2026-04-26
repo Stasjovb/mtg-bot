@@ -93,3 +93,9 @@ class DefaultTacticalAgent(Agent):
 
     def choose_devour_lands(self, state, player_id, land_ids):
         return []
+
+    def choose_mana_color(self, state, player_id, options):
+        # First option (W under the standard ordering). Deterministic
+        # for search; future tactical policy can pick by analysing the
+        # cards in hand or pending costs on the stack.
+        return options[0]
