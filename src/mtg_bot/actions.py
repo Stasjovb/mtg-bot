@@ -492,10 +492,17 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     from mtg_bot.turn import fire_landfall_triggers
 
     p = state.player_by_id(player_id)
-    # Source may be hand (normal play) or exile (impulse-cast lands).
+    # Source may be hand (normal play), exile (impulse-cast lands), or
+    # graveyard (Icetill Explorer's "you may play lands from your
+    # graveyard" — gated in legal_actions on the controller having any
+    # battlefield permanent with grants_play_lands_from_graveyard=True).
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
         p.hand.remove(card)
+    elif (card := next(
+        (c for c in p.graveyard if c.id == card_id), None
+    )) is not None:
+        p.graveyard.remove(card)
     else:
         card = next(
             (c for c in p.exile if c.id == card_id), None

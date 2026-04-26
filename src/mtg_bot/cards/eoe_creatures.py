@@ -1133,12 +1133,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Icetill Explorer `{2}{G}{G}` 2/4 Creature. Real oracle:
         # "You may play an additional land on each of your turns. You
         # may play lands from your graveyard. Landfall — Whenever a
-        # land you control enters, mill a card."
-        # Simplification: play-lands-from-graveyard is dropped (would
-        # require extending legal.py's land-source scan to graveyards).
+        # land you control enters, mill a card." Both static play-rule
+        # extensions are wired:
+        #   - grants_additional_land_per_turn=1 (legal_actions cap),
+        #   - grants_play_lands_from_graveyard=True (legal_actions also
+        #     lists graveyard lands as PlayLand actions; _play_land
+        #     pulls from the graveyard rather than the hand).
         make_creature(
             "Icetill Explorer", "{2}{G}{G}", 2, 4,
             grants_additional_land_per_turn=1,
+            grants_play_lands_from_graveyard=True,
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="landfall",

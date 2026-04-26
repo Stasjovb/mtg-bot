@@ -367,6 +367,12 @@ class CardPrinting:
     # value contributes to the land-per-turn cap via legal_actions.
     # Icetill Explorer has this at 1.
     grants_additional_land_per_turn: int = 0
+    # "You may play lands from your graveyard." When True on any
+    # permanent the controller controls, legal_actions also lists
+    # land cards in the controller's graveyard as PlayLand actions
+    # (still subject to the land-per-turn cap). Matches Icetill
+    # Explorer. _play_land removes the card from the graveyard.
+    grants_play_lands_from_graveyard: bool = False
     # "If a permanent entering the battlefield causes a triggered
     # ability of a permanent you control to trigger, that ability
     # triggers an additional time." Starfield Vocalist. Summed across
@@ -647,6 +653,7 @@ def make_creature(
     ward_discard_random: bool = False,
     ward_discard_chosen: bool = False,
     grants_additional_land_per_turn: int = 0,
+    grants_play_lands_from_graveyard: bool = False,
     extra_etb_trigger: int = 0,
     grants_cast_artifact_from_top_of_library: bool = False,
     grants_food_to_your_artifacts: bool = False,
@@ -688,6 +695,7 @@ def make_creature(
         ward_discard_random=ward_discard_random,
         ward_discard_chosen=ward_discard_chosen,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
+        grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         extra_etb_trigger=extra_etb_trigger,
         grants_cast_artifact_from_top_of_library=(
             grants_cast_artifact_from_top_of_library

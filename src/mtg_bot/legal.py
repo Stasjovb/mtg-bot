@@ -177,10 +177,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         for o in state.battlefield
         if o.controller_id == player_id
     )
+    grants_play_from_graveyard = any(
+        o.controller_id == player_id
+        and o.printing.grants_play_lands_from_graveyard
+        for o in state.battlefield
+    )
     if p.lands_played_this_turn < max_lands:
         for card in p.hand:
             if card.printing.is_land:
                 actions.append(PlayLand(card.id))
+        if grants_play_from_graveyard:
+            for card in p.graveyard:
+                if card.printing.is_land:
+                    actions.append(PlayLand(card.id))
 
     # Creature / sorcery / other permanent (artifact, spacecraft, ...) casts
     # at sorcery speed. Creatures/permanents with flash were already proposed

@@ -1,5 +1,5 @@
-"""Tests for Icetill Explorer — additional-land-per-turn + landfall mill.
-(Play-lands-from-graveyard dropped as a known simplification.)"""
+"""Tests for Icetill Explorer — additional-land-per-turn + landfall mill
++ play-lands-from-graveyard."""
 
 from mtg_bot import legal_moves
 from mtg_bot.actions import PlayLand, apply_action, drain_stack
@@ -76,5 +76,49 @@ def test_landfall_mills_a_card_when_land_enters():
 def test_icetill_printing_metadata():
     i = EOE_CREATURES["Icetill Explorer"]
     assert i.grants_additional_land_per_turn == 1
+    assert i.grants_play_lands_from_graveyard is True
     triggers = {ab.trigger for ab in i.triggered_abilities}
     assert "landfall" in triggers
+
+
+def test_icetill_explorer_lists_graveyard_lands_as_legal_plays():
+    """Oracle: 'You may play lands from your graveyard.' With Icetill in
+    play, the controller's graveyard land cards should appear as
+    PlayLand legal actions alongside hand lands."""
+    state = _new_state()
+    _put(state, EOE_CREATURES["Icetill Explorer"])
+    # Forest in hand AND a Plains in graveyard.
+    hand_land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
+    state.players[0].hand.append(hand_land)
+    grave_land = state.new_object(BASIC_LANDS["Plains"], 0, Zone.GRAVEYARD)
+    state.players[0].graveyard.append(grave_land)
+    play_actions = [a for a in legal_moves(state) if isinstance(a, PlayLand)]
+    play_ids = {a.card_id for a in play_actions}
+    assert hand_land.id in play_ids
+    assert grave_land.id in play_ids
+
+
+def test_icetill_explorer_play_land_from_graveyard_removes_from_grave():
+    """Resolving a PlayLand for a graveyard card moves it to the
+    battlefield, removes it from the graveyard, and counts toward the
+    per-turn land cap."""
+    state = _new_state()
+    _put(state, EOE_CREATURES["Icetill Explorer"])
+    grave_land = state.new_object(BASIC_LANDS["Plains"], 0, Zone.GRAVEYARD)
+    state.players[0].graveyard.append(grave_land)
+    apply_action(state, 0, PlayLand(grave_land.id))
+    drain_stack(state)
+    assert grave_land in state.battlefield
+    assert grave_land not in state.players[0].graveyard
+    assert state.players[0].lands_played_this_turn == 1
+
+
+def test_no_icetill_does_not_offer_graveyard_land_plays():
+    """Without Icetill, graveyard lands are NOT offered as PlayLand
+    actions (only hand lands are)."""
+    state = _new_state()
+    grave_land = state.new_object(BASIC_LANDS["Plains"], 0, Zone.GRAVEYARD)
+    state.players[0].graveyard.append(grave_land)
+    play_actions = [a for a in legal_moves(state) if isinstance(a, PlayLand)]
+    play_ids = {a.card_id for a in play_actions}
+    assert grave_land.id not in play_ids
