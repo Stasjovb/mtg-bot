@@ -81,6 +81,7 @@ from mtg_bot.effects import (
     UntapTargetOtherPermanent,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     PutChargeCountersOnSelf,
+    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutChargeCountersOnTargetSpacecraftYouControl,
     DiscardSelf,
     DrawCards,

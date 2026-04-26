@@ -4439,8 +4439,9 @@ class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
 class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
     """Put ``amount`` charge counters on a Spacecraft you control.
 
-    Matches Drill Too Deep's first mode. Simplification: we don't include
-    Planets (a separate land subtype we don't model).
+    Spacecraft-only variant. Drill Too Deep uses the broader
+    ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` (Planet is
+    a Land subtype that IS modeled — see ``make_planet_land``).
     """
 
     amount: int = 5
@@ -4483,6 +4484,66 @@ class PutChargeCountersOnTargetSpacecraftYouControl(Effect):
         return (
             f"put {self.amount} charge counters on target Spacecraft you "
             f"control"
+        )
+
+
+
+@dataclass(frozen=True)
+class PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(Effect):
+    """Put ``amount`` charge counters on target Spacecraft or Planet you
+    control.
+
+    Matches Drill Too Deep's first mode in its full printed form. Planet
+    is a Land subtype in this codebase (see ``make_planet_land``); a
+    permanent qualifies if it's a Spacecraft (artifact subtype) OR has
+    the ``Planet`` subtype, AND the controller matches.
+    """
+
+    amount: int = 5
+
+    @staticmethod
+    def _qualifies(printing) -> bool:
+        return printing.is_spacecraft or "Planet" in printing.subtypes
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if self._qualifies(o.printing)
+            and o.controller_id == controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or not self._qualifies(obj.printing):
+            return
+        if obj.controller_id != controller_id:
+            return
+        obj.charge_counters += self.amount
+        state.log.append(
+            f"{obj.printing.name} gets {self.amount} charge counters "
+            f"(now {obj.charge_counters})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put {self.amount} charge counters on target Spacecraft or "
+            f"Planet you control"
         )
 
 

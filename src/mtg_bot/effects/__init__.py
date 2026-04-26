@@ -109,6 +109,7 @@ from mtg_bot.effects.generic import (
     PutBasicLandFromHandOntoBattlefieldTapped,
     PutCardFromGraveyardOnBottomOfLibrary,
     PutChargeCountersOnSelf,
+    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutChargeCountersOnTargetSpacecraftYouControl,
     PutLoyaltyCounterOnSelf,
     PutPlusOneCounterOnCreatureYouControl,

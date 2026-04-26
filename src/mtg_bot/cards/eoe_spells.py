@@ -973,12 +973,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 max_n=3, max_mv=3,
             ),
         ),
-        # Drill Too Deep — modal: charge counters on a Spacecraft you
-        # control OR destroy target artifact. "Planet" mode simplified out.
+        # Drill Too Deep `{1}{R}` Instant — Choose one:
+        #   • Put five charge counters on target Spacecraft or Planet
+        #     you control.
+        #   • Destroy target artifact.
+        # Planet is a Land subtype already modeled here (see
+        # ``make_planet_land``); the EoE pool ships five Planet lands
+        # (Adagia, Evendo, Kavaron, Susur Secundi, Uthros), so the
+        # Planet half of mode 0 is genuinely reachable.
         make_instant(
             "Drill Too Deep", "{1}{R}",
             effect=ModalChooseOne(modes=(
-                PutChargeCountersOnTargetSpacecraftYouControl(amount=5),
+                PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
+                    amount=5,
+                ),
                 DestroyTargetArtifact(),
             )),
         ),
