@@ -2318,6 +2318,10 @@ class PumpTargetCreatureUntilEOT(Effect):
     # warp cost (oracle: "If that creature was cast for its warp cost, it
     # also gains X"). Generic — any future card with the same rider uses it.
     granted_keywords_if_warp_cast: frozenset[str] = frozenset()
+    # Conditional draw rider: "If [target] has a +1/+1 counter on it,
+    # draw a card." Matches Dual-Sun Technique. The controller of the
+    # spell does the drawing. Inspected at resolution time.
+    draw_if_target_has_plus_one_counter: int = 0
 
     def requires_target(self) -> bool:
         return True
@@ -2360,6 +2364,20 @@ class PumpTargetCreatureUntilEOT(Effect):
             + (f" and gains {', '.join(sorted(granted))}"
                if granted else "")
         )
+        if (
+            self.draw_if_target_has_plus_one_counter > 0
+            and obj.plus_one_counters > 0
+        ):
+            from mtg_bot.turn import draw_n_cards
+            draw_n_cards(
+                state, controller_id,
+                self.draw_if_target_has_plus_one_counter,
+            )
+            state.log.append(
+                f"P{controller_id} draws "
+                f"{self.draw_if_target_has_plus_one_counter} "
+                f"(target had +1/+1 counter)"
+            )
 
     def describe(self) -> str:
         parts: list[str] = []

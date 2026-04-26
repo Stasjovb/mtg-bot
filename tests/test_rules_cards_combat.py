@@ -928,11 +928,67 @@ def test_dual_sun_technique_grants_double_strike_ueot():
     for p in state.players:
         p.agent = RandomAgent(rng=random.Random(0))
     bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    starting_hand = len(state.players[0].hand)
 
     spell = state.players[0].hand[0]
     apply(state, CastSpell(spell.id))
     resolve_top_of_stack(state)
     assert "double strike" in effective_keywords(state, bear)
+    # Bear has no +1/+1 counter — no draw rider fired.
+    # Hand started at starting_hand (= 1 with Dual-Sun + nothing else),
+    # cast removed Dual-Sun, no extra draw expected.
+    assert len(state.players[0].hand) == starting_hand - 1
+
+
+def test_dual_sun_technique_draws_when_target_has_plus_one_counter():
+    """Oracle: 'If it has a +1/+1 counter on it, draw a card.'"""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_keywords
+    import random
+
+    technique = EOE_SPELLS["Dual-Sun Technique"]
+    state = _arena(
+        p0_hand=[technique],
+        p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"]],
+    )
+    for p in state.players:
+        p.agent = RandomAgent(rng=random.Random(0))
+    bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
+    bear.plus_one_counters = 1
+    # Seed library so the draw can succeed.
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    starting_hand = len(state.players[0].hand)
+
+    spell = state.players[0].hand[0]
+    apply(state, CastSpell(spell.id))
+    resolve_top_of_stack(state)
+    assert "double strike" in effective_keywords(state, bear)
+    # Cast removed Dual-Sun (-1), then draw rider fired (+1) → net 0.
+    assert len(state.players[0].hand) == starting_hand
+
+
+def test_dual_sun_technique_does_not_draw_without_counter():
+    """Control case: target without a +1/+1 counter → no draw rider."""
+    from mtg_bot.effects import PumpTargetCreatureUntilEOT
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+
+    state = _arena()
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    starting_hand = len(state.players[0].hand)
+    PumpTargetCreatureUntilEOT(
+        power_bonus=0, toughness_bonus=0,
+        granted_keywords=frozenset({"double strike"}),
+        you_control_only=True,
+        draw_if_target_has_plus_one_counter=1,
+    ).resolve(state, 0, (("creature", bear.id),))
+    assert len(state.players[0].hand) == starting_hand
 
 
 def test_starfighter_pilot_surveils_when_tapped_by_attacking():

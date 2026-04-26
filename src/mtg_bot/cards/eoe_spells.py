@@ -112,15 +112,16 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
         ),
         # Dual-Sun Technique: "Target creature you control gains double
-        # strike until end of turn." Real card also has a "If it has a
-        # +1/+1 counter on it, draw a card" rider — skipped here (would
-        # need conditional-draw-based-on-target-state).
+        # strike until end of turn. If it has a +1/+1 counter on it,
+        # draw a card." The conditional-draw rider is wired through
+        # ``PumpTargetCreatureUntilEOT.draw_if_target_has_plus_one_counter``.
         make_instant(
             "Dual-Sun Technique", "{1}{W}",
             effect=PumpTargetCreatureUntilEOT(
                 power_bonus=0, toughness_bonus=0,
                 granted_keywords=frozenset({"double strike"}),
                 you_control_only=True,
+                draw_if_target_has_plus_one_counter=1,
             ),
         ),
         # Desculpting Blast — real card says "nonland permanent"; we
