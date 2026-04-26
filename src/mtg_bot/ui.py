@@ -369,6 +369,23 @@ def create_app(
             for s in game.snapshots
         ])
 
+    @app.route("/api/log/<game_id>")
+    def api_log(game_id: str):
+        """Return the game's complete log as a flat array of strings.
+
+        The viewer fetches this once at activation so it can render the
+        whole game's events, including future ones, with each entry
+        clickable to jump (forward or backward) to the snapshot that
+        introduced it. Logs only grow across snapshots, so the final
+        snapshot's log is the canonical full log; if there are no
+        snapshots, the result is an empty list."""
+        game = cache.get(game_id)
+        if game is None:
+            abort(404, description="unknown game_id")
+        if not game.snapshots:
+            return jsonify([])
+        return jsonify(list(game.snapshots[-1]["log"]))
+
     @app.route("/api/card/<scryfall_id>")
     def api_card(scryfall_id: str):
         card = index.by_id.get(scryfall_id)

@@ -166,13 +166,19 @@ async function loadReplay(filename) {
 // (final state) for live games; replays pass 0 to start at turn 1.
 async function activateGame(summary, startIdx) {
   // Fetch the compact (turn, step) index so step/turn navigation is O(1)
-  // per click instead of N fetches.
-  const index = await fetchJSON(`/api/snapshots_index/${summary.game_id}`);
+  // per click instead of N fetches. Fetch the full log too so the log
+  // panel can show every event (past and future) and the user can click
+  // ahead to skip forward.
+  const [index, fullLog] = await Promise.all([
+    fetchJSON(`/api/snapshots_index/${summary.game_id}`),
+    fetchJSON(`/api/log/${summary.game_id}`),
+  ]);
   game = {
     gameId: summary.game_id,
     snapshotCount: summary.snapshot_count,
     summary,
-    index,                   // [{turn_number, step}, ...]
+    index,                   // [{turn_number, step, log_size}, ...]
+    fullLog,                 // [str, str, ...] — every log line in the game
     snapCache: new Map(),
     currentIdx: 0,
     playing: false,
@@ -1004,25 +1010,54 @@ function stackItemEl(item) {
 
 function renderLog(body, snap) {
   body.replaceChildren();
-  const entries = snap.log || [];
+  // Prefer the full game log (set by activateGame) so the user sees
+  // every event, past and future, and can click ahead to skip
+  // forward. Fall back to snap.log if the full log isn't available
+  // (older replays / out-of-game state / tests that don't set game).
+  const fullLog = game && game.fullLog;
+  const entries = fullLog || snap.log || [];
+  const currentLogSize = (fullLog && game.index && game.index[game.currentIdx])
+    ? game.index[game.currentIdx].log_size
+    : entries.length;
   const recentCount = (snap.log_since_last || []).length;
-  const firstRecent = entries.length - recentCount;
+  // Range of "this-step" entries: the ones added since the previous
+  // snapshot. With the full log present we derive it from the index;
+  // otherwise we trust snap.log_since_last.
+  const firstRecent = (fullLog && currentLogSize !== undefined)
+    ? currentLogSize - recentCount
+    : entries.length - recentCount;
   entries.forEach((e, i) => {
     const d = document.createElement('div');
     d.className = 'log-entry';
-    if (i >= firstRecent && recentCount > 0) d.classList.add('this-step');
+    if (recentCount > 0 && i >= firstRecent && i < firstRecent + recentCount) {
+      d.classList.add('this-step');
+    } else if (currentLogSize !== undefined && i >= currentLogSize) {
+      d.classList.add('future');
+    }
     d.textContent = e;
-    // Click rewinds to the first snapshot that introduced this log entry.
-    // Index entries carry log_size (cumulative len(state.log) at that
-    // snapshot); the first idx with log_size > i is the snapshot where
-    // entry i first appeared.
+    // Click jumps (forward or backward) to the first snapshot that
+    // introduced this log entry. Index entries carry log_size
+    // (cumulative len(state.log) at that snapshot); the first idx
+    // with log_size > i is the snapshot where entry i first appeared.
     d.addEventListener('click', () => {
       const target = firstSnapshotWithLogEntry(i);
       if (target !== null && target !== game.currentIdx) goTo(target);
     });
     body.appendChild(d);
   });
-  body.scrollTop = body.scrollHeight;
+  // Scroll the current step's entries into view (the highlighted
+  // band). With the full log this matters more — without it we'd
+  // jump to the bottom and bury the user under future events.
+  if (fullLog && currentLogSize !== undefined) {
+    const target = body.children[Math.max(0, currentLogSize - 1)];
+    // scrollIntoView is missing in jsdom (and some older browsers);
+    // a no-op fallback is fine for tests.
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'center' });
+    }
+  } else {
+    body.scrollTop = body.scrollHeight;
+  }
 }
 
 // Binary search over game.index for the smallest snapshot idx whose log

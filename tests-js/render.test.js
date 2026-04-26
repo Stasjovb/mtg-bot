@@ -640,3 +640,98 @@ describe('renderLog click rewind', () => {
     expect(goToSpy).not.toHaveBeenCalled();
   });
 });
+
+
+describe('renderLog with full game log (past + future)', () => {
+  function setupGameWithFullLog({ index, fullLog, currentIdx }) {
+    globalThis.game = {
+      gameId: 'g1',
+      snapshotCount: index.length,
+      summary: { game_id: 'g1', snapshot_count: index.length },
+      index,
+      fullLog,
+      snapCache: new Map(),
+      currentIdx,
+      playing: false,
+      playTimer: null,
+    };
+  }
+
+  it('renders every entry in the full game log even when at an early snapshot', () => {
+    setupGameWithFullLog({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 2 },
+        { turn_number: 1, step: 'draw', log_size: 5 },
+        { turn_number: 2, step: 'untap', log_size: 7 },
+      ],
+      fullLog: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      currentIdx: 1,  // we're early in the game
+    });
+    const body = document.getElementById('log-body');
+    // snap.log only has the past entries (server still sends per-snapshot
+    // log), but renderLog should ignore it in favor of game.fullLog.
+    renderLog(body, { log: ['a', 'b'], log_since_last: ['a', 'b'] });
+    expect(body.querySelectorAll('.log-entry')).toHaveLength(7);
+  });
+
+  it('marks entries past the current snapshot with the future class', () => {
+    setupGameWithFullLog({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 2 },
+        { turn_number: 1, step: 'draw', log_size: 5 },
+        { turn_number: 2, step: 'untap', log_size: 7 },
+      ],
+      fullLog: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      currentIdx: 1,  // log_size at this snapshot is 2
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, { log: ['a', 'b'], log_since_last: ['a', 'b'] });
+    const entries = body.querySelectorAll('.log-entry');
+    // Entries 0..1 are past/this-step; 2..6 are future.
+    expect(entries[0].classList.contains('future')).toBe(false);
+    expect(entries[1].classList.contains('future')).toBe(false);
+    expect(entries[2].classList.contains('future')).toBe(true);
+    expect(entries[6].classList.contains('future')).toBe(true);
+  });
+
+  it('clicks on a future entry skip forward to the snapshot that introduced it', () => {
+    const goToSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.goTo = goToSpy;
+    setupGameWithFullLog({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 2 },
+        { turn_number: 1, step: 'draw', log_size: 5 },
+        { turn_number: 2, step: 'untap', log_size: 7 },
+      ],
+      fullLog: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      currentIdx: 0,
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, { log: [], log_since_last: [] });
+    // Entry 5 first appears in snapshot 3 (smallest idx with log_size > 5).
+    body.querySelectorAll('.log-entry')[5].click();
+    expect(goToSpy).toHaveBeenCalledWith(3);
+  });
+
+  it('highlights the entries added during the current snapshot using log_since_last', () => {
+    setupGameWithFullLog({
+      index: [
+        { turn_number: 1, step: 'untap', log_size: 0 },
+        { turn_number: 1, step: 'upkeep', log_size: 2 },
+        { turn_number: 1, step: 'draw', log_size: 5 },
+      ],
+      fullLog: ['a', 'b', 'c', 'd', 'e'],
+      currentIdx: 2,  // log_size 5; recent 3 → entries [2, 5)
+    });
+    const body = document.getElementById('log-body');
+    renderLog(body, { log: ['a', 'b', 'c', 'd', 'e'], log_since_last: ['c', 'd', 'e'] });
+    const entries = body.querySelectorAll('.log-entry');
+    expect(entries[1].classList.contains('this-step')).toBe(false);
+    expect(entries[2].classList.contains('this-step')).toBe(true);
+    expect(entries[3].classList.contains('this-step')).toBe(true);
+    expect(entries[4].classList.contains('this-step')).toBe(true);
+  });
+});

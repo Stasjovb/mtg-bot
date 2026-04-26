@@ -693,6 +693,26 @@ def test_api_snapshots_index_unknown_game_id_404(client):
     assert client.get("/api/snapshots_index/deadbeef").status_code == 404
 
 
+def test_api_log_returns_full_game_log(client):
+    """The viewer fetches the whole game's log once at activation so it
+    can render every event (including future ones) with each line
+    clickable to skip forward. Returns the final snapshot's log as
+    the canonical full log."""
+    play = client.get("/api/play?seed=0&max_turns=5").get_json()
+    full = client.get(f"/api/log/{play['game_id']}").get_json()
+    assert isinstance(full, list)
+    assert all(isinstance(line, str) for line in full)
+    # Final snapshot's log must match exactly.
+    last = client.get(
+        f"/api/snapshot/{play['game_id']}/{play['snapshot_count'] - 1}"
+    ).get_json()
+    assert full == last["log"]
+
+
+def test_api_log_unknown_game_id_404(client):
+    assert client.get("/api/log/deadbeef").status_code == 404
+
+
 # ------------------------------------------------------------------------
 # /api/recommend — engine-recommendation endpoint (stubbed)
 # ------------------------------------------------------------------------

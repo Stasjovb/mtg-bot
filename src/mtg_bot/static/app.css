@@ -354,6 +354,11 @@ body { display: grid; grid-template-columns: 1fr 280px;
 .log-entry.this-step { background: rgba(212, 196, 106, 0.12);
                        border-left: 2px solid var(--active-glow);
                        padding-left: 0.4em; }
+/* Dim entries from later snapshots so the user can tell at a glance
+   which lines they've already passed vs which are still ahead. They
+   stay clickable to jump forward. */
+.log-entry.future { color: #6c6c78; }
+.log-entry.future:hover { color: #d0d0d8; }
 
 /* ---- engine recommendations panel ---- */
 
