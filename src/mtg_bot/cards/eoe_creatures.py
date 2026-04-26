@@ -1578,8 +1578,9 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Selfcraft Mechan `{3}{U}` 3/4 Artifact Creature. Real oracle:
         # "When this creature enters, you may sacrifice an artifact.
         # When you do, put a +1/+1 counter on target creature and draw
-        # a card." Simplification: "may" is always yes when an artifact
-        # exists; otherwise the rider fizzles.
+        # a card." The "may" is gated through ``Agent.choose_yes_no``
+        # in ``SelfcraftMechanETBEffect`` — declines short-circuit the
+        # whole rider; if no artifact is available, the rider fizzles.
         make_creature(
             "Selfcraft Mechan", "{3}{U}", 3, 4,
             artifact=True,
