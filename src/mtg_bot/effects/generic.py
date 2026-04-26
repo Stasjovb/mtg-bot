@@ -593,6 +593,23 @@ class AttachToTargetCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class EquipToTargetCreatureYouControl(AttachToTargetCreatureYouControl):
+    """Equip activated-ability resolution effect (rule 702.6).
+
+    Behaves identically to ``AttachToTargetCreatureYouControl`` (re-targets
+    the source Equipment onto a creature the controller controls, replacing
+    any prior attachment), but is given a distinct name and ``describe``
+    string so logs and tooling can tell ETB-attach from a paid Equip
+    activation. Pair with an ``ActivatedAbility`` whose cost is the printed
+    Equip mana cost and ``sorcery_speed=True``.
+    """
+
+    def describe(self) -> str:
+        return "equip: attach this Equipment to target creature you control"
+
+
+
+@dataclass(frozen=True)
 class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
     """Return up to ``max_n`` target creatures to their owners' hands.
 

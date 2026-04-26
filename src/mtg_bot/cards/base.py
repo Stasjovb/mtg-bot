@@ -143,6 +143,7 @@ from mtg_bot.effects import (
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
     AttachToTargetCreatureYouControl,
+    EquipToTargetCreatureYouControl,
     BiosynthicBurstEffect,
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
@@ -858,6 +859,7 @@ def make_equipment(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
+    equip_cost: str | None = None,
     grants_control_opponent_ability_when_equipped: bool = False,
     legendary: bool = False,
 ) -> CardPrinting:
@@ -866,13 +868,30 @@ def make_equipment(
     ``power_bonus``/``toughness_bonus``/``granted_keywords`` define the
     continuous bonus granted to the equipped creature via the Equipment
     subsystem. ``keywords`` are on the Equipment itself (e.g., Flash).
-    Most EoE Equipment cards have an ETB "attach to target creature you
-    control" trigger and no Equip activated ability in our simplified
-    model (Equip as an activated ability isn't yet wired).
+
+    ``equip_cost`` (e.g. ``"{3}"``) wires the printed "Equip {N}" activated
+    ability per rule 702.6: a sorcery-speed activated ability whose cost is
+    the printed mana cost and whose effect re-attaches this Equipment to a
+    target creature its controller controls. Omit it for Equipment that
+    only auto-attaches via an ETB trigger and has no printed Equip cost.
+    The synthesized ability is appended after any explicitly supplied
+    ``activated_abilities``.
     """
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Artifact — Equipment"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
+    activated = tuple(activated_abilities)
+    if equip_cost is not None:
+        activated = activated + (
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(equip_cost),
+                    mana_str=equip_cost,
+                ),
+                effect=EquipToTargetCreatureYouControl(),
+                sorcery_speed=True,
+            ),
+        )
     return CardPrinting(
         name=name,
         mana_cost_str=cost,
@@ -883,7 +902,7 @@ def make_equipment(
         subtypes=subtypes,
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
-        activated_abilities=tuple(activated_abilities),
+        activated_abilities=activated,
         grants_control_opponent_ability_when_equipped=(
             grants_control_opponent_ability_when_equipped
         ),

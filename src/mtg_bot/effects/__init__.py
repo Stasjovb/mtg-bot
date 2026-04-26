@@ -73,6 +73,7 @@ from mtg_bot.effects.generic import (
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
     DrawCardsEqualToResolvingCounterAmount,
+    EquipToTargetCreatureYouControl,
     EachOpponentDiscards,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentLosesLife,

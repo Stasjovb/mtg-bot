@@ -2016,7 +2016,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Red
         # Auxiliary Boosters: {4}{W} Equipment. ETB create a 2/2 Robot
         # token and auto-attach to it. Equipped creature gets +1/+2 and
-        # flying. Dropped: Equip {3} activated ability.
+        # flying. Equip {3}.
         make_equipment(
             "Auxiliary Boosters", "{4}{W}",
             power_bonus=1, toughness_bonus=2,
@@ -2029,10 +2029,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
             ),
+            equip_cost="{3}",
         ),
         # Hylderblade: {B} Equipment. Equipped creature gets +3/+1.
         # Void — end step: attach this to target creature you control.
-        # Dropped: Equip {4} activated ability.
+        # Equip {4}.
         make_equipment(
             "Hylderblade", "{B}",
             power_bonus=3, toughness_bonus=1,
@@ -2043,11 +2044,10 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
+            equip_cost="{4}",
         ),
         # Meltstrider's Gear: {G} Equipment. ETB auto-attach; equipped
-        # creature gets +2/+1 and reach. Dropped: the Equip {5} activated
-        # ability (Equip costs aren't modeled — the ETB attachment is
-        # permanent in this simplified model).
+        # creature gets +2/+1 and reach. Equip {5}.
         make_equipment(
             "Meltstrider's Gear", "{G}",
             power_bonus=2, toughness_bonus=1,
@@ -2058,11 +2058,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
+            equip_cost="{5}",
         ),
         # Squire's Lightblade: {W} Equipment with Flash. ETB auto-attach;
-        # equipped creature gets +1/+0. Dropped: the one-shot "gains
-        # first strike UEOT" on ETB (would be a separate Sequence effect,
-        # skipped for clarity), and the Equip {3} activated ability.
+        # equipped creature gets +1/+0. Equip {3}. Dropped: the one-shot
+        # "gains first strike UEOT" on ETB (would be a separate Sequence
+        # effect, skipped for clarity).
         make_equipment(
             "Squire's Lightblade", "{W}",
             power_bonus=1, toughness_bonus=0,
@@ -2073,11 +2074,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
+            equip_cost="{3}",
         ),
         # Illvoi Light Jammer: {1}{U} Equipment with Flash. ETB
-        # auto-attach; equipped creature gets +1/+2. Dropped: "that
-        # creature gains hexproof UEOT" rider (hexproof not yet modeled)
-        # and the Equip {3} activated ability.
+        # auto-attach; equipped creature gets +1/+2. Equip {3}. Dropped:
+        # "that creature gains hexproof UEOT" rider (hexproof not yet
+        # modeled).
         make_equipment(
             "Illvoi Light Jammer", "{1}{U}",
             power_bonus=1, toughness_bonus=2,
@@ -2088,6 +2090,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
+            equip_cost="{3}",
         ),
         # Thaumaton Torpedo: {1} Artifact. {6}, {T}, Sacrifice: Destroy
         # target nonland permanent. Simplified: drops the "{3} less if
