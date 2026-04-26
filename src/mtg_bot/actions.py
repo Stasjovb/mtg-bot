@@ -277,6 +277,7 @@ def apply_cost_reductions(
     state: GameState,
     caster_id: int,
     base_cost: ManaCost,
+    chosen_targets: "tuple[tuple[str, int], ...] | None" = None,
 ) -> ManaCost:
     """Walk ``printing.cost_reductions`` and return a ManaCost with
     generic mana reduced accordingly. Unknown conditions are treated as
@@ -290,6 +291,15 @@ def apply_cost_reductions(
       - ``per_differently_named_land`` (with ``per_land_group=True``):
         amount is multiplied by the number of distinct basic-land names
         the caster controls.
+      - ``target_is_blocking_creature``: the spell's chosen target is a
+        creature whose ``blocking`` attribute is set (Dark Endurance).
+        When ``chosen_targets`` is None — the legal_actions
+        affordability probe before the cast actually starts — this is
+        evaluated optimistically: the discount applies if any creature
+        on the battlefield is currently blocking, since the caster
+        could pick it as the target. ``_cast_spell`` passes the actual
+        chosen targets, so the discount only sticks if the caster
+        commits to a blocker at cast time.
 
     External reductions: also walks every permanent the caster controls
     on the battlefield and applies any ``external_cost_reductions``
@@ -301,7 +311,9 @@ def apply_cost_reductions(
     cost = base_cost
     cost = _apply_external_cost_reductions(state, caster_id, cost)
     for rule in printing.cost_reductions:
-        reduction = _evaluate_cost_reduction(rule, state, caster_id)
+        reduction = _evaluate_cost_reduction(
+            rule, state, caster_id, chosen_targets=chosen_targets,
+        )
         if reduction > 0:
             cost = cost.reduced(reduction)
             state.log.append(
@@ -312,11 +324,19 @@ def apply_cost_reductions(
 
 def _evaluate_cost_reduction(
     rule, state: GameState, caster_id: int,
+    chosen_targets: "tuple[tuple[str, int], ...] | None" = None,
 ) -> int:
     """Resolve a single ``CostReduction`` rule to a generic-mana amount
     against current game state. Shared by spell-cast cost reductions
     (``apply_cost_reductions``) and ability-cost reductions
     (``_effective_ability_mana_cost``).
+
+    ``chosen_targets`` is the spell's chosen targets when this is invoked
+    from the cast pipeline. ``None`` means the caller doesn't have target
+    context (e.g., ``legal_actions``' affordability probe before targets
+    are picked, or ability cost reductions that don't depend on targets).
+    Conditions that depend on the chosen target evaluate optimistically
+    against the battlefield when ``chosen_targets`` is None.
     """
     if rule.condition == "another_spell_cast_this_turn":
         if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
@@ -356,6 +376,34 @@ def _evaluate_cost_reduction(
                 ):
                     names.add(o.printing.name)
             return rule.amount * len(names)
+    elif rule.condition == "target_is_blocking_creature":
+        # Dark Endurance: "this spell costs {1} less to cast if it
+        # targets a blocking creature." Cast-pipeline path passes the
+        # actual chosen targets; we apply the discount only when the
+        # picked creature is currently blocking. legal_actions'
+        # affordability probe (chosen_targets=None) evaluates
+        # optimistically — the discount applies if any blocker exists
+        # on the battlefield, since the caster could pick it.
+        if chosen_targets is None:
+            if any(
+                o.printing.is_creature and o.blocking is not None
+                for o in state.battlefield
+            ):
+                return rule.amount
+        else:
+            for kind, tid in chosen_targets:
+                if kind != "creature":
+                    continue
+                obj = next(
+                    (o for o in state.battlefield if o.id == tid),
+                    None,
+                )
+                if (
+                    obj is not None
+                    and obj.printing.is_creature
+                    and obj.blocking is not None
+                ):
+                    return rule.amount
     else:
         state.log.append(
             f"unknown cost-reduction condition {rule.condition!r}; "
@@ -681,6 +729,70 @@ def _offer_echoing_deeps_copy(
     )
 
 
+def _select_spell_targets(
+    state: GameState, player_id: int, card: GameObject,
+) -> tuple[tuple[str, int], ...]:
+    """Pick target(s) for a spell about to be cast. Mirrors CR
+    601.2c-d (mode/target choices happen BEFORE total cost is
+    determined). Called from ``_cast_spell`` ahead of
+    ``apply_cost_reductions`` so target-dependent cost riders (Dark
+    Endurance) can see the choice.
+
+    Handles both regular ``spell_effect`` targets (single- and
+    multi-target via ``Effect.target_count_range``) and aura
+    enchant-target picks. Returns an empty tuple for non-targeting
+    spells.
+    """
+    p = state.player_by_id(player_id)
+    targets: tuple[tuple[str, int], ...] = ()
+    spell_effect = card.printing.spell_effect
+    if spell_effect is not None:
+        _min_t, max_t = spell_effect.target_count_range()
+        if max_t > 0:
+            legal = spell_effect.legal_targets(state, player_id)
+            chosen_list: list[tuple[str, int]] = []
+            remaining = list(legal)
+            for _ in range(max_t):
+                if not remaining:
+                    break
+                pick = p.agent.choose_target(state, player_id, remaining)
+                # Agent declines → stop. In practice every EoE multi-
+                # target effect we model has min_t=0 so declines are
+                # always honored. If min_t > 0 is ever added, revive
+                # the "forced pick" branch.
+                if pick is None:
+                    break
+                if pick not in remaining:
+                    # Agent picked an out-of-range target; ignore.
+                    break
+                chosen_list.append(pick)
+                remaining.remove(pick)
+            targets = tuple(chosen_list)
+    # Auras pick their enchanted-target at cast time. The target is
+    # recorded on the StackItem and consumed at resolution to set
+    # attached_to. ``aura_enchant_type`` picks the scope: "creature"
+    # (default) or "artifact" (Hardlight Containment).
+    if card.printing.is_aura:
+        enchant_type = card.printing.aura_enchant_type
+        if enchant_type == "artifact":
+            legal = [
+                (enchant_type, o.id)
+                for o in state.battlefield
+                if o.printing.is_artifact
+            ]
+        else:
+            legal = [
+                ("creature", o.id)
+                for o in state.battlefield
+                if o.printing.is_creature
+            ]
+        if legal:
+            chosen = p.agent.choose_target(state, player_id, legal)
+            if chosen is not None:
+                targets = (chosen,)
+    return targets
+
+
 def _cast_spell(
     state: GameState, player_id: int, card_id: int,
     use_warp: bool = False, kicked: bool = False,
@@ -785,10 +897,22 @@ def _cast_spell(
                     f"card {card_id} not castable by P{player_id}"
                 )
 
+    # Select target(s) BEFORE applying cost reductions. CR 601.2c-f
+    # orders modes/targets BEFORE total-cost determination, so any
+    # "costs {N} less if it targets <X>" rider (Dark Endurance) needs
+    # the chosen target visible to the cost-reduction layer. The
+    # ``targets`` tuple flows into ``apply_cost_reductions`` below and
+    # later onto the StackItem unchanged.
+    targets: tuple[tuple[str, int], ...] = _select_spell_targets(
+        state, player_id, card,
+    )
+
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
     # spell this turn"). Warp costs are reduced too — the rules don't
     # special-case this.
-    cost = apply_cost_reductions(card.printing, state, player_id, cost)
+    cost = apply_cost_reductions(
+        card.printing, state, player_id, cost, chosen_targets=targets,
+    )
     # Kicker: add the optional kicker cost onto the generic+colored
     # portion before X is resolved.
     if kicked and card.printing.kicker_cost is not None:
@@ -903,55 +1027,10 @@ def _cast_spell(
     card.zone = Zone.STACK
     card.controller_id = player_id
 
-    # If this spell has a targeted spell_effect, select target(s) now.
-    # Supports multi-target via Effect.target_count_range() → (min, max).
-    targets: tuple[tuple[str, int], ...] = ()
-    spell_effect = card.printing.spell_effect
-    if spell_effect is not None:
-        min_t, max_t = spell_effect.target_count_range()
-        if max_t > 0:
-            legal = spell_effect.legal_targets(state, player_id)
-            chosen_list: list[tuple[str, int]] = []
-            remaining = list(legal)
-            for _ in range(max_t):
-                if not remaining:
-                    break
-                pick = p.agent.choose_target(state, player_id, remaining)
-                # Agent declines → stop. In practice every EoE multi-
-                # target effect we model has min_t=0 so declines are
-                # always honored. If min_t > 0 is ever added, revive
-                # the "forced pick" branch.
-                if pick is None:
-                    break
-                if pick not in remaining:
-                    # Agent picked an out-of-range target; ignore.
-                    break
-                chosen_list.append(pick)
-                remaining.remove(pick)
-            targets = tuple(chosen_list)
-    # Auras pick their enchanted-target at cast time. The target is
-    # recorded on the StackItem and consumed at resolution to set
-    # attached_to. ``aura_enchant_type`` picks the scope: "creature"
-    # (default) or "artifact" (Hardlight Containment).
-    if card.printing.is_aura:
-        enchant_type = card.printing.aura_enchant_type
-        if enchant_type == "artifact":
-            legal = [
-                (enchant_type, o.id)
-                for o in state.battlefield
-                if o.printing.is_artifact
-            ]
-        else:
-            legal = [
-                ("creature", o.id)
-                for o in state.battlefield
-                if o.printing.is_creature
-            ]
-        if legal:
-            chosen = p.agent.choose_target(state, player_id, legal)
-            if chosen is not None:
-                targets = (chosen,)
-
+    # Targets were already selected up-front (before cost reductions)
+    # so cost-reduction rules that key off the chosen target — e.g.
+    # Dark Endurance's "costs {1} less if it targets a blocking
+    # creature" — could see the choice.
     countered = _apply_ward_check(state, player_id, targets)
     state.stack.append(
         StackItem(

@@ -940,14 +940,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 ExileAllArtifactsWithManaValueAtMost(max_mv=3),
             )),
         ),
-        # Dark Endurance — +2/+0 and indestructible UEOT. Simplified:
-        # drops the "costs {1} less if it targets a blocking creature"
-        # rider (cost modification not yet modeled).
+        # Dark Endurance — +2/+0 and indestructible UEOT. Carries the
+        # "this spell costs {1} less to cast if it targets a blocking
+        # creature" rider via a CostReduction; the
+        # ``target_is_blocking_creature`` condition is evaluated against
+        # the chosen target inside _cast_spell (and optimistically inside
+        # legal_actions for affordability probing).
         make_instant(
             "Dark Endurance", "{1}{B}",
             effect=PumpTargetCreatureUntilEOT(
                 power_bonus=2, toughness_bonus=0,
                 granted_keywords=frozenset({"indestructible"}),
+            ),
+            cost_reductions=(
+                CostReduction(
+                    amount=1, condition="target_is_blocking_creature",
+                ),
             ),
         ),
         # Full Bore — +3/+2 UEOT on target creature you control. If that
