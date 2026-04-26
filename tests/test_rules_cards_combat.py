@@ -284,6 +284,8 @@ def test_landfall_fires_when_you_play_a_land():
     forest = state.players[0].hand[0]
 
     apply(state, PlayLand(forest.id), player_id=0)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Landfall triggered: +1/+1 + vigilance + haste UEOT to P0's creatures.
     assert effective_power(state, bear) == 3
     assert "haste" in effective_keywords(state, bear)
@@ -335,7 +337,8 @@ def test_landfall_also_fires_from_lander_library_search():
 
     god = next(o for o in state.battlefield if o.printing.name == "Glacier Godmaw")
     apply(state, ActivateAbility(source_id=lander.id, ability_index=0), player_id=0)
-    resolve_top_of_stack(state)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     # Landfall should have pumped Godmaw +1/+1 when the Forest entered
     assert effective_power(state, god) == 7
 
@@ -729,6 +732,8 @@ def test_eumidian_terrabotanist_gains_life_on_landfall():
     )
     forest = state.players[0].hand[0]
     apply(state, PlayLand(forest.id), player_id=0)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert state.players[0].life == 16
 
 

@@ -3,6 +3,7 @@
 from mtg_bot.actions import (
     CastSpell,
     apply_action,
+    drain_stack,
     put_into_battlefield,
     resolve_top_of_stack,
 )
@@ -50,6 +51,7 @@ def test_tezzeret_artifact_enters_trigger_adds_loyalty():
     # Bring a Robot (artifact creature) into play under P0.
     robot = state.new_object(TOKEN_PRINTINGS["Robot"], 0, Zone.HAND)
     put_into_battlefield(state, robot, controller_id=0)
+    drain_stack(state)
     # Tezzeret's artifact-enters trigger fires → +1 loyalty.
     assert tez.loyalty_counters == 5
 

@@ -352,6 +352,8 @@ def test_remnant_elemental_landfall_pumps():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert elem.temp_power_bonus == 2
 
 
@@ -370,6 +372,8 @@ def test_icecave_crasher_trample_plus_landfall():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert crasher.temp_power_bonus == 1
 
 
@@ -429,6 +433,8 @@ def test_seedship_agrarian_landfall_counter():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert agr.plus_one_counters == 1
 
 
@@ -1494,6 +1500,8 @@ def test_eusocial_engineering_landfall_makes_robot():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
 
@@ -1904,11 +1912,13 @@ def test_second_spell_trigger_fires_once_per_turn():
     _cast_spell(state, 0, first.id)
     resolve_top_of_stack(state)
     assert op.plus_one_counters == 0
-    # Cast second spell — trigger fires on the cast (before resolution).
+    # Cast second spell — trigger goes on stack above the spell; resolve
+    # the trigger first to apply the counter.
     second = state.players[0].hand[0]
     _cast_spell(state, 0, second.id)
+    resolve_top_of_stack(state)  # second-spell trigger
     assert op.plus_one_counters == 1
-    resolve_top_of_stack(state)
+    resolve_top_of_stack(state)  # spell
 
 
 def test_second_spell_counter_resets_across_turns():
@@ -1994,7 +2004,7 @@ def test_brightspear_zealot_power_boost_requires_two_spells():
 
 
 def test_oreplate_pangolin_artifact_enters_trigger():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -2007,6 +2017,7 @@ def test_oreplate_pangolin_artifact_enters_trigger():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, lander, 0)
+    drain_stack(state)
     assert pang.plus_one_counters == 1
 
     # An opponent's artifact entering shouldn't trigger.
@@ -2014,6 +2025,7 @@ def test_oreplate_pangolin_artifact_enters_trigger():
         TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, enemy_art, 1)
+    drain_stack(state)
     assert pang.plus_one_counters == 1  # unchanged
 
 
@@ -2032,7 +2044,7 @@ def test_pangolin_doesnt_trigger_on_itself():
 
 
 def test_mechan_assembler_fires_once_per_turn():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -2045,6 +2057,7 @@ def test_mechan_assembler_fires_once_per_turn():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, art1, 0)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1
     # Second artifact enters → should NOT create another token (once/turn).
@@ -2052,6 +2065,7 @@ def test_mechan_assembler_fires_once_per_turn():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, art2, 0)
+    drain_stack(state)
     robots = [o for o in state.battlefield if o.printing.name == "Robot"]
     assert len(robots) == 1  # still just one
 
@@ -2305,6 +2319,8 @@ def test_sunstar_expansionist_landfall_pumps_self():
     )
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    from mtg_bot.actions import drain_stack
+    drain_stack(state)
     assert se.temp_power_bonus == 1
 
 
@@ -3538,7 +3554,7 @@ def test_shock_land_without_agent_enters_normal():
 
 
 def test_weftstalker_ardent_pings_opponent_on_creature_enter():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
@@ -3553,11 +3569,12 @@ def test_weftstalker_ardent_pings_opponent_on_creature_enter():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, mate, 0)
+    drain_stack(state)
     assert state.players[1].life == p1_life_before - 1
 
 
 def test_haliya_gains_life_on_creature_enter():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
@@ -3571,6 +3588,7 @@ def test_haliya_gains_life_on_creature_enter():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, mate, 0)
+    drain_stack(state)
     assert state.players[0].life == life_before + 1
 
 
@@ -4893,7 +4911,7 @@ def test_lashwhip_cost_reduction_with_three_enemy_creatures():
 
 
 def test_mm_menon_artifact_enters_triggers_counter_on_target():
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
 
     state = _arena()
@@ -4916,6 +4934,7 @@ def test_mm_menon_artifact_enters_triggers_counter_on_target():
         TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, lander, 0)
+    drain_stack(state)
     # Some creature (ally or mm itself) got a +1/+1 counter.
     total_counters = sum(
         o.plus_one_counters for o in state.battlefield
@@ -5222,7 +5241,7 @@ def test_put_stun_counter_noop_paths():
 def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.actions import put_into_battlefield, drain_stack
     from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
 
     state = _arena()
@@ -5237,6 +5256,7 @@ def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
         EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, moxite, 0)
+    drain_stack(state)
     # A Munitions token should have been created.
     munitions = [
         o for o in state.battlefield if o.printing.name == "Munitions"

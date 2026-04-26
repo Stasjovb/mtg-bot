@@ -1,6 +1,6 @@
 """Tests for Station Monitor's second-spell-each-turn Drone-token trigger."""
 
-from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+from mtg_bot.actions import _cast_spell, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import (
     BASIC_LANDS,
@@ -38,8 +38,9 @@ def test_station_monitor_creates_drone_on_second_spell():
     _cast_spell(state, 0, bolt1.id)
     assert not any(o.printing.name == "Drone" for o in state.battlefield)
     resolve_top_of_stack(state)
-    # Second spell — trigger fires immediately on cast.
+    # Second spell — trigger fires on cast and goes on top of the stack.
     _cast_spell(state, 0, bolt2.id)
+    drain_stack(state)
     drones = [
         o for o in state.battlefield
         if o.printing.name == "Drone" and o.controller_id == 0

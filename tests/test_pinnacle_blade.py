@@ -4,6 +4,7 @@ Blade of the Swarm (ETB +2/+2 self-counters)."""
 from mtg_bot.actions import (
     CastSpell,
     apply_action,
+    drain_stack,
     put_into_battlefield,
     resolve_top_of_stack,
 )
@@ -61,6 +62,7 @@ def test_pinnacle_emissary_creates_drone_when_casting_artifact():
     )
     p.hand.append(vault)
     apply_action(state, 0, CastSpell(vault.id))
+    drain_stack(state)
     # Trigger fires as the vault hits the stack → Drone token created.
     drones = [
         o for o in state.battlefield

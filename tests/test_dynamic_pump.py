@@ -190,5 +190,6 @@ def test_mightform_harmonizer_landfall_doubles_target_power():
     land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(land)
     fire_landfall_triggers(state, land)
+    drain_stack(state)
     # Harmonizer (base power 4) gets +4 → 8.
     assert effective_power(state, harmonizer) == 8

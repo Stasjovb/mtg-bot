@@ -501,51 +501,34 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
-    """Fire "Landfall — whenever a land you control enters" triggers on
-    permanents the new land's controller controls.
+    """Push "Landfall — whenever a land you control enters" triggers onto
+    the stack for permanents the new land's controller controls.
 
     Called from every code path that puts a land onto the battlefield
-    (PlayLand, SearchLibraryForBasicLandTapped, etc.). For effects
-    with targets, the controller's agent selects via choose_target;
-    if no legal target exists, the trigger fizzles.
+    (PlayLand, SearchLibraryForBasicLandTapped, etc.). Honors
+    etb_trigger_multiplier by pushing N times.
     """
+    from mtg_bot.actions import push_triggered_ability
     from mtg_bot.game import etb_trigger_multiplier
 
     controller = new_land.controller_id
-    p = state.player_by_id(controller)
     firings = etb_trigger_multiplier(state, controller)
     # Snapshot to avoid mid-iteration surprises if a trigger ETBs something.
     for obj in list(state.battlefield):
         if obj.controller_id != controller:
             continue
-        for ability in obj.printing.triggered_abilities:
+        for i, ability in enumerate(obj.printing.triggered_abilities):
             if ability.trigger != "landfall":
                 continue
             for _ in range(firings):
-                state.log.append(
-                    f"{obj.printing.name}'s landfall triggers"
+                push_triggered_ability(
+                    state,
+                    source=obj,
+                    ability=ability,
+                    ability_index=i,
+                    controller_id=controller,
+                    label="landfall",
                 )
-                state.resolving_source = obj
-                targets: tuple[tuple[str, int], ...] = ()
-                try:
-                    effect = ability.effect
-                    if effect.requires_target():
-                        legal = effect.legal_targets(state, controller)
-                        if not legal:
-                            state.log.append(
-                                f"{obj.printing.name}'s landfall trigger "
-                                f"fizzles (no legal targets)"
-                            )
-                            continue
-                        if p.agent is not None:
-                            chosen = p.agent.choose_target(
-                                state, controller, legal
-                            )
-                            if chosen is not None:
-                                targets = (chosen,)
-                    effect.resolve(state, controller, targets)
-                finally:
-                    state.resolving_source = None
 
 
 def fire_opponent_plays_land_triggers(

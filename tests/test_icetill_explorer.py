@@ -2,7 +2,7 @@
 (Play-lands-from-graveyard dropped as a known simplification.)"""
 
 from mtg_bot import legal_moves
-from mtg_bot.actions import PlayLand, apply_action
+from mtg_bot.actions import PlayLand, apply_action, drain_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
 from mtg_bot.game import GameState, Player, Zone
@@ -32,11 +32,13 @@ def test_additional_land_per_turn_allows_second_land_play():
     land2 = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     state.players[0].hand.extend([land1, land2])
     apply_action(state, 0, PlayLand(land1.id))
+    drain_stack(state)
     # Even after one play, another PlayLand action should still be legal
     # (up to 2 total per turn).
     land_plays = [a for a in legal_moves(state) if isinstance(a, PlayLand)]
     assert len(land_plays) >= 1
     apply_action(state, 0, PlayLand(land2.id))
+    drain_stack(state)
     # 2 total lands played — further plays should not be legal.
     land_plays_after = [a for a in legal_moves(state) if isinstance(a, PlayLand)]
     assert land_plays_after == []
@@ -66,6 +68,7 @@ def test_landfall_mills_a_card_when_land_enters():
     lib_before = len(state.players[0].library)
     gy_before = len(state.players[0].graveyard)
     apply_action(state, 0, PlayLand(forest.id))
+    drain_stack(state)
     assert len(state.players[0].library) == lib_before - 1
     assert len(state.players[0].graveyard) == gy_before + 1
 

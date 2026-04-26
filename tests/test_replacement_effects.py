@@ -99,7 +99,9 @@ def test_starfield_doubles_landfall_trigger():
     land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
     state.players[0].hand.append(land)
     gy_before = len(state.players[0].graveyard)
+    from mtg_bot.actions import drain_stack
     apply_action(state, 0, PlayLand(land.id))
+    drain_stack(state)
     assert len(state.players[0].graveyard) == gy_before + 2
 
 
