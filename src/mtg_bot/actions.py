@@ -567,6 +567,11 @@ def _convoke_candidates(
     ]
 
 
+def _cost_is_zero(cost: ManaCost) -> bool:
+    """True when a ManaCost has no remaining generic or colored requirement."""
+    return cost.generic == 0 and not any(n > 0 for _, n in cost.colored)
+
+
 def _apply_convoke_pip(
     state: GameState, creature: GameObject,
     generic: int, colored: list[tuple[str, int]],
@@ -602,7 +607,7 @@ def _convoke_max_contribution(
     legality check uses the upper-bound contribution. The actual cast
     pipeline taps whatever subset the agent chooses.
     """
-    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+    if _cost_is_zero(cost):
         return cost
     candidates = _convoke_candidates(state, player_id)
     generic = cost.generic
@@ -637,7 +642,7 @@ def _apply_convoke(
     p = state.player_by_id(player_id)
     if p.agent is None:
         return cost
-    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+    if _cost_is_zero(cost):
         return cost
     candidates = _convoke_candidates(state, player_id)
     if not candidates:
@@ -785,7 +790,7 @@ def _sac_for_mana_max_contribution(
     fire at most once per cast; greedy color-first matching mirrors
     the runtime ``_activate_sac_for_mana_for_cost`` allocator.
     """
-    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+    if _cost_is_zero(cost):
         return cost
     sources = _sac_for_mana_sources(state, player_id)
     if not sources:
@@ -851,7 +856,7 @@ def _activate_sac_for_mana_for_cost(
     be paid from pool + lands — Treasures aren't blown up unless
     they're actually needed.
     """
-    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+    if _cost_is_zero(cost):
         return cost
     if can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
         return cost
