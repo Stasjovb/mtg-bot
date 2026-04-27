@@ -942,6 +942,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # a card.
         make_creature(
             "Sunstar Lightsmith", "{3}{W}", 3, 3,
+            subtypes=("Human", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.IS_CAST,
