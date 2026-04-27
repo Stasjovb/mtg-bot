@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from mtg_bot.cards.base import DealDamageAnyTarget, TriggeredAbility
+from mtg_bot.cards.base import (
+    CreateToken,
+    DealDamageAnyTarget,
+    TriggeredAbility,
+)
 from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
@@ -15,6 +19,7 @@ from mtg_bot.cards.parser_source import (
     _parse_triggered_ability_line,
     _parse_type_line,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
 # ---------- _parse_clause ----------
@@ -185,6 +190,10 @@ def test_parse_trigger_phrase_recognizes_etb():
     assert _parse_trigger_phrase("this creature enters") == "etb"
 
 
+def test_parse_trigger_phrase_recognizes_dies():
+    assert _parse_trigger_phrase("this creature dies") == "dies"
+
+
 def test_parse_trigger_phrase_strips_whitespace():
     assert _parse_trigger_phrase("  this creature enters  ") == "etb"
 
@@ -200,6 +209,16 @@ def test_parse_effect_phrase_recognizes_deal_damage_any_target():
     ) == DealDamageAnyTarget(amount=2)
 
 
+def test_parse_effect_phrase_recognizes_create_tapped_robot_token():
+    assert _parse_effect_phrase(
+        "create a tapped 2/2 colorless Robot artifact creature token"
+    ) == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Robot"],
+        count=1,
+        tapped=True,
+    )
+
+
 def test_parse_effect_phrase_returns_none_for_unknown():
     assert _parse_effect_phrase("you gain 2 life") is None
     assert _parse_effect_phrase("") is None
@@ -211,6 +230,22 @@ def test_parse_triggered_ability_line_full_etb_damage():
     )
     assert result == TriggeredAbility(
         trigger="etb", effect=DealDamageAnyTarget(amount=5)
+    )
+
+
+def test_parse_triggered_ability_line_full_dies_create_robot():
+    """Gravpack Monoist's full dies-trigger line."""
+    result = _parse_triggered_ability_line(
+        "When this creature dies, "
+        "create a tapped 2/2 colorless Robot artifact creature token."
+    )
+    assert result == TriggeredAbility(
+        trigger="dies",
+        effect=CreateToken(
+            token_printing=TOKEN_PRINTINGS["Robot"],
+            count=1,
+            tapped=True,
+        ),
     )
 
 
@@ -338,6 +373,14 @@ def test_source_claims_nebula_dragon():
     source = OracleParserCardSource()
     assert "Nebula Dragon" in source.claimed_names
     assert "Nebula Dragon" in source.get_printings()
+
+
+def test_source_claims_gravpack_monoist():
+    """Flying + dies-trigger to create a tapped Robot is now in
+    the parser's grammar."""
+    source = OracleParserCardSource()
+    assert "Gravpack Monoist" in source.claimed_names
+    assert "Gravpack Monoist" in source.get_printings()
 
 
 def test_source_skips_cards_with_unsupported_clauses():

@@ -23,12 +23,15 @@ Slice 1's grammar:
 
 Currently recognized:
 
-- Trigger conditions: ``this creature enters`` → ``"etb"``.
+- Trigger conditions: ``this creature enters`` → ``"etb"``;
+  ``this creature dies`` → ``"dies"``.
 - Effects: ``it deals N damage to any target`` →
-  ``DealDamageAnyTarget(amount=N)``.
+  ``DealDamageAnyTarget(amount=N)``;
+  ``create a tapped 2/2 colorless Robot artifact creature token``
+  → ``CreateToken(token_printing=TOKEN_PRINTINGS["Robot"], count=1,
+  tapped=True)``.
 
-Cards whose oracle text uses only those clauses get claimed. Today
-that is exactly one EoE card: Nebula Dragon.
+Cards whose oracle text uses only those clauses get claimed.
 """
 
 from __future__ import annotations
@@ -40,11 +43,13 @@ from pathlib import Path
 
 from mtg_bot.cards.base import (
     CardPrinting,
+    CreateToken,
     DealDamageAnyTarget,
     Effect,
     TriggeredAbility,
     make_creature,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
 _DATA_PATH = (
@@ -108,6 +113,7 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # Trigger-condition phrases → engine-level trigger key.
 _TRIGGER_PHRASES: dict[str, str] = {
     "this creature enters": "etb",
+    "this creature dies": "dies",
 }
 
 
@@ -124,11 +130,25 @@ _DEAL_DAMAGE_ANY_TARGET = re.compile(
 )
 
 
+# Narrow handler for Gravpack Monoist's exact dies-trigger payload.
+# Generalizes once another card needs a similar token-creation slice
+# (color/power/toughness/subtype variation).
+_CREATE_TAPPED_2_2_ROBOT = re.compile(
+    r"^create a tapped 2/2 colorless Robot artifact creature token$"
+)
+
+
 def _parse_effect_phrase(phrase: str) -> Effect | None:
     phrase = phrase.strip()
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
+    if _CREATE_TAPPED_2_2_ROBOT.match(phrase) is not None:
+        return CreateToken(
+            token_printing=TOKEN_PRINTINGS["Robot"],
+            count=1,
+            tapped=True,
+        )
     return None
 
 
