@@ -433,6 +433,18 @@ class CardPrinting:
     attached_sets_base_pt: "tuple[int, int] | None" = None
     attached_grants_lose_all_abilities: bool = False
     attached_grants_subtype: "str | None" = None
+    # Clone-style ETB replacement: "You may have this creature enter
+    # as a copy of any creature on the battlefield." When True, the
+    # spell-resolution path prompts the controller for a target
+    # creature and (if chosen) snapshots ``original_printing`` and
+    # mutates ``printing`` to the target's PRINTED characteristics
+    # (CR 706.2 copiable values). A layer-1 ``"is_copy"`` registry
+    # entry is also written with ``expires_at=None`` and
+    # ``source_id=target_id=clone.id`` so the layered system records
+    # the copy event; the entry is dropped when the clone leaves
+    # play. If no legal target exists, or the controller declines,
+    # the clone enters as itself (its printed self).
+    enters_as_copy_of_creature: bool = False
     # "The first time you would create one or more tokens each turn,
     # you may instead create that many tokens that are copies of
     # enchanted permanent." Moonlit Meditation. Aura-only flag.
@@ -733,6 +745,7 @@ def make_creature(
     warp_castable_from_graveyard: bool = False,
     unblockable_if_two_spells_cast_this_turn: bool = False,
     attack_bypass_if_artifact_entered_this_turn: bool = False,
+    enters_as_copy_of_creature: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -791,6 +804,7 @@ def make_creature(
         attack_bypass_if_artifact_entered_this_turn=(
             attack_bypass_if_artifact_entered_this_turn
         ),
+        enters_as_copy_of_creature=enters_as_copy_of_creature,
     )
 
 
