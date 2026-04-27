@@ -25,14 +25,24 @@ Currently:
   through ``effective_subtypes`` and ``effective_land_produces`` so
   the rewritten land taps for the new color. Persistent (no
   ``expires_at``) — text changes survive cleanup per CR 612.
+- ``WHITE_KNIGHT`` (Alpha) — 2/2 white Knight with first strike and
+  protection from black. Used as the protection-target so layer 5
+  color changes have observable consequences in combat.
+- ``SCUTTLEMUTT`` (Shards of Alara) — 3/3 Scarecrow with
+  ``{T}: Target creature becomes the color or colors of your choice
+  until end of turn.`` Layer 5 color-changing effect that writes a
+  ``"set_colors"`` registry entry with ``expires_at="cleanup"``.
 """
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import (
-    CardPrinting, make_aura, make_creature, make_sorcery,
+from mtg_bot.effects import (
+    MagicalHackTextChangeEffect, ScuttlemuttColorChangeUEOT,
 )
-from mtg_bot.effects import MagicalHackTextChangeEffect
+from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+from mtg_bot.cards.base import (
+    CardPrinting, make_aura, make_creature, make_sorcery, parse_mana_cost,
+)
 
 
 LIGNIFY: CardPrinting = make_aura(
@@ -52,4 +62,23 @@ CLONE: CardPrinting = make_creature(
 MAGICAL_HACK: CardPrinting = make_sorcery(
     "Magical Hack", "{U}",
     effect=MagicalHackTextChangeEffect(),
+)
+
+
+WHITE_KNIGHT: CardPrinting = make_creature(
+    "White Knight", "{W}{W}", 2, 2,
+    keywords={"first strike"},
+    protection_from_color="B",
+)
+
+
+SCUTTLEMUTT: CardPrinting = make_creature(
+    "Scuttlemutt", "{4}", 3, 3,
+    subtypes=("Scarecrow",),
+    activated_abilities=(
+        ActivatedAbility(
+            cost=ActivationCost(tap_self=True),
+            effect=ScuttlemuttColorChangeUEOT(),
+        ),
+    ),
 )

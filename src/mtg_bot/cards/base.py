@@ -613,6 +613,18 @@ class CardPrinting:
     # attack as though it didn't have defender." Consumed in
     # ``combat.eligible_attackers``.
     attack_bypass_if_artifact_entered_this_turn: bool = False
+    # Protection from a single color (CR 702.16). When set on a
+    # creature's printing, ``combat.can_block`` rejects any block
+    # declared by an attacker (or against an attacker) whose
+    # effective color includes this one. Matches the classic White
+    # Knight ("Protection from black") / Black Knight ("Protection
+    # from white") shape. Read via
+    # ``game.effective_protection_from_colors`` so future text-/
+    # ability-changing layers (Layer 3 color-word rewrites, Layer 6
+    # ability grants/removals) compose cleanly. Single color only
+    # for now; extend to a frozenset if real cards need protection
+    # from multiple colors at once.
+    protection_from_color: str | None = None
     # Zone-change replacement: when this card would be put into a
     # graveyard from ANY zone the engine currently models, instead it
     # is shuffled into its owner's library. Consumed by
@@ -746,6 +758,7 @@ def make_creature(
     unblockable_if_two_spells_cast_this_turn: bool = False,
     attack_bypass_if_artifact_entered_this_turn: bool = False,
     enters_as_copy_of_creature: bool = False,
+    protection_from_color: str | None = None,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -805,6 +818,7 @@ def make_creature(
             attack_bypass_if_artifact_entered_this_turn
         ),
         enters_as_copy_of_creature=enters_as_copy_of_creature,
+        protection_from_color=protection_from_color,
     )
 
 
