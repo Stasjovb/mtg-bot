@@ -1011,7 +1011,41 @@ _SBA_MAX_PASSES = 50
 def _state_based_actions_pass(state: GameState) -> bool:
     """Single SBA application pass. Returns True if any changes were
     made. Public callers should use ``state_based_actions``, which
-    loops this until quiescent."""
+    loops this until quiescent.
+
+    CR 704.5 SBAs implemented (audit numbering):
+    - 704.5a: player at 0 or less life loses.
+    - 704.5b: drawing from empty library (handled in
+      ``draw_card``, not here).
+    - 704.5c: 10+ poison counters loses.
+    - 704.5d: tokens cease to exist (in
+      ``move_off_battlefield``).
+    - 704.5f: creature with toughness ≤ 0 → graveyard.
+    - 704.5g: creature with damage ≥ toughness → destroyed.
+    - 704.5h: marked-lethal → destroyed.
+    - 704.5i: planeswalker with 0 loyalty → graveyard.
+    - 704.5j: legend rule (per-controller, per-name).
+    - 704.5n (audit) / 704.5r (current CR): +1/+1 vs -1/-1
+      counter cancellation.
+    - 704.5n (audit) / 704.5q (current CR): aura on illegal
+      target → graveyard.
+    - 704.5p (audit): equipment on illegal target → unattach.
+    - 704.5r (audit): saga at chapter count → graveyard.
+    - 701.15: regeneration shield (handled in the destroyed
+      pass — not strictly an SBA).
+
+    KNOWN GAPS:
+    - 704.5k (audit) / 704.5o (current CR): world rule.
+      Not implemented. No World cards are in the EoE pool.
+    - 704.5s (audit) / 704.5u (current CR): battle with 0
+      defense → graveyard. Not implemented. No Battles in EoE.
+    - 21+ commander damage from one source: not implemented.
+      Engine doesn't track commander damage by source.
+    - Token in non-battlefield zone other than via leave-play:
+      not actively scrubbed. Cards moved to a hand/library
+      from a non-battlefield zone are not currently a token-
+      bearing path.
+    """
     changed = False
 
     for p in state.players:
