@@ -89,14 +89,21 @@ shapes are supported:
 
 If any clause fails to parse the whole spell is skipped.
 
-Land support starts with **basic lands** (``Basic`` supertype +
-``Land`` card type). The oracle text is a single parenthesized
-reminder line — ``"({T}: Add {W}.)"`` and friends — from which we
-extract the produced color and call ``make_basic_land``. Non-basic
-lands (Planet lands, shock lands, utility lands) are silently
-skipped for now: their oracle text mixes mana-tap clauses with
-ETB riders, Station mechanics, and tier-gated activated abilities
-that the parser doesn't yet model.
+Land support covers two shapes today:
+
+- **Basic lands** (``Basic`` supertype + ``Land`` card type). Oracle
+  text is a single parenthesized reminder line —
+  ``"({T}: Add {W}.)"`` and friends — from which we extract the
+  produced color and call ``make_basic_land``.
+- **Shock lands** (non-basic ``Land`` with a two-color subtype line).
+  Oracle text is exactly the dual-mana reminder
+  ``"({T}: Add {<c1>} or {<c2>}.)"`` followed by the fixed
+  pay-2-life-or-enter-tapped rider. Both colors come from the reminder
+  line and feed ``make_shock_land`` along with the subtypes string.
+
+Other non-basic land kinds (Planet lands with Station + tier-gated
+abilities, utility lands with sac-self ETB triggers) are silently
+skipped — their oracle text needs grammar the parser doesn't yet model.
 """
 
 from __future__ import annotations
@@ -123,6 +130,7 @@ from mtg_bot.cards.base import (
     make_basic_land,
     make_creature,
     make_instant,
+    make_shock_land,
     make_sorcery,
     parse_mana_cost,
 )
@@ -649,31 +657,89 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 _BASIC_LAND_REMINDER = re.compile(r"^\(\{T\}: Add \{([WUBRGC])\}\.\)$")
 
 
+# Shock-land oracle text is exactly two lines, in this order on Scryfall:
+#   1. The dual-mana reminder: ``"({T}: Add {<c1>} or {<c2>}.)"``
+#   2. The pay-2-life-or-enter-tapped rider:
+#      ``"As this land enters, you may pay 2 life. If you don't, it
+#      enters tapped."``
+# Both colors come from the reminder line and are passed straight to
+# ``make_shock_land``. The subtype string (e.g. ``"Forest Island"``)
+# comes from the type line. Variants with a different life cost or a
+# different tap-condition phrasing intentionally do not match — they
+# fall through to the skip-silently behavior.
+_SHOCK_LAND_REMINDER = re.compile(
+    r"^\(\{T\}: Add \{([WUBRGC])\} or \{([WUBRGC])\}\.\)$"
+)
+_SHOCK_LAND_LIFE_RIDER = (
+    "As this land enters, you may pay 2 life. "
+    "If you don't, it enters tapped."
+)
+
+
 def _build_land_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a land ``card`` (a Scryfall
     record). Returns ``None`` if the card is not a land or if its shape
     isn't one the land grammar yet supports.
 
-    Currently supported: basic lands (``Basic`` supertype + ``Land`` card
-    type), whose oracle text is the single reminder line
-    ``"({T}: Add {<color>}.)"``. Non-basic lands (Planet lands, shock
-    lands, utility lands) require ETB riders, Station, or tier-gated
-    activated abilities that the parser doesn't yet model and so are
-    skipped silently — same pattern as the creature/spell builders.
+    Currently supported:
+
+    - Basic lands (``Basic`` supertype + ``Land`` card type), whose
+      oracle text is the single reminder line ``"({T}: Add {<color>}.)"``.
+    - Shock lands: a non-basic ``Land`` whose oracle text is the
+      two-line dual-mana reminder + pay-2-life-or-enter-tapped rider.
+      Both colors are read off the reminder line and the subtype string
+      off the type line; both feed ``make_shock_land``.
+
+    Other non-basic shapes (Planet lands, utility lands) require
+    Station, sac-self triggers, or tier-gated activated abilities that
+    the parser doesn't yet model and so are skipped silently — same
+    pattern as the creature/spell builders.
     """
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )
     if "Land" not in card_types:
         return None
-    if "Basic" not in supertypes:
-        return None
     text = card.get("oracle_text", "").strip()
-    m = _BASIC_LAND_REMINDER.match(text)
+    if "Basic" in supertypes:
+        m = _BASIC_LAND_REMINDER.match(text)
+        if m is None:
+            return None
+        color = m.group(1)
+        return make_basic_land(name=card["name"], color=color)
+    # Non-basic land shapes follow.
+    shock = _try_build_shock_land(card, text, subtypes)
+    if shock is not None:
+        return shock
+    return None
+
+
+def _try_build_shock_land(
+    card: dict, text: str, subtypes: tuple[str, ...]
+) -> CardPrinting | None:
+    """Return a shock-land ``CardPrinting`` if ``text`` matches the
+    two-line shock-land shape, else ``None``.
+
+    The shape is exactly: a dual-mana reminder line followed by the
+    fixed pay-2-life-or-enter-tapped rider. Anything else (extra lines,
+    different life cost, different rider wording) falls through.
+    """
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    m = _SHOCK_LAND_REMINDER.match(lines[0])
     if m is None:
         return None
-    color = m.group(1)
-    return make_basic_land(name=card["name"], color=color)
+    if lines[1] != _SHOCK_LAND_LIFE_RIDER:
+        return None
+    if not subtypes:
+        return None
+    colors = (m.group(1), m.group(2))
+    return make_shock_land(
+        name=card["name"],
+        colors=colors,
+        subtypes_str=" ".join(subtypes),
+    )
 
 
 def _load_scryfall_data() -> list[dict]:

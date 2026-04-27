@@ -748,13 +748,115 @@ def test_build_land_printing_skips_planet_lands():
     assert _build_land_printing(card) is None
 
 
-def test_build_land_printing_skips_shock_lands():
-    """Shock lands have a non-trivial ETB rider (optional 2-life payment
-    or enter tapped) the parser doesn't yet model."""
+@pytest.mark.parametrize(
+    "name,subtypes_str,reminder,colors",
+    [
+        (
+            "Breeding Pool", "Forest Island",
+            "({T}: Add {G} or {U}.)", ("G", "U"),
+        ),
+        (
+            "Godless Shrine", "Plains Swamp",
+            "({T}: Add {W} or {B}.)", ("W", "B"),
+        ),
+        (
+            "Sacred Foundry", "Mountain Plains",
+            "({T}: Add {R} or {W}.)", ("R", "W"),
+        ),
+        (
+            "Stomping Ground", "Mountain Forest",
+            "({T}: Add {R} or {G}.)", ("R", "G"),
+        ),
+        (
+            "Watery Grave", "Island Swamp",
+            "({T}: Add {U} or {B}.)", ("U", "B"),
+        ),
+    ],
+)
+def test_build_land_printing_handles_each_shock_land(
+    name, subtypes_str, reminder, colors
+):
+    """Each shock land's two-line oracle text parses to the expected
+    shape: dual-mana producer, ETB-pay-2-life-or-tapped rider, no
+    Basic supertype, subtypes lifted off the type line."""
     card = {
-        "name": "Breeding Pool",
+        "name": name,
+        "mana_cost": "",
+        "type_line": f"Land — {subtypes_str}",
+        "oracle_text": (
+            f"{reminder}\n"
+            "As this land enters, you may pay 2 life. "
+            "If you don't, it enters tapped."
+        ),
+    }
+    printing = _build_land_printing(card)
+    assert printing is not None
+    assert printing.name == name
+    assert printing.is_land
+    assert printing.is_basic_land is False
+    assert printing.supertypes == ()
+    assert printing.card_types == ("Land",)
+    assert printing.subtypes == tuple(subtypes_str.split())
+    assert printing.produces == frozenset(colors)
+    assert printing.shock_land_life_cost == 2
+    # No granted triggers/activations beyond the engine's built-in
+    # shock-land ETB handling.
+    assert printing.triggered_abilities == ()
+    assert printing.activated_abilities == ()
+
+
+def test_build_land_printing_skips_shock_land_with_extra_line():
+    """A shock-shaped card with a third line (hypothetical printed
+    reminder or rider variation) must not partially claim — fall through."""
+    card = {
+        "name": "Hypothetical Shock",
         "mana_cost": "",
         "type_line": "Land — Forest Island",
+        "oracle_text": (
+            "({T}: Add {G} or {U}.)\n"
+            "As this land enters, you may pay 2 life. "
+            "If you don't, it enters tapped.\n"
+            "When this land enters, draw a card."
+        ),
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_shock_with_wrong_life_cost():
+    """The fixed 2-life rider is what we recognize; a 3-life variant
+    (hypothetical) falls through rather than silently parsing wrong."""
+    card = {
+        "name": "Hypothetical Shock",
+        "mana_cost": "",
+        "type_line": "Land — Forest Island",
+        "oracle_text": (
+            "({T}: Add {G} or {U}.)\n"
+            "As this land enters, you may pay 3 life. "
+            "If you don't, it enters tapped."
+        ),
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_shock_with_missing_rider():
+    """Just the dual-mana reminder line, no ETB rider, isn't a shock —
+    skip rather than build a shock with shock_land_life_cost=2."""
+    card = {
+        "name": "Hypothetical Dual",
+        "mana_cost": "",
+        "type_line": "Land — Forest Island",
+        "oracle_text": "({T}: Add {G} or {U}.)",
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_shock_dual_with_no_subtypes():
+    """A non-basic land with the shock oracle shape but no subtypes on
+    the type line has no ``subtypes_str`` to feed the factory; skip."""
+    card = {
+        "name": "Hypothetical Subtype-less",
+        "mana_cost": "",
+        "type_line": "Land",
         "oracle_text": (
             "({T}: Add {G} or {U}.)\n"
             "As this land enters, you may pay 2 life. "
@@ -813,10 +915,27 @@ def test_source_does_not_claim_planet_land():
     assert "Adagia, Windswept Bastion" not in source.claimed_names
 
 
-def test_source_does_not_claim_shock_land():
-    """Shock lands are out-of-slice."""
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Breeding Pool", "Godless Shrine", "Sacred Foundry",
+        "Stomping Ground", "Watery Grave",
+    ],
+)
+def test_source_claims_each_shock_land(name):
+    """Each EoE shock land gets claimed end-to-end from the cached
+    Scryfall data."""
     source = OracleParserCardSource()
-    assert "Breeding Pool" not in source.claimed_names
+    assert name in source.claimed_names
+    assert name in source.get_printings()
+
+
+def test_source_does_not_claim_utility_land():
+    """Utility lands (Command Bridge, Secluded Starforge) need ETB
+    sac-self triggers / activated abilities the parser doesn't model."""
+    source = OracleParserCardSource()
+    assert "Command Bridge" not in source.claimed_names
+    assert "Secluded Starforge" not in source.claimed_names
 
 
 # ---------- Warp ----------
