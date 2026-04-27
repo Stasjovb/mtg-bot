@@ -19,6 +19,17 @@ if TYPE_CHECKING:
     from mtg_bot.game import GameState
 
 
+def _eff_subtypes(state: "GameState", obj) -> tuple[str, ...]:
+    """Local alias for ``mtg_bot.game.effective_subtypes`` so
+    subtype-keyed legal-target filters (anti-subtype, allowed-subtype,
+    target-subtype) can read the layered-effects view of a battlefield
+    permanent's subtypes without circular-import gymnastics. Lazy
+    import — the function-level fallthrough avoids importing game at
+    module load."""
+    from mtg_bot.game import effective_subtypes
+    return effective_subtypes(state, obj)
+
+
 @dataclass(frozen=True)
 class GainLife(Effect):
     amount: int
@@ -2784,6 +2795,8 @@ class PumpTargetCreatureUntilEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import effective_subtypes
+
         source = state.resolving_source if self.exclude_self else None
         source_id = source.id if source is not None else -1
         return [
@@ -2794,8 +2807,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             and (not self.opponents_only or o.controller_id != controller_id)
             and (
                 self.target_subtype is None
-                or self.target_subtype in o.printing.subtypes
-                or self.target_subtype == o.temp_subtype
+                or self.target_subtype in effective_subtypes(state, o)
             )
             and o.id != source_id
         ]
@@ -3925,7 +3937,10 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
             if o.printing.is_creature
             and not (
                 self.excluded_subtypes
-                and any(s in self.excluded_subtypes for s in o.printing.subtypes)
+                and any(
+                    s in self.excluded_subtypes
+                    for s in _eff_subtypes(state, o)
+                )
             )
             and not (
                 self.opponents_only and o.controller_id == controller_id
@@ -4224,63 +4239,48 @@ class PumpSelfXPowerUEOT(Effect):
 
 @dataclass(frozen=True)
 class SwitchSourcePowerToughnessUEOT(Effect):
-    """Switch the source's base power and toughness until end of turn.
+    """Switch the source's power and toughness until end of turn.
 
-    Implementation: reads the source's current effective base P/T
-    via the layered registry (the most-recent layer-7a
-    ``"set_base_pt"`` entry wins; falls back to printed P/T if no
-    such entry exists) and writes a NEW layer-7a ``"set_base_pt"``
-    entry with the swapped pair, ``expires_at="cleanup"``. Because
-    timestamps are monotonically increasing, the new entry
-    overrides the old one in ``effective_power`` / ``effective_toughness``.
-    Mirrors to the legacy ``temp_base_pt_override`` cache field so
-    any code still reading the field (rare) sees the right value.
+    Implementation: writes a layer-7 sublayer-4 ``"switch_pt"``
+    registry entry sourced by the source object with
+    ``expires_at="cleanup"``. The entry carries no params — each
+    such entry contributes a single swap, walked in timestamp order
+    by ``_compute_effective_pt``. Two switches cancel; three
+    switches is one swap.
 
-    Simplification: only the BASE pair is swapped. +1/+1 counters and
-    static-anthem bonuses are not "swapped" per se — they continue to
-    add equally to both sides via existing P/T plumbing — so for the
-    common Wandering Fumarole case (no counters, no buffs) the result
-    is exact: 1/4 → 4/1.
+    Per CR 613.4 layer 7e, switch operates on the post-7b/c/d
+    effective P/T — so a Lignified manland (0/4 from layer 7b) with
+    a +1/+1 counter (7d) becomes 1/5 before any switch, and 5/1
+    after one switch. That matches MTG's "switch power and
+    toughness" semantics on a creature whose P/T has already been
+    modified by other effects.
 
     Wires Wandering Fumarole's granted "{0}: Switch this creature's
     power and toughness until end of turn" while animated. The {0}
-    cost means the ability is freely re-activatable, which lets the
-    swap toggle back and forth — each activation re-reads the
-    most-recent registry entry and writes a fresh override.
+    cost means the ability is freely re-activatable; each activation
+    appends another switch entry, toggling the displayed P/T.
     """
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import _registry_set_base_pt
-
         source = state.resolving_source
         if source is None:
             return
-        layer7a = _registry_set_base_pt(state, source)
-        if layer7a is not None:
-            p, t = layer7a
-        elif source.temp_base_pt_override is not None:
-            p, t = source.temp_base_pt_override
-        else:
-            p = source.printing.power or 0
-            t = source.printing.toughness or 0
         state.add_continuous_effect(
             source_id=source.id,
-            layer=7, sublayer=1, kind="set_base_pt",
+            layer=7, sublayer=4, kind="switch_pt",
             target_id=source.id,
-            params=(t, p),
+            params=(),
             expires_at="cleanup",
             description=(
-                f"{source.printing.name} P/T switched to {t}/{p} UEOT"
+                f"{source.printing.name} P/T switched UEOT"
             ),
         )
-        # Mirror to legacy cache for any non-registry reader.
-        source.temp_base_pt_override = (t, p)
         state.log.append(
             f"{source.printing.name}'s power and toughness are switched "
-            f"({p}/{t} -> {t}/{p}) until end of turn"
+            f"until end of turn"
         )
 
     def describe(self) -> str:
@@ -4978,7 +4978,8 @@ class RegenerateTargetCreature(Effect):
             and (
                 not self.allowed_subtypes
                 or any(
-                    s in self.allowed_subtypes for s in o.printing.subtypes
+                    s in self.allowed_subtypes
+                    for s in _eff_subtypes(state, o)
                 )
             )
         ]
@@ -6048,7 +6049,8 @@ class GainControlOfTargetSliverPermanently(Effect):
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature and "Sliver" in o.printing.subtypes
+            if o.printing.is_creature
+            and "Sliver" in _eff_subtypes(state, o)
         ]
 
     def resolve(
@@ -6065,7 +6067,7 @@ class GainControlOfTargetSliverPermanently(Effect):
         )
         if obj is None:
             return
-        if "Sliver" not in obj.printing.subtypes:
+        if "Sliver" not in _eff_subtypes(state, obj):
             return
         if obj.controller_id == controller_id:
             # Already yours — no change, but log for visibility.
@@ -7278,6 +7280,101 @@ class MagicalHackTextChangeEffect(Effect):
         return (
             "change the text of target spell or permanent by replacing "
             "all instances of one basic land type with another"
+        )
+
+
+
+@dataclass(frozen=True)
+class SleightOfMindTextChangeEffect(Effect):
+    """Sleight of Mind: 'Change the text of target spell or
+    permanent by replacing all instances of one color word with
+    another.' Layer 3 text-changing.
+
+    Implementation scope: rewrites color words in
+    ``protection_from_color`` on the target's printing. The OLD
+    color is auto-derived from the target's current effective
+    protection (the only color-word reference our engine
+    currently models on permanents); the controller picks the NEW
+    color via ``choose_mana_color``. Writes a layer-3
+    ``"replace_color_word"`` registry entry sourced by the
+    resolving spell with ``params=(old, new)`` and
+    ``expires_at=None`` (text changes persist per CR 612).
+
+    Limitations: doesn't rewrite color words inside other rules
+    text (e.g., "Whenever a black creature ETBs, ..."). The engine
+    doesn't have such color-keyed triggers in scope, so the
+    extension is a no-op there.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Permits any permanent on the battlefield. In practice
+        # only the protection-from-color holders get observable
+        # results; targeting elsewhere just writes a no-op entry.
+        return [
+            ("permanent", o.id) for o in state.battlefield
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_protection_from_colors
+
+        if not targets:
+            return
+        _, target_id = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == target_id), None,
+        )
+        if target is None:
+            return
+        # Derive the OLD color from the target's current effective
+        # protection set. If protection is empty or has multiple
+        # colors, we can't unambiguously rewrite — fizzle.
+        prot = effective_protection_from_colors(state, target)
+        if len(prot) != 1:
+            state.log.append(
+                f"Sleight of Mind fizzles: {target.printing.name} "
+                f"has no single color word to rewrite"
+            )
+            return
+        (old,) = prot
+        options = [c for c in ["W", "U", "B", "R", "G"] if c != old]
+        chosen = state.players[controller_id].agent.choose_mana_color(
+            state, controller_id, options,
+        )
+        if chosen not in options:
+            state.log.append(
+                f"Sleight of Mind fizzles: invalid new color choice"
+            )
+            return
+        src = state.resolving_source
+        source_id = src.id if src is not None else target.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=3,
+            kind="replace_color_word",
+            target_id=target.id,
+            params=(old, chosen),
+            description=(
+                f"Sleight of Mind rewrites {target.printing.name}: "
+                f"{old} -> {chosen}"
+            ),
+        )
+        state.log.append(
+            f"Sleight of Mind rewrites {target.printing.name}: "
+            f"{old} -> {chosen}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "change the text of target spell or permanent by replacing "
+            "all instances of one color word with another"
         )
 
 

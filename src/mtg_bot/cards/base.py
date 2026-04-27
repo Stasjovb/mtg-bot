@@ -595,6 +595,54 @@ class CardPrinting:
     # aren't rewritten, and already-animated manlands keep their
     # temp_is_creature state (no layers yet).
     nonbasic_lands_are_mountains: bool = False
+    # Dryad of the Ilysian Grove: "Lands you control are every basic
+    # land type in addition to their other types." A printing with
+    # this flag, while on the battlefield, contributes synthetic
+    # layer-4 ``"add_subtype"`` entries (one per basic land type) to
+    # ``effective_subtypes`` for every land its controller controls.
+    # Synthesizing on-the-fly avoids ETB/leave plumbing; the
+    # source's ``etb_timestamp`` is used so within-layer timestamp
+    # order vs Blood Moon / Magus of the Moon matches CR 613.4.
+    grants_all_basic_land_types_to_lands_you_control: bool = False
+    # Urborg, Tomb of Yawgmoth / Yavimaya, Cradle of Growth: "Each
+    # land is a [basic land type] in addition to its other types."
+    # When this is set on a permanent on the battlefield,
+    # ``effective_subtypes`` synthesizes a layer-4 ``"add_subtype"``
+    # entry on every land, sourced by this permanent. The CR 613.7
+    # dependency rule kicks in here: if the source itself is a
+    # land that's been rewritten by a layer-4
+    # ``"set_basic_land_subtype"`` effect (Blood Moon / Magus),
+    # its ability is wiped at layer 4 (CR 305.6) and the
+    # contribution doesn't apply. This is the famous Blood Moon
+    # beats Urborg ruling.
+    grants_basic_land_type_to_all_lands: "str | None" = None
+    # Painter's Servant: "As Painter's Servant enters, choose a
+    # color. All cards that aren't on the battlefield, spells, and
+    # permanents are the chosen color in addition to their other
+    # colors." When True on a permanent's printing,
+    # ``effective_colors`` synthesizes a layer-5 ``"add_colors"``
+    # entry on every battlefield permanent (and spell) with the
+    # source's chosen color. The chosen color is captured at ETB
+    # time on ``GameObject.painter_chosen_color``. The source's
+    # ``etb_timestamp`` is the synthesized entry's timestamp so it
+    # interleaves correctly with Scuttlemutt-style set_colors per
+    # CR 613 layer-5 timestamp rules.
+    paints_all_objects_chosen_color_at_etb: bool = False
+    # Humility (Tempest): "All creatures lose all abilities and have
+    # base power and toughness 1/1." Decomposed into two flags so a
+    # future card with only one half (just the wipe, just the 1/1)
+    # composes cleanly:
+    # - ``wipes_all_creature_abilities``: synthesizes a layer-6
+    #   ``"lose_all_abilities"`` entry on every creature, sourced
+    #   by this permanent with its ``etb_timestamp``.
+    # - ``sets_all_creature_pt_to_1_1``: synthesizes a layer-7
+    #   sublayer-1 ``"set_base_pt"`` entry with ``params=(1, 1)``
+    #   on every creature, same source/timestamp.
+    # Both contributions interleave with per-creature registry
+    # entries (Lignify, anthem grants) by timestamp in the usual
+    # CR 613 layer walks.
+    wipes_all_creature_abilities: bool = False
+    sets_all_creature_pt_to_1_1: bool = False
     # Conditional unblockable: "This creature can't be blocked if you've
     # cast two or more spells this turn." (Illvoi Infiltrator). When True
     # and the controller's Player.spells_cast_this_turn >= 2, combat.can_block
@@ -752,6 +800,7 @@ def make_creature(
     is_token_doubler: bool = False,
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
+    grants_all_basic_land_types_to_lands_you_control: bool = False,
     replaces_draw_with_extra_when_hand_at_most_one: bool = False,
     warp_additional_life_cost: int = 0,
     warp_castable_from_graveyard: bool = False,
@@ -806,6 +855,9 @@ def make_creature(
         is_token_doubler=is_token_doubler,
         devour_land_multiplier=devour_land_multiplier,
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        grants_all_basic_land_types_to_lands_you_control=(
+            grants_all_basic_land_types_to_lands_you_control
+        ),
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
         ),
@@ -947,6 +999,7 @@ def make_artifact(
     legendary: bool = False,
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     cost_reductions: tuple[CostReduction, ...] = (),
+    paints_all_objects_chosen_color_at_etb: bool = False,
 ) -> CardPrinting:
     """Build a non-creature, non-Spacecraft Artifact permanent."""
     prefix = "Legendary " if legendary else ""
@@ -965,6 +1018,9 @@ def make_artifact(
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
         cost_reductions=tuple(cost_reductions),
+        paints_all_objects_chosen_color_at_etb=(
+            paints_all_objects_chosen_color_at_etb
+        ),
     )
 
 
@@ -1142,6 +1198,9 @@ def make_enchantment(
     grants_first_spell_each_turn_free: bool = False,
     warp: str | None = None,
     grants_etb_counter_per_land_entered_this_turn: bool = False,
+    nonbasic_lands_are_mountains: bool = False,
+    wipes_all_creature_abilities: bool = False,
+    sets_all_creature_pt_to_1_1: bool = False,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
     like any other permanent and sits there firing triggers or providing
@@ -1174,6 +1233,9 @@ def make_enchantment(
         grants_etb_counter_per_land_entered_this_turn=(
             grants_etb_counter_per_land_entered_this_turn
         ),
+        nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        wipes_all_creature_abilities=wipes_all_creature_abilities,
+        sets_all_creature_pt_to_1_1=sets_all_creature_pt_to_1_1,
     )
 
 
