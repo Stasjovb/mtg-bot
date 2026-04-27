@@ -18,6 +18,9 @@ from mtg_bot.cards.parser.activated import (  # noqa: F401
     _parse_activated_ability_line,
     _parse_activation_cost,
 )
+from mtg_bot.cards.parser.artifact_builder import (  # noqa: F401
+    _build_artifact_printing,
+)
 from mtg_bot.cards.parser.clause import (  # noqa: F401
     _ParsedClause,
     _parse_clause,

@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from mtg_bot.cards.base import CardPrinting
+from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.creature_builder import _build_creature_printing
 from mtg_bot.cards.parser.equipment_builder import _build_equipment_printing
 from mtg_bot.cards.parser.land_builder import _build_land_printing
@@ -45,6 +46,8 @@ class OracleParserCardSource:
                 built = _build_equipment_printing(card)
             if built is None:
                 built = _build_spacecraft_printing(card)
+            if built is None:
+                built = _build_artifact_printing(card)
             if built is not None:
                 printings[card["name"]] = built
         self._printings = printings
