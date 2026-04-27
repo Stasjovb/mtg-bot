@@ -502,18 +502,36 @@ def gain_life(state: "GameState", player_id: int, amount: int) -> int:
     return amount
 
 
+_BASIC_LAND_TYPE_TO_COLOR: dict[str, str] = {
+    "Plains": "W",
+    "Island": "U",
+    "Swamp": "B",
+    "Mountain": "R",
+    "Forest": "G",
+}
+
+
 def effective_subtypes(
     state: "GameState", obj: "GameObject"
 ) -> tuple[str, ...]:
     """Return ``obj``'s subtypes including any granted by permanents
-    on the battlefield. Handles "artifacts you control are Foods"
-    (Ragost, Deft Gastronaut's static) AND any layer-4 ``add_subtype``
-    registry entries targeting this object (Lignify granting
-    "Treefolk").
+    on the battlefield. Handles three sources, applied in CR-613 layer
+    order (3 before 4) on top of the printed subtype list:
 
-    Layer-4 grants are appended after the printed list, ordered by
-    timestamp ascending so the most-recent grant lands last.
-    Duplicates are suppressed."""
+    - Static "artifacts you control are Foods" (Ragost, Deft
+      Gastronaut). Adds "Food" to artifacts.
+    - Layer 3 ``"replace_basic_land_type"`` registry entries. Each
+      entry has ``params=(old, new)``; applied in timestamp order so
+      the most-recent text change wins. Substitutes the old basic
+      land type for the new one in the subtype list. Magical Hack
+      applied to a basic Forest writes ``("Forest", "Mountain")``;
+      the Forest's subtype list is rewritten ``["Forest"]`` →
+      ``["Mountain"]``, which ``effective_land_produces`` then maps
+      to ``{R}`` mana.
+    - Layer 4 ``"add_subtype"`` registry entries (Lignify granting
+      "Treefolk"). Appended after the layer-3 substitutions in
+      timestamp order; duplicates suppressed.
+    """
     subtypes = list(obj.printing.subtypes)
     if obj.printing.is_artifact:
         for o in state.battlefield:
@@ -525,6 +543,20 @@ def effective_subtypes(
                 if "Food" not in subtypes:
                     subtypes.append("Food")
                 break
+    layer3 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 3
+            and ce.kind == "replace_basic_land_type"
+            and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for ce in layer3:
+        if not ce.params or len(ce.params) != 2:
+            continue
+        old, new = ce.params
+        subtypes = [new if s == old else s for s in subtypes]
     layer4 = sorted(
         (
             ce for ce in state.continuous_effects
@@ -555,18 +587,33 @@ def magus_of_the_moon_active(state: "GameState") -> bool:
 def effective_land_produces(
     state: "GameState", land_obj: "GameObject"
 ) -> frozenset[str]:
-    """Return the effective colors a land taps for, applying the
-    Magus-of-the-Moon rewrite.
+    """Return the effective colors a land taps for, applying:
 
-    Nonbasic lands under Magus produce {R} only; basic lands and any
-    lands when Magus isn't active use their printed ``produces`` set
-    unchanged.
+    - Magus of the Moon: nonbasic lands produce {R} only.
+    - Layer 3 text-changing on basic lands (Magical Hack): the
+      basic-land-type subtype is rewritten via ``effective_subtypes``,
+      and the produced color is derived from the resulting subtype
+      via ``_BASIC_LAND_TYPE_TO_COLOR``. So a Forest with a Layer 3
+      ``("Forest", "Mountain")`` text change is effectively a
+      Mountain and produces {R}.
+
+    Nonbasic lands ignore the Layer 3 rewrite (their text usually
+    doesn't depend on basic-land-type subtypes); they return the
+    printed ``produces`` set unchanged when Magus isn't active.
     """
     if (
         not land_obj.printing.is_basic_land
         and magus_of_the_moon_active(state)
     ):
         return frozenset({"R"})
+    if land_obj.printing.is_basic_land:
+        produced = {
+            _BASIC_LAND_TYPE_TO_COLOR[s]
+            for s in effective_subtypes(state, land_obj)
+            if s in _BASIC_LAND_TYPE_TO_COLOR
+        }
+        if produced:
+            return frozenset(produced)
     return land_obj.printing.produces
 
 

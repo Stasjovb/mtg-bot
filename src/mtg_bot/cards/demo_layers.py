@@ -18,11 +18,21 @@ Currently:
   not auras, counters, or current animations). Writes a layer-1
   ``"is_copy"`` registry entry so the layered system records the
   copy event; the entry is dropped when the clone leaves play.
+- ``MAGICAL_HACK`` (Alpha) — "Change the text of target spell or
+  permanent by replacing all instances of one basic land type with
+  another." Sorcery, layer 3 text-changing. The demo targets a
+  basic land and rewrites its basic-land-type subtype, which flows
+  through ``effective_subtypes`` and ``effective_land_produces`` so
+  the rewritten land taps for the new color. Persistent (no
+  ``expires_at``) — text changes survive cleanup per CR 612.
 """
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import CardPrinting, make_aura, make_creature
+from mtg_bot.cards.base import (
+    CardPrinting, make_aura, make_creature, make_sorcery,
+)
+from mtg_bot.effects import MagicalHackTextChangeEffect
 
 
 LIGNIFY: CardPrinting = make_aura(
@@ -36,4 +46,10 @@ LIGNIFY: CardPrinting = make_aura(
 CLONE: CardPrinting = make_creature(
     "Clone", "{3}{U}", 0, 0,
     enters_as_copy_of_creature=True,
+)
+
+
+MAGICAL_HACK: CardPrinting = make_sorcery(
+    "Magical Hack", "{U}",
+    effect=MagicalHackTextChangeEffect(),
 )
