@@ -244,7 +244,7 @@ def _coin_satisfies_context(
 def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
-    *, convoke: bool = False,
+    *, convoke: bool = False, sac_for_mana: bool = False,
 ) -> bool:
     """Check whether the player can pay ``cost`` by consuming floating
     mana in their pool (respecting spend restrictions for ``spell_kind``)
@@ -258,9 +258,16 @@ def can_pay_cost(
     pre-applied as convoke contributions before checking pool + lands.
     Convoke is optional and only ever makes a spell cheaper, so for
     legality we use the maximum convoke contribution.
+
+    When ``sac_for_mana=True``, the controller's sac-for-mana mana
+    abilities (Treasure-style "Sacrifice this: Add ...") are
+    optimistically counted as available coverage. Like convoke, this
+    is upper-bound: the cast pipeline activates only what's needed.
     """
     if convoke:
         cost = _convoke_max_contribution(state, player_id, cost)
+    if sac_for_mana:
+        cost = _sac_for_mana_max_contribution(state, player_id, cost)
     p = state.player_by_id(player_id)
     usable_pool = [
         c for c in p.mana_pool
@@ -670,6 +677,230 @@ def _apply_convoke(
         colored=tuple((c, n) for c, n in colored if n > 0),
         x_pips=cost.x_pips,
     )
+
+
+def _classify_sac_for_mana(
+    state: GameState, source: GameObject,
+) -> "list[tuple[int, tuple[tuple[str, int], ...]]]":
+    """For ``source``, list its qualifying sac-for-mana mana abilities
+    as ``(ability_idx, produces)`` pairs.
+
+    A qualifying ability:
+      - is a mana ability (``is_mana_ability=True``)
+      - costs the source's sacrifice (``sacrifice_self=True``)
+      - has no other resource costs (no mana cost, no extra sacs, no
+        life payment) — Treasure-style "Sacrifice this: Add ..." or
+        "{T}, Sacrifice this: Add ..." both qualify
+      - resolves into ``AddManaToPool`` with concrete ``produces``
+    """
+    from mtg_bot.effects.generic import AddManaToPool
+    from mtg_bot.game import effective_activated_abilities
+    out: list[tuple[int, tuple[tuple[str, int], ...]]] = []
+    for idx, ability in enumerate(effective_activated_abilities(state, source)):
+        if not ability.is_mana_ability:
+            continue
+        c = ability.cost
+        if not c.sacrifice_self:
+            continue
+        if c.mana is not None and c.mana.total > 0:
+            continue
+        if (
+            c.sacrifice_another_creature_or_artifact
+            or c.sacrifice_another_artifact_or_land
+            or c.sacrifice_another_artifact
+            or c.sacrifice_food
+            or c.sacrifice_a_land
+            or c.sacrifice_a_desert
+            or c.remove_plus_one_counter_from_your_creature
+            or c.exile_granting_equipment
+            or c.pay_life
+        ):
+            continue
+        if not isinstance(ability.effect, AddManaToPool):
+            continue
+        out.append((idx, ability.effect.produces))
+    return out
+
+
+def _sac_for_mana_sources(
+    state: GameState, player_id: int,
+) -> "list[tuple[GameObject, int, tuple[tuple[str, int], ...]]]":
+    """Battlefield sources controlled by ``player_id`` whose
+    sac-for-mana mana abilities can fire as part of the current cast.
+    Already-tapped sources can still fire (a tap-then-sac ability needs
+    {T} which a tapped source can't pay; ``_can_fire_now`` filters that).
+    """
+    sources: list[tuple[GameObject, int, tuple[tuple[str, int], ...]]] = []
+    for o in state.battlefield:
+        if o.controller_id != player_id:
+            continue
+        if o.phased_out:
+            continue
+        for idx, produces in _classify_sac_for_mana(state, o):
+            sources.append((o, idx, produces))
+    return sources
+
+
+def _can_fire_sac_for_mana(state: GameState, source: GameObject, ability_idx: int) -> bool:
+    """True if ``source``'s ``ability_idx`` ability can be activated
+    right now to add mana. Gates the {T} cost on the source being
+    untapped (sacrifice and any-cost-zero parts always work)."""
+    from mtg_bot.game import effective_activated_abilities
+    abilities = effective_activated_abilities(state, source)
+    if ability_idx >= len(abilities):
+        return False
+    if abilities[ability_idx].cost.tap_self and source.tapped:
+        return False
+    return True
+
+
+def _produces_satisfies(
+    produces: "tuple[tuple[str, int], ...]", color: str,
+) -> bool:
+    """True if ``produces`` (one activation's mana output) covers a
+    requirement for one pip of ``color``. ``"any"`` matches any color;
+    a colored requirement is satisfied only by exact match or "any";
+    a generic requirement (color="" / None) is satisfied by any output.
+    """
+    for c, n in produces:
+        if n <= 0:
+            continue
+        if color == "" or color is None:
+            return True
+        if c == color or c == "any":
+            return True
+    return False
+
+
+def _produces_total(produces: "tuple[tuple[str, int], ...]") -> int:
+    return sum(n for _, n in produces)
+
+
+def _sac_for_mana_max_contribution(
+    state: GameState, player_id: int, cost: ManaCost,
+) -> ManaCost:
+    """Lower ``cost`` by the maximum coverage available from the
+    caster's sac-for-mana mana abilities. Used by the affordability
+    check (``can_pay_cost(..., sac_for_mana=True)``). Each source can
+    fire at most once per cast; greedy color-first matching mirrors
+    the runtime ``_activate_sac_for_mana_for_cost`` allocator.
+    """
+    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+        return cost
+    sources = _sac_for_mana_sources(state, player_id)
+    if not sources:
+        return cost
+    consumed: set[int] = set()
+    generic = cost.generic
+    colored = list(cost.colored)
+    # Pay colored first.
+    for i, (color, n) in enumerate(colored):
+        need = n
+        while need > 0:
+            chosen_idx: "int | None" = None
+            for sidx, (src, ai, produces) in enumerate(sources):
+                if src.id in consumed:
+                    continue
+                if not _can_fire_sac_for_mana(state, src, ai):
+                    continue
+                if _produces_satisfies(produces, color):
+                    chosen_idx = sidx
+                    break
+            if chosen_idx is None:
+                break
+            consumed.add(sources[chosen_idx][0].id)
+            need -= 1
+        colored[i] = (color, need)
+    # Then generic.
+    while generic > 0:
+        chosen_idx = None
+        for sidx, (src, ai, produces) in enumerate(sources):
+            if src.id in consumed:
+                continue
+            if not _can_fire_sac_for_mana(state, src, ai):
+                continue
+            if _produces_total(produces) > 0:
+                chosen_idx = sidx
+                break
+        if chosen_idx is None:
+            break
+        consumed.add(sources[chosen_idx][0].id)
+        generic -= 1
+    return ManaCost(
+        generic=generic,
+        colored=tuple((c, n) for c, n in colored if n > 0),
+        x_pips=cost.x_pips,
+    )
+
+
+def _activate_sac_for_mana_for_cost(
+    state: GameState, player_id: int, cost: ManaCost,
+    spell_kind: "frozenset[str]",
+) -> ManaCost:
+    """During 601.2g cost payment, activate the caster's sac-for-mana
+    mana abilities to cover any shortfall left after pool + lands.
+
+    Returns the (still-unpaid) cost — typically equal to ``cost``
+    unmodified, since auto_tap_for_cost runs after this and consumes
+    the freshly-pooled mana. We don't pay the cost here; we just push
+    coins into the pool.
+
+    Greedy: for each unmet colored pip, find a sac source whose mana
+    output covers that color and activate it. For generic shortfall,
+    any sac source qualifies. Only fires when the cost can't already
+    be paid from pool + lands — Treasures aren't blown up unless
+    they're actually needed.
+    """
+    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+        return cost
+    if can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
+        return cost
+    # Compute shortfall against pool + lands (without sac abilities).
+    sources = _sac_for_mana_sources(state, player_id)
+    if not sources:
+        return cost
+    # Activate sources greedily until the cost can be paid (or no
+    # source helps).
+    consumed: set[int] = set()
+    while not can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
+        chosen: "tuple[GameObject, int] | None" = None
+        unmet_colors = [color for color, _n in cost.colored]
+        # Try to satisfy a colored need first — a source whose mana
+        # output covers some still-needed color.
+        for need_color in unmet_colors:
+            for src, idx, produces in sources:
+                if src.id in consumed:
+                    continue
+                if not _can_fire_sac_for_mana(state, src, idx):
+                    continue
+                if _produces_satisfies(produces, need_color):
+                    chosen = (src, idx)
+                    break
+            if chosen is not None:
+                break
+        if chosen is None and cost.generic > 0:
+            # Generic shortfall: any source whose output can pay generic.
+            # Only fired when the cost has unmet generic; otherwise
+            # sacrificing a Treasure-{C} for a colored-only cost like
+            # {R} would be pointless.
+            for src, idx, produces in sources:
+                if src.id in consumed:
+                    continue
+                if not _can_fire_sac_for_mana(state, src, idx):
+                    continue
+                if _produces_total(produces) > 0:
+                    chosen = (src, idx)
+                    break
+        if chosen is None:
+            break  # nothing else helps
+        src, idx = chosen
+        consumed.add(src.id)
+        state.log.append(
+            f"P{player_id} activates {src.printing.name}'s "
+            f"sac-for-mana ability to pay cost"
+        )
+        _activate_ability(state, player_id, src.id, idx)
+    return cost
 
 
 def auto_tap_for_cost(
@@ -1151,11 +1382,23 @@ def _cast_spell(
     # of library — set above when we resolved the spell's source zone).
     if cast_from_outside_hand:
         spell_kinds.add("cast_from_outside_hand")
-    # Convoke (CR 702.51): after total cost is determined (601.2f) but
-    # before the remaining cost is paid from pool + lands (601.2g/h),
-    # the controller may tap creatures they control. Each tapped
-    # creature pays {1} or one mana of its color. ``cast_for_free``
-    # zeroed the cost above, so convoke is a no-op there.
+    # CR 601.2g (mana abilities) precedes 601.2h (pay total cost). Sac
+    # Treasures and other "sacrifice: Add ..." mana abilities fire
+    # FIRST, filling the pool. Convoke is part of paying the cost
+    # (CR 702.51b: tapped creatures "pay for" {1} or one mana of
+    # their color), so it runs afterwards. The ordering matters when
+    # a single source could be used for both — e.g. an Eldrazi Scion
+    # with "{T}, Sacrifice this: Add {C}" can EITHER sac for mana
+    # here OR convoke below, never both: sacing removes it before
+    # convoke runs; if it survives this step, convoke taps it and
+    # the {T} portion of the sac cost is no longer payable.
+    cost = _activate_sac_for_mana_for_cost(
+        state, player_id, cost, frozenset(spell_kinds),
+    )
+    # Convoke (CR 702.51): part of cost payment at 601.2h. Tapping a
+    # creature this way pays for {1} or one mana of its color.
+    # ``cast_for_free`` zeroed the cost above, so convoke is a no-op
+    # there.
     if card.printing.has_convoke:
         cost = _apply_convoke(state, player_id, cost)
     auto_tap_for_cost(
