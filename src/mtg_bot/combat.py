@@ -156,7 +156,16 @@ def _fire_exalted_pumps(state: GameState) -> None:
 
 
 def _fire_attacks_triggers(state: GameState, attacker) -> None:
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
+
+    # Predicate-style ``Event.ATTACKS`` dispatch (phase 5). Runs in
+    # parallel with the legacy ``trigger="attacks"`` loop below until
+    # every static card is migrated, at which point the legacy loop
+    # collapses into this dispatcher call.
+    dispatch_event(
+        state, Event.ATTACKS, label="attacks", attacker=attacker,
+    )
 
     # Walk printed triggers first (their indices stay stable), then any
     # UEOT-granted triggers (Raging Ravine animation). Granted triggers
