@@ -1521,8 +1521,14 @@ class PumpTargetOtherCreatureByXOverXWhereXIsSourcePower(Effect):
         )
         if obj is None:
             return
-        obj.temp_power_bonus += x
-        obj.temp_toughness_bonus += x
+        state.grant_pt_pump_ueot(
+            source_id=source.id, target_id=obj.id,
+            power=x, toughness=x,
+            description=(
+                f"{source.printing.name} pumps {obj.printing.name} "
+                f"+{x}/+{x} UEOT (source power)"
+            ),
+        )
         state.log.append(
             f"{obj.printing.name} gets +{x}/+{x} UEOT (source power)"
         )
@@ -1578,7 +1584,16 @@ class DoubleTargetCreaturesPowerUEOT(Effect):
         snapshot = effective_power(state, obj)
         if snapshot <= 0:
             return
-        obj.temp_power_bonus += snapshot
+        src = state.resolving_source
+        state.grant_pt_pump_ueot(
+            source_id=src.id if src is not None else obj.id,
+            target_id=obj.id,
+            power=snapshot, toughness=0,
+            description=(
+                f"{obj.printing.name}'s power doubled UEOT "
+                f"(+{snapshot})"
+            ),
+        )
         state.log.append(
             f"{obj.printing.name}'s power is doubled UEOT "
             f"(+{snapshot} temp power)"
@@ -2799,8 +2814,19 @@ class PumpTargetCreatureUntilEOT(Effect):
         )
         if obj is None:
             return
-        obj.temp_power_bonus += self.power_bonus
-        obj.temp_toughness_bonus += self.toughness_bonus
+        src = state.resolving_source
+        if self.power_bonus or self.toughness_bonus:
+            state.grant_pt_pump_ueot(
+                source_id=src.id if src is not None else obj.id,
+                target_id=obj.id,
+                power=self.power_bonus,
+                toughness=self.toughness_bonus,
+                description=(
+                    f"{src.printing.name if src else obj.printing.name} "
+                    f"pumps {obj.printing.name} "
+                    f"+{self.power_bonus}/+{self.toughness_bonus} UEOT"
+                ),
+            )
         granted = self.granted_keywords
         if self.granted_keywords_if_warp_cast and obj.cast_via_warp:
             granted = granted | self.granted_keywords_if_warp_cast
@@ -3071,8 +3097,15 @@ class PumpSelfUntilEOT(Effect):
         source = state.resolving_source
         if source is None:
             return
-        source.temp_power_bonus += self.power_bonus
-        source.temp_toughness_bonus += self.toughness_bonus
+        if self.power_bonus or self.toughness_bonus:
+            state.grant_pt_pump_ueot(
+                source_id=source.id, target_id=source.id,
+                power=self.power_bonus, toughness=self.toughness_bonus,
+                description=(
+                    f"{source.printing.name} pumps itself "
+                    f"+{self.power_bonus}/+{self.toughness_bonus} UEOT"
+                ),
+            )
         if self.granted_keywords:
             state.grant_keywords_ueot(
                 source_id=source.id,
@@ -3145,8 +3178,18 @@ class PumpCreaturesYouControlUntilEOT(Effect):
                     continue
             if source is not None and obj is source:
                 continue
-            obj.temp_power_bonus += self.power_bonus
-            obj.temp_toughness_bonus += self.toughness_bonus
+            if self.power_bonus or self.toughness_bonus:
+                src = state.resolving_source
+                state.grant_pt_pump_ueot(
+                    source_id=src.id if src is not None else obj.id,
+                    target_id=obj.id,
+                    power=self.power_bonus, toughness=self.toughness_bonus,
+                    description=(
+                        f"{src.printing.name if src else obj.printing.name} "
+                        f"pumps {obj.printing.name} "
+                        f"+{self.power_bonus}/+{self.toughness_bonus} UEOT"
+                    ),
+                )
             if self.granted_keywords:
                 src = state.resolving_source
                 state.grant_keywords_ueot(
@@ -3236,8 +3279,18 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
                     )
                 obj.extended_temp_expires_at_player_id = controller_id
             else:
-                obj.temp_power_bonus += self.power_bonus
-                obj.temp_toughness_bonus += self.toughness_bonus
+                if self.power_bonus or self.toughness_bonus:
+                    src = state.resolving_source
+                    state.grant_pt_pump_ueot(
+                        source_id=src.id if src is not None else obj.id,
+                        target_id=obj.id,
+                        power=self.power_bonus,
+                        toughness=self.toughness_bonus,
+                        description=(
+                            f"opp creature {obj.printing.name} pumped "
+                            f"{self.power_bonus:+d}/{self.toughness_bonus:+d} UEOT"
+                        ),
+                    )
                 if self.granted_keywords:
                     src = state.resolving_source
                     state.grant_keywords_ueot(

@@ -1279,6 +1279,45 @@ class GameState:
             description=description,
         )
 
+    def grant_pt_pump_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        power: int,
+        toughness: int,
+        description: str = "",
+    ) -> ContinuousEffect:
+        """Helper for the layer-7 sublayer-2 ``"pump_pt"`` UEOT-grant
+        pattern. Writes a single registry entry with
+        ``params=(power_delta, toughness_delta)`` and
+        ``expires_at="cleanup"``, AND mirrors the deltas onto the
+        target's ``temp_power_bonus`` / ``temp_toughness_bonus``
+        fields as a write-through cache. ``effective_power`` /
+        ``effective_toughness`` continue to read from the field
+        (the cache is the read path), while the registry holds the
+        layer-7 metadata for future layer-aware ordering work.
+        ``run_cleanup_step`` zeros both. No-op when both deltas
+        are zero."""
+        if power == 0 and toughness == 0:
+            return None  # type: ignore[return-value]
+        target = next(
+            (o for o in self.battlefield if o.id == target_id), None,
+        )
+        if target is not None:
+            target.temp_power_bonus += power
+            target.temp_toughness_bonus += toughness
+        return self.add_continuous_effect(
+            source_id=source_id,
+            layer=7,
+            sublayer=2,
+            kind="pump_pt",
+            target_id=target_id,
+            params=(power, toughness),
+            expires_at="cleanup",
+            description=description,
+        )
+
     def grant_keywords_ueot(
         self,
         *,
