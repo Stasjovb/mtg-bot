@@ -1,6 +1,8 @@
 """Static-ability grammar.
 
-Two surface forms of the same semantics are recognized:
+Two families of static-ability surface forms are recognized.
+
+**Self-scope** ``As long as``-gated lines come in two shapes:
 
 * **Leading** ``As long as <condition>, this creature gets +N/+N[ and has
   <keyword>].`` — the original shape. Cloudsculpt Technician and
@@ -13,7 +15,7 @@ Both shapes share the same condition phrasebook and produce identical
 ``StaticAbility`` outputs; the parser tries the leading regex first
 and falls back to the trailing regex.
 
-Recognized conditions today:
+Recognized self-scope conditions today:
 
 * ``you control an artifact`` →
   ``requires_artifact_you_control=True`` (Cloudsculpt Technician,
@@ -31,15 +33,35 @@ Recognized conditions today:
   raise the bar (and makes the threshold-vs-phrase mapping explicit
   in the phrasebook rather than implicit in regex generality).
 * ``it's your turn`` → ``active_turn_only=True``. Forward-looking
-  grammar coverage; no EoE card prints in the leading/trailing static
-  shape with this condition today (Memorial Team Leader uses the
-  separate ``During your turn`` rider on an anthem scope, which a
-  different builder handles), but the engine field exists and the
-  surface phrase is unambiguous.
+  grammar coverage; no EoE card prints in the leading/trailing
+  self-scope shape with this condition today, but the engine field
+  exists and the surface phrase is unambiguous.
 
 Other "As long as" conditions (entered-this-turn, void, you-control-a-
 creature, etc.) have no matching engine gate; they intentionally don't
 match and the card falls through.
+
+**Anthem-scope** lines target other permanents, not the source. Surface
+shapes recognized:
+
+* ``Creatures you control get +N/+M.`` →
+  ``StaticScope.CREATURES_YOU_CONTROL`` with the P/T bonus.
+* ``Other creatures you control get +N/+M.`` →
+  ``StaticScope.OTHER_CREATURES_YOU_CONTROL`` with the P/T bonus.
+* ``Creatures you control have <keyword>.`` /
+  ``Other creatures you control have <keyword>.`` — keyword-only
+  anthems (Tannuk-shape; ``power_bonus``/``toughness_bonus`` stay 0).
+* ``... get +N/+M and have <keyword>.`` — combined P/T + keyword
+  anthem.
+* Optional leading ``During your turn, `` rider on any of the above
+  sets ``active_turn_only=True``. Memorial Team Leader prints in this
+  shape (``During your turn, other creatures you control get +1/+0.``).
+
+Anthem lines do NOT carry an ``As long as`` condition today; the
+self-scope condition phrasebook is therefore not consulted. If a future
+printing combines the two we would extend the anthem regex rather than
+the self-scope regex (the two surface families have already diverged
+enough that a single combined grammar would be hard to read).
 """
 
 from __future__ import annotations
@@ -91,28 +113,142 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 }
 
 
+# ---------- Anthem-scope grammar ----------
+#
+# Anthem lines target permanents other than (or including) the source.
+# The ``subject`` group captures the surface noun phrase and is mapped
+# verbatim to a ``StaticScope`` via ``_ANTHEM_SUBJECT_SCOPES`` — a
+# dedicated mapping (rather than reusing ``_STATIC_CONDITION_KWARGS``)
+# because subject-vs-condition are orthogonal axes: anthem lines may
+# carry a turn-scope rider but never an ``As long as`` clause today,
+# so co-locating the two would conflate independent dimensions.
+#
+# Two body shapes are accepted:
+#
+# * ``get +N/+M[ and have <keyword>]`` — P/T anthem, optionally with a
+#   keyword grant tail. Mirrors the self-scope rider's ``and has``
+#   spelling but uses ``and have`` because the subject is plural.
+# * ``have <keyword>`` — keyword-only anthem (Tannuk's "Other creatures
+#   you control have haste."), with no P/T component.
+#
+# An optional leading ``During your turn, `` prefix on either body
+# sets ``active_turn_only=True``; this is the only "anthem condition"
+# surface form in EoE today (Memorial Team Leader). The parser tries
+# the P/T regex first and falls back to the keyword-only regex; both
+# share the same ``subject`` and ``turn_rider`` groups so the shared
+# parse function reads either match by name.
+
+_ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
+    "creatures you control": StaticScope.CREATURES_YOU_CONTROL,
+    "other creatures you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
+}
+
+# The subject's first letter is capitalized at the start of an oracle
+# line ("Creatures you control ...") but lowercase when it follows a
+# leading rider ("During your turn, other creatures you control ...").
+# The regex normalizes by lowercasing the captured group before
+# looking it up in ``_ANTHEM_SUBJECT_SCOPES``; both surface
+# capitalizations map to the same scope.
+_ANTHEM_SUBJECT_RE = (
+    r"(?P<subject>[Cc]reatures you control|[Oo]ther creatures you control)"
+)
+_ANTHEM_TURN_RIDER_RE = r"(?P<turn_rider>During your turn, )?"
+
+_ANTHEM_PT_LINE = re.compile(
+    rf"^{_ANTHEM_TURN_RIDER_RE}{_ANTHEM_SUBJECT_RE} get "
+    r"\+(?P<power>\d+)/\+(?P<toughness>\d+)"
+    r"(?: and have (?P<keyword>[A-Za-z ]+))?\.$"
+)
+
+# Keyword-only anthem: ``[During your turn, ]<subject> have <keyword>.``
+# No P/T component; ``power``/``toughness`` default to 0 in the
+# resulting ``StaticAbility``. The ``turn_rider`` capture mirrors the
+# P/T regex so the shared parse function can read it the same way.
+_ANTHEM_KEYWORD_LINE = re.compile(
+    rf"^{_ANTHEM_TURN_RIDER_RE}{_ANTHEM_SUBJECT_RE} have "
+    r"(?P<keyword>[A-Za-z ]+)\.$"
+)
+
+
+def _parse_anthem_static_line(line: str) -> StaticAbility | None:
+    """Return a ``StaticAbility`` for an anthem-shape static line, or
+    ``None`` if the surface form doesn't match, the subject isn't a
+    recognized scope, or the granted keyword (if any) isn't a known
+    evergreen.
+
+    Tries ``_ANTHEM_PT_LINE`` first (P/T-bearing, with optional
+    ``and have <keyword>`` tail) and falls back to
+    ``_ANTHEM_KEYWORD_LINE`` (keyword-only, no P/T). Both regexes
+    expose the same ``subject`` and ``turn_rider`` groups so the
+    scope-and-rider mapping is identical between the two; only the
+    P/T extraction differs.
+
+    Capitalization sensitivity: the lowercase ``creatures you control``
+    spelling never starts an oracle line in EoE, so the regex requires
+    the leading capital. If a future printing nests an anthem inside
+    a longer sentence, this routine intentionally won't match — pulling
+    anthems out of mid-sentence context is a different parse problem.
+    """
+    stripped = line.strip()
+    m = _ANTHEM_PT_LINE.match(stripped)
+    power_bonus = 0
+    toughness_bonus = 0
+    if m is not None:
+        power_bonus = int(m.group("power"))
+        toughness_bonus = int(m.group("toughness"))
+    else:
+        m = _ANTHEM_KEYWORD_LINE.match(stripped)
+        if m is None:
+            return None
+    scope = _ANTHEM_SUBJECT_SCOPES.get(m.group("subject").lower())
+    if scope is None:
+        # Defensive: the regex alternation only matches subjects that
+        # appear in the mapping, so this branch is unreachable today.
+        # Kept as belt-and-braces against future edits to the regex
+        # that add a subject without updating the mapping.
+        return None
+    granted: frozenset[str] = frozenset()
+    keyword = m.group("keyword")
+    if keyword is not None:
+        engine_keyword = _KEYWORD_LINES.get(keyword.strip().capitalize())
+        if engine_keyword is None:
+            return None
+        granted = frozenset({engine_keyword})
+    return StaticAbility(
+        scope=scope,
+        power_bonus=power_bonus,
+        toughness_bonus=toughness_bonus,
+        granted_keywords=granted,
+        active_turn_only=m.group("turn_rider") is not None,
+    )
+
+
 def _parse_static_ability_line(line: str) -> StaticAbility | None:
-    """Return a ``StaticAbility`` for a single static-ability line in
-    either the leading (``As long as <condition>, this creature gets
-    +N/+N[ and has <keyword>].``) or trailing (``This creature gets
-    +N/+N[ and has <keyword>] as long as <condition>.``) shape, or
-    ``None`` if the line shape doesn't match, the condition isn't
-    recognized, or the granted keyword isn't a known evergreen.
+    """Return a ``StaticAbility`` for a single static-ability line, or
+    ``None`` if no surface form matches.
 
-    The two shapes are semantically identical and produce identical
-    ``StaticAbility`` outputs. The leading regex is tried first; the
-    trailing regex is the fallback.
+    Self-scope (``StaticScope.SELF``) shapes are tried first via the
+    leading/trailing ``As long as`` grammar; if neither matches, the
+    line is then handed to the anthem-scope grammar
+    (``_parse_anthem_static_line``) which covers ``Creatures you
+    control [get|have] ...`` and ``Other creatures you control
+    [get|have] ...`` lines, optionally with a ``During your turn,``
+    rider.
 
-    The static ability is always self-scoped (``StaticScope.SELF``); the
-    "this creature gets" subject in the surface form is what makes that
-    explicit.
+    The two grammar families are mutually exclusive on their subject
+    noun phrase (``this creature`` vs. ``[Other ]Creatures you
+    control``), so the order of fallthrough doesn't matter for
+    correctness — self-scope is tried first only because every
+    ``StaticAbility`` produced by the parser before the anthem
+    grammar landed was self-scoped, and keeping that path first
+    minimizes diff churn for the existing test corpus.
     """
     stripped = line.strip()
     m = _STATIC_ABILITY_LINE.match(stripped)
     if m is None:
         m = _STATIC_ABILITY_LINE_TRAILING.match(stripped)
     if m is None:
-        return None
+        return _parse_anthem_static_line(stripped)
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:
