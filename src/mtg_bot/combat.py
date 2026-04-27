@@ -200,31 +200,16 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
             controller_id=attacker.controller_id,
             label="attacks",
         )
-    # Auras/Equipment attached to the attacker: fire their
-    # "whenever enchanted/equipped creature attacks" triggers.
-    # Matches Chorale of the Void (aura) and Atomic Microsizer (eq).
-    for attached in list(state.battlefield):
-        if attached.attached_to != attacker.id:
-            continue
-        is_aura = attached.printing.is_aura
-        is_equipment = attached.printing.equipment_bonuses is not None
-        if not (is_aura or is_equipment):
-            continue
-        wanted = (
-            "enchanted_creature_attacks" if is_aura
-            else "equipped_creature_attacks"
-        )
-        for i, ability in enumerate(attached.printing.triggered_abilities):
-            if ability.trigger != wanted:
-                continue
-            push_triggered_ability(
-                state,
-                source=attached,
-                ability=ability,
-                ability_index=i,
-                controller_id=attached.controller_id,
-                label="attached-attacks",
-            )
+    # Phase-7 commit 3 migrated every static
+    # ``trigger="enchanted_creature_attacks"`` (Chorale of the Void)
+    # and ``trigger="equipped_creature_attacks"`` (Atomic Microsizer)
+    # site to predicate-style ``event=Event.ATTACKS,
+    # predicate=IsHost(subject="attacker")``. The dispatcher's
+    # ATTACKS sweep above already fires those — for an attached aura
+    # or Equipment, ``IsHost(subject="attacker")`` evaluates true
+    # exactly when ``source.attached_to == attacker.id``, the same
+    # condition the legacy walk here gated on. The legacy walk had
+    # no live entries left and was dropped.
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
@@ -490,19 +475,29 @@ def _fire_enchanted_dealt_damage_triggers(
     Amount exposed via state.resolving_combat_damage_amount for effects
     that want to read it (e.g., Pain for All's
     echo-damage-to-each-opponent, Requiem Monolith's draw-and-lose).
+
+    Phase-7 commit 3 migrated every static
+    ``trigger="enchanted_creature_dealt_damage"`` site to predicate-
+    style ``event=Event.DEALT_DAMAGE, predicate=IsHost()`` (Cryoshatter,
+    Pain for All), so the legacy aura walk over
+    ``aura.printing.triggered_abilities`` had no live entries left and
+    was dropped. The aura-firing path is now the
+    ``dispatch_event(state, Event.DEALT_DAMAGE, obj=obj, …)`` call
+    below: ``IsHost()`` on an attached aura matches when
+    ``aura.attached_to == obj.id``. The bespoke granted-ability walk
+    for ``this_dealt_damage`` (Requiem Monolith) stays — it lives on
+    ``temp_triggered_abilities`` / layer-6 registry entries rather than
+    ``printing.triggered_abilities``, so the dispatcher's
+    battlefield-walk doesn't see it.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
-    # Predicate-style ``Event.DEALT_DAMAGE`` dispatch (phase 7).
-    # Subject ``obj`` is the damaged permanent. ``IsHost()`` on an
-    # attached aura matches when ``aura.attached_to == obj.id``,
-    # subsuming the legacy aura-walk below for migrated abilities.
-    # ``combat_damage_amount`` threads the damage amount through to
-    # each pushed StackItem so resolving effects (Pain for All's echo)
-    # can read ``state.resolving_combat_damage_amount``. Runs
-    # alongside the legacy walks; phase-7 commit 3 migrates the static
-    # cards, commit 4 collapses the legacy branch.
+    # Predicate-style ``Event.DEALT_DAMAGE`` dispatch. Subject ``obj``
+    # is the damaged permanent; ``IsHost()`` matches when an attached
+    # aura's ``attached_to`` equals ``obj.id``. ``combat_damage_amount``
+    # threads the damage amount through to each pushed StackItem so
+    # resolving effects can read ``state.resolving_combat_damage_amount``.
     dispatch_event(
         state, Event.DEALT_DAMAGE,
         label="enchanted-creature-dealt-damage",
@@ -510,23 +505,6 @@ def _fire_enchanted_dealt_damage_triggers(
         obj=obj,
     )
 
-    for aura in list(state.battlefield):
-        if aura.attached_to != obj.id:
-            continue
-        if not aura.printing.is_aura:
-            continue
-        for i, ability in enumerate(aura.printing.triggered_abilities):
-            if ability.trigger != "enchanted_creature_dealt_damage":
-                continue
-            push_triggered_ability(
-                state,
-                source=aura,
-                ability=ability,
-                ability_index=i,
-                controller_id=aura.controller_id,
-                label="enchanted-creature-dealt-damage",
-                combat_damage_amount=amount,
-            )
     # UEOT-granted "Whenever this creature is dealt damage, ..." triggers
     # on the damaged object itself (Requiem Monolith). Direct resolve
     # rather than stack-push because the granted ability is ephemeral

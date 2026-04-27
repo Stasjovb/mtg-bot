@@ -519,65 +519,35 @@ def destroy(state: GameState, obj: "GameObject") -> bool:
 
 
 def tap_permanent(state: GameState, obj: "GameObject") -> None:
-    """Tap ``obj`` and push any of its "becomes_tapped" triggered abilities
-    onto the stack.
+    """Tap ``obj`` and push any becomes-tapped triggered abilities onto
+    the stack.
 
-    Also pushes "enchanted_permanent_becomes_tapped" triggers on any Aura
-    attached to ``obj`` — this is how Cryoshatter ("when enchanted
-    creature becomes tapped, destroy it") works.
+    Phase-7 commit 3 migrated every static
+    ``trigger="becomes_tapped"`` and
+    ``trigger="enchanted_permanent_becomes_tapped"`` site to
+    predicate-style ``event=Event.BECOMES_TAPPED`` with either
+    ``IsSelf()`` (this creature becomes tapped — the tapped permanent
+    itself fires) or ``IsHost()`` (enchanted permanent becomes tapped
+    — an attached aura fires; Cryoshatter), so the two legacy walks
+    that previously hardcode-matched those string keys had no live
+    entries left and were dropped. The function is now a thin
+    ``dispatch_event`` forwarder — both ``IsSelf`` and ``IsHost``
+    flow through the single dispatcher sweep because the predicates
+    key off independent attributes (``subject is source`` for
+    ``IsSelf``; ``source.attached_to == subject.id`` for ``IsHost``).
 
-    If the object is already tapped, this is a no-op (no re-trigger).
+    Already-tapped objects are still a no-op (no re-trigger).
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
     if obj.tapped:
         return
     obj.tapped = True
-    # Predicate-style ``Event.BECOMES_TAPPED`` dispatch (phase 7).
-    # Subject ``obj`` is the just-tapped permanent. Both shapes —
-    # ``IsSelf()`` (this creature becomes tapped) on the tapped
-    # permanent itself, and ``IsHost()`` (enchanted permanent becomes
-    # tapped) on attached auras — are matched in a single sweep
-    # because ``IsSelf`` keys off ``subject is source`` while
-    # ``IsHost`` keys off ``source.attached_to == subject.id``.
-    # Runs alongside the legacy walks below; phase-7 commit 3
-    # migrates the static cards, commit 4 collapses the legacy
-    # branch.
     dispatch_event(
         state, Event.BECOMES_TAPPED,
         label="becomes-tapped", obj=obj,
     )
-    for i, ability in enumerate(obj.printing.triggered_abilities):
-        if ability.trigger != "becomes_tapped":
-            continue
-        push_triggered_ability(
-            state,
-            source=obj,
-            ability=ability,
-            ability_index=i,
-            controller_id=obj.controller_id,
-            label="becomes-tapped",
-        )
-    # Auras attached to ``obj`` whose oracle text is
-    # "whenever enchanted permanent becomes tapped, ..." (Cryoshatter).
-    # Snapshot to avoid mid-iteration surprises.
-    for aura in list(state.battlefield):
-        if not aura.printing.is_aura:
-            continue
-        if aura.attached_to != obj.id:
-            continue
-        for i, ability in enumerate(aura.printing.triggered_abilities):
-            if ability.trigger != "enchanted_permanent_becomes_tapped":
-                continue
-            push_triggered_ability(
-                state,
-                source=aura,
-                ability=ability,
-                ability_index=i,
-                controller_id=aura.controller_id,
-                label="enchanted-permanent-becomes-tapped",
-            )
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
