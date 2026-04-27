@@ -367,6 +367,15 @@ class CardPrinting:
     # non-Spacecraft cards.
     station_threshold: int | None = None
     stationed_keywords: frozenset[str] = frozenset()
+    # Saga (Enchantment — Saga). When > 0, this card is a Saga
+    # with the given final chapter number. Sagas would get a lore
+    # counter at the start of each precombat main phase as a
+    # turn-based action, with chapter-numbered triggered
+    # abilities firing when the lore counter advances (those
+    # mechanics aren't modeled in scope). The state-based action
+    # (CR 704.5r in audit numbering) sacrifices a saga whose
+    # ``lore_counters >= chapter_count``. 0 = not a saga.
+    chapter_count: int = 0
     # Ward {cost}: when this creature becomes the target of a spell or
     # ability an opponent controls, counter that spell/ability unless the
     # controller pays this cost. We simplify to "caster auto-pays if they
@@ -739,6 +748,10 @@ class CardPrinting:
     @property
     def is_aura(self) -> bool:
         return "Aura" in self.subtypes
+
+    @property
+    def is_saga(self) -> bool:
+        return self.chapter_count > 0
 
     @property
     def is_permanent(self) -> bool:

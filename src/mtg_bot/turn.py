@@ -1113,6 +1113,21 @@ def _state_based_actions_pass(state: GameState) -> bool:
         move_off_battlefield(state, obj, destination="graveyard")
         changed = True
 
+    # Saga age (CR 704.5r in audit numbering): if a saga has lore
+    # counters greater than or equal to its final chapter number,
+    # its controller sacrifices it (goes to owner's graveyard).
+    sagas_to_bury: list = []
+    for obj in state.battlefield:
+        if obj.printing.is_saga and obj.lore_counters >= obj.printing.chapter_count:
+            sagas_to_bury.append(obj)
+    for saga in sagas_to_bury:
+        state.log.append(
+            f"{saga.printing.name} sacrificed "
+            f"(lore counter ≥ chapter count {saga.printing.chapter_count})"
+        )
+        move_off_battlefield(state, saga, destination="graveyard")
+        changed = True
+
     # +1/+1 vs -1/-1 counter cancellation (CR 704.5r in current CR;
     # labelled 704.5n in this codebase's audit). When a permanent
     # has both kinds, N pairs are removed where N is the smaller

@@ -165,6 +165,14 @@ class GameObject:
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
     loyalty_counters: int = 0
+    # Saga lore counters. Sagas would get a lore counter at the
+    # start of each precombat main phase as a turn-based action;
+    # the state-based action (CR 704.5r in audit numbering)
+    # sacrifices a saga whose ``lore_counters >=
+    # printing.chapter_count``. The chapter-triggered abilities
+    # that fire when the lore counter advances aren't modeled in
+    # scope.
+    lore_counters: int = 0
     # Snapshot of this object's original CardPrinting, taken the first
     # time a "becomes a copy of target X" effect mutates ``printing``.
     # Restored on cleanup? No — "becomes a copy" is a continuous effect
