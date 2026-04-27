@@ -24,6 +24,8 @@ _KEYWORD_LINES: dict[str, str] = {
     "Double strike": "double strike",
     "First strike": "first strike",
     "Prowess": "prowess",
+    "Hexproof": "hexproof",
+    "Indestructible": "indestructible",
 }
 
 
