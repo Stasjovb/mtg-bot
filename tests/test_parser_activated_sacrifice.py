@@ -86,32 +86,56 @@ def test_colored_mana_plus_sacrifice_self_cost_parses():
 
 # --- Negative / out-of-scope cases ------------------------------------------
 
-def test_three_piece_tap_mana_sacrifice_cost_returns_none():
-    """Triple-cost lines (tap + mana + sacrifice) are explicitly out
-    of scope this slice — three-piece costs aren't supported."""
-    assert (
-        _parse_activation_cost("{T}, {2}, Sacrifice this creature") is None
+def test_three_piece_tap_mana_sacrifice_cost_now_parses():
+    """Triple-cost lines (tap + mana + sacrifice-self) are supported by
+    the bag-merge classifier added in the multi-piece-costs slice;
+    cross-link to ``tests/test_parser_multi_piece_costs.py`` for the
+    full 3-piece coverage."""
+    assert _parse_activation_cost("{T}, {2}, Sacrifice this creature") == (
+        ActivationCost(
+            mana=parse_mana_cost("{2}"),
+            mana_str="{2}",
+            tap_self=True,
+            sacrifice_self=True,
+        )
     )
 
 
 def test_sacrifice_other_phrasing_returns_none():
-    """Only the exact ``Sacrifice this creature`` literal is recognized.
-    Variations like ``Sacrifice a creature`` (target sac), ``Sacrifice
-    another creature``, etc. are unsupported and must not match."""
+    """Sacrifice phrasings that aren't a literal sacrifice-self or one
+    of the recognized named-sacrifice atoms are unsupported. ``Sacrifice
+    a creature`` (target sac, no engine field), ``Sacrifice another
+    creature`` (no engine field), and the reminder-only ``Sacrifice this
+    token`` phrasing all fall through."""
     assert _parse_activation_cost("Sacrifice a creature") is None
     assert _parse_activation_cost("Sacrifice another creature") is None
-    # Token / artifact / Aura phrasings appear in the data but only
-    # ever in non-creature contexts that don't reach the creature
-    # builder. Keep the cost recognizer tight to "this creature".
-    assert _parse_activation_cost("Sacrifice this artifact") is None
+    # ``Sacrifice this token`` only appears inside parenthesized
+    # reminder text on token-creating cards; it isn't a legal piece
+    # of an activation cost on a real card and isn't recognized here.
     assert _parse_activation_cost("Sacrifice this token") is None
 
 
+def test_sacrifice_this_artifact_now_parses_as_sacrifice_self():
+    """``Sacrifice this artifact`` is a wording variant of
+    sacrifice-self for artifact sources (e.g. Nutrient Block,
+    All-Fates Scroll). Both literals map to the same engine field
+    ``ActivationCost.sacrifice_self`` since the source's card type
+    determines how the engine resolves the sac."""
+    assert _parse_activation_cost("Sacrifice this artifact") == (
+        ActivationCost(sacrifice_self=True)
+    )
+
+
 def test_sacrifice_paired_with_unknown_piece_returns_none():
-    """``Sacrifice this creature, <something-not-tap-or-mana>`` falls
-    through both the tap-pair and mana-pair branches."""
+    """``Sacrifice this creature, <piece-that-doesn't-classify>`` is
+    rejected because the unknown atom can't be classified by
+    ``_classify_cost_piece`` — the bag-merge bails immediately."""
+    # ``Pay 1 life`` IS a known atom now (pay-life), so use a string
+    # that genuinely doesn't classify as anything.
     assert (
-        _parse_activation_cost("Sacrifice this creature, Pay 1 life")
+        _parse_activation_cost(
+            "Sacrifice this creature, Discard a card"
+        )
         is None
     )
 

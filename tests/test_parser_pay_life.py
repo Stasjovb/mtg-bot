@@ -94,20 +94,27 @@ def test_colored_mana_plus_pay_life_cost_parses():
 
 # --- Negative / out-of-scope cases ------------------------------------------
 
-def test_three_piece_tap_mana_pay_life_cost_returns_none():
-    """Triple-cost lines (tap + mana + pay-life) are explicitly out
-    of scope this slice — three-piece costs aren't supported."""
-    assert _parse_activation_cost("{T}, {2}, Pay 1 life") is None
+def test_three_piece_tap_mana_pay_life_cost_now_parses():
+    """Triple-cost lines (tap + mana + pay-life) are supported by the
+    bag-merge classifier added in the multi-piece-costs slice; cross-
+    link to ``tests/test_parser_multi_piece_costs.py`` for the full
+    3-piece coverage."""
+    assert _parse_activation_cost("{T}, {2}, Pay 1 life") == ActivationCost(
+        mana=parse_mana_cost("{2}"),
+        mana_str="{2}",
+        tap_self=True,
+        pay_life=1,
+    )
 
 
-def test_three_piece_tap_pay_life_sacrifice_cost_returns_none():
-    """Tap + pay-life + sacrifice (the EoE Planet's 12+ shape minus
-    the mana piece) — still a 3-piece cost and out of scope."""
-    assert (
-        _parse_activation_cost(
-            "{T}, Pay 2 life, Sacrifice this creature"
-        )
-        is None
+def test_three_piece_tap_pay_life_sacrifice_cost_now_parses():
+    """Tap + pay-life + sacrifice-self (the EoE Planet's 12+ shape
+    minus the mana piece) is now supported by the bag-merge
+    classifier."""
+    assert _parse_activation_cost(
+        "{T}, Pay 2 life, Sacrifice this creature"
+    ) == ActivationCost(
+        tap_self=True, pay_life=2, sacrifice_self=True
     )
 
 

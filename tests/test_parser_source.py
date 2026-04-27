@@ -1905,11 +1905,31 @@ def test_parse_activated_ability_line_tap_plus_mana_damage():
     )
 
 
-def test_parse_activated_ability_line_rejects_three_piece_cost():
-    """``{T}, {1}, Sacrifice ...`` has three comma-separated pieces —
-    out of scope this slice."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_accepts_three_piece_cost():
+    """``{T}, {1}, Sacrifice this creature`` is a 3-piece cost — supported
+    by the bag-merge classifier added in the multi-piece-costs slice.
+    Detailed 3-piece coverage lives in
+    ``tests/test_parser_multi_piece_costs.py``; keep a smoke check
+    here so the dispatcher branch is exercised from the public entry
+    point too."""
+    ab = _parse_activated_ability_line(
         "{T}, {1}, Sacrifice this creature: Draw a card."
+    )
+    assert ab is not None
+    assert ab.cost.tap_self is True
+    assert ab.cost.sacrifice_self is True
+    assert ab.cost.mana_str == "{1}"
+    assert ab.effect == DrawCards(amount=1)
+
+
+def test_parse_activated_ability_line_rejects_four_piece_cost():
+    """4+ comma-separated pieces are out of scope this batch — the
+    only EoE 4-piece cost (Susur Secundi's
+    ``{1}{B}, {T}, Pay 2 life, Sacrifice a creature``) also needs the
+    ``Sacrifice a creature`` target-sac atom which isn't wired yet,
+    so the whole shape is left unsupported."""
+    assert _parse_activated_ability_line(
+        "{1}{B}, {T}, Pay 2 life, Sacrifice this creature: Draw a card."
     ) is None
 
 

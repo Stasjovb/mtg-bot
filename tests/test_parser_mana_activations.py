@@ -185,40 +185,39 @@ def test_pure_sacrifice_another_cost_parses_with_surrounding_whitespace():
     )
 
 
-def test_sacrifice_another_with_other_filter_returns_none():
-    """Only the exact ``Sacrifice another creature or artifact``
-    literal is recognized this slice. Variants — ``Sacrifice another
-    artifact``, ``Sacrifice another creature``, ``Sacrifice another
-    permanent``, ``Sacrifice another artifact or land`` — appear in
-    the data but only inside multi-piece cost lines (e.g.
-    ``{T}, Sacrifice another artifact``) which the two-piece grammar
-    doesn't yet wire end-to-end."""
+def test_sacrifice_another_with_other_filter():
+    """The multi-piece slice added classifier atoms for
+    ``Sacrifice another artifact`` and ``Sacrifice another artifact or
+    land`` (each maps to its own ``ActivationCost`` boolean field).
+    ``Sacrifice another creature`` and ``Sacrifice another permanent``
+    have no engine field today and remain unrecognized."""
     assert _parse_activation_cost("Sacrifice another creature") is None
-    assert _parse_activation_cost("Sacrifice another artifact") is None
     assert _parse_activation_cost("Sacrifice another permanent") is None
-    assert (
-        _parse_activation_cost("Sacrifice another artifact or land")
-        is None
+    assert _parse_activation_cost("Sacrifice another artifact") == (
+        ActivationCost(sacrifice_another_artifact=True)
+    )
+    assert _parse_activation_cost("Sacrifice another artifact or land") == (
+        ActivationCost(sacrifice_another_artifact_or_land=True)
     )
 
 
-def test_sacrifice_another_paired_in_two_piece_cost_returns_none():
-    """``Sacrifice another creature or artifact`` is only a single-
-    piece cost in this slice. Pairing it with ``{T}`` or mana via a
-    comma would need the two-piece grammar to learn the new piece —
-    not done here. EoE has no card with that two-piece shape today."""
-    assert (
-        _parse_activation_cost(
-            "{T}, Sacrifice another creature or artifact"
-        )
-        is None
+def test_sacrifice_another_paired_in_two_piece_cost():
+    """The bag-merge classifier added in the multi-piece-costs slice
+    treats ``Sacrifice another creature or artifact`` as a sacrifice-
+    flavor atom that composes with tap (and mana, etc.) like any
+    other sacrifice piece. EoE has no card with this two-piece shape
+    today, but the grammar accepts it for symmetry with the named-
+    sacrifice shapes."""
+    expected = ActivationCost(
+        tap_self=True,
+        sacrifice_another_creature_or_artifact=True,
     )
-    assert (
-        _parse_activation_cost(
-            "Sacrifice another creature or artifact, {T}"
-        )
-        is None
-    )
+    assert _parse_activation_cost(
+        "{T}, Sacrifice another creature or artifact"
+    ) == expected
+    assert _parse_activation_cost(
+        "Sacrifice another creature or artifact, {T}"
+    ) == expected
 
 
 # --- Full activated-ability lines for sacrifice-another --------------------
