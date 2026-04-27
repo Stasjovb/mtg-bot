@@ -399,17 +399,32 @@ class StaticAbility:
 class TriggeredAbility:
     """An ability that fires on a specific event.
 
-    Supported triggers:
-      - ``"etb"`` — when the permanent enters the battlefield
-      - ``"beginning_of_end_step"`` — at the start of its controller's end step
+    Two ways to specify what fires this ability:
+
+    - **String-key style** (legacy): ``trigger`` is a string like
+      ``"etb"`` / ``"landfall"`` / ``"dies"`` and the engine's
+      per-event ``_fire_*`` functions hardcode-match it. Every static
+      card today uses this path.
+    - **Predicate style** (new): ``event`` is an ``Event`` enum value
+      and ``predicate`` filters which firings of that event the
+      ability cares about (subject type, controller, counters, etc.).
+      The centralized dispatcher walks every triggered ability and
+      fires the ones whose ``event`` matches and whose predicate
+      evaluates true.
+
+    Both styles coexist during migration. A given ability sets EXACTLY
+    ONE of the two (the unused fields stay at their defaults). Phase 1
+    only wires the ENTERS event family on the predicate path; the rest
+    of the trigger taxonomy stays on the string-key path until later
+    phases migrate them.
 
     ``requires_void`` is True for EoE "Void —" abilities, which only fire when
     ``is_void_active(state)`` (a nonland permanent left the battlefield this
     turn or a spell was warped this turn).
     """
 
-    trigger: str
-    effect: Effect
+    trigger: str = ""
+    effect: "Effect | None" = None
     requires_void: bool = False
     # "This ability triggers only once each turn." When True, the firing
     # site records (source_id, ability_index) in state.once_per_turn_fired
@@ -420,6 +435,46 @@ class TriggeredAbility:
     # ``tier_threshold`` or more charge counters. 0 = always on. Mirrors
     # ``StaticAbility.tier_threshold``. Consumed by should_fire_trigger.
     tier_threshold: int = 0
+    # Predicate-style trigger fields. ``event`` is an ``Event`` enum
+    # value (None means string-key style); ``predicate`` is the filter
+    # over event subjects, game state, and the source object. When
+    # ``event`` is set, the engine's centralized dispatcher fires this
+    # ability whenever the named event happens AND ``predicate``
+    # evaluates true (or the predicate is None, which is treated as
+    # ``Always``). String-key fields (``trigger``) are ignored on the
+    # predicate path.
+    event: "Event | None" = None
+    predicate: "Predicate | None" = None
+
+    def __post_init__(self) -> None:
+        if self.event is not None and self.trigger:
+            raise ValueError(
+                "TriggeredAbility cannot specify both `trigger` (string-key "
+                "style) and `event` (predicate style); pick one."
+            )
+
+    def matches_event(
+        self,
+        event: "Event",
+        subjects: "Mapping[str, object]",
+        source: "object",
+        state: "object",
+    ) -> bool:
+        """Predicate-style match check.
+
+        Returns True iff this ability is on the predicate path
+        (``self.event is not None``), the event matches, and the
+        predicate evaluates true (or is unset, meaning ``Always``).
+        Returns False for string-key abilities — those fire via the
+        legacy per-event ``_fire_*`` paths.
+        """
+        if self.event is None:
+            return False
+        if self.event != event:
+            return False
+        if self.predicate is None:
+            return True
+        return self.predicate.matches(state, subjects, source)
 
     def describe(self) -> str:
         prefix = {
