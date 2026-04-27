@@ -24,6 +24,7 @@ from mtg_bot.cards.parser_source import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
     _parse_type_line,
+    _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
@@ -749,3 +750,166 @@ def test_source_does_not_claim_shock_land():
     """Shock lands are out-of-slice."""
     source = OracleParserCardSource()
     assert "Breeding Pool" not in source.claimed_names
+
+
+# ---------- Warp ----------
+
+@pytest.mark.parametrize(
+    "line,expected_cost",
+    [
+        ("Warp {3}", "{3}"),
+        ("Warp {R}", "{R}"),
+        ("Warp {1}{R}", "{1}{R}"),
+        ("Warp {2}{U}{U}", "{2}{U}{U}"),
+        ("Warp {X}{G}", "{X}{G}"),
+        ("Warp {U/R}", "{U/R}"),
+    ],
+)
+def test_parse_warp_line_simple_costs(line, expected_cost):
+    """Bare ``Warp {cost}`` lines (no reminder text) extract the cost."""
+    assert _parse_warp_line(line) == expected_cost
+
+
+def test_parse_warp_line_with_reminder_text():
+    """The printed line includes parenthesized reminder text — the
+    recognizer ignores it and just returns the cost."""
+    line = (
+        "Warp {1}{R} (You may cast this card from your hand for its "
+        "warp cost. Exile this creature at the beginning of the next "
+        "end step, then you may cast it from exile on a later turn.)"
+    )
+    assert _parse_warp_line(line) == "{1}{R}"
+
+
+def test_parse_warp_line_strips_whitespace():
+    assert _parse_warp_line("  Warp {2}{G}  ") == "{2}{G}"
+
+
+def test_parse_warp_line_rejects_pay_life_rider():
+    """``Warp—{B}, Pay 2 life.`` (em-dash + additional cost rider) is
+    out of scope this batch and must not match — the card should fall
+    through and be skipped, not silently parsed as plain Warp."""
+    rider = (
+        "Warp—{B}, Pay 2 life. (You may cast this card from your "
+        "hand or graveyard for its warp cost. If you do, exile this "
+        "creature at the beginning of the next end step, then you may "
+        "cast it from exile on a later turn.)"
+    )
+    assert _parse_warp_line(rider) is None
+
+
+def test_parse_warp_line_rejects_em_dash_form():
+    """Even the em-dash separator alone (no rider) is intentionally
+    not matched — actual EoE simple-Warp printings use a space."""
+    assert _parse_warp_line("Warp—{B}") is None
+
+
+def test_parse_warp_line_rejects_non_warp_lines():
+    assert _parse_warp_line("Flying") is None
+    assert _parse_warp_line("Warp") is None
+    assert _parse_warp_line("Warp {1}{R} extra junk") is None
+    assert _parse_warp_line("") is None
+
+
+def test_parse_warp_line_rejects_malformed_cost():
+    """Cost segment must be one or more brace-wrapped symbols."""
+    assert _parse_warp_line("Warp 3") is None
+    assert _parse_warp_line("Warp {}") is None
+
+
+def test_parse_clause_does_not_claim_warp_line():
+    """Warp is handled by its own recognizer in
+    ``_build_creature_printing``, not by ``_parse_clause``. A warp
+    line passed directly to ``_parse_clause`` must return ``None``
+    so the clause grammar stays orthogonal."""
+    assert _parse_clause("Warp {1}{R}") is None
+
+
+def test_build_creature_printing_handles_simple_warp():
+    """Synthetic vanilla creature with only a Warp clause — exercises
+    the warp passthrough without depending on any other clause."""
+    card = {
+        "name": "Test Warpling",
+        "mana_cost": "{4}",
+        "type_line": "Creature — Beast",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "Warp {1}{G} (You may cast this card from your hand for "
+            "its warp cost. Exile this creature at the beginning of "
+            "the next end step, then you may cast it from exile on a "
+            "later turn.)"
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.warp_cost_str == "{1}{G}"
+    assert printing.warp_cost is not None
+
+
+def test_build_creature_printing_handles_warp_with_keyword():
+    """Red Tiger Mechan's exact shape: Haste + Warp."""
+    card = {
+        "name": "Red Tiger Mechan",
+        "mana_cost": "{3}{R}",
+        "type_line": "Artifact Creature — Robot Cat",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "Haste\n"
+            "Warp {1}{R} (You may cast this card from your hand for "
+            "its warp cost. Exile this creature at the beginning of "
+            "the next end step, then you may cast it from exile on a "
+            "later turn.)"
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset({"haste"})
+    assert printing.warp_cost_str == "{1}{R}"
+    assert "Robot" in printing.subtypes
+    assert "Cat" in printing.subtypes
+    assert "Artifact" in printing.card_types
+
+
+def test_build_creature_printing_skips_warp_with_pay_life_rider():
+    """A creature whose Warp clause has a rider (additional life cost)
+    falls through and the whole card must be skipped, not silently
+    parsed as plain Warp."""
+    card = {
+        "name": "Test Rider",
+        "mana_cost": "{B}",
+        "type_line": "Creature — Zombie",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": (
+            "Warp—{B}, Pay 2 life. (You may cast this card from "
+            "your hand or graveyard for its warp cost.)"
+        ),
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_source_claims_red_tiger_mechan():
+    """Haste + Warp is now claimable."""
+    source = OracleParserCardSource()
+    assert "Red Tiger Mechan" in source.claimed_names
+
+
+def test_source_claims_germinating_wurm():
+    """ETB gain-2-life + Warp is now claimable."""
+    source = OracleParserCardSource()
+    assert "Germinating Wurm" in source.claimed_names
+
+
+def test_source_claims_bygone_colossus():
+    """Bare Warp-only oracle text is now claimable."""
+    source = OracleParserCardSource()
+    assert "Bygone Colossus" in source.claimed_names
+
+
+def test_source_does_not_claim_timeline_culler():
+    """Timeline Culler has the ``Warp—{B}, Pay 2 life.`` rider that's
+    out of scope this batch — the card must remain unclaimed."""
+    source = OracleParserCardSource()
+    assert "Timeline Culler" not in source.claimed_names

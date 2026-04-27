@@ -34,6 +34,12 @@ Currently recognized:
   ``draw N cards`` → ``DrawCards(amount=N)``;
   ``you gain N life`` → ``GainLife(amount=N)``.
 
+- Printing-level keyword: ``Warp {cost}`` (with optional reminder
+  text) sets the creature's ``warp_cost`` so it can be cast for the
+  alternative cost. Riders (``Warp—{cost}, Pay 2 life.`` or
+  graveyard-castable variants) are out of scope and cause the card
+  to be skipped.
+
 Cards whose oracle text uses only those clauses get claimed.
 
 Spell support (instants and sorceries) is a separate small grammar:
@@ -268,6 +274,33 @@ def _parse_clause(line: str) -> _ParsedClause | None:
     return None
 
 
+# Warp is a printing-level keyword that takes a mana-cost argument, so
+# it doesn't fit the literal-line ``_KEYWORD_LINES`` map. The simple
+# shape on EoE cards is ``"Warp {cost}"`` (with a regular space) on its
+# own line, optionally followed by parenthesized reminder text. The
+# cost is one or more brace-wrapped mana symbols (``{1}{R}``, ``{R}``,
+# ``{3}``, ``{X}{G}``, ``{U/R}``, etc.).
+#
+# Riders like ``"Warp—{B}, Pay 2 life."`` (em-dash, additional cost) and
+# ``"...cast from your graveyard."`` are out of scope for this batch and
+# must NOT match — they should fall through and cause the card to be
+# skipped, exactly like any other unparsed clause.
+_WARP_LINE = re.compile(
+    r"^Warp (\{[^}]+\}(?:\{[^}]+\})*)(?: \([^)]*\))?$"
+)
+
+
+def _parse_warp_line(line: str) -> str | None:
+    """Return the warp cost string (e.g. ``"{1}{R}"``) if ``line`` is a
+    simple Warp clause, else ``None``. Lines with riders (additional
+    life cost, graveyard-castable, etc.) intentionally don't match.
+    """
+    m = _WARP_LINE.match(line.strip())
+    if m is None:
+        return None
+    return m.group(1)
+
+
 # Spell-effect parsing. Spells use full sentences (period included) with
 # the card's own name as the subject — "<Name> deals N damage to <thing>."
 # — instead of the creature parser's "it deals N damage..." (where "it"
@@ -347,10 +380,18 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 
     keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
+    warp: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         line = raw_line.strip()
         if not line:
+            continue
+        warp_cost = _parse_warp_line(line)
+        if warp_cost is not None:
+            # A card should only have one Warp clause; if a malformed
+            # printing somehow had two we just keep the last — parity
+            # against the static registry will catch any drift.
+            warp = warp_cost
             continue
         parsed = _parse_clause(line)
         if parsed is None:
@@ -369,6 +410,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
+        warp=warp,
     )
 
 
