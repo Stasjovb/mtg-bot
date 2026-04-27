@@ -340,17 +340,25 @@ def test_remove_counter_line_with_unparseable_effect_returns_none():
 
 def test_sunstar_chaplain_cost_shape_parses_via_line_helper():
     """Sunstar Chaplain's exact activated-ability line — the cost
-    parses correctly (and the effect ``Tap target artifact or
-    creature`` is currently unsupported by the unified grammar, so
-    the LINE returns None overall). The point of this test is to lock
-    in that the COST piece classification works on Sunstar's
-    real-card text; once a future batch adds the ``Tap target
-    artifact or creature`` effect to the unified grammar, the
-    full line will parse without any further changes here.
+    parses correctly via the bag-merge classifier added in batch 12,
+    and as of batch 13 the ``Tap target artifact or creature`` effect
+    is also recognized by the unified grammar. The full line therefore
+    now produces a complete ``ActivatedAbility``.
 
-    Verified by feeding the cost segment alone to
-    ``_parse_activation_cost``, which is what the line helper does
-    after splitting on the colon."""
+    Verified two ways: feeding the cost segment alone to
+    ``_parse_activation_cost`` (mirroring what the line helper does
+    after splitting on the colon), and then running the full line
+    through ``_parse_activated_ability_line``.
+
+    Sunstar Chaplain itself is still NOT end-to-end claimed by the
+    parser — the card's other ability is an
+    ``At the beginning of your end step, if you control two or more
+    tapped creatures, …`` triggered ability whose conditional gate
+    isn't yet in the trigger phrasebook. Once that gate is added the
+    card will become parser-claimed without further activated-grammar
+    work."""
+    from mtg_bot.cards.base import TapTargetArtifactOrCreature
+
     cost = _parse_activation_cost(
         "{2}, Remove a +1/+1 counter from a creature you control"
     )
@@ -359,12 +367,10 @@ def test_sunstar_chaplain_cost_shape_parses_via_line_helper():
         mana_str="{2}",
         remove_plus_one_counter_from_your_creature=True,
     )
-    # The full line still returns None because the effect isn't
-    # in the unified grammar yet — documented here so a future
-    # grammar addition flips this from None to a real ability and
-    # the test author knows where to look.
     ab = _parse_activated_ability_line(
         "{2}, Remove a +1/+1 counter from a creature you control: "
         "Tap target artifact or creature."
     )
-    assert ab is None
+    assert ab is not None
+    assert ab.cost == cost
+    assert ab.effect == TapTargetArtifactOrCreature()
