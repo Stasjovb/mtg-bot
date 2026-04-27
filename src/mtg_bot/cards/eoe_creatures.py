@@ -207,6 +207,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Activate only as a sorcery."
         make_creature(
             "Intrepid Tenderfoot", "{1}{G}", 2, 2,
+            subtypes=("Insect", "Citizen"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=cost(mana="{3}"),
