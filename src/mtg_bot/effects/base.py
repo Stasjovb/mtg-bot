@@ -41,6 +41,26 @@ class Effect:
         Override for "up to N target" effects (min=0, max=N)."""
         return (1, 1) if self.requires_target() else (0, 0)
 
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        """Per-slot required target kinds, for effects with multiple
+        distinct-kind slots (e.g., Diplomatic Relations targets BOTH
+        a friendly creature ``"my_creature"`` AND an opponent's
+        creature ``"creature"``). Returning a non-empty tuple opts in
+        to per-slot kind enforcement: the targeting pipeline filters
+        the legal-targets pool to only entries of the matching kind
+        when picking each slot, preventing illegal-kind picks (e.g.,
+        a friendly creature being chosen for an opp-creature slot).
+
+        Empty tuple (default) keeps the legacy flat-kind behavior:
+        all entries in ``legal_targets`` are picked from a shared
+        pool, regardless of kind. Used by single-target effects and
+        flexible effects whose only kind is implicit.
+
+        When non-empty, the tuple length should equal
+        ``target_count_range()[1]`` (max).
+        """
+        return ()
+
     def resolve(
         self, state: "GameState", controller_id: int, targets: tuple[Target, ...] = ()
     ) -> None:

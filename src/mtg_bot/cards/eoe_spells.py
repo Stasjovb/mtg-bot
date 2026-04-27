@@ -411,12 +411,14 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # enchanted permanent. You control enchanted permanent.
         # Enchanted permanent doesn't untap during its controller's
         # untap step."
-        # All three clauses wired: ETB tap + don't-untap rider
-        # (``attached_prevents_untap``) + continuous-while-attached
-        # control swap (``TractorBeamETBEffect`` records the prior
-        # controller in ``controller_id_before_aura_swap`` and
-        # ``move_off_battlefield`` reverts when the aura leaves play).
-        # No P/T bonus — real card grants none.
+        # All three clauses wired: ETB tap (``TractorBeamETBEffect``)
+        # + don't-untap rider (``attached_prevents_untap``) +
+        # continuous-while-attached control swap
+        # (``attached_grants_control``; the swap is applied at attach
+        # time via ``apply_aura_static_grants_on_attach``, pushed onto
+        # the target's ``aura_control_grants`` stack, and reverted
+        # when the aura leaves play). No P/T bonus — real card
+        # grants none.
         make_aura(
             "Tractor Beam", "{2}{U}{U}",
             attached_prevents_untap=True,

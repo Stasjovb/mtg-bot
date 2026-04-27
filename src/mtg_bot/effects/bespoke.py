@@ -1262,6 +1262,12 @@ class MonoistCircuitFeederETBEffect(Effect):
     def target_count_range(self) -> tuple[int, int]:
         return (2, 2)
 
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        # Slot 0: friendly creature (+X/+0). Slot 1: opp creature
+        # (-0/-X). Per-slot kind enforcement guards against an agent
+        # picking two friendlies or two opps.
+        return ("my_creature", "creature")
+
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
@@ -2426,6 +2432,11 @@ class DiplomaticRelationsEffect(Effect):
 
     def target_count_range(self) -> tuple[int, int]:
         return (2, 2)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        # Slot 0: pumped friendly creature. Slot 1: damaged opp
+        # creature. Per-slot kind enforcement.
+        return ("my_creature", "creature")
 
     def legal_targets(
         self, state: "GameState", controller_id: int

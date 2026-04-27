@@ -781,17 +781,23 @@ def _select_spell_targets(
             legal = spell_effect.legal_targets(state, player_id)
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
-            for _ in range(max_t):
-                if not remaining:
+            slot_kinds = spell_effect.target_slot_kinds()
+            for slot_idx in range(max_t):
+                if slot_kinds and slot_idx < len(slot_kinds):
+                    needed = slot_kinds[slot_idx]
+                    pool = [t for t in remaining if t[0] == needed]
+                else:
+                    pool = remaining
+                if not pool:
                     break
-                pick = p.agent.choose_target(state, player_id, remaining)
+                pick = p.agent.choose_target(state, player_id, pool)
                 # Agent declines → stop. In practice every EoE multi-
                 # target effect we model has min_t=0 so declines are
                 # always honored. If min_t > 0 is ever added, revive
                 # the "forced pick" branch.
                 if pick is None:
                     break
-                if pick not in remaining:
+                if pick not in pool:
                     # Agent picked an out-of-range target; ignore.
                     break
                 chosen_list.append(pick)
@@ -1386,16 +1392,22 @@ def _activate_ability(
             p = state.player_by_id(player_id)
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
-            for _ in range(max_t):
-                if not remaining:
+            slot_kinds = ability.effect.target_slot_kinds()
+            for slot_idx in range(max_t):
+                if slot_kinds and slot_idx < len(slot_kinds):
+                    needed = slot_kinds[slot_idx]
+                    pool = [t for t in remaining if t[0] == needed]
+                else:
+                    pool = remaining
+                if not pool:
                     break
                 if p.agent is not None:
                     pick = p.agent.choose_target(
-                        state, player_id, remaining,
+                        state, player_id, pool,
                     )
                 else:
-                    pick = remaining[0]
-                if pick is None or pick not in remaining:
+                    pick = pool[0]
+                if pick is None or pick not in pool:
                     break
                 chosen_list.append(pick)
                 remaining.remove(pick)
@@ -1878,24 +1890,32 @@ def apply_aura_static_grants_on_attach(
     before any ETB triggers go on the stack.
 
     Currently models Tractor Beam's "you control enchanted permanent"
-    via the ``attached_grants_control`` printing flag. Records the
-    prior controller in ``controller_id_before_aura_swap`` and the
-    aura's id in ``swapped_controller_by_aura_id`` on the target so
-    ``move_off_battlefield`` can revert when the aura leaves play.
-    Skips the swap when the target is already self-controlled (no
-    redundant chain).
+    via the ``attached_grants_control`` printing flag. Pushes
+    ``(aura.id, controller_id)`` onto the target's
+    ``aura_control_grants`` stack and updates ``controller_id``. The
+    first time the stack goes from empty to non-empty, the prior
+    controller is captured in ``controller_id_before_any_aura_swap``
+    so reversion can restore it once all grants leave. Subsequent
+    grants stack additively — most-recent grant wins, matching MTG
+    continuous-effect timestamp ordering. ``move_off_battlefield``
+    removes the leaving aura's entry and updates the controller from
+    the new top-of-stack (or the saved prior when the stack empties).
+
+    Skips when the target is already self-controlled by the same
+    player (no redundant chain entry).
     """
-    if (
-        aura.printing.attached_grants_control
-        and target.controller_id != controller_id
-    ):
-        target.controller_id_before_aura_swap = target.controller_id
-        target.swapped_controller_by_aura_id = aura.id
-        target.controller_id = controller_id
-        state.log.append(
-            f"P{controller_id} gains control of "
-            f"{target.printing.name} via {aura.printing.name}"
-        )
+    if not aura.printing.attached_grants_control:
+        return
+    if target.controller_id == controller_id:
+        return
+    if not target.aura_control_grants:
+        target.controller_id_before_any_aura_swap = target.controller_id
+    target.aura_control_grants.append((aura.id, controller_id))
+    target.controller_id = controller_id
+    state.log.append(
+        f"P{controller_id} gains control of "
+        f"{target.printing.name} via {aura.printing.name}"
+    )
 
 
 def put_into_battlefield(
@@ -2195,15 +2215,26 @@ def push_triggered_ability(
             controller = state.player_by_id(controller_id)
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
-            for _ in range(max_t):
-                if not remaining:
+            slot_kinds = effect.target_slot_kinds()
+            for slot_idx in range(max_t):
+                # Per-slot kind enforcement: when the effect declares
+                # ``target_slot_kinds`` (e.g., Diplomatic Relations:
+                # ``("my_creature", "creature")``), restrict the agent's
+                # choices for THIS slot to entries of the declared kind.
+                # Empty tuple keeps the legacy flat-pool behavior.
+                if slot_kinds and slot_idx < len(slot_kinds):
+                    needed = slot_kinds[slot_idx]
+                    pool = [t for t in remaining if t[0] == needed]
+                else:
+                    pool = remaining
+                if not pool:
                     break
                 if controller.agent is None:  # pragma: no cover
                     break
                 pick = controller.agent.choose_target(
-                    state, controller_id, remaining
+                    state, controller_id, pool
                 )
-                if pick is None or pick not in remaining:
+                if pick is None or pick not in pool:
                     break
                 chosen_list.append(pick)
                 remaining.remove(pick)

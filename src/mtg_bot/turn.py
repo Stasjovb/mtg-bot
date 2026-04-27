@@ -162,23 +162,39 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
-    # Aura-granted "you control enchanted permanent" reversion: if any
-    # permanent on the battlefield had its controller swapped by THIS
-    # aura (Tractor Beam), restore the saved controller before any
-    # cascading aura-burials run. Doing this first keeps the
-    # subsequent attached_to detach + bury logic working with the
-    # post-revert controller.
+    # Aura-granted "you control enchanted permanent" reversion: if
+    # any permanent on the battlefield has THIS aura's id in its
+    # ``aura_control_grants`` stack, remove that entry. The new
+    # effective controller is the new top-of-stack's
+    # granted_controller_id; if the stack empties, restore the
+    # original (pre-first-aura) controller from
+    # ``controller_id_before_any_aura_swap``. Doing this BEFORE the
+    # cascading aura-detach + bury logic keeps any downstream
+    # observers (e.g., the buried-aura's own subsequent
+    # move_off_battlefield) reading the correct controller.
     for other in state.battlefield:
-        if other.swapped_controller_by_aura_id == obj.id:
-            prior = other.controller_id_before_aura_swap
-            if prior is not None:
-                other.controller_id = prior
-                state.log.append(
-                    f"{other.printing.name} reverts to P{prior} "
-                    f"(no longer enchanted by {obj.printing.name})"
-                )
-            other.swapped_controller_by_aura_id = None
-            other.controller_id_before_aura_swap = None
+        match_idx = next(
+            (
+                i for i, (aid, _) in enumerate(other.aura_control_grants)
+                if aid == obj.id
+            ),
+            None,
+        )
+        if match_idx is None:
+            continue
+        del other.aura_control_grants[match_idx]
+        if other.aura_control_grants:
+            new_controller = other.aura_control_grants[-1][1]
+        else:
+            assert other.controller_id_before_any_aura_swap is not None
+            new_controller = other.controller_id_before_any_aura_swap
+            other.controller_id_before_any_aura_swap = None
+        if new_controller != other.controller_id:
+            other.controller_id = new_controller
+            state.log.append(
+                f"{other.printing.name} reverts to P{new_controller} "
+                f"(no longer enchanted by {obj.printing.name})"
+            )
     # Any attachment on this object: Equipment falls off (stays on
     # battlefield, attached_to cleared); Auras are sent to their
     # owners' graveyards.

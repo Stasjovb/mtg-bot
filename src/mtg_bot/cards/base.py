@@ -408,9 +408,11 @@ class CardPrinting:
     # controller is swapped to the aura's controller — applied
     # BEFORE any ETB triggers go on the stack, since static abilities
     # are continuous (not stack-based). The swap is recorded on the
-    # target via ``swapped_controller_by_aura_id`` /
-    # ``controller_id_before_aura_swap`` and reverted in
+    # target via the ``aura_control_grants`` stack +
+    # ``controller_id_before_any_aura_swap`` and reverted in
     # ``move_off_battlefield`` when the aura leaves play.
+    # Supports nested swaps (multiple control-grant auras stacked on
+    # the same permanent) in LIFO order.
     attached_grants_control: bool = False
     # "The first time you would create one or more tokens each turn,
     # you may instead create that many tokens that are copies of

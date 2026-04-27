@@ -4,10 +4,12 @@ Audit-found bug: pre-fix Tractor Beam wired the ETB tap and the
 don't-untap rider but silently dropped the "You control enchanted
 permanent" clause — so even with Tractor Beam attached to an
 opponent's creature, the opponent still controlled the creature.
-Now wired via two new GameObject fields
-(``swapped_controller_by_aura_id`` + ``controller_id_before_aura_swap``)
-and a reversion hook in ``move_off_battlefield`` that restores the
-prior controller when the aura leaves play.
+Now wired via a stack of aura-control grants on the target
+(``aura_control_grants`` + ``controller_id_before_any_aura_swap``)
+and a reversion hook in ``move_off_battlefield`` that pops the
+leaving aura's entry and restores the prior controller (handles
+nested swaps in LIFO order — see
+``test_nested_tractor_beams_revert_in_lifo_order``).
 """
 
 from mtg_bot.actions import (
@@ -72,8 +74,8 @@ def test_etb_grants_control_of_enchanted_creature():
     _attach_and_etb(state, aura, bear)
 
     assert bear.controller_id == 0
-    assert bear.controller_id_before_aura_swap == 1
-    assert bear.swapped_controller_by_aura_id == aura.id
+    assert bear.aura_control_grants == [(aura.id, 0)]
+    assert bear.controller_id_before_any_aura_swap == 1
     # ETB tap fired too.
     assert bear.tapped is True
 
@@ -89,8 +91,8 @@ def test_etb_no_swap_when_already_self_controlled():
     _attach_and_etb(state, aura, bear)
 
     assert bear.controller_id == 0
-    assert bear.swapped_controller_by_aura_id is None
-    assert bear.controller_id_before_aura_swap is None
+    assert bear.aura_control_grants == []
+    assert bear.controller_id_before_any_aura_swap is None
     assert bear.tapped is True
 
 
@@ -109,8 +111,8 @@ def test_aura_destroyed_reverts_controller():
     destroy(state, aura)
 
     assert bear.controller_id == 1
-    assert bear.swapped_controller_by_aura_id is None
-    assert bear.controller_id_before_aura_swap is None
+    assert bear.aura_control_grants == []
+    assert bear.controller_id_before_any_aura_swap is None
 
 
 def test_aura_exiled_reverts_controller():
@@ -185,6 +187,61 @@ def test_printing_is_aura_with_correct_etb_and_static_flags():
 
 
 # -----------------------
+# Nested swaps: two Tractor Beams stacked on the same creature
+# -----------------------
+
+
+def test_nested_tractor_beams_revert_in_lifo_order():
+    """Two Tractor Beams stacked on the same creature, each
+    attached by a different player, should produce a LIFO control
+    chain — and reverting them should restore the prior controller
+    at each step.
+
+    Scenario (the user-reported edge case):
+      1. P0 casts Tractor Beam (TB1) on P1's creature →
+         P0 controls it (via TB1).
+      2. P1 casts Tractor Beam (TB2) on the same creature →
+         P1 controls it (via TB2 stacked on TB1).
+      3. TB2 destroyed → control should revert to P0 (TB1 still on).
+      4. TB1 destroyed → control should revert to P1 (the owner).
+    """
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
+    assert bear.controller_id == 1
+    assert bear.owner_id == 1
+
+    # Step 1: P0's TB1 attaches.
+    tb1 = state.new_object(EOE_SPELLS["Tractor Beam"], 0, Zone.BATTLEFIELD)
+    state.battlefield.append(tb1)
+    tb1.attached_to = bear.id
+    apply_aura_static_grants_on_attach(state, tb1, bear, 0)
+    assert bear.controller_id == 0
+
+    # Step 2: P1's TB2 attaches on the same creature.
+    tb2 = state.new_object(EOE_SPELLS["Tractor Beam"], 1, Zone.BATTLEFIELD)
+    state.battlefield.append(tb2)
+    tb2.attached_to = bear.id
+    apply_aura_static_grants_on_attach(state, tb2, bear, 1)
+    assert bear.controller_id == 1, (
+        "TB2 stacks on TB1; controller should now be P1"
+    )
+
+    # Step 3: TB2 destroyed → control reverts to P0 (TB1 still on).
+    destroy(state, tb2)
+    assert bear.controller_id == 0, (
+        "After TB2 leaves, TB1's grant should still apply; "
+        "controller reverts to P0"
+    )
+
+    # Step 4: TB1 destroyed → control reverts to P1 (the owner).
+    destroy(state, tb1)
+    assert bear.controller_id == 1, (
+        "After TB1 leaves, no grants remain; controller reverts to "
+        "the original owner P1"
+    )
+
+
+# -----------------------
 # Static-vs-triggered ordering (the user-reported observation)
 # -----------------------
 
@@ -224,8 +281,8 @@ def test_control_swap_applies_before_etb_tap_resolves():
     assert bear.controller_id == 0, (
         "static control swap must apply before ETB tap resolves"
     )
-    assert bear.controller_id_before_aura_swap == 1
-    assert bear.swapped_controller_by_aura_id == aura.id
+    assert bear.controller_id_before_any_aura_swap == 1
+    assert bear.aura_control_grants == [(aura.id, 0)]
     # ETB tap is on the stack but bear is still UNTAPPED.
     assert any(
         item.ability is not None and item.source.id == aura.id

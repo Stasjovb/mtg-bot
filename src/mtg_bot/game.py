@@ -142,17 +142,25 @@ class GameObject:
     # controller it came from. run_cleanup_step swaps ``controller_id``
     # back and clears this field. None = no temporary-control effect.
     temp_original_controller_id: Optional[int] = None
-    # Aura-granted "you control enchanted permanent" tracking: when an
-    # Aura with this clause attaches, the enchanted permanent stores
-    # the aura's id in ``swapped_controller_by_aura_id`` and the prior
-    # controller in ``controller_id_before_aura_swap``. When that
-    # specific aura leaves the battlefield, ``move_off_battlefield``
-    # restores the saved controller and clears both fields. Distinct
-    # from the UEOT temp_original_controller_id mechanism — the swap
-    # persists for the lifetime of the aura attachment, not just
-    # until cleanup. Tractor Beam.
-    swapped_controller_by_aura_id: Optional[int] = None
-    controller_id_before_aura_swap: Optional[int] = None
+    # Aura-granted "you control enchanted permanent" tracking. Each
+    # aura with the static control-grant attaches via
+    # ``apply_aura_static_grants_on_attach`` and pushes
+    # ``(aura_id, granted_controller_id)`` onto ``aura_control_grants``
+    # in arrival order. The effective controller is always the LAST
+    # entry's granted_controller_id (most-recent grant wins, matching
+    # MTG's continuous-effect timestamp ordering). When an aura
+    # leaves play, ``move_off_battlefield`` removes its entry from
+    # the list; controller reverts to the new last entry's
+    # granted_controller_id, or to ``controller_id_before_any_aura_swap``
+    # (the original controller, captured the first time the list
+    # transitions from empty to non-empty) when the list goes empty.
+    # Supports nested swaps: P0's TB1 + P1's TB2 stacked on the
+    # same creature reverts in LIFO order as each aura leaves.
+    # Distinct from the UEOT temp_original_controller_id mechanism —
+    # this swap persists for the lifetime of the aura attachment,
+    # not just until cleanup. Tractor Beam.
+    aura_control_grants: list[tuple[int, int]] = field(default_factory=list)
+    controller_id_before_any_aura_swap: Optional[int] = None
     # Planeswalker loyalty counters. Initialized to printing.loyalty
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
@@ -1093,6 +1101,10 @@ class GameState:
             new = GameObject.__new__(GameObject)
             new.__dict__ = o.__dict__.copy()
             new.blocked_by = list(o.blocked_by)
+            # Aura-control-grant stack is mutable (push on attach,
+            # pop on aura-leaves) — duplicate so MCTS branches don't
+            # share state.
+            new.aura_control_grants = list(o.aura_control_grants)
             id_map[o.id] = new
             return new
 
