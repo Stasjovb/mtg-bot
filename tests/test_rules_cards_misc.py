@@ -7062,6 +7062,7 @@ def test_pump_creatures_opponents_control_grants_keywords():
         toughness_bonus=0,
         granted_keywords=frozenset({"first strike"}),
     ).resolve(state, controller_id=0)
-    assert "first strike" in op.temp_keywords
+    from mtg_bot.game import effective_keywords
+    assert "first strike" in effective_keywords(state, op)
 
 

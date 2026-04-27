@@ -78,7 +78,9 @@ def test_pump_target_creature_applies_bonuses():
     ).resolve(state, controller_id=0, targets=(("creature", bear.id),))
     assert bear.temp_power_bonus == 3
     assert bear.temp_toughness_bonus == 0
-    assert "first strike" in bear.temp_keywords
+    # Granted keyword now lives in the layer-6 registry; query via
+    # effective_keywords (Phase 2 migration).
+    assert "first strike" in effective_keywords(state, bear)
 
 
 def test_pump_target_creature_stacks_additively():

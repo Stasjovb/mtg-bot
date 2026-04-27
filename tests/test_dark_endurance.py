@@ -216,7 +216,8 @@ def test_cast_at_instant_speed_during_opponent_block_step_gets_discount():
     # Resolve the spell off the stack and confirm the buff applied.
     resolve_top_of_stack(state)
     # Blocker gets +2/+0 and indestructible UEOT.
-    assert "indestructible" in blocker.temp_keywords
+    from mtg_bot.game import effective_keywords
+    assert "indestructible" in effective_keywords(state, blocker)
     assert blocker.temp_power_bonus == 2
     assert blocker.temp_toughness_bonus == 0
 

@@ -675,22 +675,13 @@ class AttachToTargetCreatureYouControl(Effect):
             f"{source.printing.name} is attached to {target.printing.name}"
         )
         if self.granted_keywords_ueot:
-            # Layer-6 keyword grant via the continuous-effects
-            # registry. One entry per keyword, expires at the
-            # active player's cleanup step.
-            for kw in sorted(self.granted_keywords_ueot):
-                state.add_continuous_effect(
-                    source_id=source.id,
-                    layer=6,
-                    kind="grant_keyword",
-                    target_id=target.id,
-                    params=(kw,),
-                    expires_at="cleanup",
-                    description=(
-                        f"{source.printing.name} grants {kw} UEOT to "
-                        f"{target.printing.name}"
-                    ),
-                )
+            state.grant_keywords_ueot(
+                source_id=source.id,
+                target_id=target.id,
+                keywords=self.granted_keywords_ueot,
+                log_source_name=source.printing.name,
+                log_target_name=target.printing.name,
+            )
             state.log.append(
                 f"{target.printing.name} gains "
                 f"{', '.join(sorted(self.granted_keywords_ueot))} "
@@ -2814,7 +2805,17 @@ class PumpTargetCreatureUntilEOT(Effect):
         if self.granted_keywords_if_warp_cast and obj.cast_via_warp:
             granted = granted | self.granted_keywords_if_warp_cast
         if granted:
-            obj.temp_keywords = obj.temp_keywords | granted
+            source = state.resolving_source
+            state.grant_keywords_ueot(
+                source_id=source.id if source is not None else obj.id,
+                target_id=obj.id,
+                keywords=granted,
+                log_source_name=(
+                    source.printing.name if source is not None
+                    else obj.printing.name
+                ),
+                log_target_name=obj.printing.name,
+            )
         if self.granted_triggered_ability is not None:
             obj.temp_triggered_abilities = (
                 obj.temp_triggered_abilities
@@ -2982,7 +2983,17 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
         obj.temp_is_creature = True
         obj.temp_base_pt_override = (self.power, self.toughness)
         if self.granted_keywords:
-            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            source = state.resolving_source
+            state.grant_keywords_ueot(
+                source_id=source.id if source is not None else obj.id,
+                target_id=obj.id,
+                keywords=self.granted_keywords,
+                log_source_name=(
+                    source.printing.name if source is not None
+                    else obj.printing.name
+                ),
+                log_target_name=obj.printing.name,
+            )
         kw_note = (
             f" and gains {', '.join(sorted(self.granted_keywords))}"
             if self.granted_keywords else ""
@@ -3050,7 +3061,13 @@ class PumpSelfUntilEOT(Effect):
         source.temp_power_bonus += self.power_bonus
         source.temp_toughness_bonus += self.toughness_bonus
         if self.granted_keywords:
-            source.temp_keywords = source.temp_keywords | self.granted_keywords
+            state.grant_keywords_ueot(
+                source_id=source.id,
+                target_id=source.id,
+                keywords=self.granted_keywords,
+                log_source_name=source.printing.name,
+                log_target_name=source.printing.name,
+            )
         state.log.append(
             f"{source.printing.name} gets "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
@@ -3118,7 +3135,17 @@ class PumpCreaturesYouControlUntilEOT(Effect):
             obj.temp_power_bonus += self.power_bonus
             obj.temp_toughness_bonus += self.toughness_bonus
             if self.granted_keywords:
-                obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+                src = state.resolving_source
+                state.grant_keywords_ueot(
+                    source_id=src.id if src is not None else obj.id,
+                    target_id=obj.id,
+                    keywords=self.granted_keywords,
+                    log_source_name=(
+                        src.printing.name if src is not None
+                        else obj.printing.name
+                    ),
+                    log_target_name=obj.printing.name,
+                )
             if untap_rider_active and obj.tapped:
                 obj.tapped = False
                 untapped_count += 1
@@ -3199,7 +3226,17 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
                 obj.temp_power_bonus += self.power_bonus
                 obj.temp_toughness_bonus += self.toughness_bonus
                 if self.granted_keywords:
-                    obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+                    src = state.resolving_source
+                    state.grant_keywords_ueot(
+                        source_id=src.id if src is not None else obj.id,
+                        target_id=obj.id,
+                        keywords=self.granted_keywords,
+                        log_source_name=(
+                            src.printing.name if src is not None
+                            else obj.printing.name
+                        ),
+                        log_target_name=obj.printing.name,
+                    )
             count += 1
         # Format signed bonuses ("+3"/"-3" rather than "+-3").
         p_str = f"{self.power_bonus:+d}"

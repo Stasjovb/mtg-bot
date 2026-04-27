@@ -1196,6 +1196,42 @@ class GameState:
         self.continuous_effects.append(effect)
         return effect
 
+    def grant_keywords_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        keywords,
+        log_source_name: str = "",
+        log_target_name: str = "",
+    ) -> None:
+        """Helper for the common layer-6 UEOT-keyword-grant pattern.
+        Writes one ``ContinuousEffect`` entry per keyword
+        (``layer=6, kind="grant_keyword", expires_at="cleanup"``).
+        Effects that grant UEOT keywords (PumpTargetCreatureUntilEOT,
+        BecomeLandCreatureUEOT, AttachToTargetCreatureYouControl, etc.)
+        call this rather than mutating ``temp_keywords`` directly, so
+        all UEOT keyword grants share one cleanup mechanism and one
+        query path through ``effective_keywords``.
+        """
+        if not keywords:
+            return
+        for kw in sorted(keywords):
+            desc = ""
+            if log_source_name and log_target_name:
+                desc = (
+                    f"{log_source_name} grants {kw} UEOT to {log_target_name}"
+                )
+            self.add_continuous_effect(
+                source_id=source_id,
+                layer=6,
+                kind="grant_keyword",
+                target_id=target_id,
+                params=(kw,),
+                expires_at="cleanup",
+                description=desc,
+            )
+
     def expire_continuous_effects(
         self, expires_at: str
     ) -> list[ContinuousEffect]:

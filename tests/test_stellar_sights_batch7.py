@@ -204,8 +204,9 @@ def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
     while state.stack:
         resolve_top_of_stack(state)
     assert plaza not in state.battlefield
-    assert "hexproof" in bear.temp_keywords
-    assert "indestructible" in bear.temp_keywords
+    from mtg_bot.game import effective_keywords
+    assert "hexproof" in effective_keywords(state, bear)
+    assert "indestructible" in effective_keywords(state, bear)
 
 
 # -----------------------
