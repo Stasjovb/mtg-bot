@@ -40,6 +40,7 @@ from mtg_bot.cards.base import (
     make_sorcery,
 )
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 
 
@@ -177,12 +178,19 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     surviving clause fails to parse.
     """
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
-    # Drop leading spell-keyword preambles. Only leading clauses are
-    # stripped — a parenthesized reminder appearing later would be
-    # an unrelated structure (e.g. Hymn of the Faller's "(To
-    # surveil 1, ...)" tail) and must not be silently dropped.
+    # Drop leading spell-keyword preambles BEFORE per-clause reminder
+    # stripping. The preamble shape (``"Convoke (...)"``) is recognized
+    # via the trailing parenthesized reminder, so we have to detect
+    # those preamble clauses while their parentheses are still intact.
     while clauses and _is_spell_keyword_preamble(clauses[0]):
         clauses = clauses[1:]
+    # Now drop per-clause parenthesized reminder text. Empty results
+    # (a clause that was nothing but a parenthetical) are filtered out.
+    clauses = [
+        stripped
+        for stripped in (_strip_reminder_text(c) for c in clauses)
+        if stripped
+    ]
     if not clauses:
         return None
     if len(clauses) == 1:

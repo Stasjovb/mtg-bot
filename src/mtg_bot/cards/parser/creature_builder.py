@@ -24,6 +24,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_ward_line,
     _parse_warp_line,
 )
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 
 
@@ -52,7 +53,12 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     devour: int = 0
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
-        line = raw_line.strip()
+        # Strip parenthesized reminder text per-line before any clause
+        # dispatch — the keyword/triggered/activated/static grammars
+        # don't need to know about flavor parentheticals. ``_strip_
+        # reminder_text`` also calls ``.strip()``, so we don't need a
+        # separate strip on ``raw_line`` first.
+        line = _strip_reminder_text(raw_line)
         if not line:
             continue
         warp_cost = _parse_warp_line(line)
