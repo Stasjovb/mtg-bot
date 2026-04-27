@@ -63,6 +63,8 @@ def _can_cast(
     Bundles spend-restriction context (spell_kinds from the card type and
     zone), convoke eligibility, and sac-for-mana eligibility so call sites
     don't have to reconstruct those three arguments on every check.
+    ``sac_for_mana`` is always ``True`` — every spell-cast site permits
+    Treasure-style sacrifice during cost payment.
     """
     return can_pay_cost(
         state, player_id, cost,
@@ -397,21 +399,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     )
     if has_cast_artifact_top and p.library:
         top = p.library[0]
-        if top.printing.is_artifact and not top.printing.is_creature:
-            # Sorcery timing check for non-instant tops.
-            if _is_sorcery_timing(state, player_id) and can_pay_cost(
-                state, player_id,
-                _effective_cost(top, top.printing.mana_cost),
-                spell_kind="artifact_spell",
-                convoke=top.printing.has_convoke, sac_for_mana=True,
-            ) and _targets_are_satisfiable(state, player_id, top):
-                actions.append(CastSpell(top.id))
-        elif top.printing.is_artifact and top.printing.is_creature:
-            if _is_sorcery_timing(state, player_id) and can_pay_cost(
-                state, player_id,
-                _effective_cost(top, top.printing.mana_cost),
-                spell_kind="artifact_spell",
-                convoke=top.printing.has_convoke, sac_for_mana=True,
+        if top.printing.is_artifact:
+            # Sorcery timing check (all artifact tops, creature or not).
+            if _is_sorcery_timing(state, player_id) and _can_cast(
+                state, player_id, top, _effective_cost(top, top.printing.mana_cost),
             ) and _targets_are_satisfiable(state, player_id, top):
                 actions.append(CastSpell(top.id))
 
