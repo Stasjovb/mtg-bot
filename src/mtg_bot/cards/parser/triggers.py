@@ -41,7 +41,17 @@ Two trigger shapes coexist during the predicate-trigger migration:
   — all built directly in static-card registries via the new
   ``IsHost`` predicate, so the parser tables grow only by the
   ``this creature becomes tapped`` entry moving from
-  ``_TRIGGER_PHRASES`` to ``_PREDICATE_TRIGGER_PHRASES``.
+  ``_TRIGGER_PHRASES`` to ``_PREDICATE_TRIGGER_PHRASES``. Batch 11
+  added the type-qualified self-ETB / self-attack family
+  (``this Spacecraft enters``, ``this artifact enters``,
+  ``this enchantment enters``, ``this Aura enters``,
+  ``this Spacecraft attacks``) — every entry maps to the same
+  ``IsSelf()`` predicate as the pre-existing ``"this creature
+  enters"`` / ``"this creature attacks"`` siblings because the
+  predicate's object-identity check is type-blind. The phrases are
+  forward-looking grammar coverage today: every EoE printing that
+  carries them is a non-creature card type that doesn't flow through
+  the creature-builder ``_parse_clause`` pipeline.
 
 Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
@@ -303,6 +313,37 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
         Event.ENTERS,
         (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
+    # Batch 11 — type-qualified self-ETB / self-attack family. Every
+    # entry in this group maps to the same ``IsSelf()`` predicate as
+    # the pre-existing ``"this creature enters"`` / ``"this creature
+    # attacks"`` entries: the source's identity is what matters, not
+    # what type qualifier the printed text uses. The predicate's
+    # object-identity check is type-blind, so the parser collapses
+    # ``"this Spacecraft enters"`` / ``"this artifact enters"`` /
+    # ``"this enchantment enters"`` / ``"this Aura enters"`` /
+    # ``"this Spacecraft attacks"`` onto the same shape as the
+    # creature-typed sibling.
+    #
+    # The EoE printings that carry these phrases today are all non-
+    # creature card types (Spacecraft are artifacts; the Aura/
+    # Enchantment/Artifact phrasings appear on their respective non-
+    # creature card types) and don't currently flow through the
+    # creature-builder ``_parse_clause`` pipeline that calls this
+    # phrasebook — so the additions are forward-looking grammar
+    # coverage in the same shape as batch 10's ``"it's your turn"``
+    # static-condition entry. Adding them keeps the parser ready for
+    # reprints and for future creature-typed printings (e.g. an
+    # artifact-creature whose oracle text says ``"this artifact
+    # enters"``) without lying about engine semantics. Every entry's
+    # static-card sibling already builds via ``IsSelf()`` directly
+    # (see ``cards/eoe_spells.py`` Pinnacle Starcage / Tractor Beam /
+    # Larval Scoutlander / Specimen Freighter etc.), so parser/
+    # static-registry parity holds out of the box.
+    "this Spacecraft enters": (Event.ENTERS, IsSelf()),
+    "this artifact enters": (Event.ENTERS, IsSelf()),
+    "this enchantment enters": (Event.ENTERS, IsSelf()),
+    "this Aura enters": (Event.ENTERS, IsSelf()),
+    "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
 }
 
 

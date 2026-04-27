@@ -21,6 +21,15 @@ Recognized conditions today:
 * ``you've cast two or more spells this turn`` →
   ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
   trailing shape).
+* ``you've cast three or more spells this turn`` →
+  ``requires_spells_cast_this_turn=3``. Batch-11 forward-looking
+  variant of the existing ``two or more`` phrase — same engine gate
+  field with a higher threshold. No EoE printing today uses this
+  threshold but the engine accepts any ``int >= 0`` and the surface
+  phrasing is the natural one-word substitution from the ``two``
+  variant; adding it keeps the parser ready for printings that
+  raise the bar (and makes the threshold-vs-phrase mapping explicit
+  in the phrasebook rather than implicit in regex generality).
 * ``it's your turn`` → ``active_turn_only=True``. Forward-looking
   grammar coverage; no EoE card prints in the leading/trailing static
   shape with this condition today (Memorial Team Leader uses the
@@ -69,6 +78,14 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     "you control an artifact": {"requires_artifact_you_control": True},
     "you've cast two or more spells this turn": {
         "requires_spells_cast_this_turn": 2
+    },
+    # Batch 11 — forward-looking N=3 variant. Same engine gate as the
+    # ``two or more`` entry above with a higher threshold; the engine
+    # accepts any non-negative integer for ``requires_spells_cast_this_
+    # turn`` and the surface phrasing is the natural one-word
+    # substitution. No EoE card prints this threshold today.
+    "you've cast three or more spells this turn": {
+        "requires_spells_cast_this_turn": 3
     },
     "it's your turn": {"active_turn_only": True},
 }
