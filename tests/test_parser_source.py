@@ -37,6 +37,7 @@ from mtg_bot.cards.parser_source import (
     _parse_triggered_ability_line,
     _parse_type_line,
     _parse_void_damage_replacement,
+    _parse_ward_line,
     _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -979,6 +980,191 @@ def test_source_does_not_claim_timeline_culler():
     out of scope this batch — the card must remain unclaimed."""
     source = OracleParserCardSource()
     assert "Timeline Culler" not in source.claimed_names
+
+
+# ---------- Ward ----------
+
+@pytest.mark.parametrize(
+    "line,expected_cost",
+    [
+        ("Ward {1}", "{1}"),
+        ("Ward {2}", "{2}"),
+        ("Ward {3}", "{3}"),
+        ("Ward {R}", "{R}"),
+        ("Ward {1}{R}", "{1}{R}"),
+        ("Ward {2}{U}{U}", "{2}{U}{U}"),
+        ("Ward {X}{G}", "{X}{G}"),
+        ("Ward {U/R}", "{U/R}"),
+    ],
+)
+def test_parse_ward_line_simple_costs(line, expected_cost):
+    """Bare ``Ward {cost}`` lines (no reminder text) extract the cost."""
+    assert _parse_ward_line(line) == expected_cost
+
+
+def test_parse_ward_line_with_reminder_text():
+    """The printed line includes parenthesized reminder text — the
+    recognizer ignores it and just returns the cost."""
+    line = (
+        "Ward {2} (Whenever this creature becomes the target of a spell "
+        "or ability an opponent controls, counter it unless that player "
+        "pays {2}.)"
+    )
+    assert _parse_ward_line(line) == "{2}"
+
+
+def test_parse_ward_line_strips_whitespace():
+    assert _parse_ward_line("  Ward {2}  ") == "{2}"
+
+
+def test_parse_ward_line_rejects_pay_life_rider():
+    """``Ward — Pay 2 life.`` (em-dash + non-mana cost) is out of scope
+    this batch and must not match — the card should fall through and
+    be skipped, not silently parsed as plain Ward."""
+    assert _parse_ward_line("Ward — Pay 2 life.") is None
+
+
+def test_parse_ward_line_rejects_discard_random_rider():
+    """``Ward — Discard a card at random.`` (em-dash + non-mana cost)
+    is out of scope this batch — Alpharael, Stonechosen has this
+    shape and must remain unclaimed."""
+    assert _parse_ward_line("Ward—Discard a card at random.") is None
+
+
+def test_parse_ward_line_rejects_discard_chosen_rider():
+    """``Ward — Discard a card.`` (em-dash + non-mana cost) is out of
+    scope this batch — Sunset Saboteur has this shape and must remain
+    unclaimed."""
+    assert _parse_ward_line("Ward—Discard a card.") is None
+
+
+def test_parse_ward_line_rejects_em_dash_form():
+    """Even the em-dash separator alone (no rider) is intentionally
+    not matched — actual EoE simple-Ward printings use a space."""
+    assert _parse_ward_line("Ward—{B}") is None
+
+
+def test_parse_ward_line_rejects_non_ward_lines():
+    assert _parse_ward_line("Flying") is None
+    assert _parse_ward_line("Ward") is None
+    assert _parse_ward_line("Ward {2} extra junk") is None
+    assert _parse_ward_line("") is None
+
+
+def test_parse_ward_line_rejects_malformed_cost():
+    """Cost segment must be one or more brace-wrapped symbols."""
+    assert _parse_ward_line("Ward 2") is None
+    assert _parse_ward_line("Ward {}") is None
+
+
+def test_parse_clause_does_not_claim_ward_line():
+    """Ward is handled by its own recognizer in
+    ``_build_creature_printing``, not by ``_parse_clause``. A ward
+    line passed directly to ``_parse_clause`` must return ``None``
+    so the clause grammar stays orthogonal."""
+    assert _parse_clause("Ward {2}") is None
+
+
+def test_build_creature_printing_handles_simple_ward():
+    """Synthetic vanilla creature with only a Ward clause — exercises
+    the ward passthrough without depending on any other clause."""
+    card = {
+        "name": "Test Wardling",
+        "mana_cost": "{4}",
+        "type_line": "Creature — Beast",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "Ward {2} (Whenever this creature becomes the target of a "
+            "spell or ability an opponent controls, counter it unless "
+            "that player pays {2}.)"
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.ward_cost_str == "{2}"
+    assert printing.ward_cost is not None
+
+
+def test_build_creature_printing_handles_ward_with_keyword():
+    """Synthetic creature with both Flying and Ward — both clauses
+    contribute and the ward cost is plumbed through."""
+    card = {
+        "name": "Test Ward Flyer",
+        "mana_cost": "{3}{U}",
+        "type_line": "Creature — Spirit",
+        "power": "2",
+        "toughness": "3",
+        "oracle_text": (
+            "Flying\n"
+            "Ward {1} (Whenever this creature becomes the target of a "
+            "spell or ability an opponent controls, counter it unless "
+            "that player pays {1}.)"
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset({"flying"})
+    assert printing.ward_cost_str == "{1}"
+    assert printing.ward_cost is not None
+
+
+def test_build_creature_printing_skips_ward_with_pay_life_rider():
+    """A creature whose Ward clause has an em-dash life-cost rider
+    falls through and the whole card must be skipped, not silently
+    parsed as plain Ward."""
+    card = {
+        "name": "Test Ward Rider",
+        "mana_cost": "{B}",
+        "type_line": "Creature — Zombie",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "Ward — Pay 2 life.",
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_build_creature_printing_skips_ward_with_discard_rider():
+    """``Ward—Discard a card.`` (Sunset Saboteur's shape) is out of
+    scope and the creature must not be claimed."""
+    card = {
+        "name": "Test Discard Ward",
+        "mana_cost": "{1}{B}",
+        "type_line": "Creature — Human Rogue",
+        "power": "4",
+        "toughness": "1",
+        "oracle_text": "Ward—Discard a card.",
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_source_does_not_claim_alpharael_stonechosen():
+    """Alpharael's ``Ward—Discard a card at random.`` rider is out of
+    scope this batch — the card must remain unclaimed."""
+    source = OracleParserCardSource()
+    assert "Alpharael, Stonechosen" not in source.claimed_names
+
+
+def test_source_does_not_claim_sunset_saboteur():
+    """Sunset Saboteur's ``Ward—Discard a card.`` rider is out of
+    scope this batch — the card must remain unclaimed."""
+    source = OracleParserCardSource()
+    assert "Sunset Saboteur" not in source.claimed_names
+
+
+def test_source_does_not_claim_harmonious_grovestrider():
+    """Harmonious Grovestrider has simple ``Ward {2}`` but its
+    power/toughness are ``*/*`` (lands-you-control), so the parser
+    rejects it at the integer-power check."""
+    source = OracleParserCardSource()
+    assert "Harmonious Grovestrider" not in source.claimed_names
+
+
+def test_source_does_not_claim_famished_worldsire():
+    """Famished Worldsire has simple ``Ward {3}`` but also Devour,
+    which is out of scope — the card must remain unclaimed."""
+    source = OracleParserCardSource()
+    assert "Famished Worldsire" not in source.claimed_names
 
 
 def test_source_claims_honor():

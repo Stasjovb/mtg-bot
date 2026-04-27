@@ -59,6 +59,12 @@ Currently recognized:
   alternative cost. Riders (``Warp—{cost}, Pay 2 life.`` or
   graveyard-castable variants) are out of scope and cause the card
   to be skipped.
+- Printing-level keyword: ``Ward {cost}`` (mana cost, with optional
+  reminder text) sets the creature's ``ward_cost`` so opposing
+  spells/abilities targeting it must pay the additional cost or be
+  countered. Non-mana variants (``Ward — Pay 2 life.``,
+  ``Ward — Discard a card.``) are out of scope and cause the card
+  to be skipped.
 
 Cards whose oracle text uses only those clauses get claimed.
 
@@ -434,6 +440,34 @@ def _parse_warp_line(line: str) -> str | None:
     return m.group(1)
 
 
+# Ward is a printing-level keyword that takes a mana-cost argument, so
+# it doesn't fit the literal-line ``_KEYWORD_LINES`` map. The simple
+# shape on EoE cards is ``"Ward {cost}"`` (with a regular space) on its
+# own line, optionally followed by parenthesized reminder text. The
+# cost is one or more brace-wrapped mana symbols (``{2}``, ``{1}{R}``,
+# ``{X}{G}``, ``{U/R}``, etc.).
+#
+# Riders like ``"Ward — Pay 2 life."`` (em-dash, life cost) and
+# ``"Ward — Discard a card."`` / ``"Ward — Discard a card at random."``
+# (em-dash, non-mana cost) are out of scope for this batch and must NOT
+# match — they should fall through and cause the card to be skipped,
+# exactly like any other unparsed clause.
+_WARD_LINE = re.compile(
+    r"^Ward (\{[^}]+\}(?:\{[^}]+\})*)(?: \([^)]*\))?$"
+)
+
+
+def _parse_ward_line(line: str) -> str | None:
+    """Return the ward cost string (e.g. ``"{2}"``) if ``line`` is a
+    simple ``Ward {cost}`` clause, else ``None``. Lines with riders
+    (em-dash + life cost, em-dash + discard) intentionally don't match.
+    """
+    m = _WARD_LINE.match(line.strip())
+    if m is None:
+        return None
+    return m.group(1)
+
+
 def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
     """Parse a spell's full-sentence effect text.
 
@@ -561,6 +595,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     triggers: list[TriggeredAbility] = []
     activated: list[ActivatedAbility] = []
     warp: str | None = None
+    ward: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         line = raw_line.strip()
@@ -572,6 +607,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             warp = warp_cost
+            continue
+        ward_cost = _parse_ward_line(line)
+        if ward_cost is not None:
+            # A card should only have one Ward clause; if a malformed
+            # printing somehow had two we just keep the last — parity
+            # against the static registry will catch any drift.
+            ward = ward_cost
             continue
         parsed = _parse_clause(line)
         if parsed is None:
@@ -594,6 +636,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
         warp=warp,
+        ward=ward,
     )
 
 
