@@ -761,6 +761,77 @@ def test_magus_and_dryad_both_lignified_lands_keep_all_basic_types():
     )
 
 
+def test_lignify_on_recipient_older_then_lord_newer_grants_haste():
+    """Within-layer-6 timestamp ordering for static-anthem keyword
+    grants. Sliver is Lignified BEFORE the Sliver lord enters
+    play. Per CR layer-6 timestamp walk:
+      - T1 (Lignify on Sliver): wipes the Sliver's printed and
+        any pre-existing granted abilities.
+      - T2 (Hivepool's anthem on Sliver, synthesized at the
+        lord's etb_timestamp): grants haste + double strike.
+    Result: Sliver has haste + double strike, despite being
+    Lignified (because the anthem is newer).
+    """
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    state.add_continuous_effect(
+        source_id=bear.id, layer=4, kind="add_subtype",
+        target_id=bear.id, params=("Sliver",),
+        description="(test) Bear is a Sliver",
+    )
+    bear.etb_timestamp = 1
+    # Lignify the Sliver first (older).
+    aura = _put(state, LIGNIFY, owner_id=0)
+    aura.etb_timestamp = 5
+    _attach(state, aura, bear)
+    # Pre-Hivepool: Sliver has been Lignified, no keywords.
+    assert effective_keywords(state, bear) == frozenset()
+
+    # Hivepool enters NEWER than Lignify.
+    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool.etb_timestamp = 100  # newer
+
+    # Per CR timestamp order in layer 6: Lignify wipe (T=5) then
+    # Hivepool grant (T=100). Sliver gets haste + double strike.
+    kws = effective_keywords(state, bear)
+    assert "haste" in kws
+    assert "double strike" in kws
+
+
+def test_lord_older_then_lignify_on_recipient_newer_wipes_keywords():
+    """Reverse: Hivepool enters first (older), Lignify on Sliver
+    newer. Per CR timestamp walk: lord grants haste, then Lignify
+    wipes. Sliver has no keywords.
+    """
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    state.add_continuous_effect(
+        source_id=bear.id, layer=4, kind="add_subtype",
+        target_id=bear.id, params=("Sliver",),
+        description="(test) Bear is a Sliver",
+    )
+    bear.etb_timestamp = 1
+    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool.etb_timestamp = 5  # older
+    kws = effective_keywords(state, bear)
+    assert "haste" in kws
+    assert "double strike" in kws
+
+    # Advance state.next_timestamp past 5 so Lignify's entries are
+    # newer than the synthesized lord-grant timestamp.
+    state.next_timestamp = 100
+    aura = _put(state, LIGNIFY, owner_id=0)
+    aura.etb_timestamp = 100
+    _attach(state, aura, bear)
+
+    # Lignify (newer) wipes the lord's grants on this recipient.
+    assert effective_keywords(state, bear) == frozenset()
+
+
 def test_lignified_anthem_lord_keeps_keyword_grant_drops_pt_bonus():
     """The Lord-of-Atlantis-vs-Humility shape, using cards in our
     pool. Memorial Team Leader's static "Other creatures you
@@ -966,6 +1037,56 @@ def test_lignified_animated_manland_keeps_animation_at_1_1():
     subs = effective_subtypes(state, forest)
     assert "Elemental" in subs
     assert "Treefolk" in subs
+
+
+def test_synthetic_set_basic_land_subtype_suppresses_nonbasic_abilities():
+    """Direct registry-write of a layer-4 ``set_basic_land_subtype``
+    entry on a nonbasic land triggers CR 305.6 ability suppression
+    via ``effective_activated_abilities``. Pin the registry-driven
+    path so future cards that write this entry kind (without
+    needing the ``nonbasic_lands_are_mountains`` printing flag)
+    inherit the suppression for free.
+    """
+    from mtg_bot.cards.base import (
+        ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
+        parse_mana_cost,
+    )
+    from mtg_bot.effects.generic import GainLife
+
+    activated_land = CardPrinting(
+        name="Test Activated Land",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=(),
+        produces=frozenset(),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                ),
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    state = _new_state()
+    land = state.new_object(activated_land, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    # Without any rewrite: the activated ability is visible.
+    assert len(effective_activated_abilities(state, land)) == 1
+
+    # Direct registry write (no Magus needed).
+    state.add_continuous_effect(
+        source_id=999, layer=4, kind="set_basic_land_subtype",
+        target_id=land.id, params=("Mountain",),
+        description="(test) layer-4 set Mountain",
+    )
+
+    # Per CR 305.6, the activated ability is suppressed.
+    assert effective_activated_abilities(state, land) == ()
 
 
 def test_blood_moon_urborg_dependency_GAP():

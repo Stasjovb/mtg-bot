@@ -423,44 +423,98 @@ def effective_controller(state: GameState, obj: GameObject) -> int:
     return obj.controller_id
 
 
+def _layer6_entries_for(
+    state: "GameState", obj: "GameObject",
+) -> list["ContinuousEffect"]:
+    """Collect every layer-6 continuous-effect entry that targets
+    ``obj`` — both real registry entries AND synthesized entries
+    from static-anthem sources on the battlefield. Synthesized
+    entries carry the source's ``etb_timestamp`` so the within-
+    layer-6 timestamp walk in ``effective_keywords`` /
+    ``effective_activated_abilities`` /
+    ``effective_triggered_abilities`` interleaves them correctly
+    with registry-based grants and ``"lose_all_abilities"`` wipes.
+
+    Synthesized sources:
+    - Static anthems with ``granted_keywords`` (Sliver lord style).
+    - Equipment ``equipment_bonuses`` keyword riders attached to
+      ``obj``. The Equipment's ``etb_timestamp`` is the rider's
+      timestamp.
+    """
+    entries: list["ContinuousEffect"] = [
+        ce for ce in state.continuous_effects
+        if ce.layer == 6 and ce.target_id == obj.id
+    ]
+    # Static-anthem keyword grants from sources on the battlefield.
+    for source in state.battlefield:
+        for ability in source.printing.static_abilities:
+            if not ability.applies_to(source, obj, state):
+                continue
+            for kw in ability.granted_keywords:
+                entries.append(ContinuousEffect(
+                    source_id=source.id,
+                    layer=6,
+                    timestamp=source.etb_timestamp,
+                    kind="grant_keyword",
+                    target_id=obj.id,
+                    params=(kw,),
+                    description=(
+                        f"{source.printing.name} grants {kw}"
+                    ),
+                ))
+    # Equipment keyword riders.
+    for source in state.battlefield:
+        if source.attached_to != obj.id:
+            continue
+        eb = source.printing.equipment_bonuses
+        if eb is None:
+            continue
+        _, _, ek = eb
+        for kw in ek:
+            entries.append(ContinuousEffect(
+                source_id=source.id,
+                layer=6,
+                timestamp=source.etb_timestamp,
+                kind="grant_keyword",
+                target_id=obj.id,
+                params=(kw,),
+                description=(
+                    f"{source.printing.name} grants {kw} via equip"
+                ),
+            ))
+    return entries
+
+
 def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
-    """Keywords in effect right now, computed in CR-613 layer-6 order.
+    """Keywords in effect right now, computed in CR-613 layer-6
+    timestamp order.
 
-    Base set: printing.keywords + stationed_keywords (when stationed)
-    + static-anthem grants + legacy ``temp_keywords`` /
-    ``extended_temp_keywords`` (effects that haven't been migrated
-    to the registry yet). The base set is treated as if it applies
-    BEFORE any layer-6 registry entries — pragmatic since legacy
-    fields don't carry timestamps.
+    Base set (treated as before any layer-6 entry, since these
+    inherent properties don't carry a layer-6 timestamp in our
+    model):
+    - ``obj.printing.keywords``
+    - ``obj.printing.stationed_keywords`` if stationed
+    - ``obj.temp_keywords`` and ``obj.extended_temp_keywords``
+      (legacy UEOT grants from non-registry effects)
 
-    Then layer-6 registry entries on this target are walked in
-    timestamp order:
+    Layer-6 entries (real + synthesized via
+    ``_layer6_entries_for``) walked in timestamp order:
+    - ``"lose_all_abilities"`` clears the set entirely.
+    - ``"grant_keyword"`` adds ``params[0]``.
 
-    - ``kind == "lose_all_abilities"`` clears the keyword set
-      entirely (Humility, Lignify).
-    - ``kind == "grant_keyword"`` adds ``params[0]`` (a single
-      keyword string).
-
-    The timestamp walk gets Humility-vs-newer-anthem right: an
-    older lose_all_abilities clears the printed/legacy base, then
-    a NEWER grant_keyword re-adds the granted keyword. A newer
-    lose_all_abilities wipes everything that came before within
-    layer 6.
+    Static-anthem keyword grants from a Sliver-lord-style source
+    are synthesized as layer-6 ``grant_keyword`` entries with the
+    source's ``etb_timestamp``. So a Lignify-OLDER-than-lord
+    correctly grants the keyword (Sliver lord's anthem applies
+    after the older Lignify wipe). Similarly Equipment keyword
+    riders carry the equipment's etb_timestamp.
     """
     kws: set[str] = set(obj.printing.keywords)
     if is_stationed(obj):
         kws |= set(obj.printing.stationed_keywords)
-    _, _, granted = _static_bonuses(state, obj)
-    kws |= set(granted)
     kws |= set(obj.temp_keywords)
     kws |= set(obj.extended_temp_keywords)
-    layer6 = sorted(
-        (
-            ce for ce in state.continuous_effects
-            if ce.layer == 6 and ce.target_id == obj.id
-        ),
-        key=lambda ce: ce.timestamp,
-    )
+    layer6 = sorted(_layer6_entries_for(state, obj), key=lambda ce: ce.timestamp)
     for ce in layer6:
         if ce.kind == "lose_all_abilities":
             kws.clear()
@@ -766,21 +820,52 @@ def effective_protection_from_colors(
 
 def magus_of_the_moon_active(state: "GameState") -> bool:
     """True when any permanent on the battlefield has the
-    ``nonbasic_lands_are_mountains`` flag. Used by
-    ``effective_activated_abilities`` to suppress nonbasic lands'
-    activated abilities — modeled here as a side-effect of Magus's
-    layer-4 type change (CR 305.6: when a land's basic land type
-    is changed, it loses its other land-type-derived abilities).
+    ``nonbasic_lands_are_mountains`` flag. Thin wrapper kept for
+    backward compatibility with code that wants a quick "is any
+    Magus / Blood Moon source on the battlefield" check.
 
     Strict layer order (CR 613.1) puts layer 4 before layer 6, so
     a Lignified / Humility'd Magus STILL applies its layer-4
     nonbasic-lands-are-Mountains effect — its abilities haven't
-    been wiped yet at layer 4 walking time. No source-suppression
-    check here.
+    been wiped yet at layer 4 walking time. No source-suppression.
     """
     return any(
         o.printing.nonbasic_lands_are_mountains for o in state.battlefield
     )
+
+
+def _has_basic_land_type_set_effect(
+    state: "GameState", obj: "GameObject"
+) -> bool:
+    """True if any layer-4 ``"set_basic_land_subtype"`` effect
+    (real registry entry or synthesized from a Magus-of-the-Moon /
+    Blood Moon flag source) targets ``obj``. Per CR 305.6, when a
+    land's basic land type is set by an effect, it loses abilities
+    derived from its rules text and its previous land types — the
+    suppression is part of layer-4 type-changing semantics, not a
+    separate layer-6 ability wipe.
+
+    Used by ``effective_activated_abilities`` to gate nonbasic
+    lands' activated abilities under Magus / Blood Moon. Routes
+    through the same registry/synthesis path as
+    ``effective_subtypes`` so the two stay consistent.
+    """
+    # Real registry entries (no card writes these directly today,
+    # but the path is open for future cards).
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 4
+            and ce.kind == "set_basic_land_subtype"
+            and ce.target_id == obj.id
+        ):
+            return True
+    # Synthesized Magus / Blood Moon entries: per the
+    # ``effective_subtypes`` synthesis, these target nonbasic lands.
+    if obj.printing.is_land and not obj.printing.is_basic_land:
+        for src in state.battlefield:
+            if src.printing.nonbasic_lands_are_mountains:
+                return True
+    return False
 
 
 def effective_land_produces(
@@ -839,10 +924,14 @@ def effective_activated_abilities(
         RAGOST_FOOD_GRANTED_ABILITY,
     )
 
-    # Magus: nonbasic land abilities suppressed while in play.
+    # CR 305.6: a land whose basic land type has been SET by a
+    # layer-4 effect (Magus / Blood Moon set_basic_land_subtype)
+    # loses its abilities derived from rules text and old land
+    # types. Routes through the same registry/synthesis path as
+    # ``effective_subtypes`` so the two stay consistent.
     if (
-        obj.printing.is_land and not obj.printing.is_basic_land
-        and magus_of_the_moon_active(state)
+        obj.printing.is_land
+        and _has_basic_land_type_set_effect(state, obj)
     ):
         return ()
 
