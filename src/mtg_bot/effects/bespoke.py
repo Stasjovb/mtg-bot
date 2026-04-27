@@ -1243,77 +1243,93 @@ class MonoistCircuitFeederETBEffect(Effect):
     you control gets +X/+0 and target creature an opponent controls
     gets -0/-X, where X is the number of artifacts you control."
 
-    Uses two distinct target slots (own creature, opponent creature)
-    picked by the agent in sequence. X is computed at resolve time
-    from the caster's battlefield artifact count. If one slot has no
-    legal target, that half silently no-ops; the trigger still fires
-    if at least one creature exists across both sides.
+    Two REQUIRED targets (per CR 601.2c, both slots must be filled to
+    queue the trigger). Modeled with distinct target kinds so the
+    standard targeting pipeline can validate each slot independently:
+
+    - ``("my_creature", id)`` — slot 0, the +X/+0 friendly creature
+    - ``("creature",   id)`` — slot 1, the -0/-X opponent creature
+
+    X is computed at resolve time from the caster's artifact count.
+    If either slot has no legal candidate, ``legal_targets`` returns
+    ``[]`` so the firing path's no-legal-targets gate fizzles the
+    trigger before it goes on the stack — no half-effect leaks.
     """
 
     def requires_target(self) -> bool:
         return True
 
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
-        # Union of both slots — at least one legal target is required
-        # to queue the trigger (has_legal check).
-        return [
+        mine = [
+            ("my_creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+        ]
+        theirs = [
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            and o.controller_id != controller_id
         ]
+        # Both slots must be satisfiable; if either side is empty
+        # the trigger cannot be put on the stack.
+        if not mine or not theirs:
+            return []
+        return mine + theirs
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        p = state.player_by_id(controller_id)
         x = sum(
             1 for o in state.battlefield
             if o.controller_id == controller_id and o.printing.is_artifact
         )
-        # Pick own target and opponent target independently via the agent
-        # (ignoring any targets passed in — this effect manages its own
-        # two-slot selection).
-        own_options = [
-            o for o in state.battlefield
-            if o.printing.is_creature and o.controller_id == controller_id
-        ]
-        opp_options = [
-            o for o in state.battlefield
-            if o.printing.is_creature and o.controller_id != controller_id
-        ]
-        own_target = None
-        if own_options and p.agent is not None:
-            pick = p.agent.choose_target(
-                state, controller_id,
-                [("creature", o.id) for o in own_options],
+        # Locate one entry per slot. Order is agent-dependent, so
+        # search by kind rather than index.
+        my_target = next(
+            ((k, t) for (k, t) in targets if k == "my_creature"), None
+        )
+        opp_target = next(
+            ((k, t) for (k, t) in targets if k == "creature"), None
+        )
+        # Re-validate at resolution: a target that's left the
+        # battlefield or changed control is illegal and skipped per
+        # CR 608.2b. The OTHER half still resolves.
+        if my_target is not None:
+            obj = next(
+                (o for o in state.battlefield if o.id == my_target[1]),
+                None,
             )
-            if pick is not None:
-                own_target = next(
-                    (o for o in own_options if o.id == pick[1]), None
+            if (
+                obj is not None
+                and obj.controller_id == controller_id
+                and obj.printing.is_creature
+            ):
+                obj.temp_power_bonus += x
+                state.log.append(
+                    f"{obj.printing.name} gets +{x}/+0 UEOT"
                 )
-        opp_target = None
-        if opp_options and p.agent is not None:
-            pick = p.agent.choose_target(
-                state, controller_id,
-                [("creature", o.id) for o in opp_options],
-            )
-            if pick is not None:
-                opp_target = next(
-                    (o for o in opp_options if o.id == pick[1]), None
-                )
-        if own_target is not None:
-            own_target.temp_power_bonus += x
-            state.log.append(
-                f"{own_target.printing.name} gets +{x}/+0 UEOT"
-            )
         if opp_target is not None:
-            opp_target.temp_toughness_bonus -= x
-            state.log.append(
-                f"{opp_target.printing.name} gets -0/-{x} UEOT"
+            obj = next(
+                (o for o in state.battlefield if o.id == opp_target[1]),
+                None,
             )
+            if (
+                obj is not None
+                and obj.controller_id != controller_id
+                and obj.printing.is_creature
+            ):
+                obj.temp_toughness_bonus -= x
+                state.log.append(
+                    f"{obj.printing.name} gets -0/-{x} UEOT"
+                )
 
     def describe(self) -> str:
         return (
