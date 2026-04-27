@@ -132,11 +132,19 @@ def test_build_spacecraft_printing_skips_non_spacecraft_artifact():
     assert _build_spacecraft_printing(card) is None
 
 
-def test_build_spacecraft_printing_skips_legendary_spacecraft():
-    """Legendary Spacecraft (The Seriema, Dawnsire, Infinite Guideline
-    Station, The Eternity Elevator) all carry abilities outside this
-    slice's grammar. Skip defensively rather than risk building a
-    printing that silently drops the ``Legendary`` supertype."""
+def test_build_spacecraft_printing_claims_legendary_spacecraft():
+    """A Legendary Spacecraft whose body fits the supported grammar
+    (Station + tier-keyword line, optionally one self-ETB / self-
+    ATTACKS trigger) is claimed with ``legendary=True`` forwarded to
+    ``make_spacecraft``. The ``Legendary`` supertype lands on the
+    printing's ``supertypes`` tuple via ``_parse_type_line`` of the
+    type line ``make_spacecraft`` synthesizes.
+
+    No real EoE Legendary Spacecraft fits the supported grammar today
+    — every printing carries either a tier-gated trigger, missing
+    P/T, or an out-of-grammar effect — so this test pins the synthetic
+    shape that would be claimed if a future printing landed inside
+    the grammar."""
     card = {
         "name": "Hand-Crafted Legendary Spacecraft",
         "mana_cost": "{1}{W}{W}",
@@ -150,7 +158,22 @@ def test_build_spacecraft_printing_skips_legendary_spacecraft():
             "7+ | Flying"
         ),
     }
-    assert _build_spacecraft_printing(card) is None
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.name == "Hand-Crafted Legendary Spacecraft"
+    assert "Legendary" in printing.supertypes
+    assert "Spacecraft" in printing.subtypes
+    assert "Artifact" in printing.card_types
+    assert printing.station_threshold == 7
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert printing.triggered_abilities == ()
+    expected = make_spacecraft(
+        "Hand-Crafted Legendary Spacecraft", "{1}{W}{W}", 5, 5,
+        station_threshold=7,
+        stationed_keywords={"flying"},
+        legendary=True,
+    )
+    assert printing == expected
 
 
 def test_build_spacecraft_printing_skips_missing_power_toughness():

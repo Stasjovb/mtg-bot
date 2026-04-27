@@ -30,7 +30,7 @@ This builder grew in two slices:
   reminder line plus a single ``"<N>+ | <evergreen-keyword-list>"``
   tier line whose threshold matches the Station threshold. The
   keyword list is comma-joined evergreens from ``_KEYWORD_LINES``.
-- **Slice 2** (this batch) extends the grammar to claim a single
+- **Slice 2** extends the grammar to claim a single
   ``"When this Spacecraft enters, <effect>."`` ETB trigger alongside
   the Station + tier-keyword pair. The trigger line is parsed by the
   unified ``_parse_clause`` orchestrator — the type-qualified self-ETB
@@ -41,12 +41,29 @@ This builder grew in two slices:
   ``make_spacecraft(triggered_abilities=...)``. Spacecraft whose ETB
   effect is outside the effect grammar (e.g. ``return target creature
   or enchantment card from your graveyard``) still fall through.
+- **Slice 3** (this batch) extends the trigger arm two ways. First,
+  ``Whenever this Spacecraft attacks, <effect>.`` lines are accepted
+  alongside the self-ETB shape — the type-qualified self-attack
+  predicate-trigger phrase ``this Spacecraft attacks`` lives in the
+  same ``_PREDICATE_TRIGGER_PHRASES`` table the self-ETB phrase uses,
+  so the only change is the per-line dispatch widening to admit the
+  ``Event.ATTACKS, IsSelf()`` shape. Second, the defensive Legendary
+  skip is dropped — ``_parse_type_line``'s ``Legendary`` supertype is
+  forwarded to ``make_spacecraft(legendary=True)`` so a Legendary
+  Spacecraft whose body falls inside the supported grammar can be
+  claimed. No EoE Legendary Spacecraft has a body inside the grammar
+  today (Dawnsire's tier-gated trigger is multi-tier-shaped, The
+  Eternity Elevator has no P/T, Infinite Guideline Station's effects
+  aren't in the effect grammar, The Seriema carries a 7+ tier static
+  ability), so both extensions are forward-looking grammar coverage —
+  but the synthetic test cases exercise both arms and parity is
+  preserved end to end via the standard parity gate.
 
-Anything outside that shape - attack triggers, lower-tier
-static/trigger/activated abilities, multiple tier lines, multiple
-trigger lines, an ``X+`` body that isn't a bare keyword list, or a
-missing Station line - falls through and the Spacecraft is silently
-skipped, mirroring the creature/spell/land/equipment builders.
+Anything outside that shape - lower-tier static/trigger/activated
+abilities, multiple tier lines, multiple trigger lines on the same
+event, an ``X+`` body that isn't a bare keyword list, or a missing
+Station line - falls through and the Spacecraft is silently skipped,
+mirroring the creature/spell/land/equipment builders.
 
 Spacecraft live in their own module rather than extending the artifact/
 equipment builders because the printed grammar (Station reminder text
@@ -127,14 +144,20 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
       threshold matches the Station threshold, plus
     - at most one ``"When this Spacecraft enters, <effect>."`` line
       whose effect resolves through ``_parse_clause`` to a
-      ``TriggeredAbility(event=ENTERS, predicate=IsSelf())``.
+      ``TriggeredAbility(event=ENTERS, predicate=IsSelf())``, and
+    - at most one ``"Whenever this Spacecraft attacks, <effect>."``
+      line whose effect resolves through ``_parse_clause`` to a
+      ``TriggeredAbility(event=ATTACKS, predicate=IsSelf())``.
 
-    Legendary Spacecraft (The Seriema, The Eternity Elevator,
-    Dawnsire, Infinite Guideline Station) are skipped defensively -
-    every legendary Spacecraft in the EoE pool has additional ETB or
-    tier abilities outside this slice's grammar, and we'd rather skip
-    cleanly than silently strip the ``Legendary`` supertype off a
-    printing that happened to look simple.
+    Legendary Spacecraft (The Seriema, Dawnsire, Infinite Guideline
+    Station, The Eternity Elevator) are not skipped — the ``Legendary``
+    supertype, when present in the type line, is forwarded to
+    ``make_spacecraft(legendary=True)``. Today no EoE Legendary
+    Spacecraft body falls inside this grammar (each carries a tier-
+    gated trigger, missing P/T, or an out-of-grammar ETB effect), so
+    accepting the ``Legendary`` supertype is forward-looking grammar
+    coverage; per-card parity stays exact because the static registry
+    builds those cards with ``legendary=True`` directly.
     """
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
@@ -143,8 +166,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         return None
     if "Spacecraft" not in subtypes:
         return None
-    if "Legendary" in supertypes:
-        return None
+    legendary = "Legendary" in supertypes
     try:
         power = int(card["power"])
         toughness = int(card["toughness"])
@@ -188,17 +210,17 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             tier_threshold = int(m.group(1))
             stationed_keywords = kw
             continue
-        # Try the unified clause parser. Today this builder only
-        # accepts a single self-ETB trigger from it; any other clause
-        # shape (static, activated, attack trigger whose effect happens
-        # to parse, keywords) is out of scope for this slice and skips
-        # the whole card.
+        # Try the unified clause parser. This builder accepts at most
+        # one self-ETB trigger and at most one self-ATTACKS trigger
+        # per card; any other clause shape (static, activated, a
+        # different trigger event, more than one trigger of the same
+        # event) is out of scope and skips the whole card.
         clause = _parse_clause(line)
         if clause is None:
             # Anything the unified parser doesn't recognize - attack
-            # triggers whose effects aren't modeled, plain activated
-            # abilities not yet supported here, etc. - falls through
-            # and we skip the whole card.
+            # or ETB triggers whose effect phrases aren't modeled,
+            # plain activated abilities not yet supported here, etc. -
+            # falls through and we skip the whole card.
             return None
         if clause.trigger is None:
             # The clause parsed but as a non-trigger (static keyword,
@@ -206,21 +228,27 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             # doesn't model those on Spacecraft yet - skip rather than
             # silently drop the ability.
             return None
-        if (
-            clause.trigger.event != Event.ENTERS
-            or clause.trigger.predicate != IsSelf()
-        ):
-            # Defensive: the only trigger shape we claim today is the
-            # Spacecraft's own ETB. An attack trigger or some other
-            # self/non-self event whose effect happened to parse is
-            # outside this slice - skip rather than mis-wire it.
+        trig = clause.trigger
+        if trig.predicate != IsSelf():
+            # Defensive: only self-targeted predicates make sense for
+            # the Spacecraft body shapes we claim. A trigger whose
+            # predicate isn't ``IsSelf()`` is some other observer
+            # event whose effect happened to parse — skip rather
+            # than mis-wire it.
             return None
-        if triggers:
-            # A second trigger line (e.g. Specimen Freighter's ETB +
-            # attack mill) is out of scope for this slice - claiming
+        if trig.event not in (Event.ENTERS, Event.ATTACKS):
+            # Self-DIES / self-LEAVES / self-BECOMES_TAPPED etc. are
+            # not body-trigger shapes any current Spacecraft prints,
+            # and accepting them blindly would risk mis-wiring a
+            # future printing whose effect happened to parse. Restrict
+            # to the two events we explicitly claim.
+            return None
+        if any(t.event == trig.event for t in triggers):
+            # A second trigger line on the same event (two ETB lines,
+            # two attack-trigger lines) is out of scope — claiming
             # only the first would silently drop the second.
             return None
-        triggers.append(clause.trigger)
+        triggers.append(trig)
 
     # Both Station and the keyword-tier line are required: a Spacecraft
     # with no Station line is malformed, and one with no tier-keyword
@@ -244,4 +272,5 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         station_threshold=station_threshold,
         stationed_keywords=stationed_keywords,
         triggered_abilities=tuple(triggers),
+        legendary=legendary,
     )

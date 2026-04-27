@@ -158,13 +158,18 @@ def test_build_spacecraft_printing_matches_static_wurmwall_sweeper():
     assert parsed == expected
 
 
-def test_build_spacecraft_printing_skips_attack_trigger():
-    """A Spacecraft with an attack trigger (like Specimen Freighter's
-    defender-mill or Sledge-Class Seedship's free-creature-into-play)
-    is a non-ETB trigger shape this slice doesn't model. Even if the
-    attack-trigger effect happened to parse, the builder rejects any
-    trigger whose event isn't ``Event.ENTERS`` so we don't mis-wire it
-    as an ETB."""
+def test_build_spacecraft_printing_claims_attack_trigger():
+    """A Spacecraft with a single ``Whenever this Spacecraft attacks,
+    <effect>.`` line whose effect resolves through ``_parse_clause``
+    (here ``surveil 2``) is now claimed alongside the Station + tier-
+    keyword pair. The trigger builds as ``TriggeredAbility(event=
+    ATTACKS, predicate=IsSelf(), effect=Surveil(amount=2))``.
+
+    No real EoE Spacecraft uses surveil on attack — Specimen
+    Freighter (defender-mill), Sledge-Class Seedship (free creature
+    into play), and the others use effects that aren't yet in the
+    effect grammar — so this synthetic card pins the new attack-
+    trigger arm directly."""
     card = {
         "name": "Hand-Crafted Attack-Trigger Spacecraft",
         "mana_cost": "{2}",
@@ -172,6 +177,38 @@ def test_build_spacecraft_printing_skips_attack_trigger():
         "power": "2",
         "toughness": "2",
         "oracle_text": (
+            "Whenever this Spacecraft attacks, surveil 2.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 4
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert len(printing.triggered_abilities) == 1
+    trig = printing.triggered_abilities[0]
+    assert trig.event == Event.ATTACKS
+    assert trig.predicate == IsSelf()
+    assert trig.effect == Surveil(amount=2)
+
+
+def test_build_spacecraft_printing_skips_two_attack_triggers():
+    """Two ``Whenever this Spacecraft attacks, ...`` lines on the
+    same card would silently drop one if we kept only the first.
+    Defensive: at most one attack trigger per card; a second one
+    skips the whole card. No EoE Spacecraft prints two attack
+    triggers today, so this is forward-looking."""
+    card = {
+        "name": "Hand-Crafted Double-Attack Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Whenever this Spacecraft attacks, surveil 2.\n"
             "Whenever this Spacecraft attacks, surveil 2.\n"
             "Station (Tap another creature you control: Put charge "
             "counters equal to its power on this Spacecraft. Station "
@@ -206,12 +243,21 @@ def test_build_spacecraft_printing_skips_two_etb_triggers():
     assert _build_spacecraft_printing(card) is None
 
 
-def test_build_spacecraft_printing_skips_etb_plus_attack_trigger():
-    """A Spacecraft that pairs an ETB with an attack trigger (Specimen
-    Freighter-shaped: ETB returns creatures, attack trigger mills the
-    defender) skips because the attack trigger line either fails
-    ``_parse_clause`` outright or returns a non-ENTERS trigger - either
-    way the per-line dispatch bails on the attack line."""
+def test_build_spacecraft_printing_claims_etb_plus_attack_trigger():
+    """A Spacecraft that pairs a self-ETB with a self-ATTACKS trigger
+    (Specimen Freighter-shaped: ETB returns creatures, attack trigger
+    mills the defender) is now claimed when both effects resolve
+    through the unified parser. Both triggers land on
+    ``triggered_abilities`` in the order they appear on the card —
+    the engine doesn't depend on order between distinct events, but
+    pinning iteration order keeps the parsed printing byte-equal to
+    a static-registry analogue.
+
+    Specimen Freighter itself stays unclaimed today: its attack-
+    trigger effect (``defending player mills four cards``) isn't in
+    the effect grammar yet. This synthetic card uses ``surveil 2``
+    on both lines so both clauses resolve and the dual-trigger arm
+    is exercised end to end."""
     card = {
         "name": "Hand-Crafted ETB-Plus-Attack Spacecraft",
         "mana_cost": "{5}{U}",
@@ -227,7 +273,32 @@ def test_build_spacecraft_printing_skips_etb_plus_attack_trigger():
             "Whenever this Spacecraft attacks, surveil 2."
         ),
     }
-    assert _build_spacecraft_printing(card) is None
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 9
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert len(printing.triggered_abilities) == 2
+    events = {t.event for t in printing.triggered_abilities}
+    assert events == {Event.ENTERS, Event.ATTACKS}
+    for trig in printing.triggered_abilities:
+        assert trig.predicate == IsSelf()
+        assert trig.effect == Surveil(amount=2)
+    expected = make_spacecraft(
+        "Hand-Crafted ETB-Plus-Attack Spacecraft", "{5}{U}", 4, 3,
+        station_threshold=9,
+        stationed_keywords={"flying"},
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+            TriggeredAbility(
+                event=Event.ATTACKS, predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+        ),
+    )
+    assert printing == expected
 
 
 def test_build_spacecraft_printing_skips_clause_returning_static():
@@ -280,3 +351,148 @@ def test_parity_wedgelight_rammer_and_wurmwall_sweeper():
     static_printings = StaticCardSource().get_printings()
     for name in ("Wedgelight Rammer", "Wurmwall Sweeper"):
         assert parser_printings[name] == static_printings[name]
+
+
+def test_build_spacecraft_printing_skips_attack_trigger_unparseable_effect():
+    """Specimen Freighter (defending player mills four cards) and
+    Sledge-Class Seedship (you may put a creature card from your hand
+    onto the battlefield) both carry attack triggers whose effect
+    phrases are outside the unified effect grammar. Even with the
+    new attack-trigger arm wired up, those cards still skip — the
+    attack-trigger line goes to ``_parse_clause`` which returns
+    ``None`` because the effect phrase isn't claimed.
+
+    This is the same fall-through path the slice-2 ETB-with-
+    unparseable-effect test pins for ETB lines, just routed through
+    the attacks-event arm. Locking it in keeps a future effect-grammar
+    extension that adds either of those phrases from quietly turning
+    Specimen Freighter / Sledge-Class Seedship into half-claimed
+    printings without an explicit static-registry update."""
+    source = OracleParserCardSource()
+    claimed = set(source.claimed_names)
+    # Real EoE Spacecraft with attack triggers whose effects aren't
+    # in the effect grammar today — must NOT be claimed.
+    assert "Specimen Freighter" not in claimed
+    assert "Sledge-Class Seedship" not in claimed
+    assert "Entropic Battlecruiser" not in claimed
+    assert "Infinite Guideline Station" not in claimed
+    assert "Dawnsire, Sunstar Dreadnought" not in claimed
+
+
+def test_build_spacecraft_printing_skips_attack_trigger_unparseable_card():
+    """Synthetic counterpart of the source-level skip above: a hand-
+    crafted Spacecraft with a parseable Station + tier-keyword pair
+    but whose attack-trigger effect phrase isn't in the effect
+    grammar (``defending player mills four cards``) returns ``None``
+    from the builder. The attack-trigger line falls through
+    ``_parse_clause`` (no matching trigger phrase + effect combo)
+    and the per-line dispatch bails on the first unrecognized line."""
+    card = {
+        "name": "Hand-Crafted Unparseable-Attack Spacecraft",
+        "mana_cost": "{5}{U}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "4",
+        "toughness": "7",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 9+.)\n"
+            "9+ | Flying\n"
+            "Whenever this Spacecraft attacks, defending player mills "
+            "four cards."
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_other_event_self_trigger():
+    """Defensive: a self-targeted trigger on an event other than
+    ENTERS or ATTACKS (here a synthetic ``Whenever this creature
+    becomes tapped`` line, which the trigger grammar accepts as
+    ``Event.BECOMES_TAPPED, IsSelf()``) is not a Spacecraft body
+    shape we claim. The builder restricts to the two events we
+    explicitly model so a future printing whose effect happens to
+    parse can't sneak through with a mis-wired trigger event."""
+    card = {
+        "name": "Hand-Crafted Self-Tapped Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Whenever this creature becomes tapped, surveil 2.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_non_self_trigger():
+    """Defensive: a trigger whose predicate isn't ``IsSelf()`` (here
+    a synthetic ``Whenever a land you control enters, surveil 2.``
+    line, which parses as ``Event.ENTERS, IsLand() & Controlled(YOU)``)
+    is some other observer event — not a Spacecraft body trigger.
+    The builder rejects it so a future printing that happens to
+    parse this shape can't be mis-claimed as a Spacecraft self-ETB."""
+    card = {
+        "name": "Hand-Crafted Landfall-Ish Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Whenever a land you control enters, surveil 2.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_legendary_with_etb_trigger():
+    """A Legendary Spacecraft that pairs the supported Station +
+    tier-keyword shape with a single self-ETB trigger whose effect is
+    in the grammar is claimed end to end with ``legendary=True``.
+    This pins the cross-arm interaction (the Legendary supertype
+    forwarding doesn't disrupt trigger handling)."""
+    card = {
+        "name": "Hand-Crafted Legendary ETB Spacecraft",
+        "mana_cost": "{1}{U}{U}",
+        "type_line": "Legendary Artifact — Spacecraft",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "When this Spacecraft enters, surveil 2.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 5+.)\n"
+            "5+ | Flying"
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert "Legendary" in printing.supertypes
+    assert printing.station_threshold == 5
+    assert len(printing.triggered_abilities) == 1
+    trig = printing.triggered_abilities[0]
+    assert trig.event == Event.ENTERS
+    assert trig.predicate == IsSelf()
+    assert trig.effect == Surveil(amount=2)
+    expected = make_spacecraft(
+        "Hand-Crafted Legendary ETB Spacecraft", "{1}{U}{U}", 3, 3,
+        station_threshold=5,
+        stationed_keywords={"flying"},
+        legendary=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+        ),
+    )
+    assert printing == expected
