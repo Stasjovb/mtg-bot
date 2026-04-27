@@ -988,7 +988,30 @@ def run_cleanup_step(state: GameState) -> None:
 
 
 def state_based_actions(state: GameState) -> bool:
-    """Apply state-based actions. Returns True if any changes were made."""
+    """Apply state-based actions until quiescent (CR 704.3 — SBAs are
+    checked continuously and applied repeatedly until none apply).
+    Returns True if any pass made changes.
+
+    Internally calls ``_state_based_actions_pass`` in a loop. The
+    iteration cap (``_SBA_MAX_PASSES``) defends against pathological
+    cycles — none should occur with the rules we model, but the
+    cap converts a runaway into an early bailout instead of a hang.
+    """
+    any_changed = False
+    for _ in range(_SBA_MAX_PASSES):
+        if not _state_based_actions_pass(state):
+            break
+        any_changed = True
+    return any_changed
+
+
+_SBA_MAX_PASSES = 50
+
+
+def _state_based_actions_pass(state: GameState) -> bool:
+    """Single SBA application pass. Returns True if any changes were
+    made. Public callers should use ``state_based_actions``, which
+    loops this until quiescent."""
     changed = False
 
     for p in state.players:
@@ -1014,6 +1037,37 @@ def state_based_actions(state: GameState) -> bool:
         )
         move_off_battlefield(state, pw, destination="graveyard")
         changed = True
+
+    # Legend rule (CR 704.5j): if a player controls two or more
+    # legendary permanents with the same name, that player chooses
+    # one of them, and the rest are put into their owners'
+    # graveyards. Group by (controller_id, printed_name) over
+    # legendary permanents only.
+    legend_groups: dict[tuple[int, str], list] = {}
+    for obj in state.battlefield:
+        if not obj.printing.is_legendary:
+            continue
+        key = (obj.controller_id, obj.printing.name)
+        legend_groups.setdefault(key, []).append(obj)
+    for (ctrl_id, _name), group in legend_groups.items():
+        if len(group) < 2:
+            continue
+        controller = state.player_by_id(ctrl_id)
+        if controller.agent is not None:
+            keep_id = controller.agent.choose_legend_keep(
+                state, ctrl_id, [o.id for o in group],
+            )
+        else:
+            keep_id = group[0].id
+        for obj in group:
+            if obj.id == keep_id:
+                continue
+            state.log.append(
+                f"{obj.printing.name} put into graveyard "
+                f"(legend rule; P{ctrl_id} kept #{keep_id})"
+            )
+            move_off_battlefield(state, obj, destination="graveyard")
+            changed = True
 
     destroyed = []
     for obj in state.battlefield:
@@ -1058,6 +1112,68 @@ def state_based_actions(state: GameState) -> bool:
             state.log.append(f"{obj.printing.name} destroyed (lethal damage)")
         move_off_battlefield(state, obj, destination="graveyard")
         changed = True
+
+    # Aura attachment legality (CR 704.5n): an Aura attached to an
+    # illegal target (or unattached) goes to its owner's graveyard.
+    # The target is illegal if it's no longer on the battlefield, or
+    # no longer satisfies the Aura's printed enchant restriction
+    # (e.g., enchant creature with the target turned non-creature
+    # by a Lignified manland's animation expiring).
+    auras_to_bury: list = []
+    for obj in state.battlefield:
+        if not obj.printing.is_aura:
+            continue
+        if obj.attached_to is None:
+            auras_to_bury.append(obj)
+            continue
+        target = next(
+            (o for o in state.battlefield if o.id == obj.attached_to),
+            None,
+        )
+        if target is None:
+            auras_to_bury.append(obj)
+            continue
+        kind = obj.printing.aura_enchant_type
+        if kind == "creature":
+            if not is_creature_now(target):
+                auras_to_bury.append(obj)
+        elif kind == "artifact":
+            if not target.printing.is_artifact:
+                auras_to_bury.append(obj)
+        elif kind == "land":
+            if not target.printing.is_land:
+                auras_to_bury.append(obj)
+        # Other kinds (e.g., player-enchant) aren't in scope.
+    for aura in auras_to_bury:
+        state.log.append(
+            f"{aura.printing.name} put into graveyard "
+            f"(no legal enchant target)"
+        )
+        move_off_battlefield(state, aura, destination="graveyard")
+        changed = True
+
+    # Equipment attachment legality (CR 704.5p): an Equipment
+    # attached to an illegal permanent (non-creature, gone) becomes
+    # unattached but stays on the battlefield. Default scope:
+    # Equipment must be attached to a creature.
+    for obj in state.battlefield:
+        if obj.printing.is_aura:
+            continue
+        if "Equipment" not in obj.printing.subtypes:
+            continue
+        if obj.attached_to is None:
+            continue
+        target = next(
+            (o for o in state.battlefield if o.id == obj.attached_to),
+            None,
+        )
+        if target is None or not is_creature_now(target):
+            obj.attached_to = None
+            state.log.append(
+                f"{obj.printing.name} unattaches "
+                f"(no longer attached to a creature)"
+            )
+            changed = True
 
     alive = [p for p in state.players if not p.has_lost]
     if len(alive) == 0 and not state.is_draw:
