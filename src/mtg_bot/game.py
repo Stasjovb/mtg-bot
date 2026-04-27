@@ -50,6 +50,14 @@ class GameObject:
     # +1/+1 counters raise effective power and toughness by equal amounts.
     # Persist across turns (never wear off on their own).
     plus_one_counters: int = 0
+    # -1/-1 counters lower effective power and toughness by equal
+    # amounts. Persist across turns. CR 704.5n: at the next SBA
+    # check, +1/+1 and -1/-1 counters cancel pairwise — N pairs
+    # of each remove min(+1/+1, -1/-1) from each side. The
+    # cancellation runs in ``state_based_actions``; the readers
+    # in ``_compute_effective_pt`` use the post-cancellation
+    # values via this field.
+    minus_one_counters: int = 0
     # "Can't be blocked this turn" marker (cleared at cleanup).
     temp_unblockable: bool = False
     # "Until end of turn, this land becomes a creature." Manlands
@@ -157,6 +165,14 @@ class GameObject:
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
     loyalty_counters: int = 0
+    # Saga lore counters. Sagas would get a lore counter at the
+    # start of each precombat main phase as a turn-based action;
+    # the state-based action (CR 704.5r in audit numbering)
+    # sacrifices a saga whose ``lore_counters >=
+    # printing.chapter_count``. The chapter-triggered abilities
+    # that fire when the lore counter advances aren't modeled in
+    # scope.
+    lore_counters: int = 0
     # Snapshot of this object's original CardPrinting, taken the first
     # time a "becomes a copy of target X" effect mutates ``printing``.
     # Restored on cleanup? No — "becomes a copy" is a continuous effect
@@ -1260,6 +1276,24 @@ def add_plus_one_counters(
     return effective
 
 
+def add_minus_one_counters(
+    state: GameState, obj: GameObject, amount: int
+) -> int:
+    """Add ``amount`` -1/-1 counters to ``obj``. Counters reduce
+    effective P/T by 1 per counter (layer 7d). +1/+1 and -1/-1
+    counters cancel pairwise via the CR 704.5n state-based
+    action — the cancellation runs in ``state_based_actions``,
+    not here.
+
+    No doubling applied (no in-pool doublers target -1/-1
+    counters). Safe when amount <= 0.
+    """
+    if amount <= 0:
+        return 0
+    obj.minus_one_counters += amount
+    return amount
+
+
 def add_charge_counters(
     state: GameState, obj: GameObject, amount: int
 ) -> int:
@@ -1374,9 +1408,12 @@ def _compute_effective_pt(
         base_t + toughness_bonus
         + obj.temp_toughness_bonus + obj.extended_temp_toughness_bonus
     )
-    # 7d: counters.
-    p += obj.plus_one_counters
-    t += obj.plus_one_counters
+    # 7d: counters. +1/+1 and -1/-1 are normally cancelled out by
+    # the CR 704.5n SBA before this read, but if they coexist
+    # transiently (between counter additions and the next SBA pass)
+    # we still apply both signs.
+    p += obj.plus_one_counters - obj.minus_one_counters
+    t += obj.plus_one_counters - obj.minus_one_counters
     # 7e: switches. Each entry contributes a single swap.
     layer7e = sorted(
         (

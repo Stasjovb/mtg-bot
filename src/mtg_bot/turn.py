@@ -1011,7 +1011,41 @@ _SBA_MAX_PASSES = 50
 def _state_based_actions_pass(state: GameState) -> bool:
     """Single SBA application pass. Returns True if any changes were
     made. Public callers should use ``state_based_actions``, which
-    loops this until quiescent."""
+    loops this until quiescent.
+
+    CR 704.5 SBAs implemented (audit numbering):
+    - 704.5a: player at 0 or less life loses.
+    - 704.5b: drawing from empty library (handled in
+      ``draw_card``, not here).
+    - 704.5c: 10+ poison counters loses.
+    - 704.5d: tokens cease to exist (in
+      ``move_off_battlefield``).
+    - 704.5f: creature with toughness ≤ 0 → graveyard.
+    - 704.5g: creature with damage ≥ toughness → destroyed.
+    - 704.5h: marked-lethal → destroyed.
+    - 704.5i: planeswalker with 0 loyalty → graveyard.
+    - 704.5j: legend rule (per-controller, per-name).
+    - 704.5n (audit) / 704.5r (current CR): +1/+1 vs -1/-1
+      counter cancellation.
+    - 704.5n (audit) / 704.5q (current CR): aura on illegal
+      target → graveyard.
+    - 704.5p (audit): equipment on illegal target → unattach.
+    - 704.5r (audit): saga at chapter count → graveyard.
+    - 701.15: regeneration shield (handled in the destroyed
+      pass — not strictly an SBA).
+
+    KNOWN GAPS:
+    - 704.5k (audit) / 704.5o (current CR): world rule.
+      Not implemented. No World cards are in the EoE pool.
+    - 704.5s (audit) / 704.5u (current CR): battle with 0
+      defense → graveyard. Not implemented. No Battles in EoE.
+    - 21+ commander damage from one source: not implemented.
+      Engine doesn't track commander damage by source.
+    - Token in non-battlefield zone other than via leave-play:
+      not actively scrubbed. Cards moved to a hand/library
+      from a non-battlefield zone are not currently a token-
+      bearing path.
+    """
     changed = False
 
     for p in state.players:
@@ -1113,7 +1147,43 @@ def _state_based_actions_pass(state: GameState) -> bool:
         move_off_battlefield(state, obj, destination="graveyard")
         changed = True
 
-    # Aura attachment legality (CR 704.5n): an Aura attached to an
+    # Saga age (CR 704.5r in audit numbering): if a saga has lore
+    # counters greater than or equal to its final chapter number,
+    # its controller sacrifices it (goes to owner's graveyard).
+    sagas_to_bury: list = []
+    for obj in state.battlefield:
+        if obj.printing.is_saga and obj.lore_counters >= obj.printing.chapter_count:
+            sagas_to_bury.append(obj)
+    for saga in sagas_to_bury:
+        state.log.append(
+            f"{saga.printing.name} sacrificed "
+            f"(lore counter ≥ chapter count {saga.printing.chapter_count})"
+        )
+        move_off_battlefield(state, saga, destination="graveyard")
+        changed = True
+
+    # +1/+1 vs -1/-1 counter cancellation (CR 704.5r in current CR;
+    # labelled 704.5n in this codebase's audit). When a permanent
+    # has both kinds, N pairs are removed where N is the smaller
+    # count. Cancellation can drive toughness back above 0 / below
+    # 0 → run BEFORE the destroyed-creature pass above? No, after,
+    # because cancellation is a separate SBA pass. The
+    # state_based_actions LOOP handles cascading: after this
+    # cancellation, the next pass re-evaluates 704.5f/g.
+    for obj in state.battlefield:
+        if obj.plus_one_counters > 0 and obj.minus_one_counters > 0:
+            n = min(obj.plus_one_counters, obj.minus_one_counters)
+            obj.plus_one_counters -= n
+            obj.minus_one_counters -= n
+            state.log.append(
+                f"{obj.printing.name}: {n} +1/+1 and {n} -1/-1 "
+                f"counters cancel"
+            )
+            changed = True
+
+    # Aura attachment legality (CR 704.5q in current CR; this
+    # codebase historically labelled it 704.5n): an Aura attached to
+    # an
     # illegal target (or unattached) goes to its owner's graveyard.
     # The target is illegal if it's no longer on the battlefield, or
     # no longer satisfies the Aura's printed enchant restriction
