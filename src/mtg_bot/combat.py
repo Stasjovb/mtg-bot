@@ -158,52 +158,45 @@ def _fire_exalted_pumps(state: GameState) -> None:
 def _fire_attacks_triggers(state: GameState, attacker) -> None:
     from mtg_bot.actions import dispatch_event, push_triggered_ability
     from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import effective_triggered_abilities
 
-    # Predicate-style ``Event.ATTACKS`` dispatch (phase 5). Runs in
-    # parallel with the legacy ``trigger="attacks"`` loop below until
-    # every static card is migrated, at which point the legacy loop
-    # collapses into this dispatcher call.
+    # Predicate-style ``Event.ATTACKS`` dispatch (phase 5). Phase-5
+    # commit 2 migrated every static ``trigger="attacks"`` site to the
+    # predicate path, so the dispatcher subsumes all printed-ability
+    # firings. The legacy walk over ``attacker.printing.triggered_abilities``
+    # is gone.
     dispatch_event(
         state, Event.ATTACKS, label="attacks", attacker=attacker,
     )
 
-    # Walk printed triggers first (their indices stay stable), then any
-    # UEOT-granted triggers (Raging Ravine animation). Granted triggers
-    # use a 1000-offset ability_index so the once_per_turn ledger key
-    # ``(source_id, ability_index)`` cannot collide with a printed-
+    # UEOT-granted attacks-triggers (Raging Ravine's "+1/+1 counter
+    # when this attacks", granted while animated). These live on
+    # ``temp_triggered_abilities`` / layer-6 registry entries via
+    # ``effective_triggered_abilities`` rather than on
+    # ``printing.triggered_abilities``, so the dispatcher's
+    # battlefield-walk doesn't see them. Use a 1000-offset
+    # ability_index so the once_per_turn ledger key
+    # ``(source_id, ability_index)`` can't collide with a printed-
     # ability index. None of the wired-in granted triggers are
-    # once-per-turn, so the offset is purely defensive.
-    # Printed abilities first (stable indices), then UEOT-granted
-    # abilities — both legacy ``temp_triggered_abilities`` field
-    # contents and layer-6 registry entries via
-    # ``effective_triggered_abilities``.
-    enumerated: list[tuple[int, "object"]] = list(
-        enumerate(attacker.printing.triggered_abilities)
-    )
-    from mtg_bot.game import effective_triggered_abilities
-
+    # once-per-turn, so the offset is purely defensive. Both legacy
+    # ``trigger="attacks"`` and predicate-style ``event=Event.ATTACKS``
+    # granted shapes are recognized.
     granted_only = [
         ab for ab in effective_triggered_abilities(state, attacker)
         if ab not in attacker.printing.triggered_abilities
     ]
-    enumerated.extend((1000 + i, ab) for i, ab in enumerate(granted_only))
-    for i, ability in enumerated:
+    for i, ability in enumerate(granted_only):
         is_legacy_attacks = ability.trigger == "attacks"
         is_predicate_attacks = ability.matches_event(
             Event.ATTACKS, {"attacker": attacker}, attacker, state,
         )
-        # Skip predicate-style printed abilities — those already fired
-        # via dispatch_event above. Only walk granted predicate-style
-        # abilities (offset >= 1000) here so they're not double-pushed.
-        if is_predicate_attacks and i < 1000:
-            continue
         if not (is_legacy_attacks or is_predicate_attacks):
             continue
         push_triggered_ability(
             state,
             source=attacker,
             ability=ability,
-            ability_index=i,
+            ability_index=1000 + i,
             controller_id=attacker.controller_id,
             label="attacks",
         )
