@@ -19,7 +19,7 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DiplomaticRelationsEffect
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step, run_cleanup_step
 
@@ -72,7 +72,7 @@ def test_diplomatic_relations_pumps_and_deals_post_pump_damage():
     # Bear is now 3/2 with vigilance UEOT.
     assert bear.temp_power_bonus == 1
     assert bear.temp_toughness_bonus == 0
-    assert "vigilance" in bear.temp_keywords
+    assert "vigilance" in effective_keywords(state, bear)
     # Wurm took 3 damage (post-pump bear power = 3).
     assert wurm.damage == 3
 
@@ -133,10 +133,10 @@ def test_diplomatic_relations_vigilance_clears_at_cleanup():
     p.hand.append(spell)
     apply_action(state, 0, CastSpell(spell.id))
     resolve_top_of_stack(state)
-    assert "vigilance" in bear.temp_keywords
+    assert "vigilance" in effective_keywords(state, bear)
     assert bear.temp_power_bonus == 1
     run_cleanup_step(state)
-    assert bear.temp_keywords == frozenset()
+    assert "vigilance" not in effective_keywords(state, bear)
     assert bear.temp_power_bonus == 0
 
 
@@ -185,7 +185,7 @@ def test_diplomatic_relations_resolve_skips_damage_if_opponent_creature_gone():
     # Pump still applies (per MTG: each target is independently
     # validated; an illegal damage target just means no damage).
     assert bear.temp_power_bonus == 1
-    assert "vigilance" in bear.temp_keywords
+    assert "vigilance" in effective_keywords(state, bear)
 
 
 def test_diplomatic_relations_skips_damage_if_opp_creature_changed_control():
