@@ -1060,7 +1060,10 @@ class ContinuousEffect:
     #     animation, granted-triggers UEOT, etc.).
     #   - "controller_untap": drop at the source-controller's next
     #     untap step (extended-temporal pumps — Mouth of the Storm).
+    #     ``expires_at_player_id`` carries the controller id whose
+    #     untap step terminates the entry.
     expires_at: Optional[str] = None
+    expires_at_player_id: Optional[int] = None
 
 
 @dataclass
@@ -1212,12 +1215,15 @@ class GameState:
         params: tuple = (),
         description: str = "",
         expires_at: Optional[str] = None,
+        expires_at_player_id: Optional[int] = None,
     ) -> ContinuousEffect:
         """Allocate a fresh timestamp and append a continuous-effect
         record to the registry. Returns the appended record so callers
         can hold onto it (e.g., to reference its source_id later).
         ``expires_at`` defaults to None (lives until the source
-        leaves play); pass ``"cleanup"`` for UEOT effects.
+        leaves play); pass ``"cleanup"`` for UEOT effects, or
+        ``"controller_untap"`` (with ``expires_at_player_id`` set to
+        the relevant controller id) for extended-temporal pumps.
         """
         ts = self.next_timestamp
         self.next_timestamp += 1
@@ -1232,6 +1238,7 @@ class GameState:
             params=params,
             description=description,
             expires_at=expires_at,
+            expires_at_player_id=expires_at_player_id,
         )
         self.continuous_effects.append(effect)
         return effect
@@ -1318,6 +1325,47 @@ class GameState:
             description=description,
         )
 
+    def grant_pt_pump_until_player_next_turn(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        power: int,
+        toughness: int,
+        until_player_id: int,
+        description: str = "",
+    ) -> ContinuousEffect:
+        """Helper for the layer-7 sublayer-2 ``"pump_pt"`` extended-
+        temporal grant — "until your next turn" pumps. Mouth of the
+        Storm's "creatures your opponents control get -3/-0 until
+        your next turn" is the canonical case. Writes a registry
+        entry with ``expires_at="controller_untap"`` and
+        ``expires_at_player_id=until_player_id``, AND mirrors the
+        deltas onto the legacy ``extended_temp_*`` cache fields. The
+        entry expires at ``until_player_id``'s next untap step —
+        ``run_untap_step`` calls ``expire_continuous_effects(
+        "controller_untap", player_id=ap.id)``."""
+        if power == 0 and toughness == 0:
+            return None  # type: ignore[return-value]
+        target = next(
+            (o for o in self.battlefield if o.id == target_id), None,
+        )
+        if target is not None:
+            target.extended_temp_power_bonus += power
+            target.extended_temp_toughness_bonus += toughness
+            target.extended_temp_expires_at_player_id = until_player_id
+        return self.add_continuous_effect(
+            source_id=source_id,
+            layer=7,
+            sublayer=2,
+            kind="pump_pt",
+            target_id=target_id,
+            params=(power, toughness),
+            expires_at="controller_untap",
+            expires_at_player_id=until_player_id,
+            description=description,
+        )
+
     def grant_keywords_ueot(
         self,
         *,
@@ -1355,20 +1403,36 @@ class GameState:
             )
 
     def expire_continuous_effects(
-        self, expires_at: str
+        self, expires_at: str, *, player_id: Optional[int] = None,
     ) -> list[ContinuousEffect]:
         """Drop every registry entry whose ``expires_at`` matches
         the given marker (``"cleanup"`` for UEOT, ``"controller_untap"``
         for extended-temporal). Returns the dropped entries — useful
         for tests and for downstream cleanup hooks that need to react
-        to specific kinds going away."""
+        to specific kinds going away.
+
+        For ``"controller_untap"`` the caller passes ``player_id`` —
+        only entries whose ``expires_at_player_id`` matches are
+        dropped (a Mouth-of-the-Storm-style "until your next turn"
+        effect ends at the controller's untap step, not just any
+        untap step). For ``"cleanup"`` the player_id is ignored
+        because cleanup is a once-per-turn event tied to whoever
+        the active player is at end-of-turn.
+        """
         kept: list[ContinuousEffect] = []
         dropped: list[ContinuousEffect] = []
         for ce in self.continuous_effects:
-            if ce.expires_at == expires_at:
-                dropped.append(ce)
-            else:
+            if ce.expires_at != expires_at:
                 kept.append(ce)
+                continue
+            if (
+                expires_at == "controller_untap"
+                and player_id is not None
+                and ce.expires_at_player_id != player_id
+            ):
+                kept.append(ce)
+                continue
+            dropped.append(ce)
         self.continuous_effects = kept
         return dropped
 

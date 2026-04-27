@@ -45,12 +45,15 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
-    # "Until your next turn" pump expiry: clear extended-temporal pump
-    # bonuses tagged with this active player as the source-controller.
-    # Matches Mouth of the Storm's "creatures your opponents control
-    # get -3/-0 until your next turn." — the bonus survives the cleanup
-    # step of the casting turn AND the opponent's full turn, then clears
-    # right at the start of the source-controller's next turn.
+    # "Until your next turn" pump expiry: drop extended-temporal pump
+    # registry entries tagged with this active player as the
+    # source-controller, then clear the matching legacy
+    # ``extended_temp_*`` cache fields. Matches Mouth of the Storm's
+    # "creatures your opponents control get -3/-0 until your next
+    # turn." — the bonus survives the cleanup step of the casting
+    # turn AND the opponent's full turn, then clears right at the
+    # start of the source-controller's next turn.
+    state.expire_continuous_effects("controller_untap", player_id=ap.id)
     for obj in state.battlefield:
         if obj.extended_temp_expires_at_player_id == ap.id:
             obj.extended_temp_power_bonus = 0

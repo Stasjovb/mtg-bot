@@ -3271,13 +3271,30 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
             if not obj.printing.is_creature:
                 continue
             if self.until_caster_next_turn:
-                obj.extended_temp_power_bonus += self.power_bonus
-                obj.extended_temp_toughness_bonus += self.toughness_bonus
+                src = state.resolving_source
+                if self.power_bonus or self.toughness_bonus:
+                    state.grant_pt_pump_until_player_next_turn(
+                        source_id=src.id if src is not None else obj.id,
+                        target_id=obj.id,
+                        power=self.power_bonus,
+                        toughness=self.toughness_bonus,
+                        until_player_id=controller_id,
+                        description=(
+                            f"opp creature {obj.printing.name} pumped "
+                            f"{self.power_bonus:+d}/{self.toughness_bonus:+d} "
+                            f"until P{controller_id}'s next turn"
+                        ),
+                    )
                 if self.granted_keywords:
+                    # Extended-temporal keywords still flow through
+                    # the bespoke field path; the layered registry
+                    # currently models only P/T pumps for this
+                    # lifetime. Future work can mirror grant_keywords
+                    # under expires_at="controller_untap".
                     obj.extended_temp_keywords = (
                         obj.extended_temp_keywords | self.granted_keywords
                     )
-                obj.extended_temp_expires_at_player_id = controller_id
+                    obj.extended_temp_expires_at_player_id = controller_id
             else:
                 if self.power_bonus or self.toughness_bonus:
                     src = state.resolving_source
