@@ -1338,6 +1338,8 @@ class MonoistCircuitFeederETBEffect(Effect):
         # Re-validate at resolution: a target that's left the
         # battlefield or changed control is illegal and skipped per
         # CR 608.2b. The OTHER half still resolves.
+        src = state.resolving_source
+        source_id = src.id if src is not None else -1
         if my_target is not None:
             obj = next(
                 (o for o in state.battlefield if o.id == my_target[1]),
@@ -1348,7 +1350,13 @@ class MonoistCircuitFeederETBEffect(Effect):
                 and obj.controller_id == controller_id
                 and obj.printing.is_creature
             ):
-                obj.temp_power_bonus += x
+                state.grant_pt_pump_ueot(
+                    source_id=source_id,
+                    target_id=obj.id,
+                    power=x,
+                    toughness=0,
+                    description=f"{obj.printing.name} gets +{x}/+0 UEOT",
+                )
                 state.log.append(
                     f"{obj.printing.name} gets +{x}/+0 UEOT"
                 )
@@ -1362,7 +1370,13 @@ class MonoistCircuitFeederETBEffect(Effect):
                 and obj.controller_id != controller_id
                 and obj.printing.is_creature
             ):
-                obj.temp_toughness_bonus -= x
+                state.grant_pt_pump_ueot(
+                    source_id=source_id,
+                    target_id=obj.id,
+                    power=0,
+                    toughness=-x,
+                    description=f"{obj.printing.name} gets -0/-{x} UEOT",
+                )
                 state.log.append(
                     f"{obj.printing.name} gets -0/-{x} UEOT"
                 )
@@ -1941,15 +1955,29 @@ class MutinousMassacreEffect(Effect):
             )
             destroy(state, v)
         # Gain control of all surviving creatures UEOT, untap, haste.
+        src = state.resolving_source
+        spell_id = src.id if src is not None else -1
         for o in state.battlefield:
             if not o.printing.is_creature:
                 continue
             if o.controller_id != controller_id:
-                if o.temp_original_controller_id is None:
-                    o.temp_original_controller_id = o.controller_id
-                o.controller_id = controller_id
+                state.grant_control_change_ueot(
+                    source_id=spell_id,
+                    target_id=o.id,
+                    new_controller_id=controller_id,
+                    description=(
+                        f"Mutinous Massacre: P{controller_id} controls "
+                        f"{o.printing.name} UEOT"
+                    ),
+                )
             o.tapped = False
-            o.temp_keywords = o.temp_keywords | frozenset({"haste"})
+            state.grant_keywords_ueot(
+                source_id=spell_id,
+                target_id=o.id,
+                keywords=frozenset({"haste"}),
+                log_source_name="Mutinous Massacre",
+                log_target_name=o.printing.name,
+            )
             state.log.append(
                 f"P{controller_id} takes control of {o.printing.name} "
                 f"UEOT; untaps + gains haste"
@@ -2003,14 +2031,29 @@ class SystemsOverrideEffect(Effect):
         )
         if obj is None:
             return
-        # Gain control UEOT. If we already stole it this turn, keep the
-        # original controller (don't overwrite with the current — rare
-        # but preserves correct reversion).
-        if obj.temp_original_controller_id is None:
-            obj.temp_original_controller_id = obj.controller_id
-        obj.controller_id = controller_id
+        # Gain control UEOT via the layer-2 control_change registry
+        # entry; haste via grant_keywords_ueot. Both expire at
+        # cleanup, with controller refresh handled in
+        # ``run_cleanup_step``.
+        src = state.resolving_source
+        spell_id = src.id if src is not None else obj.id
+        state.grant_control_change_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            new_controller_id=controller_id,
+            description=(
+                f"Systems Override: P{controller_id} controls "
+                f"{obj.printing.name} UEOT"
+            ),
+        )
         obj.tapped = False
-        obj.temp_keywords = obj.temp_keywords | frozenset({"haste"})
+        state.grant_keywords_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            keywords=frozenset({"haste"}),
+            log_source_name="Systems Override",
+            log_target_name=obj.printing.name,
+        )
         state.log.append(
             f"P{controller_id} takes control of {obj.printing.name} "
             f"UEOT; untaps + gains haste"
@@ -2078,8 +2121,14 @@ class BiosynthicBurstEffect(Effect):
             return
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, 1)
-        obj.temp_keywords = obj.temp_keywords | frozenset(
-            {"reach", "trample", "indestructible"}
+        src = state.resolving_source
+        source_id = src.id if src is not None else obj.id
+        state.grant_keywords_ueot(
+            source_id=source_id,
+            target_id=obj.id,
+            keywords=frozenset({"reach", "trample", "indestructible"}),
+            log_source_name="Biosynthetic Burst",
+            log_target_name=obj.printing.name,
         )
         obj.tapped = False
         state.log.append(
@@ -2137,7 +2186,17 @@ class DepressurizeEffect(Effect):
         )
         if obj is None:
             return
-        obj.temp_power_bonus -= self.power_penalty
+        src = state.resolving_source
+        source_id = src.id if src is not None else obj.id
+        state.grant_pt_pump_ueot(
+            source_id=source_id,
+            target_id=obj.id,
+            power=-self.power_penalty,
+            toughness=0,
+            description=(
+                f"{obj.printing.name} gets -{self.power_penalty}/-0 UEOT"
+            ),
+        )
         state.log.append(
             f"{obj.printing.name} gets -{self.power_penalty}/-0 until end "
             f"of turn"
@@ -2514,9 +2573,21 @@ class DiplomaticRelationsEffect(Effect):
                 None,
             )
             if my_obj is not None and my_obj.controller_id == controller_id:
-                my_obj.temp_power_bonus += 1
-                my_obj.temp_keywords = my_obj.temp_keywords | frozenset(
-                    {"vigilance"}
+                src = state.resolving_source
+                source_id = src.id if src is not None else my_obj.id
+                state.grant_pt_pump_ueot(
+                    source_id=source_id,
+                    target_id=my_obj.id,
+                    power=1,
+                    toughness=0,
+                    description=f"{my_obj.printing.name} gets +1/+0 UEOT",
+                )
+                state.grant_keywords_ueot(
+                    source_id=source_id,
+                    target_id=my_obj.id,
+                    keywords=frozenset({"vigilance"}),
+                    log_source_name="Diplomatic Relations",
+                    log_target_name=my_obj.printing.name,
                 )
                 state.log.append(
                     f"{my_obj.printing.name} gets +1/+0 and gains "

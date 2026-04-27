@@ -2048,6 +2048,59 @@ class GameState:
                 description=desc,
             )
 
+    def grant_control_change_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        new_controller_id: int,
+        description: str = "",
+    ) -> None:
+        """Helper for "Until end of turn, you gain control of target
+        permanent" effects (Mutinous Massacre, Systems Override,
+        Threaten / Act of Treason shape).
+
+        Writes a layer-2 ``"control_change"`` registry entry with
+        ``params=(new_controller_id,)`` and
+        ``expires_at="cleanup"``. Captures the captured-baseline
+        controller in ``controller_id_before_any_aura_swap`` if
+        this is the first control-grant on the target, mirroring
+        ``apply_aura_static_grants_on_attach``'s logic so the
+        revert-to-baseline machinery in
+        ``move_off_battlefield`` and ``run_cleanup_step``'s
+        controller refresh works uniformly.
+
+        Updates the ``target.controller_id`` write-through cache
+        immediately via ``effective_controller`` so downstream
+        reads (haste grants, attack eligibility) see the new
+        controller right away.
+        """
+        target = next(
+            (o for o in self.battlefield if o.id == target_id), None,
+        )
+        if target is None:
+            return
+        if effective_controller(self, target) == new_controller_id:
+            return
+        has_prior_grant = any(
+            ce.layer == 2
+            and ce.kind == "control_change"
+            and ce.target_id == target.id
+            for ce in self.continuous_effects
+        )
+        if not has_prior_grant:
+            target.controller_id_before_any_aura_swap = target.controller_id
+        self.add_continuous_effect(
+            source_id=source_id,
+            layer=2,
+            kind="control_change",
+            target_id=target.id,
+            params=(new_controller_id,),
+            expires_at="cleanup",
+            description=description,
+        )
+        target.controller_id = effective_controller(self, target)
+
     def expire_continuous_effects(
         self, expires_at: str, *, player_id: Optional[int] = None,
     ) -> list[ContinuousEffect]:

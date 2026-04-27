@@ -7,7 +7,7 @@ from mtg_bot.cards import (
     SYNTHETIC_CREATURES,
 )
 from mtg_bot.effects import MutinousMassacreEffect
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_cleanup_step
 
 
@@ -47,8 +47,11 @@ def test_mutinous_massacre_odd_destroys_odd_mv_creatures():
     assert spider not in state.battlefield
     assert bear in state.battlefield
     assert bear.controller_id == 0
-    assert bear.temp_original_controller_id == 1
-    assert "haste" in bear.temp_keywords
+    # Layer-2 control swap captures the original controller as the
+    # baseline (used by ``move_off_battlefield`` and the cleanup
+    # refresh to revert).
+    assert bear.controller_id_before_any_aura_swap == 1
+    assert "haste" in effective_keywords(state, bear)
 
 
 def test_mutinous_massacre_even_destroys_even_mv_creatures():
@@ -78,8 +81,8 @@ def test_mutinous_massacre_reverts_on_cleanup():
     assert bear.controller_id == 0
     run_cleanup_step(state)
     assert bear.controller_id == 1
-    assert bear.temp_original_controller_id is None
-    assert "haste" not in bear.temp_keywords
+    assert bear.controller_id_before_any_aura_swap is None
+    assert "haste" not in effective_keywords(state, bear)
 
 
 def test_mutinous_massacre_untaps_stolen_creatures():
@@ -105,9 +108,9 @@ def test_mutinous_massacre_own_creatures_untap_and_haste():
     MutinousMassacreEffect().resolve(state, 0, ())
     assert my_bear in state.battlefield
     assert not my_bear.tapped
-    assert "haste" in my_bear.temp_keywords
-    # We already control it → no temp_original_controller_id change.
-    assert my_bear.temp_original_controller_id is None
+    assert "haste" in effective_keywords(state, my_bear)
+    # We already control it → no control-grant entry / baseline.
+    assert my_bear.controller_id_before_any_aura_swap is None
 
 
 def test_mutinous_massacre_agent_none_defaults_to_odd():

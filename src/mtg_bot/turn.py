@@ -979,9 +979,27 @@ def run_cleanup_step(state: GameState) -> None:
     # ``printing`` mutation needs to revert. Walk the battlefield
     # and revert any object that has ``original_printing`` set
     # but no remaining layer-1 ``is_copy`` entries.
-    from mtg_bot.game import revert_printing_if_no_layer1_copies
+    from mtg_bot.game import (
+        effective_controller, revert_printing_if_no_layer1_copies,
+    )
     for obj in state.battlefield:
         revert_printing_if_no_layer1_copies(state, obj)
+    # UEOT layer-2 control_change effects (Mutinous Massacre,
+    # Systems Override): when the layer-2 entry expired above,
+    # the cached ``obj.controller_id`` is stale. Recompute via
+    # ``effective_controller`` and clear
+    # ``controller_id_before_any_aura_swap`` for any object whose
+    # last control_change entry is now gone.
+    for obj in state.battlefield:
+        obj.controller_id = effective_controller(state, obj)
+        any_remaining = any(
+            ce.layer == 2
+            and ce.kind == "control_change"
+            and ce.target_id == obj.id
+            for ce in state.continuous_effects
+        )
+        if not any_remaining:
+            obj.controller_id_before_any_aura_swap = None
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
