@@ -197,6 +197,10 @@ def test_parse_trigger_phrase_recognizes_dies():
     assert _parse_trigger_phrase("this creature dies") == "dies"
 
 
+def test_parse_trigger_phrase_recognizes_attacks():
+    assert _parse_trigger_phrase("this creature attacks") == "attacks"
+
+
 def test_parse_trigger_phrase_strips_whitespace():
     assert _parse_trigger_phrase("  this creature enters  ") == "etb"
 

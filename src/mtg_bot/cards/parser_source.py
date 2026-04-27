@@ -24,7 +24,8 @@ Slice 1's grammar:
 Currently recognized:
 
 - Trigger conditions: ``this creature enters`` → ``"etb"``;
-  ``this creature dies`` → ``"dies"``.
+  ``this creature dies`` → ``"dies"``;
+  ``this creature attacks`` → ``"attacks"``.
 - Effects: ``it deals N damage to any target`` →
   ``DealDamageAnyTarget(amount=N)``;
   ``create a tapped 2/2 colorless Robot artifact creature token``
@@ -124,6 +125,7 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 _TRIGGER_PHRASES: dict[str, str] = {
     "this creature enters": "etb",
     "this creature dies": "dies",
+    "this creature attacks": "attacks",
 }
 
 
