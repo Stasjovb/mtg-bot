@@ -855,46 +855,54 @@ def _activate_sac_for_mana_for_cost(
         return cost
     if can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
         return cost
-    # Compute shortfall against pool + lands (without sac abilities).
     sources = _sac_for_mana_sources(state, player_id)
     if not sources:
         return cost
-    # Activate sources greedily until the cost can be paid (or no
-    # source helps).
-    consumed: set[int] = set()
-    while not can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
-        chosen: "tuple[GameObject, int] | None" = None
-        unmet_colors = [color for color, _n in cost.colored]
-        # Try to satisfy a colored need first — a source whose mana
-        # output covers some still-needed color.
-        for need_color in unmet_colors:
-            for src, idx, produces in sources:
-                if src.id in consumed:
-                    continue
-                if not _can_fire_sac_for_mana(state, src, idx):
-                    continue
-                if _produces_satisfies(produces, need_color):
-                    chosen = (src, idx)
-                    break
-            if chosen is not None:
-                break
-        if chosen is None and cost.generic > 0:
-            # Generic shortfall: any source whose output can pay generic.
-            # Only fired when the cost has unmet generic; otherwise
-            # sacrificing a Treasure-{C} for a colored-only cost like
-            # {R} would be pointless.
-            for src, idx, produces in sources:
-                if src.id in consumed:
-                    continue
-                if not _can_fire_sac_for_mana(state, src, idx):
-                    continue
-                if _produces_total(produces) > 0:
-                    chosen = (src, idx)
-                    break
-        if chosen is None:
-            break  # nothing else helps
-        src, idx = chosen
-        consumed.add(src.id)
+    # Ask the agent which sources to activate. Default returns every
+    # candidate in engine order, matching the prior auto-greedy
+    # behavior. The agent's ordered list is iterated only while the
+    # cost is still unpayable — once we can pay, remaining picks are
+    # skipped (Treasures aren't blown up unnecessarily).
+    p = state.player_by_id(player_id)
+    candidates = [(src.id, produces) for src, _idx, produces in sources]
+    if p.agent is None:
+        ordered_ids = [oid for oid, _produces in candidates]
+    else:
+        ordered_ids = p.agent.choose_sac_for_mana(
+            state, player_id, candidates,
+            cost.generic, list(cost.colored),
+        )
+    by_id = {
+        src.id: (src, idx, produces)
+        for src, idx, produces in sources
+    }
+    seen: set[int] = set()
+    for oid in ordered_ids:
+        if oid in seen:
+            continue
+        seen.add(oid)
+        entry = by_id.get(oid)
+        if entry is None:
+            continue
+        src, idx, produces = entry
+        if not _can_fire_sac_for_mana(state, src, idx):
+            continue
+        if can_pay_cost(state, player_id, cost, spell_kind=spell_kind):
+            break
+        # Skip sources whose mana output can't reduce the still-unmet
+        # cost — a Treasure-{C} doesn't help against a colored-only
+        # {R} cost. The agent's ordered list provides preference;
+        # this gate keeps Treasures from being blown up uselessly
+        # even if the agent listed them.
+        helps_color = any(
+            n > 0 and _produces_satisfies(produces, color)
+            for color, n in cost.colored
+        )
+        helps_generic = (
+            cost.generic > 0 and _produces_total(produces) > 0
+        )
+        if not (helps_color or helps_generic):
+            continue
         state.log.append(
             f"P{player_id} activates {src.printing.name}'s "
             f"sac-for-mana ability to pay cost"
