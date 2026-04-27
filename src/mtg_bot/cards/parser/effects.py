@@ -31,7 +31,10 @@ from mtg_bot.cards.base import (
     ExileTargetCreature,
     GainLife,
     LoseLife,
+    OptionalDiscardCardThenDrawN,
     OptionalManaCostThenEffect,
+    OptionalSacAnotherForEffect,
+    OptionalSacAnotherForPumpSelfUEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -43,6 +46,7 @@ from mtg_bot.cards.base import (
     Surveil,
     TargetOpponentLosesLife,
 )
+from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
@@ -228,6 +232,78 @@ _LOSE_N_LIFE = re.compile(r"^(?:you )?lose (\d+) life$")
 _YOU_MAY_PAY_THEN_EFFECT = re.compile(
     r"^you may pay (\{[^}]+(?:\}\{[^}]+)*\})\. If you do, (.+)$"
 )
+# "Target creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
+# turn." — pump + grant-keywords compound. The granted-keywords body
+# (between ``and gains `` and `` until end of turn``) is one or more
+# evergreen-keyword tokens joined by `` and `` and validated against the
+# keyword-line whitelist before the parsed effect is returned. Both the
+# bare-target form (Rig for War, Dark Endurance) and the
+# ``target creature you control`` restricted form (Kavaron Turbodrone,
+# Molecular Modifier — activated/triggered abilities not yet wired by
+# the surrounding builders, but the effect primitive is in place) share
+# the same regex via the optional ``(?:you control )?`` group. Future
+# cards with multiple keywords (``... and gains first strike and reach
+# UEOT``) parse through the same shape. The ``you control`` group is
+# captured (group 1) and translated into the engine's
+# ``you_control_only=True`` flag at handler time.
+_PUMP_AND_GAIN_KEYWORDS_UEOT = re.compile(
+    r"^target creature (you control )?gets ([+-]\d+)/([+-]\d+) and gains "
+    r"(.+) until end of turn$"
+)
+# "You may discard a card. If you do, draw N cards." — the
+# ``OptionalDiscardCardThenDrawN`` wrapper. The amount tail accepts the
+# Scryfall standard variants for "1": the article ``a`` for the singular
+# ``draw a card`` and the spelled-out small cardinals (``draw two
+# cards`` is Melded Moxite's printed form) plus bare digits for any
+# future card that uses ``draw 3 cards``. Inner-effect parsing is NOT
+# delegated to ``_parse_effect`` here because the engine class hardcodes
+# the inner draw — only the count needs to be extracted from the
+# surface text.
+_OPTIONAL_DISCARD_THEN_DRAW = re.compile(
+    rf"^you may discard a card\. If you do, "
+    rf"draw (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
+# "You may sacrifice another creature or artifact. If you do, this
+# creature gets +N/+M until end of turn." — the
+# ``OptionalSacAnotherForPumpSelfUEOT`` wrapper. Mirrors the surface
+# form on Comet Crawler's attack trigger. Pump-self-only (no
+# ``granted_keywords`` rider parsed today; no EoE printing pairs the
+# self-sac pump with an inner keyword grant). Tried BEFORE the more
+# general ``OptionalSacAnotherForEffect`` regex so the self-pump shape
+# wins and produces the specialized engine class instead of falling
+# through.
+_OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT = re.compile(
+    r"^you may sacrifice another creature or artifact\. If you do, "
+    r"this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "You may sacrifice another creature or artifact. If you do, <inner-
+# effect>." — the general ``OptionalSacAnotherForEffect`` wrapper.
+# Inner-effect phrase is parsed recursively via the unified grammar so
+# any single-effect (or compound) primitive that parses on its own can
+# serve as the consequence (e.g. ``draw a card`` on Swarm Culler, or a
+# ``put a +1/+1 counter on this creature`` on a future printing).
+# Failure to parse the inner rejects the whole line so the wrapping
+# card stays unclaimed rather than silently dropping the consequence.
+_OPTIONAL_SAC_ANOTHER_FOR_EFFECT = re.compile(
+    r"^you may sacrifice another creature or artifact\. If you do, (.+)$"
+)
+
+
+def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
+    """Parse the tail of a pump-and-gain phrase — one or more evergreen
+    keywords joined by `` and `` — into the frozenset of engine
+    spellings consumed by ``PumpTargetCreatureUntilEOT.granted_keywords``.
+
+    Returns ``None`` if any piece is not a recognized standalone keyword
+    so the caller can reject the whole pump-and-gain phrase rather than
+    silently dropping a granted ability. Mirrors the keyword-line
+    whitelist in ``parser.keywords`` (``_KEYWORD_LINES``) — adding a new
+    evergreen keyword there automatically makes it grantable here.
+    """
+    pieces = [p.strip() for p in body.split(" and ")]
+    if not all(p in _KEYWORD_LINES.values() for p in pieces):
+        return None
+    return frozenset(pieces)
 
 
 def _parse_amount(token: str) -> int:
@@ -400,6 +476,24 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
     if _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnTargetArtifactCardFromYourGraveyardToHand()
+    # Pump + grant-keywords compound is tried BEFORE the bare-pump
+    # regex so a phrase like ``+3/+0 and gains first strike and reach
+    # until end of turn`` produces the keyword-bearing
+    # ``PumpTargetCreatureUntilEOT``. The bare-pump regex below would
+    # never match this surface (it requires the stats to be directly
+    # followed by ``until end of turn``), but ordering more-specific
+    # before more-general is the convention in this dispatcher.
+    m = _PUMP_AND_GAIN_KEYWORDS_UEOT.match(phrase)
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(4))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(2)),
+            toughness_bonus=int(m.group(3)),
+            granted_keywords=keywords,
+            you_control_only=m.group(1) is not None,
+        )
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(
@@ -424,6 +518,33 @@ def _parse_effect(phrase: str) -> Effect | None:
         return OptionalManaCostThenEffect(
             cost_str=m.group(1), inner_effect=inner,
         )
+    m = _OPTIONAL_DISCARD_THEN_DRAW.match(phrase)
+    if m is not None:
+        # ``draw a card`` / ``draw N cards`` / ``draw <word> cards`` —
+        # ``a`` collapses to 1, digits and spelled-out small cardinals
+        # go through ``_parse_amount``.
+        token = m.group(1)
+        amount = 1 if token == "a" else _parse_amount(token)
+        return OptionalDiscardCardThenDrawN(amount=amount)
+    m = _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT.match(phrase)
+    if m is not None:
+        # More-specific shape (self-pump consequence) — produces the
+        # specialized ``OptionalSacAnotherForPumpSelfUEOT`` engine
+        # class. Tried BEFORE the general optional-sac regex below.
+        return OptionalSacAnotherForPumpSelfUEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+        )
+    m = _OPTIONAL_SAC_ANOTHER_FOR_EFFECT.match(phrase)
+    if m is not None:
+        # Generic optional-sac wrapper. The inner consequence is parsed
+        # recursively via the unified grammar; if the inner doesn't
+        # parse, the whole line rejects so the wrapping card stays
+        # unclaimed rather than silently dropping the consequence.
+        inner = _parse_effect(m.group(1))
+        if inner is None:
+            return None
+        return OptionalSacAnotherForEffect(inner_effect=inner)
     return None
 
 

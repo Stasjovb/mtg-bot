@@ -453,14 +453,23 @@ def test_unsupported_condition_synthetic_spell_skipped():
     assert _build_spell_printing(synthetic) is None
 
 
-def test_dark_endurance_still_unclaimed_due_to_body_effect():
-    # The cost-reduction rider on Dark Endurance now parses, but the
-    # spell's body (``Target creature gets +2/+0 and gains
-    # indestructible until end of turn.``) is not yet covered by the
-    # unified spell-effect grammar. The card must still be skipped —
-    # claiming it without a body effect would silently drop the pump.
+def test_dark_endurance_now_fully_claimed_with_pump_and_gains_body():
+    # Batch 11 added the ``target creature gets +N/+M and gains <kw>
+    # until end of turn`` shape to the unified effect grammar, which
+    # together with the already-supported ``This spell costs {1} less
+    # to cast if it targets a blocking creature.`` rider lets the
+    # spell-builder claim Dark Endurance end-to-end. The body effect
+    # parses to a ``PumpTargetCreatureUntilEOT`` with the indestructible
+    # grant, and the cost-reduction rider is surfaced on the
+    # ``CardPrinting`` via ``cost_reductions=`` exactly as Gigastorm
+    # Titan and Lashwhip Predator do.
     card = _eoe_card("Dark Endurance")
-    assert _build_spell_printing(card) is None
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.name == "Dark Endurance"
+    assert printing.cost_reductions == (
+        CostReduction(amount=1, condition="target_is_blocking_creature"),
+    )
 
 
 def test_temporal_intervention_still_unclaimed_due_to_void_prefix():
