@@ -45,12 +45,14 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     HasCounter,
+    HasKeyword,
     HasSubtype,
     IsArtifact,
     IsCreature,
     IsHost,
     IsLand,
     IsNontoken,
+    IsPlayer,
     IsSelf,
     Not,
     Or,
@@ -422,6 +424,86 @@ def _legacy_key_for_predicate(ability, source_printing=None) -> str | None:
         return _legacy_key_for_player_phase(ability, "beginning_of_combat")
     if ability.event is Event.BEGINNING_OF_END_STEP:
         return _legacy_key_for_player_phase(ability, "beginning_of_end_step")
+    if ability.event is Event.DEALS_COMBAT_DAMAGE:
+        return _legacy_key_for_deals_combat_damage(ability)
+    if ability.event is Event.BLOCKS:
+        return _legacy_key_for_blocks(ability)
+    return None
+
+
+def _legacy_key_for_deals_combat_damage(ability) -> str | None:
+    """Map a predicate-style DEALS_COMBAT_DAMAGE ability back to its
+    legacy key. Three shapes recognized in phase 9:
+
+    - ``IsSelf(subject="source") & IsPlayer(subject="target")`` →
+      ``combat_damage_to_player`` (Illvoi Infiltrator).
+    - ``IsCreature(subject="source") & Controlled(YOU, subject=
+      "source") & IsPlayer(subject="target")`` →
+      ``your_creature_combat_damage_to_player`` (Starwinder).
+    - ``IsCreature(subject="source") & Controlled(YOU, subject=
+      "target")`` → ``creature_deals_combat_damage_to_you``
+      (Contested War Zone) — the ``Controlled(YOU, "target")`` clause
+      checks "the damaged player IS the source ability's controller",
+      which is the same check the legacy walk did.
+    """
+    leaves = _flatten_and(ability.predicate)
+    has_self_source = any(
+        isinstance(leaf, IsSelf) and leaf.subject == "source"
+        for leaf in leaves
+    )
+    has_creature_source = any(
+        isinstance(leaf, IsCreature) and leaf.subject == "source"
+        for leaf in leaves
+    )
+    has_controlled_you_source = any(
+        isinstance(leaf, Controlled)
+        and leaf.by == YOU
+        and leaf.subject == "source"
+        for leaf in leaves
+    )
+    has_controlled_you_target = any(
+        isinstance(leaf, Controlled)
+        and leaf.by == YOU
+        and leaf.subject == "target"
+        for leaf in leaves
+    )
+    has_player_target = any(
+        isinstance(leaf, IsPlayer) and leaf.subject == "target"
+        for leaf in leaves
+    )
+    if has_self_source and has_player_target:
+        return "combat_damage_to_player"
+    if (
+        has_creature_source
+        and has_controlled_you_source
+        and has_player_target
+    ):
+        return "your_creature_combat_damage_to_player"
+    if has_creature_source and has_controlled_you_target:
+        return "creature_deals_combat_damage_to_you"
+    return None
+
+
+def _legacy_key_for_blocks(ability) -> str | None:
+    """Map a predicate-style BLOCKS ability back to its legacy key.
+
+    Only shape today:
+    - ``IsSelf(subject="blocker") & HasKeyword("flying", subject=
+      "attacker")`` → ``blocks_creature_with_flying`` (Skystinger).
+    """
+    leaves = _flatten_and(ability.predicate)
+    has_self_blocker = any(
+        isinstance(leaf, IsSelf) and leaf.subject == "blocker"
+        for leaf in leaves
+    )
+    has_flying_attacker = any(
+        isinstance(leaf, HasKeyword)
+        and leaf.name == "flying"
+        and leaf.subject == "attacker"
+        for leaf in leaves
+    )
+    if has_self_blocker and has_flying_attacker:
+        return "blocks_creature_with_flying"
     return None
 
 

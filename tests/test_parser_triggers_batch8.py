@@ -45,7 +45,9 @@ from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
+    HasKeyword,
     IsArtifact,
+    IsPlayer,
     IsSelf,
 )
 
@@ -118,39 +120,63 @@ def test_leaves_battlefield_end_to_end():
 
 # ---------- this creature deals combat damage to a player ----------
 
-def test_parse_trigger_phrase_recognizes_combat_damage_to_player():
-    # ``this creature deals combat damage to a player``
-    # (Illvoi Infiltrator) is the simplest combat-damage-to-player
-    # phrasing on EoE and maps to the engine's
-    # ``combat_damage_to_player`` key. Broader variants
+def test_parse_predicate_trigger_phrase_recognizes_combat_damage_to_player():
+    # Phase 9 migrated this phrase from the legacy ``trigger=
+    # "combat_damage_to_player"`` key to the predicate path —
+    # ``Event.DEALS_COMBAT_DAMAGE`` carries subjects ``("source",
+    # "target")``; ``IsSelf(subject="source")`` ties the trigger to
+    # the source's own damage-dealing; ``IsPlayer(subject="target")``
+    # gates "to a player" vs "to a creature". Broader variants
     # (``a creature you control``, ``one or more creatures you
-    # control``) are different engine keys and stay out of scope.
+    # control``) aren't parsed today — they're built directly in
+    # static-card registries.
+    assert _parse_predicate_trigger_phrase(
+        "this creature deals combat damage to a player"
+    ) == (
+        Event.DEALS_COMBAT_DAMAGE,
+        IsSelf(subject="source") & IsPlayer(subject="target"),
+    )
+    # Legacy lookup must NOT also claim the phrase.
     assert _parse_trigger_phrase(
         "this creature deals combat damage to a player"
-    ) == "combat_damage_to_player"
+    ) is None
 
 
 def test_combat_damage_to_player_end_to_end():
     # Illvoi Infiltrator's verbatim trigger line composes directly
-    # with the existing ``draw a card`` effect.
+    # with the existing ``draw a card`` effect, now on the predicate
+    # path.
     parsed = _parse_triggered_ability_line(
         "Whenever this creature deals combat damage to a player, "
         "draw a card."
     )
     assert parsed == TriggeredAbility(
-        trigger="combat_damage_to_player",
+        event=Event.DEALS_COMBAT_DAMAGE,
+        predicate=IsSelf(subject="source") & IsPlayer(subject="target"),
         effect=DrawCards(amount=1),
     )
 
 
 # ---------- this creature blocks a creature with flying ----------
 
-def test_parse_trigger_phrase_recognizes_blocks_creature_with_flying():
-    # ``this creature blocks a creature with flying`` (Skystinger)
-    # maps to the engine's ``blocks_creature_with_flying`` key.
+def test_parse_predicate_trigger_phrase_recognizes_blocks_creature_with_flying():
+    # Phase 9 migrated this phrase from the legacy ``trigger=
+    # "blocks_creature_with_flying"`` key to the predicate path —
+    # ``Event.BLOCKS`` carries subjects ``("blocker", "attacker")``;
+    # ``IsSelf(subject="blocker")`` ties the trigger to the source
+    # being the blocker; ``HasKeyword("flying", subject="attacker")``
+    # gates on the attacker having flying right now.
+    assert _parse_predicate_trigger_phrase(
+        "this creature blocks a creature with flying"
+    ) == (
+        Event.BLOCKS,
+        IsSelf(subject="blocker")
+        & HasKeyword("flying", subject="attacker"),
+    )
+    # Legacy lookup must NOT also claim the phrase.
     assert _parse_trigger_phrase(
         "this creature blocks a creature with flying"
-    ) == "blocks_creature_with_flying"
+    ) is None
 
 
 def test_blocks_creature_with_flying_end_to_end():
@@ -163,7 +189,11 @@ def test_blocks_creature_with_flying_end_to_end():
         "draw a card."
     )
     assert parsed == TriggeredAbility(
-        trigger="blocks_creature_with_flying",
+        event=Event.BLOCKS,
+        predicate=(
+            IsSelf(subject="blocker")
+            & HasKeyword("flying", subject="attacker")
+        ),
         effect=DrawCards(amount=1),
     )
 

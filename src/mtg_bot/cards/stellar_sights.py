@@ -8,7 +8,7 @@ relative to oracle text.
 from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
-from mtg_bot.effects.predicates import YOU, Controlled, Event, IsSelf
+from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
 
 
 # Edge of Eternities: Stellar Sights (Scryfall set `eos`). Bonus-sheet
@@ -178,7 +178,23 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         "Contested War Zone",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="creature_deals_combat_damage_to_you",
+                event=Event.DEALS_COMBAT_DAMAGE,
+                # Source = the creature dealing damage (any controller);
+                # target = the player taking damage. ``Controlled(YOU,
+                # subject="target")`` matches when the damaged player IS
+                # the source ability's controller (the land's
+                # controller) — i.e. "deals combat damage to YOU". The
+                # land's controller is the trigger's source-ability
+                # controller, so ``YOU`` resolves correctly even after
+                # the control-change effect re-parents the land. The
+                # dispatcher threads ``fixed_targets=(("player",
+                # attacker_controller_id),)`` so
+                # ``ChangeControllerToCombatDamageSource`` reads the
+                # attacker's controller from ``targets[0]`` unchanged.
+                predicate=(
+                    IsCreature(subject="source")
+                    & Controlled(YOU, subject="target")
+                ),
                 effect=ChangeControllerToCombatDamageSource(),
             ),
         ),

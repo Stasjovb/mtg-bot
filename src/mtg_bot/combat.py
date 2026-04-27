@@ -594,20 +594,19 @@ def _fire_combat_damage_to_player_triggers(
     skip them — no double-fire. Phase-9 commit 3 collapses the legacy
     walks once all static sites migrate.
 
-    ``fixed_targets`` for the predicate dispatch exposes the
-    attacker's controller as ``("player", attacker_controller_id)``.
-    This matches Contested War Zone's
-    ``ChangeControllerToCombatDamageSource`` effect (which reads
-    ``targets[0]`` to learn who the new controller is); the other
-    migrated effects (Illvoi's ``DrawCards``, Starwinder's
-    ``DrawCardsEqualToResolvingCombatDamage``, Skystinger's
-    ``PumpSelfUntilEOT``) ignore ``targets`` so the threaded value
-    is a no-op for them. The legacy ``your_creature_combat_damage_
-    to_player`` / ``creature_deals_combat_damage_to_you`` walks below
-    keep their original ``fixed_targets`` shapes (target_player vs
-    attacker_controller_id) for the still-string-key observers
-    (Virulent Silencer, Haliya's aggregated, etc.) that aren't part
-    of this phase's migration.
+    The dispatch threads the attacker's controller through
+    ``combat_damage_source_controller_id`` (mirrored to
+    ``state.resolving_combat_damage_source_controller_id`` at resolve
+    time), NOT through ``fixed_targets``. Contested War Zone's
+    ``ChangeControllerToCombatDamageSource`` effect reads the new
+    controller from that state slot; Illvoi/Starwinder/Skystinger's
+    effects (``DrawCards``, ``DrawCardsEqualToResolvingCombatDamage``,
+    ``PumpSelfUntilEOT``) ignore both ``targets`` and the slot. The
+    legacy ``creature_deals_combat_damage_to_you`` walk below keeps
+    its original ``fixed_targets=(("player", attacker_controller_id),)``
+    shape for the still-string-key observers (Virulent Silencer,
+    Haliya's aggregated, etc.) that aren't part of this phase's
+    migration.
     """
     from mtg_bot.actions import dispatch_event, push_triggered_ability
     from mtg_bot.effects.predicates import Event
@@ -629,9 +628,9 @@ def _fire_combat_damage_to_player_triggers(
         attacker_controller_id = source.controller_id
         dispatch_event(
             state, Event.DEALS_COMBAT_DAMAGE,
-            label="deals-combat-damage",
+            label="combat-damage-to-player",
             combat_damage_amount=amount,
-            fixed_targets=(("player", attacker_controller_id),),
+            combat_damage_source_controller_id=attacker_controller_id,
             source=source,
             target=target_player_obj,
         )

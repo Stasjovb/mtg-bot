@@ -1483,6 +1483,14 @@ class StackItem:
     # even though the ability resolves after the damage step ends.
     # 0 for non-combat-damage triggers and for spells.
     combat_damage_amount: int = 0
+    # Controller id of the creature dealing combat damage in a
+    # combat-damage-triggered ability while it sits on the stack.
+    # Mirrored to state.resolving_combat_damage_source_controller_id
+    # during resolution so observer effects like Contested War Zone's
+    # ChangeControllerToCombatDamageSource can read the attacker's
+    # controller without having to thread it through the targets tuple.
+    # None for non-combat-damage triggers.
+    combat_damage_source_controller_id: Optional[int] = None
     # Counter amount carried by a counters-added-to-creature observer
     # trigger. Mirrored to state.resolving_counter_amount during
     # resolution so effects like Terrasymbiosis ("draw that many cards")

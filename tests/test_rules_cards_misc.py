@@ -6044,13 +6044,21 @@ def test_zookeeper_mechan_taps_to_add_red_mana():
 
 def test_skystinger_has_blocks_flying_trigger():
     from mtg_bot.cards import EOE_CREATURES
+    from tests._etb_helpers import _legacy_or_inferred_key
 
     c = EOE_CREATURES["Skystinger"]
     assert "reach" in c.keywords
     assert c.power == 3 and c.toughness == 3
     # Blocks-a-flying-creature trigger pumps Skystinger +5/+0 UEOT.
+    # Phase 9 migrated this from ``trigger="blocks_creature_with_flying"``
+    # to predicate-style ``event=Event.BLOCKS, predicate=
+    # IsSelf(subject="blocker") & HasKeyword("flying", subject=
+    # "attacker")`` — assertion uses the helper to keep the legacy
+    # key as the canonical form for membership checks.
     assert len(c.triggered_abilities) == 1
-    assert c.triggered_abilities[0].trigger == "blocks_creature_with_flying"
+    assert _legacy_or_inferred_key(c.triggered_abilities[0]) == (
+        "blocks_creature_with_flying"
+    )
 
 
 def test_all_fates_stalker_exiles_and_returns_on_death():

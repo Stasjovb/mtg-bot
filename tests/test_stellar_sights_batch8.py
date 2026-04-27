@@ -49,9 +49,17 @@ def _put(state, printing, owner_id=0):
 
 
 def test_contested_war_zone_metadata():
+    from tests._etb_helpers import _legacy_or_inferred_key
+
     p = STELLAR_SIGHTS_LANDS["Contested War Zone"]
     assert len(p.triggered_abilities) == 1
-    assert p.triggered_abilities[0].trigger == (
+    # Phase 9 migrated this trigger from
+    # ``trigger="creature_deals_combat_damage_to_you"`` to predicate-style
+    # ``event=Event.DEALS_COMBAT_DAMAGE, predicate=IsCreature(subject=
+    # "source") & Controlled(YOU, subject="target")`` — assertion uses
+    # the helper to keep the legacy key as the canonical form for the
+    # membership check.
+    assert _legacy_or_inferred_key(p.triggered_abilities[0]) == (
         "creature_deals_combat_damage_to_you"
     )
     assert len(p.activated_abilities) == 1

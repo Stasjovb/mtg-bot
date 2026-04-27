@@ -2214,6 +2214,9 @@ def resolve_top_of_stack(state: GameState) -> None:
             item.additional_cost_choice_id
         )
         state.resolving_combat_damage_amount = item.combat_damage_amount
+        state.resolving_combat_damage_source_controller_id = (
+            item.combat_damage_source_controller_id
+        )
         state.resolving_counter_amount = item.counter_amount
         state.resolving_modes = item.chosen_modes
         try:
@@ -2224,6 +2227,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             state.resolving_kicked = False
             state.resolving_additional_cost_choice_id = None
             state.resolving_combat_damage_amount = 0
+            state.resolving_combat_damage_source_controller_id = None
             state.resolving_counter_amount = 0
             state.resolving_modes = ()
         return
@@ -2632,6 +2636,7 @@ def push_triggered_ability(
     controller_id: int,
     label: str,
     combat_damage_amount: int = 0,
+    combat_damage_source_controller_id: int | None = None,
     counter_amount: int = 0,
     fixed_targets: tuple[tuple[str, int], ...] | None = None,
 ) -> bool:
@@ -2720,6 +2725,9 @@ def push_triggered_ability(
             ability=ability,
             targets=targets,
             combat_damage_amount=combat_damage_amount,
+            combat_damage_source_controller_id=(
+                combat_damage_source_controller_id
+            ),
             counter_amount=counter_amount,
         )
     )
@@ -2737,6 +2745,7 @@ def dispatch_event(
     label: str | None = None,
     extra_observers: "list | None" = None,
     combat_damage_amount: int = 0,
+    combat_damage_source_controller_id: int | None = None,
     counter_amount: int = 0,
     fixed_targets: tuple[tuple[str, int], ...] | None = None,
     **subjects,
@@ -2818,6 +2827,9 @@ def dispatch_event(
                     controller_id=source.controller_id,
                     label=label,
                     combat_damage_amount=combat_damage_amount,
+                    combat_damage_source_controller_id=(
+                        combat_damage_source_controller_id
+                    ),
                     counter_amount=counter_amount,
                     fixed_targets=fixed_targets,
                 )

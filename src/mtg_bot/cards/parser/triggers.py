@@ -63,9 +63,11 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     HasCounter,
+    HasKeyword,
     IsArtifact,
     IsCreature,
     IsLand,
+    IsPlayer,
     IsSelf,
     Predicate,
     SpellsCastThisTurn,
@@ -80,22 +82,12 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # Trigger-condition phrases → engine-level trigger key (legacy
 # string-key shape). Pre-phase-2 this dict held every recognized
 # condition; phase 2 lifted the ENTERS-event family into
-# ``_PREDICATE_TRIGGER_PHRASES`` below. The remaining entries here
-# stay on the string-key path until later phases migrate them.
-_TRIGGER_PHRASES: dict[str, str] = {
-    # Combat-damage-to-player trigger. ``Whenever this creature deals
-    # combat damage to a player`` (Illvoi Infiltrator) is the simplest
-    # form on EoE and maps to the engine's ``combat_damage_to_player``
-    # key. The broader ``a creature you control deals combat damage``
-    # variant is a different engine key and stays out of scope.
-    "this creature deals combat damage to a player":
-        "combat_damage_to_player",
-    # Blocks-creature-with-flying trigger. ``Whenever this creature
-    # blocks a creature with flying`` (Skystinger) maps to the
-    # engine's ``blocks_creature_with_flying`` key.
-    "this creature blocks a creature with flying":
-        "blocks_creature_with_flying",
-}
+# ``_PREDICATE_TRIGGER_PHRASES`` below. Phases 4-9 migrated every
+# remaining parsed trigger phrase off the string-key path — this
+# table is now empty. The lookup helper still exists so future
+# trigger phrases that haven't yet been promoted to the predicate
+# shape have a place to land.
+_TRIGGER_PHRASES: dict[str, str] = {}
 
 
 # Trigger-condition phrases for the predicate-trigger path → tuple of
@@ -201,6 +193,37 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "you sacrifice another creature or artifact": (
         Event.IS_SACRIFICED,
         (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
+    ),
+    # ``Whenever this creature deals combat damage to a player``
+    # (Illvoi Infiltrator). Phase 9 migrated from
+    # ``trigger="combat_damage_to_player"``. ``Event.DEALS_COMBAT_DAMAGE``
+    # carries subjects ``("source", "target")`` — the source is the
+    # damage-dealing permanent, the target is the damaged player or
+    # creature. ``IsSelf(subject="source")`` ties the trigger to the
+    # source's own damage-dealing; ``IsPlayer(subject="target")`` gates
+    # "to a player" vs "to a creature". The broader ``a creature you
+    # control deals combat damage`` variant (Starwinder) stays out of
+    # the parser today — it's built directly in the static-card
+    # registry — but a future addition would compose
+    # ``IsCreature(subject="source") & Controlled(YOU,
+    # subject="source") & IsPlayer(subject="target")`` here.
+    "this creature deals combat damage to a player": (
+        Event.DEALS_COMBAT_DAMAGE,
+        IsSelf(subject="source") & IsPlayer(subject="target"),
+    ),
+    # ``Whenever this creature blocks a creature with flying``
+    # (Skystinger). Phase 9 migrated from
+    # ``trigger="blocks_creature_with_flying"``. ``Event.BLOCKS``
+    # carries subjects ``("blocker", "attacker")``;
+    # ``IsSelf(subject="blocker")`` ties the trigger to the source
+    # being the blocker; ``HasKeyword("flying", subject="attacker")``
+    # gates on the attacker having flying right now (printed,
+    # granted, or temp). Composes naturally to other block-filter
+    # triggers — ``HasKeyword("trample", subject="attacker")`` etc.
+    # — when those land in the card pool.
+    "this creature blocks a creature with flying": (
+        Event.BLOCKS,
+        IsSelf(subject="blocker") & HasKeyword("flying", subject="attacker"),
     ),
 }
 

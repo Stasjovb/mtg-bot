@@ -15,12 +15,14 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     HasCounter,
+    HasKeyword,
     HasSubtype,
     IsArtifact,
     IsCreature,
     IsHost,
     IsLand,
     IsNontoken,
+    IsPlayer,
     IsSelf,
     SpellsCastThisTurn,
 )
@@ -965,7 +967,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             unblockable_if_two_spells_cast_this_turn=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="combat_damage_to_player",
+                    event=Event.DEALS_COMBAT_DAMAGE,
+                    predicate=(
+                        IsSelf(subject="source")
+                        & IsPlayer(subject="target")
+                    ),
                     effect=DrawCards(amount=1),
                 ),
             ),
@@ -1715,7 +1721,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{U}{U}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="your_creature_combat_damage_to_player",
+                    event=Event.DEALS_COMBAT_DAMAGE,
+                    predicate=(
+                        IsCreature(subject="source")
+                        & Controlled(YOU, subject="source")
+                        & IsPlayer(subject="target")
+                    ),
                     effect=DrawCardsEqualToResolvingCombatDamage(),
                 ),
             ),
@@ -2397,7 +2408,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="blocks_creature_with_flying",
+                    event=Event.BLOCKS,
+                    predicate=(
+                        IsSelf(subject="blocker")
+                        & HasKeyword("flying", subject="attacker")
+                    ),
                     effect=PumpSelfUntilEOT(
                         power_bonus=5, toughness_bonus=0,
                     ),
