@@ -42,6 +42,15 @@ name into a single sentence — e.g. ``"<Name> deals N damage to any
 target."`` → ``DealDamageAnyTarget(amount=N)`` and ``"<Name> deals N
 damage to target creature."`` → ``DealDamageToTargetCreature(amount=N)``.
 Multi-sentence spells return ``None`` and are skipped.
+
+Land support starts with **basic lands** (``Basic`` supertype +
+``Land`` card type). The oracle text is a single parenthesized
+reminder line — ``"({T}: Add {W}.)"`` and friends — from which we
+extract the produced color and call ``make_basic_land``. Non-basic
+lands (Planet lands, shock lands, utility lands) are silently
+skipped for now: their oracle text mixes mana-tap clauses with
+ETB riders, Station mechanics, and tier-gated activated abilities
+that the parser doesn't yet model.
 """
 
 from __future__ import annotations
@@ -60,6 +69,7 @@ from mtg_bot.cards.base import (
     Effect,
     GainLife,
     TriggeredAbility,
+    make_basic_land,
     make_creature,
     make_instant,
     make_sorcery,
@@ -362,6 +372,42 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     )
 
 
+# Basic-land reminder text. Scryfall always prints the produced color in
+# parentheses on the single oracle line: ``"({T}: Add {W}.)"`` etc. The
+# capture group identifies which color the land taps for and feeds it
+# straight into ``make_basic_land``. Colorless basics aren't a thing in
+# EoE today, but ``C`` is included for completeness so a future
+# colorless basic doesn't trip the parser.
+_BASIC_LAND_REMINDER = re.compile(r"^\(\{T\}: Add \{([WUBRGC])\}\.\)$")
+
+
+def _build_land_printing(card: dict) -> CardPrinting | None:
+    """Try to produce a ``CardPrinting`` for a land ``card`` (a Scryfall
+    record). Returns ``None`` if the card is not a land or if its shape
+    isn't one the land grammar yet supports.
+
+    Currently supported: basic lands (``Basic`` supertype + ``Land`` card
+    type), whose oracle text is the single reminder line
+    ``"({T}: Add {<color>}.)"``. Non-basic lands (Planet lands, shock
+    lands, utility lands) require ETB riders, Station, or tier-gated
+    activated abilities that the parser doesn't yet model and so are
+    skipped silently — same pattern as the creature/spell builders.
+    """
+    supertypes, card_types, subtypes = _parse_type_line(
+        card.get("type_line", "")
+    )
+    if "Land" not in card_types:
+        return None
+    if "Basic" not in supertypes:
+        return None
+    text = card.get("oracle_text", "").strip()
+    m = _BASIC_LAND_REMINDER.match(text)
+    if m is None:
+        return None
+    color = m.group(1)
+    return make_basic_land(name=card["name"], color=color)
+
+
 def _load_scryfall_data() -> list[dict]:
     with _DATA_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -374,6 +420,8 @@ class OracleParserCardSource:
             built = _build_creature_printing(card)
             if built is None:
                 built = _build_spell_printing(card)
+            if built is None:
+                built = _build_land_printing(card)
             if built is not None:
                 printings[card["name"]] = built
         self._printings = printings

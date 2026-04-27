@@ -15,6 +15,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
+    _build_land_printing,
     _build_spell_printing,
     _parse_clause,
     _parse_effect_phrase,
@@ -599,3 +600,152 @@ def test_source_does_not_claim_plasma_bolt():
     """Plasma Bolt has a Void rider — outside slice-1 spell grammar."""
     source = OracleParserCardSource()
     assert "Plasma Bolt" not in source.claimed_names
+
+
+# ---------- _build_land_printing ----------
+
+_PLAINS_CARD = {
+    "name": "Plains",
+    "mana_cost": "",
+    "type_line": "Basic Land — Plains",
+    "oracle_text": "({T}: Add {W}.)",
+}
+
+
+@pytest.mark.parametrize(
+    "name,subtype,reminder,produced",
+    [
+        ("Plains", "Plains", "({T}: Add {W}.)", "W"),
+        ("Island", "Island", "({T}: Add {U}.)", "U"),
+        ("Swamp", "Swamp", "({T}: Add {B}.)", "B"),
+        ("Mountain", "Mountain", "({T}: Add {R}.)", "R"),
+        ("Forest", "Forest", "({T}: Add {G}.)", "G"),
+    ],
+)
+def test_build_land_printing_handles_each_basic(
+    name, subtype, reminder, produced
+):
+    card = {
+        "name": name,
+        "mana_cost": "",
+        "type_line": f"Basic Land — {subtype}",
+        "oracle_text": reminder,
+    }
+    printing = _build_land_printing(card)
+    assert printing is not None
+    assert printing.name == name
+    assert printing.is_basic_land
+    assert printing.is_land
+    assert printing.supertypes == ("Basic",)
+    assert printing.card_types == ("Land",)
+    assert printing.subtypes == (subtype,)
+    assert printing.produces == frozenset({produced})
+    # Basics are simple: no triggers, no activations, no enters-tapped.
+    assert printing.triggered_abilities == ()
+    assert printing.activated_abilities == ()
+    assert printing.enters_tapped is False
+
+
+def test_build_land_printing_skips_non_lands():
+    creature = {
+        "name": "Nebula Dragon",
+        "mana_cost": "{6}{R}",
+        "type_line": "Creature — Dragon",
+        "power": "4",
+        "toughness": "4",
+        "oracle_text": "Flying",
+    }
+    assert _build_land_printing(creature) is None
+
+
+def test_build_land_printing_skips_planet_lands():
+    """Planet lands have ETB-tapped, mana-tap, Station, and a tier-gated
+    activated ability — none of which the slice grammar yet models. The
+    builder must skip silently rather than partially claim."""
+    card = {
+        "name": "Adagia, Windswept Bastion",
+        "mana_cost": "",
+        "type_line": "Land — Planet",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "{T}: Add {W}.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Planet. Station only "
+            "as a sorcery.)\n"
+            "12+ | {3}{W}, {T}: Create a token that's a copy of target "
+            "artifact or enchantment you control, except it's legendary. "
+            "Activate only as a sorcery."
+        ),
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_shock_lands():
+    """Shock lands have a non-trivial ETB rider (optional 2-life payment
+    or enter tapped) the parser doesn't yet model."""
+    card = {
+        "name": "Breeding Pool",
+        "mana_cost": "",
+        "type_line": "Land — Forest Island",
+        "oracle_text": (
+            "({T}: Add {G} or {U}.)\n"
+            "As this land enters, you may pay 2 life. "
+            "If you don't, it enters tapped."
+        ),
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_utility_lands():
+    """Plain non-basic lands (no Basic supertype) without recognizable
+    basic-reminder text are skipped."""
+    card = {
+        "name": "Command Bridge",
+        "mana_cost": "",
+        "type_line": "Land",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "When this land enters, sacrifice it unless you tap an "
+            "untapped permanent you control.\n"
+            "{T}: Add one mana of any color."
+        ),
+    }
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_basic_with_unrecognized_oracle_text():
+    """A card flagged Basic Land whose oracle text doesn't match the
+    reminder shape (hypothetical snow basic, etc.) must be skipped."""
+    card = dict(_PLAINS_CARD, oracle_text="Some unsupported ability.")
+    assert _build_land_printing(card) is None
+
+
+def test_build_land_printing_skips_empty_oracle_text():
+    """Defensive: a basic with no oracle text at all has no color signal,
+    so the builder skips."""
+    card = dict(_PLAINS_CARD, oracle_text="")
+    assert _build_land_printing(card) is None
+
+
+# ---------- OracleParserCardSource (lands) ----------
+
+
+@pytest.mark.parametrize(
+    "name", ["Plains", "Island", "Swamp", "Mountain", "Forest"]
+)
+def test_source_claims_each_basic_land(name):
+    source = OracleParserCardSource()
+    assert name in source.claimed_names
+    assert name in source.get_printings()
+
+
+def test_source_does_not_claim_planet_land():
+    """Planet lands are out-of-slice; the source must not claim them."""
+    source = OracleParserCardSource()
+    assert "Adagia, Windswept Bastion" not in source.claimed_names
+
+
+def test_source_does_not_claim_shock_land():
+    """Shock lands are out-of-slice."""
+    source = OracleParserCardSource()
+    assert "Breeding Pool" not in source.claimed_names
