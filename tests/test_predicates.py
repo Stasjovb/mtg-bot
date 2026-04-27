@@ -18,9 +18,11 @@ from mtg_bot.effects.predicates import (
     And,
     Controlled,
     Event,
+    HasSubtype,
     IsArtifact,
     IsCreature,
     IsLand,
+    IsNontoken,
     IsSelf,
     Never,
     Not,
@@ -36,6 +38,8 @@ from mtg_bot.effects.predicates import (
 @dataclass
 class FakePrinting:
     card_types: tuple[str, ...] = ()
+    subtypes: tuple[str, ...] = ()
+    is_token: bool = False
 
 
 @dataclass
@@ -166,6 +170,57 @@ def test_controlled_you_rejects_opponent_subject():
 
 def test_controlled_false_when_subject_missing():
     assert Controlled().matches(FakeState(), {}, _src()) is False
+
+
+# ---------- IsNontoken ----------
+
+def test_is_nontoken_true_for_real_card():
+    """A printing without the Token supertype passes IsNontoken."""
+    src = _src()
+    real = FakeObject(printing=FakePrinting(is_token=False))
+    assert IsNontoken().matches(FakeState(), {"obj": real}, src) is True
+
+
+def test_is_nontoken_false_for_token():
+    """A printing with the Token supertype is rejected."""
+    src = _src()
+    token = FakeObject(printing=FakePrinting(is_token=True))
+    assert IsNontoken().matches(FakeState(), {"obj": token}, src) is False
+
+
+def test_is_nontoken_false_when_subject_missing():
+    assert IsNontoken().matches(FakeState(), {}, _src()) is False
+
+
+# ---------- HasSubtype ----------
+
+def test_has_subtype_matches_named_subtype():
+    src = _src()
+    obj = FakeObject(printing=FakePrinting(subtypes=("Kavu",)))
+    assert HasSubtype("Kavu").matches(FakeState(), {"obj": obj}, src) is True
+
+
+def test_has_subtype_rejects_other_subtype():
+    src = _src()
+    obj = FakeObject(printing=FakePrinting(subtypes=("Goblin",)))
+    assert HasSubtype("Kavu").matches(FakeState(), {"obj": obj}, src) is False
+
+
+def test_has_subtype_matches_within_multi_subtype_printing():
+    """A printing with multiple subtypes matches when the named one is
+    present (case-sensitive substring match isn't enough — it's a
+    membership check)."""
+    src = _src()
+    obj = FakeObject(printing=FakePrinting(subtypes=("Human", "Wizard")))
+    assert HasSubtype("Wizard").matches(FakeState(), {"obj": obj}, src) is True
+    assert HasSubtype("Human").matches(FakeState(), {"obj": obj}, src) is True
+    assert (
+        HasSubtype("Soldier").matches(FakeState(), {"obj": obj}, src) is False
+    )
+
+
+def test_has_subtype_false_when_subject_missing():
+    assert HasSubtype("Kavu").matches(FakeState(), {}, _src()) is False
 
 
 # ---------- combinators ----------

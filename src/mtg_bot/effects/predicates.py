@@ -265,3 +265,45 @@ class Controlled(Predicate):
         if self.by == YOU:
             return getattr(obj, "controller_id", None) == source.controller_id
         raise NotImplementedError(f"unsupported controller ref: {self.by!r}")
+
+
+@dataclass(frozen=True)
+class IsNontoken(Predicate):
+    """The named subject is NOT a token.
+
+    Token-ness lives on the printing (``CardPrinting.is_token`` checks
+    for the ``"Token"`` supertype). Models the "nontoken" qualifier in
+    triggers like ``"Whenever a nontoken artifact you control enters"``
+    — cards spawned by token-creator effects must be excluded from the
+    firing pool.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        return not obj.printing.is_token
+
+
+@dataclass(frozen=True)
+class HasSubtype(Predicate):
+    """The named subject's printing has the given subtype string.
+
+    Models the type-line subtype check used by triggers that gate on a
+    creature subtype (e.g. ``"Whenever a Kavu you control enters"``).
+    Compares against ``obj.printing.subtypes`` directly — runtime
+    subtype grants (``temp_subtype``, ``effective_subtypes``) are not
+    consulted here because every existing in-scope trigger keys off
+    the printed subtype.
+    """
+
+    name: str
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        return self.name in obj.printing.subtypes
