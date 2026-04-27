@@ -37,6 +37,7 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     SelfMill,
+    Sequence,
     Surveil,
     TargetOpponentLosesLife,
 )
@@ -157,13 +158,61 @@ def _parse_amount(token: str) -> int:
     return _SMALL_CARDINAL_WORDS[token]
 
 
+def _parse_compound_effect(phrase: str) -> Effect | None:
+    """Try to parse ``phrase`` as a compound effect: two or more
+    primitive effects joined by `` and ``.
+
+    Splits on `` and ``, parses each piece via ``_parse_effect``, and
+    returns a ``Sequence`` only if EVERY piece parses cleanly.
+    Returns ``None`` if the phrase contains no `` and ``, or if any
+    piece fails to parse — never falls back to single-effect parsing
+    on the original (the caller does that).
+
+    The strict all-or-nothing rule keeps us from accidentally
+    consuming `` and ``-bearing single effects (e.g. a future
+    ``destroy all artifacts and creatures`` whose `` and `` is part
+    of one effect's grammar): if a split-and-parse attempt fails on
+    any piece, we punt and let the caller try the single-effect
+    grammar on the unsplit phrase.
+
+    A compound where two or more sub-effects each require a target is
+    also rejected (returns ``None``) — ``Sequence`` only supports a
+    single targeting sub-effect (the cast-time target-selection
+    pipeline is single-choice). A multi-target spell needs a
+    different combinator and isn't claimed by this slice.
+    """
+    if " and " not in phrase:
+        return None
+    pieces = phrase.split(" and ")
+    parsed: list[Effect] = []
+    for piece in pieces:
+        eff = _parse_effect(piece)
+        if eff is None:
+            return None
+        parsed.append(eff)
+    if sum(1 for e in parsed if e.requires_target()) > 1:
+        return None
+    return Sequence(effects=tuple(parsed))
+
+
 def _parse_effect(phrase: str) -> Effect | None:
     """Parse a *normalized* effect phrase into an ``Effect``.
 
     Normalized form has no source-subject prefix, no trailing period,
     and a lowercased first letter — see ``_normalize_*`` helpers below
     for the per-context surface stripping.
+
+    Compound effects (two or more primitives joined by `` and ``) are
+    tried first via ``_parse_compound_effect``; if every split-piece
+    parses, returns a ``Sequence``. If the compound attempt fails
+    (any piece doesn't parse), falls through to the single-effect
+    grammar on the original phrase — preserving the ability of a
+    single-effect regex to match a phrase that happens to contain
+    `` and ``.
     """
+    compound = _parse_compound_effect(phrase)
+    if compound is not None:
+        return compound
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
