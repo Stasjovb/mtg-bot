@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
     ConditionalIfVoid,
     CreateToken,
     DealDamageAnyTarget,
@@ -14,14 +16,17 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnTargetCreature,
     Sequence,
     TriggeredAbility,
+    parse_mana_cost,
 )
 from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
     _build_land_printing,
     _build_spell_printing,
+    _normalize_activated_effect_phrase,
     _normalize_creature_effect_phrase,
     _normalize_spell_effect_phrase,
+    _parse_activated_ability_line,
     _parse_clause,
     _parse_effect,
     _parse_effect_phrase,
@@ -1187,3 +1192,256 @@ def test_build_spell_printing_skips_multi_line_with_unparseable_clause():
         ),
     }
     assert _build_spell_printing(card) is None
+
+
+# ---------- activated abilities ----------
+
+def test_normalize_activated_effect_phrase_strips_period_and_lowercases():
+    assert _normalize_activated_effect_phrase(
+        "Put a +1/+1 counter on target creature."
+    ) == "put a +1/+1 counter on target creature"
+    assert _normalize_activated_effect_phrase(
+        "Draw a card."
+    ) == "draw a card"
+
+
+def test_normalize_activated_effect_phrase_strips_whitespace():
+    assert _normalize_activated_effect_phrase(
+        "  Draw a card.  "
+    ) == "draw a card"
+
+
+def test_normalize_activated_effect_phrase_no_period_passthrough():
+    """If the surface phrase already lacks a trailing period, just the
+    lowercase + whitespace strip applies."""
+    assert _normalize_activated_effect_phrase("Draw a card") == "draw a card"
+
+
+def test_parse_activated_ability_line_simple_draw():
+    result = _parse_activated_ability_line("{2}: Draw a card.")
+    assert result == ActivatedAbility(
+        cost=ActivationCost(mana=parse_mana_cost("{2}"), mana_str="{2}"),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_parse_activated_ability_line_simple_gain_life():
+    result = _parse_activated_ability_line("{1}{W}: You gain 2 life.")
+    assert result == ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{1}{W}"), mana_str="{1}{W}"
+        ),
+        effect=GainLife(amount=2),
+    )
+
+
+def test_parse_activated_ability_line_put_counter_on_target():
+    result = _parse_activated_ability_line(
+        "{3}: Put a +1/+1 counter on target creature."
+    )
+    assert result == ActivatedAbility(
+        cost=ActivationCost(mana=parse_mana_cost("{3}"), mana_str="{3}"),
+        effect=PutPlusOneCounterOnTargetCreature(amount=1),
+    )
+
+
+def test_parse_activated_ability_line_damage_to_any_target():
+    result = _parse_activated_ability_line(
+        "{1}{R}: Deals 2 damage to any target."
+    )
+    assert result == ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{1}{R}"), mana_str="{1}{R}"
+        ),
+        effect=DealDamageAnyTarget(amount=2),
+    )
+
+
+def test_parse_activated_ability_line_strips_whitespace():
+    assert _parse_activated_ability_line(
+        "  {2}: Draw a card.  "
+    ) == _parse_activated_ability_line("{2}: Draw a card.")
+
+
+def test_parse_activated_ability_line_rejects_tap_cost():
+    """``{T}`` is a tap symbol, not a mana symbol — outside this
+    slice's pure-mana-cost grammar. Must return ``None`` rather than
+    blow up on the unknown mana symbol."""
+    assert _parse_activated_ability_line("{T}: Draw a card.") is None
+
+
+def test_parse_activated_ability_line_rejects_multi_cost_with_tap():
+    """``{2}, {T}: ...`` has an additional tap-cost piece beyond the
+    bare mana cost — out of scope, must return ``None``."""
+    assert _parse_activated_ability_line(
+        "{2}, {T}: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_multi_cost_with_sacrifice():
+    """``{2}, Sacrifice this creature: ...`` is multi-cost, out of
+    scope."""
+    assert _parse_activated_ability_line(
+        "{2}, Sacrifice this creature: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_unknown_effect():
+    """Cost parses, effect doesn't → whole line fails."""
+    assert _parse_activated_ability_line("{2}: Scry 1.") is None
+
+
+def test_parse_activated_ability_line_rejects_non_activated_lines():
+    assert _parse_activated_ability_line("Flying") is None
+    assert _parse_activated_ability_line("") is None
+    assert _parse_activated_ability_line(
+        "When this creature enters, draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_missing_period():
+    """The trailing period is part of the line shape — without it the
+    line doesn't match the pattern."""
+    assert _parse_activated_ability_line("{2}: Draw a card") is None
+
+
+def test_parse_activated_ability_line_rejects_sorcery_rider_inline():
+    """A sorcery rider on the same line as the effect doesn't parse —
+    the effect text including the rider isn't in our grammar. (The
+    out-of-scope case where the rider is on its own separate line is
+    covered by ``test_build_creature_printing_skips_sorcery_rider``.)"""
+    assert _parse_activated_ability_line(
+        "{3}: Put a +1/+1 counter on target creature. "
+        "Activate only as a sorcery."
+    ) is None
+
+
+def test_parse_clause_recognizes_activated_ability():
+    parsed = _parse_clause("{2}: Draw a card.")
+    assert parsed is not None
+    assert parsed.activated == ActivatedAbility(
+        cost=ActivationCost(mana=parse_mana_cost("{2}"), mana_str="{2}"),
+        effect=DrawCards(amount=1),
+    )
+    assert parsed.keywords == ()
+    assert parsed.trigger is None
+    assert parsed.keyword is None
+
+
+def test_parse_clause_does_not_claim_warp_does_not_collide_with_activated():
+    """Warp lines (e.g. ``Warp {1}{R}``) lack the ``: <effect>.`` tail
+    so the activated-ability matcher must not falsely claim them. Per
+    the existing orthogonality rule, ``_parse_clause`` returns ``None``
+    for a warp line — Warp is handled by the dedicated recognizer in
+    ``_build_creature_printing``."""
+    assert _parse_clause("Warp {1}{R}") is None
+
+
+def test_build_creature_printing_handles_simple_activated_ability():
+    """Synthetic creature with a pure ``{cost}: <effect>.`` activated
+    ability — exercises the activated-ability passthrough end-to-end
+    without depending on any other clause."""
+    card = {
+        "name": "Test Activator",
+        "mana_cost": "{1}{G}",
+        "type_line": "Creature — Insect",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": "{3}: Put a +1/+1 counter on target creature.",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset()
+    assert printing.triggered_abilities == ()
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{3}"), mana_str="{3}"),
+            effect=PutPlusOneCounterOnTargetCreature(amount=1),
+        ),
+    )
+
+
+def test_build_creature_printing_handles_activated_with_keyword():
+    """Mixed clause types (keyword line + activated-ability line) on the
+    same creature."""
+    card = {
+        "name": "Test Flyer",
+        "mana_cost": "{2}{U}",
+        "type_line": "Creature — Bird",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "Flying\n{2}: Draw a card.",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset({"flying"})
+    assert printing.triggered_abilities == ()
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{2}"), mana_str="{2}"),
+            effect=DrawCards(amount=1),
+        ),
+    )
+
+
+def test_build_creature_printing_handles_multiple_activated_abilities():
+    """Two pure activated abilities on the same creature both land in
+    ``activated_abilities`` in oracle-text order."""
+    card = {
+        "name": "Test Multi-Activator",
+        "mana_cost": "{2}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": (
+            "{1}: You gain 1 life.\n"
+            "{2}: Draw a card."
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{1}"), mana_str="{1}"),
+            effect=GainLife(amount=1),
+        ),
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{2}"), mana_str="{2}"),
+            effect=DrawCards(amount=1),
+        ),
+    )
+
+
+def test_build_creature_printing_skips_sorcery_rider():
+    """A creature whose activated ability has the
+    ``Activate only as a sorcery.`` rider on a separate line — the
+    rider line doesn't match any clause parser, so the whole card is
+    silently skipped (per design)."""
+    card = {
+        "name": "Test Sorcery-Rider",
+        "mana_cost": "{1}{G}",
+        "type_line": "Creature — Insect",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "{3}: Put a +1/+1 counter on target creature.\n"
+            "Activate only as a sorcery."
+        ),
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_build_creature_printing_skips_multi_cost_activated_ability():
+    """A creature whose activated ability has an additional cost
+    (e.g. ``{2}, Sacrifice this creature``) doesn't match the pure
+    mana-cost grammar — the line fails to parse and the card is
+    silently skipped."""
+    card = {
+        "name": "Test Multi-Cost",
+        "mana_cost": "{U}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "{2}, Sacrifice this creature: Draw a card.",
+    }
+    assert _build_creature_printing(card) is None

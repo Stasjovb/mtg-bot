@@ -20,6 +20,12 @@ Slice 1's grammar:
   trigger condition and an effect, each handled by its own parser.
   Adding a new condition or effect grows its respective grammar
   without touching the line-level pattern.
+- An activated-ability line of the form ``{cost}: <effect>.`` where
+  ``cost`` is one or more brace-wrapped mana symbols becomes a
+  single-mana-cost ``ActivatedAbility``. The effect is parsed via
+  the unified ``_parse_effect`` after lowercase + period stripping.
+  Riders (``Activate only as a sorcery.`` on a separate line) are
+  out of scope and cause the card to be skipped.
 
 Currently recognized:
 
@@ -95,6 +101,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
     CardPrinting,
     ConditionalIfVoid,
     CreateToken,
@@ -110,6 +118,7 @@ from mtg_bot.cards.base import (
     make_creature,
     make_instant,
     make_sorcery,
+    parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
@@ -124,14 +133,16 @@ class _ParsedClause:
     """One oracle-text clause that successfully parsed.
 
     Fields are mutually exclusive — a clause contributes either one
-    or more keyword strings or a triggered ability, never both. A
-    keyword-only line that lists several keywords joined by ``, ``
-    parses to a single ``_ParsedClause`` whose ``keywords`` tuple
-    holds every keyword on that line.
+    or more keyword strings, a triggered ability, or an activated
+    ability, never more than one. A keyword-only line that lists
+    several keywords joined by ``, `` parses to a single
+    ``_ParsedClause`` whose ``keywords`` tuple holds every keyword
+    on that line.
     """
 
     keywords: tuple[str, ...] = ()
     trigger: TriggeredAbility | None = None
+    activated: ActivatedAbility | None = None
 
     @property
     def keyword(self) -> str | None:
@@ -287,6 +298,55 @@ def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
         return None
     return TriggeredAbility(trigger=trigger, effect=effect)
 
+
+# Activated-ability parsing handles the simple shape ``{cost}: <effect>.``
+# where ``cost`` is one or more brace-wrapped mana symbols (no ``{T}``,
+# no comma-separated additional costs like sacrifice or counter removal)
+# and ``<effect>`` is a single sentence parsed via the unified
+# ``_parse_effect`` after lowercase + period stripping. Riders like
+# ``Activate only as a sorcery.`` on a separate line are out of scope —
+# they fall through ``_parse_clause`` and cause the card to be skipped.
+_ACTIVATED_ABILITY_LINE = re.compile(
+    r"^(\{[^}]+\}(?:\{[^}]+\})*): (.+\.)$"
+)
+
+
+def _normalize_activated_effect_phrase(phrase: str) -> str:
+    """Strip the trailing period and lowercase the first letter so the
+    activated-ability surface form (``Put a +1/+1 counter on target
+    creature.``) matches the unified normalized grammar."""
+    phrase = phrase.strip()
+    if phrase.endswith("."):
+        phrase = phrase[:-1]
+    if phrase and phrase[0].isupper():
+        phrase = phrase[0].lower() + phrase[1:]
+    return phrase
+
+
+def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
+    """Return an ``ActivatedAbility`` for a simple ``{cost}: <effect>.``
+    line, or ``None`` if the line shape doesn't match, the cost contains
+    a non-mana symbol (e.g. ``{T}``), or the effect doesn't parse via
+    the unified grammar.
+    """
+    m = _ACTIVATED_ABILITY_LINE.match(line.strip())
+    if m is None:
+        return None
+    cost_str = m.group(1)
+    try:
+        mana = parse_mana_cost(cost_str)
+    except ValueError:
+        # ``{T}`` and other non-mana symbols are not valid as the entire
+        # cost of a simple activated ability in this slice.
+        return None
+    effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
+    if effect is None:
+        return None
+    return ActivatedAbility(
+        cost=ActivationCost(mana=mana, mana_str=cost_str),
+        effect=effect,
+    )
+
 _SUPERTYPES = frozenset({"Basic", "Legendary", "Snow", "World", "Ongoing"})
 
 _TYPE_LINE_SEPARATOR = "—"  # em-dash, used by Scryfall
@@ -341,6 +401,9 @@ def _parse_clause(line: str) -> _ParsedClause | None:
     triggered = _parse_triggered_ability_line(line)
     if triggered is not None:
         return _ParsedClause(trigger=triggered)
+    activated = _parse_activated_ability_line(line)
+    if activated is not None:
+        return _ParsedClause(activated=activated)
     return None
 
 
@@ -496,6 +559,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 
     keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
+    activated: list[ActivatedAbility] = []
     warp: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
@@ -515,6 +579,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         keywords.update(parsed.keywords)
         if parsed.trigger is not None:
             triggers.append(parsed.trigger)
+        if parsed.activated is not None:
+            activated.append(parsed.activated)
 
     return make_creature(
         name=card["name"],
@@ -523,6 +589,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         toughness=toughness,
         keywords=keywords,
         triggered_abilities=tuple(triggers),
+        activated_abilities=tuple(activated),
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
