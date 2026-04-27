@@ -394,14 +394,9 @@ def test_lignify_plus_counters_plus_pump_compose():
 
 
 def test_wandering_fumarole_switch_after_lignify():
-    """Wandering Fumarole's "{0}: Switch P/T UEOT" is per CR a layer
-    7e effect — it operates on whatever the post-7b/c/d effective
-    P/T is. So a Lignified Fumarole at 0/4 should switch to 4/0.
-
-    Today our Switch effect writes a layer-7a set_base_pt entry,
-    which is incorrect: 7a runs before 7b, so the latest 7a wins
-    over the older Lignify 7a. Demonstrates the sublayer mistake.
-    """
+    """Wandering Fumarole's "{0}: Switch P/T UEOT" is a layer 7e
+    effect — it operates on whatever the post-7b/c/d effective P/T
+    is. So a Lignified manland at 0/4 should switch to 4/0."""
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
     # Animate Forest into a 1/4 creature (manland-style) UEOT.
@@ -416,17 +411,128 @@ def test_wandering_fumarole_switch_after_lignify():
     assert effective_power(state, forest) == 0  # Lignify wins over animation
     assert effective_toughness(state, forest) == 4
 
-    # Now activate the switch. Per CR, expect 4/0 (switch swaps the
-    # post-base-set P/T). With our buggy 7a-instead-of-7e
-    # implementation, the switch's NEW 7a entry overrides Lignify's
-    # 7a → result is whatever the switch read (the bear's old P/T)
-    # — wrong.
     from mtg_bot.effects.generic import SwitchSourcePowerToughnessUEOT
     state.resolving_source = forest
     SwitchSourcePowerToughnessUEOT().resolve(state, 0)
 
     assert effective_power(state, forest) == 4
     assert effective_toughness(state, forest) == 0
+
+
+def test_switch_pt_swaps_after_counters_not_just_base():
+    """Layer 7e switch operates AFTER 7d counters. A Lignified bear
+    (0/4 base) with a +1/+1 counter is effectively 1/5 before the
+    switch — switching gives 5/1, NOT 4/0 (which would be the
+    pre-counter base swap). Pins the sublayer ordering.
+    """
+    from mtg_bot.effects.generic import SwitchSourcePowerToughnessUEOT
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, bear)
+    bear.plus_one_counters = 1
+    assert effective_power(state, bear) == 1
+    assert effective_toughness(state, bear) == 5
+
+    state.resolving_source = bear
+    SwitchSourcePowerToughnessUEOT().resolve(state, 0)
+
+    assert effective_power(state, bear) == 5
+    assert effective_toughness(state, bear) == 1
+
+
+def test_asymmetric_pump_before_switch_pump_applies_to_unswapped_base():
+    """Titan's-Strength-style asymmetric pump (+3/+1) applied to a
+    Wandering Fumarole BEFORE the switch activates. Per CR sublayer
+    order, 7c (modify P/T) applies before 7e (switch):
+
+      7b base: 1/4 (animated manland)
+      7c pump: 1+3 / 4+1 = 4/5
+      7e switch: 5/4
+
+    Pinning that pump bonuses are added to BASE P/T, then the swap
+    happens to the post-pump pair.
+    """
+    from mtg_bot.effects.generic import SwitchSourcePowerToughnessUEOT
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    state.grant_become_creature_ueot(
+        source_id=forest.id, target_id=forest.id,
+        power=1, toughness=4,
+        description="manland animation",
+    )
+    # Pump first: +3/+1 (Titan's Strength shape).
+    forest.temp_power_bonus = 3
+    forest.temp_toughness_bonus = 1
+    assert effective_power(state, forest) == 4
+    assert effective_toughness(state, forest) == 5
+
+    state.resolving_source = forest
+    SwitchSourcePowerToughnessUEOT().resolve(state, 0)
+
+    assert effective_power(state, forest) == 5
+    assert effective_toughness(state, forest) == 4
+
+
+def test_asymmetric_pump_after_switch_same_result():
+    """Reverse timestamp order: switch FIRST, pump LATER. Per CR
+    613 the layer of the effect dominates the timestamp — 7c always
+    runs before 7e regardless of when each was applied. So the
+    final P/T is the same as the pump-before-switch ordering: 5/4.
+
+    This is the key MTG-correctness guarantee the user called out:
+    the asymmetric pump's bonus must be applied to the unswapped
+    base, with the swap happening LAST regardless of casting order.
+    """
+    from mtg_bot.effects.generic import SwitchSourcePowerToughnessUEOT
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    state.grant_become_creature_ueot(
+        source_id=forest.id, target_id=forest.id,
+        power=1, toughness=4,
+        description="manland animation",
+    )
+    # Switch first.
+    state.resolving_source = forest
+    SwitchSourcePowerToughnessUEOT().resolve(state, 0)
+    assert effective_power(state, forest) == 4
+    assert effective_toughness(state, forest) == 1
+    # Now apply the pump — temporally AFTER the switch, but per CR
+    # layered effects 7c still applies before 7e in computation.
+    forest.temp_power_bonus = 3
+    forest.temp_toughness_bonus = 1
+
+    # Same final result as the pump-then-switch test: 5/4.
+    assert effective_power(state, forest) == 5
+    assert effective_toughness(state, forest) == 4
+
+
+def test_two_switches_cancel():
+    """Two layer-7e switch_pt entries cancel — P/T returns to the
+    pre-switch effective values."""
+    from mtg_bot.effects.generic import SwitchSourcePowerToughnessUEOT
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    state.grant_become_creature_ueot(
+        source_id=forest.id, target_id=forest.id,
+        power=1, toughness=4,
+        description="manland animation",
+    )
+    assert (effective_power(state, forest), effective_toughness(state, forest)) \
+        == (1, 4)
+
+    state.resolving_source = forest
+    SwitchSourcePowerToughnessUEOT().resolve(state, 0)
+    assert (effective_power(state, forest), effective_toughness(state, forest)) \
+        == (4, 1)
+
+    SwitchSourcePowerToughnessUEOT().resolve(state, 0)
+    assert (effective_power(state, forest), effective_toughness(state, forest)) \
+        == (1, 4)
 
 
 def test_older_set_base_pt_then_lignify_lignify_wins_if_newer():

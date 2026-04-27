@@ -934,59 +934,79 @@ def _registry_set_base_pt(
     return matches[-1].params  # (power, toughness)
 
 
-def effective_power(state: GameState, obj: GameObject) -> int:
-    """Power including +1/+1 counters, static bonuses, and UEOT pumps.
-    Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
-    instead of reading ``printing.power``.
+def _compute_effective_pt(
+    state: GameState, obj: GameObject
+) -> tuple[int, int]:
+    """Compute (effective_power, effective_toughness) walking layer 7
+    sublayers in CR-613 order:
 
-    Layer-7a precedence: a registry ``"set_base_pt"`` entry (Lignify)
-    overrides both the printed/dynamic base AND the legacy
-    ``temp_base_pt_override`` field, since the registry entry is the
-    layered-effects source of truth.
+      - 7b (sublayer 1): set base P/T — most-recent registry
+        ``"set_base_pt"`` wins; falls back to legacy
+        ``temp_base_pt_override``, then dynamic P/T formula, then
+        printed.
+      - 7c (sublayer 2): modify P/T — anthem static bonuses + UEOT
+        pump bonuses (legacy fields).
+      - 7d (sublayer 3): counters — +1/+1 counters add equally.
+      - 7e (sublayer 4): switch P/T — each layer-7 sublayer-4
+        ``"switch_pt"`` registry entry contributes one swap, walked
+        in timestamp order (so two swaps cancel; three swaps =
+        one swap).
+
+    Single function returning both so the sublayer walk happens
+    once per query — saves the duplicate work of the prior
+    ``effective_power`` / ``effective_toughness`` split.
     """
-    layer7a = _registry_set_base_pt(state, obj)
-    if layer7a is not None:
-        base = layer7a[0]
+    # 7b: base P/T.
+    layer7b = _registry_set_base_pt(state, obj)
+    if layer7b is not None:
+        base_p, base_t = layer7b
     elif obj.temp_base_pt_override is not None:
-        base = obj.temp_base_pt_override[0]
+        base_p, base_t = obj.temp_base_pt_override
     else:
         dynamic = _dynamic_base_pt(state, obj)
-        base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
-    power_bonus, _, _ = _static_bonuses(state, obj)
-    return (
-        base
-        + obj.plus_one_counters
-        + power_bonus
-        + obj.temp_power_bonus
-        + obj.extended_temp_power_bonus
+        if dynamic is not None:
+            base_p, base_t = dynamic
+        else:
+            base_p = obj.printing.power or 0
+            base_t = obj.printing.toughness or 0
+    # 7c: modify P/T (anthems, pumps).
+    power_bonus, toughness_bonus, _ = _static_bonuses(state, obj)
+    p = (
+        base_p + power_bonus
+        + obj.temp_power_bonus + obj.extended_temp_power_bonus
     )
+    t = (
+        base_t + toughness_bonus
+        + obj.temp_toughness_bonus + obj.extended_temp_toughness_bonus
+    )
+    # 7d: counters.
+    p += obj.plus_one_counters
+    t += obj.plus_one_counters
+    # 7e: switches. Each entry contributes a single swap.
+    layer7e = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 7 and ce.sublayer == 4
+            and ce.kind == "switch_pt"
+            and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for _ in layer7e:
+        p, t = t, p
+    return p, t
+
+
+def effective_power(state: GameState, obj: GameObject) -> int:
+    """Power after walking layer 7 sublayers (see
+    ``_compute_effective_pt`` for the full ordering)."""
+    return _compute_effective_pt(state, obj)[0]
 
 
 def effective_toughness(state: GameState, obj: GameObject) -> int:
-    """Toughness including +1/+1 counters, static bonuses, and UEOT pumps.
-    Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
-    instead of reading ``printing.toughness``.
-
-    Layer-7a precedence: a registry ``"set_base_pt"`` entry (Lignify)
-    overrides both the printed/dynamic base AND the legacy
-    ``temp_base_pt_override`` field.
-    """
-    layer7a = _registry_set_base_pt(state, obj)
-    if layer7a is not None:
-        base = layer7a[1]
-    elif obj.temp_base_pt_override is not None:
-        base = obj.temp_base_pt_override[1]
-    else:
-        dynamic = _dynamic_base_pt(state, obj)
-        base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
-    _, toughness_bonus, _ = _static_bonuses(state, obj)
-    return (
-        base
-        + obj.plus_one_counters
-        + toughness_bonus
-        + obj.temp_toughness_bonus
-        + obj.extended_temp_toughness_bonus
-    )
+    """Toughness after walking layer 7 sublayers (see
+    ``_compute_effective_pt`` for the full ordering)."""
+    return _compute_effective_pt(state, obj)[1]
 
 
 @dataclass
