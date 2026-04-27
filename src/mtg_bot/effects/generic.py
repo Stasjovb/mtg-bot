@@ -4226,11 +4226,15 @@ class PumpSelfXPowerUEOT(Effect):
 class SwitchSourcePowerToughnessUEOT(Effect):
     """Switch the source's base power and toughness until end of turn.
 
-    Implementation: reads the source's current effective power /
-    toughness (so existing pumps and counters are accounted for in the
-    swap) and writes a temp_base_pt_override of (T, P) — the swapped
-    pair — while zeroing the temp_*_bonus fields contributed BY the
-    swap so it composes additively with later pumps.
+    Implementation: reads the source's current effective base P/T
+    via the layered registry (the most-recent layer-7a
+    ``"set_base_pt"`` entry wins; falls back to printed P/T if no
+    such entry exists) and writes a NEW layer-7a ``"set_base_pt"``
+    entry with the swapped pair, ``expires_at="cleanup"``. Because
+    timestamps are monotonically increasing, the new entry
+    overrides the old one in ``effective_power`` / ``effective_toughness``.
+    Mirrors to the legacy ``temp_base_pt_override`` cache field so
+    any code still reading the field (rare) sees the right value.
 
     Simplification: only the BASE pair is swapped. +1/+1 counters and
     static-anthem bonuses are not "swapped" per se — they continue to
@@ -4241,22 +4245,38 @@ class SwitchSourcePowerToughnessUEOT(Effect):
     Wires Wandering Fumarole's granted "{0}: Switch this creature's
     power and toughness until end of turn" while animated. The {0}
     cost means the ability is freely re-activatable, which lets the
-    swap toggle back and forth — handled correctly because each
-    activation re-reads the current base override.
+    swap toggle back and forth — each activation re-reads the
+    most-recent registry entry and writes a fresh override.
     """
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import _registry_set_base_pt
+
         source = state.resolving_source
         if source is None:
             return
-        if source.temp_base_pt_override is not None:
+        layer7a = _registry_set_base_pt(state, source)
+        if layer7a is not None:
+            p, t = layer7a
+        elif source.temp_base_pt_override is not None:
             p, t = source.temp_base_pt_override
         else:
             p = source.printing.power or 0
             t = source.printing.toughness or 0
+        state.add_continuous_effect(
+            source_id=source.id,
+            layer=7, sublayer=1, kind="set_base_pt",
+            target_id=source.id,
+            params=(t, p),
+            expires_at="cleanup",
+            description=(
+                f"{source.printing.name} P/T switched to {t}/{p} UEOT"
+            ),
+        )
+        # Mirror to legacy cache for any non-registry reader.
         source.temp_base_pt_override = (t, p)
         state.log.append(
             f"{source.printing.name}'s power and toughness are switched "

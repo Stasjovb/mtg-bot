@@ -373,7 +373,14 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     ``expires_at == "cleanup"``). Effects that haven't been migrated
     yet still write to ``obj.temp_keywords`` directly; the union
     ensures both code paths combine correctly so the migration can
-    proceed effect-by-effect without breaking existing behavior."""
+    proceed effect-by-effect without breaking existing behavior.
+
+    Lignify-style "lose all abilities" (layer 6) wipes printed AND
+    granted keywords — returns the empty frozenset in that case.
+    Granted keywords from REGISTRY entries are also suppressed
+    because Lignify's effect lives at the same layer as the grants."""
+    if _has_lose_all_abilities(state, obj):
+        return frozenset()
     kws = obj.printing.keywords
     if is_stationed(obj):
         kws = kws | obj.printing.stationed_keywords
@@ -499,8 +506,14 @@ def effective_subtypes(
     state: "GameState", obj: "GameObject"
 ) -> tuple[str, ...]:
     """Return ``obj``'s subtypes including any granted by permanents
-    on the battlefield. Currently only handles "artifacts you control
-    are Foods" (Ragost, Deft Gastronaut's static)."""
+    on the battlefield. Handles "artifacts you control are Foods"
+    (Ragost, Deft Gastronaut's static) AND any layer-4 ``add_subtype``
+    registry entries targeting this object (Lignify granting
+    "Treefolk").
+
+    Layer-4 grants are appended after the printed list, ordered by
+    timestamp ascending so the most-recent grant lands last.
+    Duplicates are suppressed."""
     subtypes = list(obj.printing.subtypes)
     if obj.printing.is_artifact:
         for o in state.battlefield:
@@ -512,6 +525,19 @@ def effective_subtypes(
                 if "Food" not in subtypes:
                     subtypes.append("Food")
                 break
+    layer4 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 4
+            and ce.kind == "add_subtype"
+            and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for ce in layer4:
+        sub = ce.params[0] if ce.params else None
+        if sub and sub not in subtypes:
+            subtypes.append(sub)
     return tuple(subtypes)
 
 
@@ -544,6 +570,21 @@ def effective_land_produces(
     return land_obj.printing.produces
 
 
+def _has_lose_all_abilities(state: "GameState", obj: "GameObject") -> bool:
+    """True if a layer-6 ``"lose_all_abilities"`` registry entry
+    targets ``obj`` (Lignify, Humility, Turn to Frog). Suppresses
+    every printed and granted ability the object would otherwise
+    have."""
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "lose_all_abilities"
+            and ce.target_id == obj.id
+        ):
+            return True
+    return False
+
+
 def effective_activated_abilities(
     state: "GameState", obj: "GameObject"
 ) -> tuple:
@@ -559,12 +600,20 @@ def effective_activated_abilities(
     Magus of the Moon: nonbasic lands lose their activated abilities
     entirely (their {T}: Add {R} tap is handled via
     ``effective_land_produces``, not as an activated ability).
+
+    Lignify-style "lose all abilities" (layer 6) takes precedence
+    over both printed AND granted abilities — returns the empty
+    tuple if any ``"lose_all_abilities"`` registry entry targets
+    this object.
     """
     from mtg_bot.cards import (
         DOMINION_BRACELET_GRANTED_ABILITY,
         MMNEMON_BLUE_MANA_GRANTED_ABILITY,
         RAGOST_FOOD_GRANTED_ABILITY,
     )
+
+    if _has_lose_all_abilities(state, obj):
+        return ()
 
     # Magus: nonbasic land abilities suppressed while in play.
     if (
@@ -635,7 +684,12 @@ def effective_triggered_abilities(
     Indices match the order the engine fires them: printed first,
     then ``temp_*`` field grants (legacy path), then registry
     grants.
+
+    Lignify-style "lose all abilities" suppresses every trigger
+    (printed and granted) — returns the empty tuple in that case.
     """
+    if _has_lose_all_abilities(state, obj):
+        return ()
     base = list(obj.printing.triggered_abilities)
     if obj.temp_triggered_abilities:
         base.extend(obj.temp_triggered_abilities)
@@ -769,15 +823,44 @@ def add_stun_counters(
     return effective
 
 
+def _registry_set_base_pt(
+    state: "GameState", obj: "GameObject"
+) -> "tuple[int, int] | None":
+    """Highest-timestamp layer-7 sublayer-1 ``"set_base_pt"`` entry
+    targeting ``obj``, or None if no such entry exists. Lignify
+    ("base power and toughness 0/4 while attached") writes one of
+    these on attach. Multiple "set base PT" effects: the latest
+    timestamp wins (CR 613 timestamp rule within a sublayer)."""
+    matches = [
+        ce for ce in state.continuous_effects
+        if ce.layer == 7
+        and ce.sublayer == 1
+        and ce.kind == "set_base_pt"
+        and ce.target_id == obj.id
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda ce: ce.timestamp)
+    return matches[-1].params  # (power, toughness)
+
+
 def effective_power(state: GameState, obj: GameObject) -> int:
     """Power including +1/+1 counters, static bonuses, and UEOT pumps.
     Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
     instead of reading ``printing.power``.
+
+    Layer-7a precedence: a registry ``"set_base_pt"`` entry (Lignify)
+    overrides both the printed/dynamic base AND the legacy
+    ``temp_base_pt_override`` field, since the registry entry is the
+    layered-effects source of truth.
     """
-    dynamic = _dynamic_base_pt(state, obj)
-    if obj.temp_base_pt_override is not None:
+    layer7a = _registry_set_base_pt(state, obj)
+    if layer7a is not None:
+        base = layer7a[0]
+    elif obj.temp_base_pt_override is not None:
         base = obj.temp_base_pt_override[0]
     else:
+        dynamic = _dynamic_base_pt(state, obj)
         base = dynamic[0] if dynamic is not None else (obj.printing.power or 0)
     power_bonus, _, _ = _static_bonuses(state, obj)
     return (
@@ -793,11 +876,18 @@ def effective_toughness(state: GameState, obj: GameObject) -> int:
     """Toughness including +1/+1 counters, static bonuses, and UEOT pumps.
     Dynamic P/T creatures compute their base via ``dynamic_pt_formula``
     instead of reading ``printing.toughness``.
+
+    Layer-7a precedence: a registry ``"set_base_pt"`` entry (Lignify)
+    overrides both the printed/dynamic base AND the legacy
+    ``temp_base_pt_override`` field.
     """
-    dynamic = _dynamic_base_pt(state, obj)
-    if obj.temp_base_pt_override is not None:
+    layer7a = _registry_set_base_pt(state, obj)
+    if layer7a is not None:
+        base = layer7a[1]
+    elif obj.temp_base_pt_override is not None:
         base = obj.temp_base_pt_override[1]
     else:
+        dynamic = _dynamic_base_pt(state, obj)
         base = dynamic[1] if dynamic is not None else (obj.printing.toughness or 0)
     _, toughness_bonus, _ = _static_bonuses(state, obj)
     return (

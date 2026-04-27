@@ -1889,58 +1889,95 @@ def apply_aura_static_grants_on_attach(
     continuous (not stack-based), so they take effect immediately —
     before any ETB triggers go on the stack.
 
-    Currently models Tractor Beam's "you control enchanted permanent"
-    via the ``attached_grants_control`` printing flag. Writes a
-    layer-2 ``"control_change"`` entry to ``state.continuous_effects``
-    with ``source_id=aura.id`` and ``params=(controller_id,)``. The
-    most-recent (highest-timestamp) entry wins — matching MTG's
-    continuous-effect timestamp ordering — so a second control-grant
-    aura attaching after this one overrides.
-    ``move_off_battlefield`` drops the entry when the source aura
-    leaves play, at which point ``effective_controller`` falls back
-    to the next-most-recent entry or the captured baseline.
+    Models the following printing flags by writing matching
+    registry entries with ``expires_at=None`` (static-while-attached;
+    ``move_off_battlefield`` drops them via
+    ``remove_continuous_effects_from_source(only_static=True)``):
 
-    The first time a control-grant entry targets this permanent,
-    captures the prior ``controller_id`` in
-    ``controller_id_before_any_aura_swap`` as the baseline for
-    reversion. The stored ``target.controller_id`` field is updated
-    as a write-through cache of ``effective_controller`` so existing
-    sites that read the field still see the right value.
+    - ``attached_grants_control`` → layer 2 ``"control_change"``
+      (Tractor Beam). Most-recent timestamp wins; baseline captured
+      on the first grant for revert order.
+    - ``attached_sets_base_pt`` → layer 7 sublayer 1 ``"set_base_pt"``
+      (Lignify). Overrides base P/T while attached.
+    - ``attached_grants_lose_all_abilities`` → layer 6
+      ``"lose_all_abilities"`` (Lignify). Suppresses every printed
+      and granted ability/keyword/trigger.
+    - ``attached_grants_subtype`` → layer 4 ``"add_subtype"``
+      (Lignify granting "Treefolk").
 
-    Skips when the target is already self-controlled by the same
-    player (no redundant entry).
+    Each is independent — a printing may set any combination.
     """
     from mtg_bot.game import effective_controller
 
-    if not aura.printing.attached_grants_control:
-        return
-    if effective_controller(state, target) == controller_id:
-        return
-    # First control-grant on this target: capture the baseline.
-    has_prior_grant = any(
-        ce.layer == 2
-        and ce.kind == "control_change"
-        and ce.target_id == target.id
-        for ce in state.continuous_effects
-    )
-    if not has_prior_grant:
-        target.controller_id_before_any_aura_swap = target.controller_id
-    state.add_continuous_effect(
-        source_id=aura.id,
-        layer=2,
-        kind="control_change",
-        target_id=target.id,
-        params=(controller_id,),
-        description=(
-            f"{aura.printing.name} grants P{controller_id} control of "
-            f"{target.printing.name}"
-        ),
-    )
-    target.controller_id = effective_controller(state, target)
-    state.log.append(
-        f"P{controller_id} gains control of "
-        f"{target.printing.name} via {aura.printing.name}"
-    )
+    if aura.printing.attached_grants_control:
+        if effective_controller(state, target) != controller_id:
+            # First control-grant on this target: capture the baseline.
+            has_prior_grant = any(
+                ce.layer == 2
+                and ce.kind == "control_change"
+                and ce.target_id == target.id
+                for ce in state.continuous_effects
+            )
+            if not has_prior_grant:
+                target.controller_id_before_any_aura_swap = target.controller_id
+            state.add_continuous_effect(
+                source_id=aura.id,
+                layer=2,
+                kind="control_change",
+                target_id=target.id,
+                params=(controller_id,),
+                description=(
+                    f"{aura.printing.name} grants P{controller_id} "
+                    f"control of {target.printing.name}"
+                ),
+            )
+            target.controller_id = effective_controller(state, target)
+            state.log.append(
+                f"P{controller_id} gains control of "
+                f"{target.printing.name} via {aura.printing.name}"
+            )
+
+    if aura.printing.attached_sets_base_pt is not None:
+        power, toughness = aura.printing.attached_sets_base_pt
+        state.add_continuous_effect(
+            source_id=aura.id,
+            layer=7,
+            sublayer=1,
+            kind="set_base_pt",
+            target_id=target.id,
+            params=(power, toughness),
+            description=(
+                f"{aura.printing.name} sets {target.printing.name} "
+                f"base P/T to {power}/{toughness}"
+            ),
+        )
+
+    if aura.printing.attached_grants_lose_all_abilities:
+        state.add_continuous_effect(
+            source_id=aura.id,
+            layer=6,
+            kind="lose_all_abilities",
+            target_id=target.id,
+            params=(),
+            description=(
+                f"{aura.printing.name}: {target.printing.name} loses "
+                f"all abilities"
+            ),
+        )
+
+    if aura.printing.attached_grants_subtype is not None:
+        sub = aura.printing.attached_grants_subtype
+        state.add_continuous_effect(
+            source_id=aura.id,
+            layer=4,
+            kind="add_subtype",
+            target_id=target.id,
+            params=(sub,),
+            description=(
+                f"{aura.printing.name}: {target.printing.name} is "
+                f"a {sub}"
+            ),
+        )
 
 
 def put_into_battlefield(
