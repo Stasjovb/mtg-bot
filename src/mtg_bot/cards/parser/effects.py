@@ -20,6 +20,7 @@ from mtg_bot.cards.base import (
     CounterTargetSpell,
     CreateToken,
     DealDamageAnyTarget,
+    DealDamageEachOpponent,
     DealDamageToTargetCreature,
     DestroyTargetArtifact,
     DestroyTargetCreature,
@@ -28,6 +29,8 @@ from mtg_bot.cards.base import (
     DrawCards,
     EachOpponentLosesLife,
     Effect,
+    ExileAllArtifactsWithManaValueAtMost,
+    ExileAllCreaturesAndSpacecraft,
     ExileTargetCreature,
     GainLife,
     LoseLife,
@@ -41,6 +44,7 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    SearchLibraryForCard,
     SelfMill,
     Sequence,
     Surveil,
@@ -87,9 +91,62 @@ _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
 )
 _DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
 _COUNTER_TARGET_SPELL = re.compile(r"^counter target spell$")
+# "Counter target artifact or enchantment spell." — Annul. Same engine
+# class as the bare counterspell, just with a non-empty ``filter_types``
+# frozenset that gates which stack items are legal targets. Tried before
+# the bare ``counter target spell`` regex below because the bare regex
+# requires the phrase to end at ``spell`` with no qualifier.
+_COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
+    r"^counter target artifact or enchantment spell$"
+)
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Exile all creatures and Spacecraft." — Beyond the Quiet wrath. Capital
+# ``S`` on Spacecraft is preserved verbatim from the oracle text — the
+# normalization layer only lowercases the first letter of the phrase, so
+# inner type-name capitalization survives. Untargeted (mass) effect.
+#
+# Note this is matched here as a SINGLE-effect regex, before the
+# compound-effect splitter would carve the phrase on `` and `` —
+# ``_parse_compound_effect`` runs first in ``_parse_effect`` but punts
+# (returns None) when any split-piece fails to parse, and ``Spacecraft``
+# alone isn't a recognized effect, so the compound attempt rejects and
+# falls through to the single-effect dispatcher where this regex wins.
+_EXILE_ALL_CREATURES_AND_SPACECRAFT = re.compile(
+    r"^exile all creatures and Spacecraft$"
+)
+# "Exile all artifacts with mana value N or less." — Ruinous Rampage's
+# anti-artifact mode. The captured group is the max mana value (digit
+# only — no card prints a spelled-out mana-value bound today). Maps to
+# ``ExileAllArtifactsWithManaValueAtMost(max_mv=N)``.
+_EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST = re.compile(
+    r"^exile all artifacts with mana value (\d+) or less$"
+)
 _EACH_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^each opponent loses (\d+) life$"
+)
+# "<source> deals N damage to each opponent." — mass burn aimed at
+# every opponent (Ruinous Rampage's burn mode). The ``deals`` form
+# (no ``it`` / ``you`` subject) is what Scryfall prints for spells
+# that name themselves as the subject; the spell-effect normalizer
+# strips the ``<Name>`` prefix before this regex sees the phrase, so
+# the surface form here is exactly ``deals N damage to each opponent``.
+# For creature-source triggered abilities the ``it`` prefix is also
+# stripped first, leaving the same canonical ``deals …`` form.
+_DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
+    r"^deals (\d+) damage to each opponent$"
+)
+# "Search your library for an artifact card, reveal it, put it into
+# your hand, then shuffle." — Scour for Scrap mode 1 (and any future
+# narrow tutor with the same surface). Maps to
+# ``SearchLibraryForCard(filter_name="artifact", may_fail=True)``.
+# The full surface form (with reveal/hand/shuffle tail) is required:
+# this primitive doesn't claim a simpler ``search your library for an
+# artifact card`` line because that bare shape isn't a complete oracle
+# clause for any printed card — every artifact tutor in EoE prints the
+# full reveal/hand/shuffle tail.
+_SEARCH_LIBRARY_FOR_ARTIFACT_CARD = re.compile(
+    r"^search your library for an artifact card, "
+    r"reveal it, put it into your hand, then shuffle$"
 )
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
@@ -426,6 +483,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetCreature(amount=int(m.group(1)))
+    # ``deals N damage to each opponent`` — mass-burn opponents (Ruinous
+    # Rampage's burn mode). Tried after the targeted ``deals N damage to
+    # any target`` / ``… target creature`` regexes because those bind
+    # tighter (the ``each opponent`` tail is an exact literal that won't
+    # collide with the targeted shapes).
+    m = _DEAL_N_DAMAGE_EACH_OPPONENT.match(phrase)
+    if m is not None:
+        return DealDamageEachOpponent(amount=int(m.group(1)))
     if _DRAW_A_CARD.match(phrase) is not None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
@@ -440,10 +505,33 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnSelf(amount=1)
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
+    # ``counter target artifact or enchantment spell`` — Annul. Tried
+    # BEFORE the bare ``counter target spell`` regex so the more
+    # specific filter-typed shape wins. Both shapes return the same
+    # engine class, just with different ``filter_types`` frozensets.
+    if _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL.match(
+        phrase
+    ) is not None:
+        return CounterTargetSpell(
+            filter_types=frozenset({"Artifact", "Enchantment"})
+        )
     if _COUNTER_TARGET_SPELL.match(phrase) is not None:
         return CounterTargetSpell()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
+    if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:
+        return ExileAllCreaturesAndSpacecraft()
+    m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
+    if m is not None:
+        return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))
+    if _SEARCH_LIBRARY_FOR_ARTIFACT_CARD.match(phrase) is not None:
+        # ``may_fail=True`` mirrors the static Scour-for-Scrap printing —
+        # the controller may decline the fetch (and shuffle anyway). No
+        # EoE oracle text spells out ``may_fail=False`` for an artifact
+        # tutor today; if one ships, gate it on a different surface form.
+        return SearchLibraryForCard(
+            filter_name="artifact", may_fail=True,
+        )
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
