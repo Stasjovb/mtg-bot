@@ -15,6 +15,7 @@ from mtg_bot.cards.base import make_artifact, make_creature
 from mtg_bot.effects import (
     ConditionalIfYouControlAtLeast, GainLife, TriggeredAbility,
 )
+from mtg_bot.effects.predicates import YOU, Controlled, Event
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_beginning_of_upkeep_triggers
 
@@ -47,7 +48,7 @@ def test_beginning_of_upkeep_fires_for_active_player_only():
         "Test Upkeep Art", "{0}",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="beginning_of_upkeep",
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
                 effect=GainLife(amount=5),
             ),
         ),
@@ -65,7 +66,7 @@ def test_beginning_of_upkeep_fires_for_active_player_permanents():
         "Test Upkeep Art", "{0}",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="beginning_of_upkeep",
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
                 effect=GainLife(amount=5),
             ),
         ),
@@ -210,7 +211,7 @@ def test_beginning_of_upkeep_targeted_trigger_fires_and_fizzles():
         "Test Pumper", "{0}",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="beginning_of_upkeep",
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
                 effect=PumpTargetCreatureUntilEOT(
                     power_bonus=1, toughness_bonus=1,
                 ),

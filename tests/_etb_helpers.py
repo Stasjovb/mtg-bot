@@ -13,7 +13,14 @@ DIES / LEAVES_BATTLEFIELD families (``"dies"``,
 family — currently just the ``"attacks"`` self-attack key (the
 aura/equipment ``"enchanted_creature_attacks"`` and
 ``"equipped_creature_attacks"`` relational variants stay on the
-string-key path until a ``Host`` predicate lands).
+string-key path until a ``Host`` predicate lands). Phase 6 migrated
+the turn-structure family (``"beginning_of_upkeep"``,
+``"beginning_of_combat"``, ``"beginning_of_end_step"``, and the
+``"beginning_of_each_end_step"`` variant) — these events carry a
+Player subject (rather than a permanent), so the inferred-key
+mapping pivots on whether the predicate is ``Controlled(YOU)`` (the
+"your" variant) or ``Always()`` (the "each" variant — only present
+for the end-step event today).
 
 Existing tests that scan trigger-key strings
 (``ab.trigger == "etb"``, ``"landfall" in {ab.trigger ...}``) need
@@ -31,6 +38,7 @@ to, and otherwise return the literal ``ability.trigger`` field.
 from __future__ import annotations
 
 from mtg_bot.effects.predicates import (
+    Always,
     And,
     Controlled,
     Event,
@@ -178,6 +186,35 @@ def _legacy_key_for_attacks(ability) -> str | None:
     return None
 
 
+def _legacy_key_for_player_phase(ability, your_key: str) -> str | None:
+    """Map a predicate-style turn-structure ability back to its legacy
+    string key. Used by all three of BEGINNING_OF_UPKEEP /
+    BEGINNING_OF_COMBAT / BEGINNING_OF_END_STEP.
+
+    ``Controlled(YOU)`` (with no other clauses) is the "your <phase>"
+    form and maps to ``your_key`` — i.e. ``"beginning_of_upkeep"``,
+    ``"beginning_of_combat"``, ``"beginning_of_end_step"``. ``Always()``
+    paired with BEGINNING_OF_END_STEP is the "each end step" form and
+    maps to ``"beginning_of_each_end_step"``; for the upkeep / combat
+    events there's no "each" variant in the static-card pool today so
+    ``Always()`` simply has no inferred legacy key.
+    """
+    leaves = _flatten_and(ability.predicate)
+    if (
+        len(leaves) == 1
+        and isinstance(leaves[0], Controlled)
+        and leaves[0].subject is None
+    ):
+        return your_key
+    if (
+        your_key == "beginning_of_end_step"
+        and len(leaves) == 1
+        and isinstance(leaves[0], Always)
+    ):
+        return "beginning_of_each_end_step"
+    return None
+
+
 def _legacy_key_for_predicate(ability) -> str | None:
     """Return the legacy string key a predicate-style ability is
     structurally equivalent to, or ``None`` if no mapping applies.
@@ -185,7 +222,7 @@ def _legacy_key_for_predicate(ability) -> str | None:
     The mapping mirrors the rewriting done in
     ``src/mtg_bot/cards/parser/triggers.py``'s
     ``_PREDICATE_TRIGGER_PHRASES`` table and the static-card
-    migrations from phases 2, 4, and 5.
+    migrations from phases 2, 4, 5, and 6.
     """
     if ability.event is None or ability.predicate is None:
         return None
@@ -197,6 +234,12 @@ def _legacy_key_for_predicate(ability) -> str | None:
         return _legacy_key_for_leaves(ability)
     if ability.event is Event.ATTACKS:
         return _legacy_key_for_attacks(ability)
+    if ability.event is Event.BEGINNING_OF_UPKEEP:
+        return _legacy_key_for_player_phase(ability, "beginning_of_upkeep")
+    if ability.event is Event.BEGINNING_OF_COMBAT:
+        return _legacy_key_for_player_phase(ability, "beginning_of_combat")
+    if ability.event is Event.BEGINNING_OF_END_STEP:
+        return _legacy_key_for_player_phase(ability, "beginning_of_end_step")
     return None
 
 

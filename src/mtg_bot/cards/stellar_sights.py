@@ -8,7 +8,7 @@ relative to oracle text.
 from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import YOU, Controlled, Event, IsSelf
 
 
 # Edge of Eternities: Stellar Sights (Scryfall set `eos`). Bonus-sheet
@@ -453,7 +453,7 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         enters_tapped=True,
         triggered_abilities=(
             TriggeredAbility(
-                trigger="beginning_of_upkeep",
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
                 effect=ConditionalIfYouControlAtLeast(
                     threshold=3,
                     predicate="artifact",

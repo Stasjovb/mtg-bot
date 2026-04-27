@@ -454,7 +454,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=ChoraleReanimateDefenderGraveCreatureEffect(),
                 ),
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=SacrificeSelfUnlessVoidActive(),
                 ),
             ),
@@ -579,7 +579,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=DrawCards(amount=1),
                 ),
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=SetLifeToHalfStartingRoundedUp(),
                 ),
             ),
@@ -633,7 +633,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             ),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_upkeep",
+                    event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Sliver"],
                         count=2,
@@ -725,7 +725,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=SotheraExileOpponentCreatureEffect(),
                 ),
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=SotheraEndStepReanimateEffect(),
                 ),
             ),

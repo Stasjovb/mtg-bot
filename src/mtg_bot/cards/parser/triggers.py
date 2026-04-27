@@ -25,7 +25,14 @@ Two trigger shapes coexist during the predicate-trigger migration:
   this-creature-leaves-the-battlefield, counter-creature-dies, and
   the broader your-creature-or-artifact-dies / another-creature-dies-
   or-exiled observer patterns); phase 5 migrated the ATTACKS family
-  (this-creature-attacks). The aura/equipment relational variants
+  (this-creature-attacks); phase 6 migrated the turn-structure family
+  (``beginning_of_upkeep`` / ``beginning_of_combat`` /
+  ``beginning_of_end_step`` and the ``each``-end-step variant) — these
+  trigger keys aren't produced by oracle-text parsing (every
+  turn-structure trigger is wired directly in the static-card
+  registries) so this module's parser tables stay unchanged for that
+  phase, but the engine-side predicate dispatch now subsumes the
+  string-key path. The aura/equipment relational variants
   ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
   stay on the legacy string-key path until a ``Host`` predicate lands.
 

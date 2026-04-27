@@ -10,6 +10,7 @@ from mtg_bot.cards.base import *  # noqa: F401,F403
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.predicates import (
     YOU,
+    Always,
     Controlled,
     Event,
     HasCounter,
@@ -143,7 +144,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"menace"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=PutPlusOneCounterOnSelf(amount=1),
                     requires_void=True,
                 ),
@@ -382,7 +383,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Molecular Modifier", "{2}{R}", 2, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_combat",
+                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=1, toughness_bonus=0,
                         granted_keywords=frozenset({"first strike"}),
@@ -714,7 +715,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_combat",
+                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
                     effect=TargetArtifactBecomesCreatureUEOT(
                         power=2, toughness=2,
                         granted_keywords=frozenset({"flying"}),
@@ -770,7 +771,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=ReturnCreatureFromYourGraveyardToHand(),
                 ),
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     requires_void=True,
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
@@ -818,7 +819,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     requires_void=True,
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
@@ -1185,7 +1186,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Vaultguard Trooper", "{4}{R}", 5, 5,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=DiscardHandThenDrawN(amount=2),
                         min_count=2,
@@ -1253,7 +1254,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Ouroboroid", "{2}{G}{G}", 1, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_combat",
+                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
                     effect=(
                         PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
                     ),
@@ -1374,7 +1375,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_each_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Always(),
                     effect=IfGainedLifeThisTurnUntapSelf(),
                 ),
             ),
@@ -1388,7 +1389,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=CreateToken(
                             token_printing=TOKEN_PRINTINGS["Robot"],
@@ -1941,7 +1942,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Flight-Deck Coordinator", "{2}{W}", 3, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=GainLife(amount=2),
                         min_count=2,
@@ -1956,7 +1957,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Sunstar Chaplain", "{1}{W}", 3, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                         min_count=2,
@@ -1983,7 +1984,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=PutPlusOneCounterOnEachCreatureYouControl(
                             amount=1,
@@ -2106,7 +2107,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Voidforged Titan", "{4}{B}", 5, 4,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     requires_void=True,
                     effect=Sequence(effects=(
                         DrawCards(amount=1),
@@ -2141,7 +2142,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             power_bonus=3, toughness_bonus=1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     requires_void=True,
                     effect=AttachToTargetCreatureYouControl(),
                 ),
@@ -2397,7 +2398,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Frontline War-Rager", "{2}{R}", 2, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalOnTappedCreatures(
                         effect=PutPlusOneCounterOnSelf(amount=1),
                         min_count=2,
@@ -2467,7 +2468,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=GainLife(amount=1),
                 ),
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     effect=ConditionalIfYouGainedLifeAtLeast(
                         threshold=3,
                         inner=DrawCards(amount=1),
@@ -2482,7 +2483,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="beginning_of_end_step",
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                     requires_void=True,
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),

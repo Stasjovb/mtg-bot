@@ -691,12 +691,14 @@ def test_stationed_spacecraft_takes_combat_damage_and_can_die():
 
 def test_skittermaw_has_menace_and_void_end_step_ability():
     from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
 
     mw = EOE_CREATURES["Insatiable Skittermaw"]
     assert "menace" in mw.keywords
     assert len(mw.triggered_abilities) == 1
     ab = mw.triggered_abilities[0]
-    assert ab.trigger == "beginning_of_end_step"
+    assert ab.event == Event.BEGINNING_OF_END_STEP
+    assert ab.predicate == Controlled(YOU)
     assert ab.requires_void is True
 
 
