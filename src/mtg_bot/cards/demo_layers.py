@@ -41,6 +41,17 @@ Currently:
   already lives in the EoE Special Guests pool, so the famous
   Dryad-vs-Blood-Moon timestamp interaction can be tested by
   pairing this Dryad with the existing Magus printing.
+- ``BLOOD_MOON`` (The Dark) — Enchantment "Nonbasic lands are
+  Mountains." Same layer-4 set_basic_land_subtype mechanism as
+  Magus of the Moon but printed as an enchantment.
+- ``URBORG_TOMB_OF_YAWGMOTH`` (Planar Chaos) — Legendary Land
+  with printed Swamp subtype and "Each land is a Swamp in
+  addition to its other types." The famous test case for the
+  CR 613.7 within-layer dependency rule: Blood Moon + Urborg
+  always resolves to Mountain regardless of timestamps because
+  Urborg's ability depends on Blood Moon's effect (Blood Moon
+  rewrites Urborg's basic land type, which wipes Urborg's static
+  via CR 305.6).
 """
 
 from __future__ import annotations
@@ -50,7 +61,8 @@ from mtg_bot.effects import (
 )
 from mtg_bot.effects.base import ActivatedAbility, ActivationCost
 from mtg_bot.cards.base import (
-    CardPrinting, make_aura, make_creature, make_sorcery, parse_mana_cost,
+    CardPrinting, ManaCost, make_aura, make_creature, make_enchantment,
+    make_sorcery, parse_mana_cost,
 )
 
 
@@ -97,4 +109,29 @@ DRYAD_OF_THE_ILYSIAN_GROVE: CardPrinting = make_creature(
     "Dryad of the Ilysian Grove", "{2}{G}", 1, 5,
     subtypes=("Nymph", "Dryad"),
     grants_all_basic_land_types_to_lands_you_control=True,
+)
+
+
+BLOOD_MOON: CardPrinting = make_enchantment(
+    "Blood Moon", "{2}{R}",
+    nonbasic_lands_are_mountains=True,
+)
+
+
+# Urborg, Tomb of Yawgmoth: Legendary Land — Swamp with the static
+# "Each land is a Swamp in addition to its other types." Wired via
+# the ``grants_basic_land_type_to_all_lands`` printing flag — the
+# ``effective_subtypes`` synthesis adds the Swamp subtype to every
+# land on the battlefield, suppressed if Urborg itself has been
+# rewritten by Blood Moon / Magus (CR 613.7 dependency).
+URBORG_TOMB_OF_YAWGMOTH: CardPrinting = CardPrinting(
+    name="Urborg, Tomb of Yawgmoth",
+    mana_cost_str="",
+    mana_cost=ManaCost(),
+    type_line="Legendary Land — Swamp",
+    supertypes=("Legendary",),
+    card_types=("Land",),
+    subtypes=("Swamp",),
+    produces=frozenset({"B"}),
+    grants_basic_land_type_to_all_lands="Swamp",
 )

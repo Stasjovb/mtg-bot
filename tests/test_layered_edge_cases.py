@@ -1089,70 +1089,145 @@ def test_synthetic_set_basic_land_subtype_suppresses_nonbasic_abilities():
     assert effective_activated_abilities(state, land) == ()
 
 
-def test_blood_moon_urborg_dependency_GAP():
-    """KNOWN GAP: CR 613.7 same-layer dependency rule isn't
-    implemented in our engine. Blood Moon (synthesized as a
-    layer-4 set_basic_land_subtype Mountain) and Urborg-style
-    "all lands are Swamps" (synthesized as layer-4 add_subtype
-    Swamp on every land) both apply at layer 4.
+def test_blood_moon_urborg_older_blood_moon_wins():
+    """The famous Blood Moon + Urborg ruling. Blood Moon
+    (Enchantment, "Nonbasic lands are Mountains") + Urborg, Tomb
+    of Yawgmoth (Legendary Land — Swamp, "Each land is a Swamp in
+    addition to its other types"). Both layer 4, both sources on
+    the battlefield.
 
-    Per CR dependency, Urborg's effect DEPENDS on Blood Moon's
-    effect (Blood Moon makes Urborg a Mountain, which removes
-    Urborg's ability — the dependency rule says Urborg waits
-    until after Blood Moon applies, then doesn't apply because
-    its ability was wiped). Result: Blood Moon ALWAYS wins
-    regardless of timestamps.
+    Per CR 613.7 within-layer dependency: Urborg's effect depends
+    on Blood Moon's effect (Blood Moon rewrites Urborg's basic
+    land type, wiping Urborg's ability via CR 305.6). Blood Moon
+    applies first; Urborg's contribution is suppressed. Result:
+    every nonbasic land (including Urborg) is a Mountain only.
+    Basic lands are unaffected by Blood Moon AND don't get the
+    Urborg add (Urborg's ability is wiped).
 
-    Our engine uses simple timestamp order within a layer. With
-    Blood Moon older + Urborg newer, our engine CORRECTLY puts
-    the Mountain (Blood Moon) on the land, then ADDS Swamp on top
-    (Urborg). The CR-correct result is Mountain only.
-
-    This test pins the current (incorrect-by-CR) behavior so a
-    future dependency-rule implementation has a target to flip.
-    Not labeled xfail since it documents observable engine
-    behavior, not aspirational behavior.
+    Blood Moon ALWAYS wins regardless of timestamps. This test
+    has Blood Moon ENTERING FIRST (older).
     """
-    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.demo_layers import BLOOD_MOON, URBORG_TOMB_OF_YAWGMOTH
 
     state = _new_state()
-    # Synthesize a nonbasic land with no printed basic land subtypes.
-    nonbasic = CardPrinting(
-        name="Strip Mine",
-        mana_cost_str="",
-        mana_cost=ManaCost(),
-        type_line="Land",
-        supertypes=(),
-        card_types=("Land",),
-        subtypes=(),
-        produces=frozenset(),
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    blood_moon = _put(state, BLOOD_MOON, owner_id=0)
+    blood_moon.etb_timestamp = 10
+    urborg = _put(state, URBORG_TOMB_OF_YAWGMOTH, owner_id=0)
+    urborg.etb_timestamp = 20  # newer than Blood Moon
+
+    # Urborg (nonbasic land) is rewritten by Blood Moon → Mountain only.
+    urborg_subs = effective_subtypes(state, urborg)
+    assert "Mountain" in urborg_subs
+    assert "Swamp" not in urborg_subs
+    assert effective_land_produces(state, urborg) == frozenset({"R"})
+    # Basic Forest: not nonbasic, Blood Moon doesn't apply. Urborg's
+    # ability is wiped (CR 305.6 dependency), so no Swamp add.
+    forest_subs = effective_subtypes(state, forest)
+    assert "Forest" in forest_subs
+    assert "Swamp" not in forest_subs
+    assert effective_land_produces(state, forest) == frozenset({"G"})
+
+
+def test_blood_moon_urborg_newer_blood_moon_still_wins():
+    """Reverse timestamps: Urborg enters FIRST (older), Blood Moon
+    NEWER. Per CR 613.7 dependency, Blood Moon STILL wins —
+    timestamps don't matter when there's a dependency. Urborg's
+    ability is wiped by Blood Moon's set effect on Urborg's type.
+    """
+    from mtg_bot.cards.demo_layers import BLOOD_MOON, URBORG_TOMB_OF_YAWGMOTH
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    urborg = _put(state, URBORG_TOMB_OF_YAWGMOTH, owner_id=0)
+    urborg.etb_timestamp = 5  # older
+    blood_moon = _put(state, BLOOD_MOON, owner_id=0)
+    blood_moon.etb_timestamp = 100  # newer
+
+    # Same final result as the previous test: Blood Moon wins via
+    # dependency regardless of timestamp order.
+    urborg_subs = effective_subtypes(state, urborg)
+    assert "Mountain" in urborg_subs
+    assert "Swamp" not in urborg_subs
+    assert effective_land_produces(state, urborg) == frozenset({"R"})
+
+    forest_subs = effective_subtypes(state, forest)
+    assert "Swamp" not in forest_subs
+
+
+def test_urborg_alone_makes_all_lands_swamps():
+    """Sanity: without Blood Moon, Urborg applies normally — every
+    land gains the Swamp subtype."""
+    from mtg_bot.cards.demo_layers import URBORG_TOMB_OF_YAWGMOTH
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    urborg = _put(state, URBORG_TOMB_OF_YAWGMOTH, owner_id=0)
+    urborg.etb_timestamp = 5
+
+    # Forest gets Swamp added → Forest+Swamp.
+    forest_subs = effective_subtypes(state, forest)
+    assert "Forest" in forest_subs
+    assert "Swamp" in forest_subs
+    assert effective_land_produces(state, forest) == frozenset({"G", "B"})
+    # Urborg has Swamp printed; "add Swamp" is idempotent.
+    urborg_subs = effective_subtypes(state, urborg)
+    assert urborg_subs.count("Swamp") == 1
+
+
+def test_blood_moon_alone_makes_nonbasic_lands_mountains():
+    """Sanity: Blood Moon alone collapses every nonbasic land to
+    Mountain (same shape as the existing Magus test, but using the
+    Blood Moon enchantment rather than the Magus creature)."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.demo_layers import BLOOD_MOON
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(), card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
     )
-    land = state.new_object(nonbasic, 0, Zone.BATTLEFIELD)
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
     state.battlefield.append(land)
     land.etb_timestamp = 1
+    blood_moon = _put(state, BLOOD_MOON, owner_id=0)
+    blood_moon.etb_timestamp = 5
 
-    # Blood Moon (older, T=10): set basic land subtype to Mountain.
-    state.add_continuous_effect(
-        source_id=999, layer=4, kind="set_basic_land_subtype",
-        target_id=land.id, params=("Mountain",),
-        description="(synthetic) Blood Moon",
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+
+def test_urborg_dryad_compose_lands_have_swamp_and_5_basics():
+    """Urborg + Dryad of the Ilysian Grove compose without
+    dependency: neither rewrites the other's source's basic land
+    type (Dryad is a creature, Urborg's add isn't a set). All
+    lands gain Swamp (Urborg) PLUS the 5 basic types from Dryad.
+    """
+    from mtg_bot.cards.demo_layers import URBORG_TOMB_OF_YAWGMOTH
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    urborg = _put(state, URBORG_TOMB_OF_YAWGMOTH, owner_id=0)
+    urborg.etb_timestamp = 5
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 10
+
+    forest_subs = effective_subtypes(state, forest)
+    assert "Plains" in forest_subs
+    assert "Island" in forest_subs
+    assert "Swamp" in forest_subs
+    assert "Mountain" in forest_subs
+    assert "Forest" in forest_subs
+    # All five colors.
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
     )
-    # Urborg-style (newer, T=11): add Swamp to every land.
-    state.add_continuous_effect(
-        source_id=998, layer=4, kind="add_subtype",
-        target_id=land.id, params=("Swamp",),
-        description="(synthetic) Urborg adds Swamp",
-    )
-
-    subs = effective_subtypes(state, land)
-    # Engine result (timestamp order): Mountain (set) then add Swamp →
-    # land is Mountain + Swamp, taps for {R, B}.
-    assert "Mountain" in subs
-    assert "Swamp" in subs
-    assert effective_land_produces(state, land) == frozenset({"R", "B"})
-
-    # CR-correct result would be Mountain only via dependency, but
-    # we don't implement that yet.
 
 
 def test_clone_of_dryad_grants_basic_land_types_too():

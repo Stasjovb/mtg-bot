@@ -749,6 +749,35 @@ def effective_subtypes(
                             f"{src.printing.name}: lands are {basic}"
                         ),
                     ))
+    # Synthesize Urborg-Tomb-of-Yawgmoth / Yavimaya-Cradle-of-Growth
+    # entries: any land on the battlefield gets a layer-4 add_subtype
+    # entry for the named basic land type, sourced by the
+    # ``grants_basic_land_type_to_all_lands`` permanent.
+    #
+    # CR 613.7 within-layer dependency: if the source is itself
+    # subject to a layer-4 ``set_basic_land_subtype`` effect (Blood
+    # Moon / Magus targeting it as a nonbasic land), CR 305.6 wipes
+    # the source's ability and the contribution is suppressed.
+    # This is the famous "Blood Moon beats Urborg" ruling — Blood
+    # Moon ALWAYS wins regardless of timestamps because Urborg's
+    # ability depends on Blood Moon's effect.
+    if obj.printing.is_land:
+        for src in state.battlefield:
+            granted = src.printing.grants_basic_land_type_to_all_lands
+            if granted is None:
+                continue
+            if _has_basic_land_type_set_effect(state, src):
+                continue  # CR 613.7 dependency suppresses
+            layer4.append(ContinuousEffect(
+                source_id=src.id, layer=4,
+                timestamp=src.etb_timestamp,
+                kind="add_subtype",
+                target_id=obj.id,
+                params=(granted,),
+                description=(
+                    f"{src.printing.name}: each land is a {granted}"
+                ),
+            ))
     layer4.sort(key=lambda ce: ce.timestamp)
     for ce in layer4:
         if ce.kind == "set_basic_land_subtype":

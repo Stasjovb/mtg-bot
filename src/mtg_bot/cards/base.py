@@ -604,6 +604,18 @@ class CardPrinting:
     # source's ``etb_timestamp`` is used so within-layer timestamp
     # order vs Blood Moon / Magus of the Moon matches CR 613.4.
     grants_all_basic_land_types_to_lands_you_control: bool = False
+    # Urborg, Tomb of Yawgmoth / Yavimaya, Cradle of Growth: "Each
+    # land is a [basic land type] in addition to its other types."
+    # When this is set on a permanent on the battlefield,
+    # ``effective_subtypes`` synthesizes a layer-4 ``"add_subtype"``
+    # entry on every land, sourced by this permanent. The CR 613.7
+    # dependency rule kicks in here: if the source itself is a
+    # land that's been rewritten by a layer-4
+    # ``"set_basic_land_subtype"`` effect (Blood Moon / Magus),
+    # its ability is wiped at layer 4 (CR 305.6) and the
+    # contribution doesn't apply. This is the famous Blood Moon
+    # beats Urborg ruling.
+    grants_basic_land_type_to_all_lands: "str | None" = None
     # Conditional unblockable: "This creature can't be blocked if you've
     # cast two or more spells this turn." (Illvoi Infiltrator). When True
     # and the controller's Player.spells_cast_this_turn >= 2, combat.can_block
@@ -1155,6 +1167,7 @@ def make_enchantment(
     grants_first_spell_each_turn_free: bool = False,
     warp: str | None = None,
     grants_etb_counter_per_land_entered_this_turn: bool = False,
+    nonbasic_lands_are_mountains: bool = False,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
     like any other permanent and sits there firing triggers or providing
@@ -1187,6 +1200,7 @@ def make_enchantment(
         grants_etb_counter_per_land_entered_this_turn=(
             grants_etb_counter_per_land_entered_this_turn
         ),
+        nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
     )
 
 
