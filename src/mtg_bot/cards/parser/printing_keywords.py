@@ -1,10 +1,11 @@
-"""Printing-level parametric keywords (Warp, Ward).
+"""Printing-level parametric keywords (Warp, Ward, Devour).
 
-These take a mana-cost argument so they don't fit the literal-line
-``_KEYWORD_LINES`` map in ``keywords.py``. Both share the same shape:
-a keyword name followed by a mana cost on its own line, with optional
-parenthesized reminder text. The cost string round-trips into the
-``make_creature`` ``warp=`` / ``ward=`` kwarg.
+These take a numeric/mana-cost argument so they don't fit the
+literal-line ``_KEYWORD_LINES`` map in ``keywords.py``. They share
+the same shape: a keyword name followed by its argument on its own
+line, with optional parenthesized reminder text. The argument
+round-trips into the ``make_creature`` ``warp=`` / ``ward=`` /
+``devour_land_multiplier=`` kwarg.
 
 Riders (``Warp—{B}, Pay 2 life.`` em-dash variants, ``Ward — Discard
 a card.`` etc.) are out of scope — they intentionally don't match
@@ -46,3 +47,22 @@ def _parse_ward_line(line: str) -> str | None:
     if m is None:
         return None
     return m.group(1)
+
+
+_DEVOUR_LINE = re.compile(
+    r"^Devour land (\d+)(?: \([^)]*\))?$"
+)
+
+
+def _parse_devour_line(line: str) -> int | None:
+    """Return the devour multiplier ``N`` (an int) if ``line`` is a
+    simple ``Devour land N`` clause, else ``None``. The EoE printing
+    is Famished Worldsire's ``Devour land 3`` (sacrifice any number of
+    lands; enter with three times that many +1/+1 counters). Lines
+    with riders or non-``land`` Devour variants intentionally don't
+    match — the enclosing card falls through and is skipped.
+    """
+    m = _DEVOUR_LINE.match(line.strip())
+    if m is None:
+        return None
+    return int(m.group(1))

@@ -20,6 +20,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_devour_line,
     _parse_ward_line,
     _parse_warp_line,
 )
@@ -48,6 +49,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     statics: list[StaticAbility] = []
     warp: str | None = None
     ward: str | None = None
+    devour: int = 0
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         line = raw_line.strip()
@@ -66,6 +68,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             ward = ward_cost
+            continue
+        devour_n = _parse_devour_line(line)
+        if devour_n is not None:
+            # A card should only have one Devour clause; if a malformed
+            # printing somehow had two we just keep the last — parity
+            # against the static registry will catch any drift.
+            devour = devour_n
             continue
         if _is_sorcery_rider_line(line):
             # The rider attaches to the immediately preceding activated
@@ -101,4 +110,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         artifact="Artifact" in card_types,
         warp=warp,
         ward=ward,
+        devour_land_multiplier=devour,
     )
