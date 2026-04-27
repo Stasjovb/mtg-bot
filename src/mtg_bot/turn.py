@@ -259,19 +259,25 @@ def move_off_battlefield(
     if destination == "graveyard" and was_creature:
         _fire_dies_triggers(state, obj)
 
-    # Observer trigger: "whenever a creature or artifact you control
-    # dies" — fires on OTHER permanents the dying object's controller
-    # controls (includes the source itself per oracle text — "this
-    # creature or another creature or artifact you control dies").
+    # Predicate-style ``Event.DIES`` dispatch. Phase-4 widens the
+    # legacy creature-only DIES fire path to also cover artifacts so
+    # the migrated ``your_creature_or_artifact_dies`` observer
+    # (Susurian Voidborn) keeps firing on artifact deaths the same
+    # way the legacy ``_fire_your_creature_or_artifact_dies_triggers``
+    # used to. Predicates handle type-filtering downstream — a
+    # ``IsCreature() & ...`` predicate won't match an artifact-only
+    # death.
     if destination == "graveyard" and (was_creature or obj.printing.is_artifact):
-        _fire_your_creature_or_artifact_dies_triggers(state, obj)
+        from mtg_bot.actions import dispatch_event as _dispatch_event_dies
+        from mtg_bot.effects.predicates import Event as _Event_dies
 
-    # Observer trigger: "whenever another creature you control dies or
-    # is put into exile" — Syr Vondam, Sunstar Exemplar. Fires on both
-    # graveyard and exile destinations, creatures only, excluding the
-    # dying object (the "another" qualifier).
-    if was_creature and destination in ("graveyard", "exile"):
-        _fire_another_creature_dies_or_exiled_triggers(state, obj)
+        _dispatch_event_dies(
+            state,
+            _Event_dies.DIES,
+            label="dies",
+            extra_observers=[obj],
+            obj=obj,
+        )
 
     # Generic "when this leaves the battlefield" triggers — fires for
     # artifacts, enchantments, and anything else with a matching
@@ -305,39 +311,6 @@ def move_off_battlefield(
     revert_printing_if_no_layer1_copies(state, obj)
 
 
-def _fire_your_creature_or_artifact_dies_triggers(
-    state: GameState, dead: "GameObject"
-) -> None:
-    """Push "whenever this or another creature or artifact you control
-    dies" triggers on all permanents the dead object's controller
-    controls onto the stack. The source of this observer trigger
-    INCLUDES the dearly-departed (Susurian Voidborn: "this creature or
-    another ... you control dies") — since ``dead`` has already been
-    moved off the battlefield by the caller, we explicitly include it
-    as a candidate observer so its own trigger fires too.
-    """
-    from mtg_bot.actions import push_triggered_ability
-
-    controller_id = dead.controller_id
-    candidates: list = [dead] + [
-        o for o in state.battlefield if o.controller_id == controller_id
-    ]
-    for obs in candidates:
-        if obs is not dead and obs.controller_id != controller_id:
-            continue
-        for i, ability in enumerate(obs.printing.triggered_abilities):
-            if ability.trigger != "your_creature_or_artifact_dies":
-                continue
-            push_triggered_ability(
-                state,
-                source=obs,
-                ability=ability,
-                ability_index=i,
-                controller_id=controller_id,
-                label="creature-or-artifact-dies",
-            )
-
-
 def fire_counters_added_to_your_creature_triggers(
     state: GameState, controller_id: int, amount: int
 ) -> None:
@@ -367,68 +340,24 @@ def fire_counters_added_to_your_creature_triggers(
             )
 
 
-def _fire_another_creature_dies_or_exiled_triggers(
-    state: GameState, dead: "GameObject"
-) -> None:
-    """Push "whenever another creature you control dies or is put into
-    exile" observer triggers onto the stack. Iterates the dying
-    creature's controller's battlefield; the dead object is already
-    moved off so it's naturally excluded (matches "another").
-    """
-    from mtg_bot.actions import push_triggered_ability
-
-    controller_id = dead.controller_id
-    for obs in list(state.battlefield):
-        if obs.controller_id != controller_id:
-            continue
-        for i, ability in enumerate(obs.printing.triggered_abilities):
-            if ability.trigger != "another_creature_you_control_dies_or_exiled":
-                continue
-            push_triggered_ability(
-                state,
-                source=obs,
-                ability=ability,
-                ability_index=i,
-                controller_id=controller_id,
-                label="another-creature-dies-or-exiled",
-            )
-
-
 def _fire_leaves_battlefield_triggers(
     state: GameState, obj: "GameObject"
 ) -> None:
-    """Push "when this leaves the battlefield" triggers on ``obj`` onto
-    the stack after it's already been moved. resolving_source exposes
-    the dearly departed during resolution.
+    """Dispatch the ``Event.LEAVES_BATTLEFIELD`` event for ``obj``.
 
-    Fires both legacy ``trigger="leaves_battlefield"`` string-key
-    abilities and predicate-style ``event=Event.LEAVES_BATTLEFIELD``
-    abilities via ``dispatch_event``. The dispatcher includes the
-    dying object via ``extra_observers`` so its own self-triggers
-    (``IsSelf()``) are checked even though it's already been moved
-    off the battlefield. Both paths coexist during the phase-4
-    migration; once every static card is migrated the legacy loop
-    here can be removed.
+    Phase 4 migrated every static card from the legacy string-key
+    ``trigger="leaves_battlefield"`` and
+    ``"another_creature_you_control_dies_or_exiled"`` (the latter
+    collapses cleanly to LEAVES_BATTLEFIELD because both death and
+    exile leave the battlefield). The dispatcher walks battlefield
+    observers AND ``extra_observers=[obj]`` so the departing object's
+    own self-trigger (``IsSelf()``) is checked even though it's
+    already been moved off the battlefield by the caller.
+    ``resolving_source`` exposes the dearly departed during resolution.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
-    for i, ability in enumerate(obj.printing.triggered_abilities):
-        if ability.trigger != "leaves_battlefield":
-            continue
-        push_triggered_ability(
-            state,
-            source=obj,
-            ability=ability,
-            ability_index=i,
-            controller_id=obj.controller_id,
-            label="leaves-battlefield",
-        )
-    # Dispatch the predicate-style LEAVES_BATTLEFIELD event so phase-4-
-    # migrated leaves-battlefield abilities (including the
-    # ``another_creature_you_control_dies_or_exiled`` observer pattern,
-    # which collapses cleanly to LEAVES_BATTLEFIELD since both death and
-    # exile leave the battlefield) fire from this code path as well.
     dispatch_event(
         state,
         Event.LEAVES_BATTLEFIELD,
@@ -720,52 +649,31 @@ def fire_opponent_plays_land_triggers(
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
-    """Push "dies" triggered abilities of ``dead`` onto the stack, then
-    push any "creature_you_control_with_counter_dies" triggers on other
-    permanents the dying creature's controller controls.
+    """Resolve UEOT-granted dies-rider effects on ``dead``.
 
-    The dead object is no longer on the battlefield by the time this
-    runs; ``state.resolving_source`` will point to it during resolution
-    so effects can read its former state.
-
-    Fires both legacy string-key ``trigger="dies"`` /
+    Phase 4 migrated every static card from the legacy string-key
+    ``trigger="dies"`` (and the family of
     ``"creature_you_control_with_counter_dies"`` /
-    ``"nontoken_creature_you_control_with_counter_dies"`` abilities and
-    predicate-style ``event=Event.DIES`` abilities via
-    ``dispatch_event``. The dispatcher includes the dying object via
-    ``extra_observers`` so its own self-triggers (``IsSelf()``) fire
-    even though the object has already been moved off the battlefield.
-    Both paths coexist during the phase-4 migration; once every static
-    card is migrated the legacy loops here can be removed.
-    """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
-    from mtg_bot.effects.predicates import Event
+    ``"nontoken_creature_you_control_with_counter_dies"`` /
+    ``"your_creature_or_artifact_dies"`` keys) to predicate-style
+    ``event=Event.DIES`` abilities. Those fire from
+    ``move_off_battlefield`` via ``dispatch_event``, so all that
+    remains here is the UEOT-granted-rider path.
 
-    for i, ability in enumerate(dead.printing.triggered_abilities):
-        if ability.trigger != "dies":
-            continue
-        push_triggered_ability(
-            state,
-            source=dead,
-            ability=ability,
-            ability_index=i,
-            controller_id=dead.controller_id,
-            label="dies",
-        )
-    # UEOT-granted "When this creature dies, ..." triggers — Perigee
-    # Beckoner's pump rider grants exactly this. Direct resolve
-    # rather than stack-push because the granted ability is
-    # ephemeral and isn't represented in the printed-ability ledger;
-    # using synthetic indices for push_triggered_ability would
-    # require broadening the ledger key type. Mirrors the dealt-
-    # damage path in combat._fire_enchanted_dealt_damage_triggers.
-    # ``resolving_source`` is set to the dying object so the granted
-    # effect can read it.
-    #
-    # Recognizes both legacy ``trigger="dies"`` shape and the migrated
-    # predicate-style ``event=Event.DIES`` shape (via ``matches_event``
-    # against the dying object as both subject and source — IsSelf()
-    # matches because the granted rider lives on the dying creature).
+    The granted rider lives on the dying object's
+    ``temp_triggered_abilities`` (Perigee Beckoner's pump grants
+    exactly this). The rider isn't represented in the printed-ability
+    ledger so we resolve it directly rather than push it through
+    ``push_triggered_ability`` (which would require broadening the
+    ledger key type). ``resolving_source`` is set to the dying object
+    so the granted effect can read it. Mirrors the dealt-damage path
+    in ``combat._fire_enchanted_dealt_damage_triggers``.
+
+    Both legacy ``trigger="dies"`` and predicate-style
+    ``event=Event.DIES`` granted shapes are recognized so any future
+    granted rider on either shape continues to work.
+    """
+    from mtg_bot.effects.predicates import Event
     from mtg_bot.game import effective_triggered_abilities
 
     granted_only = [
@@ -787,48 +695,6 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             ability.effect.resolve(state, dead.controller_id, ())
         finally:
             state.resolving_source = None
-    # "Whenever a creature you control with a +1/+1 counter on it dies" —
-    # only fires if the dying creature actually had a +1/+1 counter. The
-    # nontoken-only variant (Rayblade Trooper) additionally requires the
-    # dying creature not to be a token printing.
-    if dead.plus_one_counters > 0:
-        controller = dead.controller_id
-        dead_is_token = dead.printing.is_token
-        for obj in list(state.battlefield):
-            if obj.controller_id != controller:
-                continue
-            for i, ability in enumerate(obj.printing.triggered_abilities):
-                if ability.trigger == "creature_you_control_with_counter_dies":
-                    label = "counter-creature-dies"
-                elif (
-                    ability.trigger
-                    == "nontoken_creature_you_control_with_counter_dies"
-                    and not dead_is_token
-                ):
-                    label = "nontoken-counter-creature-dies"
-                else:
-                    continue
-                push_triggered_ability(
-                    state,
-                    source=obj,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=controller,
-                    label=label,
-                )
-    # Dispatch the predicate-style DIES event so phase-4-migrated
-    # dies-family abilities (self-dies, counter-dies, your-creature-or-
-    # artifact-dies) fire from this code path as well. The dispatcher
-    # walks battlefield observers AND ``extra_observers=[dead]`` so the
-    # dying object's own self-trigger (``IsSelf()``) is checked even
-    # though it has been moved off the battlefield by the caller.
-    dispatch_event(
-        state,
-        Event.DIES,
-        label="dies",
-        extra_observers=[dead],
-        obj=dead,
-    )
 
 
 def run_beginning_of_upkeep_triggers(state: GameState) -> None:
