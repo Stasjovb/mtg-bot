@@ -1808,6 +1808,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Cloudsculpt Technician", "{2}{U}", 1, 4,
             keywords={"flying"},
+            subtypes=("Jellyfish", "Artificer"),
             static_abilities=(
                 StaticAbility(
                     scope=StaticScope.SELF,
@@ -1820,6 +1821,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # control an artifact.
         make_creature(
             "Gravblade Heavy", "{3}{B}", 3, 4,
+            subtypes=("Human", "Soldier"),
             static_abilities=(
                 StaticAbility(
                     scope=StaticScope.SELF,
