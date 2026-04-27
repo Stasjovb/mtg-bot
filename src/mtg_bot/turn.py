@@ -1090,6 +1090,68 @@ def state_based_actions(state: GameState) -> bool:
         move_off_battlefield(state, obj, destination="graveyard")
         changed = True
 
+    # Aura attachment legality (CR 704.5n): an Aura attached to an
+    # illegal target (or unattached) goes to its owner's graveyard.
+    # The target is illegal if it's no longer on the battlefield, or
+    # no longer satisfies the Aura's printed enchant restriction
+    # (e.g., enchant creature with the target turned non-creature
+    # by a Lignified manland's animation expiring).
+    auras_to_bury: list = []
+    for obj in state.battlefield:
+        if not obj.printing.is_aura:
+            continue
+        if obj.attached_to is None:
+            auras_to_bury.append(obj)
+            continue
+        target = next(
+            (o for o in state.battlefield if o.id == obj.attached_to),
+            None,
+        )
+        if target is None:
+            auras_to_bury.append(obj)
+            continue
+        kind = obj.printing.aura_enchant_type
+        if kind == "creature":
+            if not is_creature_now(target):
+                auras_to_bury.append(obj)
+        elif kind == "artifact":
+            if not target.printing.is_artifact:
+                auras_to_bury.append(obj)
+        elif kind == "land":
+            if not target.printing.is_land:
+                auras_to_bury.append(obj)
+        # Other kinds (e.g., player-enchant) aren't in scope.
+    for aura in auras_to_bury:
+        state.log.append(
+            f"{aura.printing.name} put into graveyard "
+            f"(no legal enchant target)"
+        )
+        move_off_battlefield(state, aura, destination="graveyard")
+        changed = True
+
+    # Equipment attachment legality (CR 704.5p): an Equipment
+    # attached to an illegal permanent (non-creature, gone) becomes
+    # unattached but stays on the battlefield. Default scope:
+    # Equipment must be attached to a creature.
+    for obj in state.battlefield:
+        if obj.printing.is_aura:
+            continue
+        if "Equipment" not in obj.printing.subtypes:
+            continue
+        if obj.attached_to is None:
+            continue
+        target = next(
+            (o for o in state.battlefield if o.id == obj.attached_to),
+            None,
+        )
+        if target is None or not is_creature_now(target):
+            obj.attached_to = None
+            state.log.append(
+                f"{obj.printing.name} unattaches "
+                f"(no longer attached to a creature)"
+            )
+            changed = True
+
     alive = [p for p in state.players if not p.has_lost]
     if len(alive) == 0 and not state.is_draw:
         state.is_draw = True
