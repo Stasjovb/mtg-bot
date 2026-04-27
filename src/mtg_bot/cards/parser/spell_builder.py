@@ -6,6 +6,13 @@ combine them via one of two combinators — ``ConditionalIfVoid`` for
 the Plasma-Bolt-shaped Void rider, otherwise ``Sequence`` if every
 clause parses as a plain spell-effect sentence. Any unparseable
 clause skips the whole spell.
+
+A leading clause that is just an unimplemented spell-only keyword
+plus its parenthesized reminder text (currently only ``Convoke``)
+is dropped before the remaining clauses are parsed — the static
+side ships these spells without modeling the keyword, so the
+parser must do the same to stay in parity. See
+``_SPELL_KEYWORD_PREAMBLE_RE`` for the exact recognized shapes.
 """
 
 from __future__ import annotations
@@ -35,6 +42,35 @@ _SPELL_VOID_DAMAGE_REPLACEMENT = (
     r"if a nonland permanent left the battlefield this turn "
     r"or a spell was warped this turn\.$"
 )
+
+
+# Spell-only keyword preamble: a leading clause that's just a static
+# keyword (no implementation in the engine yet) followed by its
+# parenthesized reminder text. The keyword line itself contributes no
+# Effect — the engine treats the spell as if the keyword weren't there
+# (e.g. Vote Out's Convoke is dropped on the static side). Stripping
+# this preamble lets the remaining clauses parse as a single-effect or
+# Sequence spell exactly as if the preamble weren't printed.
+#
+# Names listed here MUST be keywords the engine intentionally ignores
+# on the static side; otherwise dropping the preamble would silently
+# diverge from the static implementation. Add a name only after
+# confirming the matching ``cards/eoe_spells.py`` entry omits the
+# keyword's behavior.
+_SPELL_PREAMBLE_KEYWORDS = ("Convoke",)
+_SPELL_KEYWORD_PREAMBLE_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(k) for k in _SPELL_PREAMBLE_KEYWORDS)
+    + r") \(.+\)\.?$"
+)
+
+
+def _is_spell_keyword_preamble(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a recognized unimplemented
+    spell-keyword preamble (keyword name + parenthesized reminder
+    text). The caller drops these preamble clauses before parsing the
+    rest of the spell. See ``_SPELL_PREAMBLE_KEYWORDS`` for the
+    whitelist."""
+    return _SPELL_KEYWORD_PREAMBLE_RE.match(clause.strip()) is not None
 
 
 def _parse_void_damage_replacement(
@@ -67,9 +103,18 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     combined either via ``ConditionalIfVoid`` (when the second clause
     is a Void replacement of the first damage effect) or via
     ``Sequence`` (every clause is a plain spell-effect sentence).
-    Returns ``None`` if any clause fails to parse.
+    Leading clauses that are unimplemented spell-keyword preambles
+    (e.g. Vote Out's Convoke) are dropped before combinator dispatch
+    so they don't fail the per-clause parse. Returns ``None`` if any
+    surviving clause fails to parse.
     """
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
+    # Drop leading spell-keyword preambles. Only leading clauses are
+    # stripped — a parenthesized reminder appearing later would be
+    # an unrelated structure (e.g. Hymn of the Faller's "(To
+    # surveil 1, ...)" tail) and must not be silently dropped.
+    while clauses and _is_spell_keyword_preamble(clauses[0]):
+        clauses = clauses[1:]
     if not clauses:
         return None
     if len(clauses) == 1:
