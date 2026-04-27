@@ -364,13 +364,33 @@ def effective_controller(state: GameState, obj: GameObject) -> int:
 def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     """Keywords in effect right now — printing + stationed_keywords +
     keywords granted by static abilities on other permanents + UEOT
-    keyword grants from pump effects."""
+    keyword grants from pump effects + layer-6 ``"grant_keyword"``
+    registry entries.
+
+    Phase 2 of the layered-effects refactor migrates per-effect UEOT
+    keyword grants into ``state.continuous_effects`` (layer 6,
+    ``kind == "grant_keyword"``, ``params == (keyword,)``,
+    ``expires_at == "cleanup"``). Effects that haven't been migrated
+    yet still write to ``obj.temp_keywords`` directly; the union
+    ensures both code paths combine correctly so the migration can
+    proceed effect-by-effect without breaking existing behavior."""
     kws = obj.printing.keywords
     if is_stationed(obj):
         kws = kws | obj.printing.stationed_keywords
     _, _, granted = _static_bonuses(state, obj)
+    # Layer-6 grant_keyword registry entries targeting this object.
+    registry_kws: set[str] = set()
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "grant_keyword"
+            and ce.target_id == obj.id
+            and ce.params
+        ):
+            registry_kws.add(ce.params[0])
     return (
         kws | granted | obj.temp_keywords | obj.extended_temp_keywords
+        | frozenset(registry_kws)
     )
 
 
@@ -992,6 +1012,15 @@ class ContinuousEffect:
     target_id: Optional[int] = None
     params: tuple = ()
     description: str = ""
+    # Lifetime marker. None = entry persists until the source leaves
+    # the battlefield (the default for static abilities — Tractor
+    # Beam's control grant). Other values:
+    #   - "cleanup": drop at the active player's cleanup step (UEOT
+    #     pump-grants — Squire's Lightblade's first strike, manland
+    #     animation, granted-triggers UEOT, etc.).
+    #   - "controller_untap": drop at the source-controller's next
+    #     untap step (extended-temporal pumps — Mouth of the Storm).
+    expires_at: Optional[str] = None
 
 
 @dataclass
@@ -1142,10 +1171,13 @@ class GameState:
         target_id: Optional[int] = None,
         params: tuple = (),
         description: str = "",
+        expires_at: Optional[str] = None,
     ) -> ContinuousEffect:
         """Allocate a fresh timestamp and append a continuous-effect
         record to the registry. Returns the appended record so callers
         can hold onto it (e.g., to reference its source_id later).
+        ``expires_at`` defaults to None (lives until the source
+        leaves play); pass ``"cleanup"`` for UEOT effects.
         """
         ts = self.next_timestamp
         self.next_timestamp += 1
@@ -1159,9 +1191,28 @@ class GameState:
             target_id=target_id,
             params=params,
             description=description,
+            expires_at=expires_at,
         )
         self.continuous_effects.append(effect)
         return effect
+
+    def expire_continuous_effects(
+        self, expires_at: str
+    ) -> list[ContinuousEffect]:
+        """Drop every registry entry whose ``expires_at`` matches
+        the given marker (``"cleanup"`` for UEOT, ``"controller_untap"``
+        for extended-temporal). Returns the dropped entries — useful
+        for tests and for downstream cleanup hooks that need to react
+        to specific kinds going away."""
+        kept: list[ContinuousEffect] = []
+        dropped: list[ContinuousEffect] = []
+        for ce in self.continuous_effects:
+            if ce.expires_at == expires_at:
+                dropped.append(ce)
+            else:
+                kept.append(ce)
+        self.continuous_effects = kept
+        return dropped
 
     def remove_continuous_effects_from_source(
         self, source_id: int

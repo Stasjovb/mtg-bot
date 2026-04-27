@@ -69,8 +69,7 @@ def test_etb_attaches_and_grants_hexproof_ueot():
 
     # Attach succeeded.
     assert jammer.attached_to == ally.id
-    # Hexproof was granted UEOT.
-    assert "hexproof" in ally.temp_keywords
+    # Hexproof was granted UEOT (via the layer-6 registry — Phase 2).
     assert "hexproof" in effective_keywords(state, ally)
     # Equipment bonus is also live (continuous, from equipment_bonuses).
     assert effective_power(state, ally) == 3  # 2 + 1
@@ -104,11 +103,11 @@ def test_hexproof_clears_at_cleanup():
     jammer = _put_jammer(state, owner_id=0)
 
     _resolve_etb(state, jammer, ally)
-    assert "hexproof" in ally.temp_keywords
+    assert "hexproof" in effective_keywords(state, ally)
 
     run_cleanup_step(state)
 
-    assert "hexproof" not in ally.temp_keywords
+    assert "hexproof" not in effective_keywords(state, ally)
     # Equipment is still attached after cleanup; attach is permanent.
     assert jammer.attached_to == ally.id
     # The continuous +1/+2 bonus survives cleanup (it's static, not UEOT).
@@ -140,7 +139,7 @@ def test_etb_no_legal_target_fizzles_no_hexproof_granted():
         state.resolving_source = None
 
     assert jammer.attached_to is None
-    assert "hexproof" not in enemy.temp_keywords
+    assert "hexproof" not in effective_keywords(state, enemy)
 
 
 def test_attach_effect_default_no_keywords_granted():

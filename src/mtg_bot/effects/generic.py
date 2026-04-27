@@ -675,9 +675,22 @@ class AttachToTargetCreatureYouControl(Effect):
             f"{source.printing.name} is attached to {target.printing.name}"
         )
         if self.granted_keywords_ueot:
-            target.temp_keywords = (
-                target.temp_keywords | self.granted_keywords_ueot
-            )
+            # Layer-6 keyword grant via the continuous-effects
+            # registry. One entry per keyword, expires at the
+            # active player's cleanup step.
+            for kw in sorted(self.granted_keywords_ueot):
+                state.add_continuous_effect(
+                    source_id=source.id,
+                    layer=6,
+                    kind="grant_keyword",
+                    target_id=target.id,
+                    params=(kw,),
+                    expires_at="cleanup",
+                    description=(
+                        f"{source.printing.name} grants {kw} UEOT to "
+                        f"{target.printing.name}"
+                    ),
+                )
             state.log.append(
                 f"{target.printing.name} gains "
                 f"{', '.join(sorted(self.granted_keywords_ueot))} "

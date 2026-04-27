@@ -914,6 +914,13 @@ def run_cleanup_step(state: GameState) -> None:
         card = ap.hand.pop()
         card.zone = Zone.GRAVEYARD
         ap.graveyard.append(card)
+    # Layer-6/7 UEOT continuous effects expire at cleanup. Drop every
+    # registry entry tagged ``expires_at="cleanup"`` (Phase 2+
+    # migration: keyword grants from pump effects, eventually
+    # P/T pumps and granted abilities). Effects still using the
+    # bespoke ``temp_*`` fields are cleared in the per-object loop
+    # below; both code paths run together until full migration.
+    state.expire_continuous_effects("cleanup")
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
