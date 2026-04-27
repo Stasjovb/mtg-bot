@@ -25,6 +25,12 @@ Currently:
   through ``effective_subtypes`` and ``effective_land_produces`` so
   the rewritten land taps for the new color. Persistent (no
   ``expires_at``) — text changes survive cleanup per CR 612.
+- ``SLEIGHT_OF_MIND`` (Alpha) — "Change the text of target spell
+  or permanent by replacing all instances of one color word with
+  another." Sorcery, layer 3 text-changing. The demo rewrites
+  ``protection_from_color`` on the target — pair with White
+  Knight to flip its protection from black to a different color.
+  Same persistent semantics as Magical Hack.
 - ``WHITE_KNIGHT`` (Alpha) — 2/2 white Knight with first strike and
   protection from black. Used as the protection-target so layer 5
   color changes have observable consequences in combat.
@@ -44,6 +50,21 @@ Currently:
 - ``BLOOD_MOON`` (The Dark) — Enchantment "Nonbasic lands are
   Mountains." Same layer-4 set_basic_land_subtype mechanism as
   Magus of the Moon but printed as an enchantment.
+- ``PAINTERS_SERVANT`` (Shadowmoor) — Artifact "As Painter's
+  Servant enters, choose a color. All cards that aren't on the
+  battlefield, spells, and permanents are the chosen color in
+  addition to their other colors." Wires via the
+  ``paints_all_objects_chosen_color_at_etb`` printing flag and
+  the per-instance ``GameObject.painter_chosen_color`` set at
+  ETB. ``effective_colors`` synthesizes a layer-5 ``add_colors``
+  entry from each Painter source.
+- ``HUMILITY`` (Tempest) — Enchantment "All creatures lose all
+  abilities and have base power and toughness 1/1." The canonical
+  reference card for the layer system. Wires via the
+  ``wipes_all_creature_abilities`` (layer 6) and
+  ``sets_all_creature_pt_to_1_1`` (layer 7b) printing flags;
+  ``_layer6_entries_for`` and ``_registry_set_base_pt`` synthesize
+  per-creature entries from each Humility source.
 - ``URBORG_TOMB_OF_YAWGMOTH`` (Planar Chaos) — Legendary Land
   with printed Swamp subtype and "Each land is a Swamp in
   addition to its other types." The famous test case for the
@@ -58,11 +79,12 @@ from __future__ import annotations
 
 from mtg_bot.effects import (
     MagicalHackTextChangeEffect, ScuttlemuttColorChangeUEOT,
+    SleightOfMindTextChangeEffect,
 )
 from mtg_bot.effects.base import ActivatedAbility, ActivationCost
 from mtg_bot.cards.base import (
-    CardPrinting, ManaCost, make_aura, make_creature, make_enchantment,
-    make_sorcery, parse_mana_cost,
+    CardPrinting, ManaCost, make_artifact, make_aura, make_creature,
+    make_enchantment, make_sorcery, parse_mana_cost,
 )
 
 
@@ -83,6 +105,12 @@ CLONE: CardPrinting = make_creature(
 MAGICAL_HACK: CardPrinting = make_sorcery(
     "Magical Hack", "{U}",
     effect=MagicalHackTextChangeEffect(),
+)
+
+
+SLEIGHT_OF_MIND: CardPrinting = make_sorcery(
+    "Sleight of Mind", "{U}",
+    effect=SleightOfMindTextChangeEffect(),
 )
 
 
@@ -115,6 +143,19 @@ DRYAD_OF_THE_ILYSIAN_GROVE: CardPrinting = make_creature(
 BLOOD_MOON: CardPrinting = make_enchantment(
     "Blood Moon", "{2}{R}",
     nonbasic_lands_are_mountains=True,
+)
+
+
+PAINTERS_SERVANT: CardPrinting = make_artifact(
+    "Painter's Servant", "{2}",
+    paints_all_objects_chosen_color_at_etb=True,
+)
+
+
+HUMILITY: CardPrinting = make_enchantment(
+    "Humility", "{2}{W}",
+    wipes_all_creature_abilities=True,
+    sets_all_creature_pt_to_1_1=True,
 )
 
 

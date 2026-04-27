@@ -1089,6 +1089,395 @@ def test_synthetic_set_basic_land_subtype_suppresses_nonbasic_abilities():
     assert effective_activated_abilities(state, land) == ()
 
 
+def test_painters_servant_paints_all_creatures_chosen_color():
+    """Painter's Servant ETBs and chooses red. Every battlefield
+    permanent gains Red in addition to its other colors via the
+    layer-5 ``add_colors`` synthesis."""
+    from mtg_bot.cards.demo_layers import PAINTERS_SERVANT
+
+    state = _new_state(agent=_PickColor("R"))
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    # Pre-Painter colors.
+    assert effective_colors(state, bear) == frozenset({"G"})
+    assert effective_colors(state, knight) == frozenset({"W"})
+
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    state.battlefield.append(painter)
+    # Drive the ETB hook directly via put_into_battlefield path —
+    # use the real cast pipeline so the choose_mana_color callback
+    # runs.
+    from mtg_bot.actions import put_into_battlefield
+    state.battlefield.remove(painter)
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    put_into_battlefield(state, painter, controller_id=0)
+
+    # Painter chose R → every permanent gains R.
+    assert effective_colors(state, bear) == frozenset({"G", "R"})
+    assert effective_colors(state, knight) == frozenset({"W", "R"})
+
+
+def test_painters_servant_changes_block_legality():
+    """Painter's Servant choosing black makes a green Wild Bear
+    also black. White Knight has protection from black → bear can
+    no longer block."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.demo_layers import PAINTERS_SERVANT
+    from mtg_bot.combat import can_block
+
+    state = _new_state(agent=_PickColor("B"))
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
+    # Pre-Painter: green bear can block prot-black White Knight.
+    assert can_block(state, blocker=bear, attacker=knight) is True
+
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    put_into_battlefield(state, painter, controller_id=0)
+
+    # Bear is now G+B → intersects White Knight's prot-B → can't block.
+    assert "B" in effective_colors(state, bear)
+    assert can_block(state, blocker=bear, attacker=knight) is False
+
+
+def test_painters_servant_then_scuttlemutt_set_overrides_paint():
+    """Layer-5 timestamp ordering: Painter's add_colors at
+    Painter's etb_timestamp, then Scuttlemutt's set_colors at a
+    later timestamp REPLACES the color set entirely (set wins
+    within layer 5 when newer than add)."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.demo_layers import PAINTERS_SERVANT
+    from mtg_bot.effects.generic import ScuttlemuttColorChangeUEOT
+
+    state = _new_state(agent=_PickColor("R"))
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    put_into_battlefield(state, painter, controller_id=0)
+    # Bear is G+R from Painter.
+    assert effective_colors(state, bear) == frozenset({"G", "R"})
+
+    # Scuttlemutt sets Bear's color to W (newer timestamp).
+    scuttle = _put(state, SCUTTLEMUTT, owner_id=0)
+    state.players[0].agent = _PickColor("W")
+    state.resolving_source = scuttle
+    ScuttlemuttColorChangeUEOT().resolve(
+        state, 0, (("creature", bear.id),),
+    )
+
+    # Set wins → bear is just W, not W+G+R.
+    assert effective_colors(state, bear) == frozenset({"W"})
+
+
+def test_scuttlemutt_then_painters_servant_painter_unions_onto_set():
+    """Reverse: Scuttlemutt sets Bear to W first, then Painter's
+    Servant adds R later. Walk in timestamp order — set then add —
+    Bear ends up W + R."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.demo_layers import PAINTERS_SERVANT
+    from mtg_bot.effects.generic import ScuttlemuttColorChangeUEOT
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    scuttle = _put(state, SCUTTLEMUTT, owner_id=0)
+    state.players[0].agent = _PickColor("W")
+    state.resolving_source = scuttle
+    ScuttlemuttColorChangeUEOT().resolve(
+        state, 0, (("creature", bear.id),),
+    )
+    assert effective_colors(state, bear) == frozenset({"W"})
+
+    # Painter's Servant ETBs (newer than Scuttlemutt's set entry).
+    state.players[0].agent = _PickColor("R")
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    put_into_battlefield(state, painter, controller_id=0)
+
+    # add_colors UNIONS onto the prior set → bear is W + R.
+    assert effective_colors(state, bear) == frozenset({"W", "R"})
+
+
+def test_painters_servant_destroyed_paint_lifts():
+    """Painter's Servant leaves play → its synthesized layer-5
+    add_colors stops contributing. Bear reverts to printed G."""
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.demo_layers import PAINTERS_SERVANT
+
+    state = _new_state(agent=_PickColor("R"))
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    painter = state.new_object(PAINTERS_SERVANT, 0, Zone.STACK)
+    put_into_battlefield(state, painter, controller_id=0)
+    assert effective_colors(state, bear) == frozenset({"G", "R"})
+
+    destroy(state, painter)
+
+    assert effective_colors(state, bear) == frozenset({"G"})
+
+
+def test_sleight_of_mind_rewrites_protection_color():
+    """Sleight of Mind rewrites White Knight's "Protection from
+    black" → "Protection from white". Pin the layer-3 substitution
+    on ``protection_from_color`` via the registry walk in
+    ``effective_protection_from_colors``."""
+    from mtg_bot.cards.demo_layers import SLEIGHT_OF_MIND
+    from mtg_bot.effects.generic import SleightOfMindTextChangeEffect
+    from mtg_bot.game import effective_protection_from_colors
+
+    state = _new_state(agent=_PickColor("W"))
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    assert effective_protection_from_colors(state, knight) == frozenset({"B"})
+
+    SleightOfMindTextChangeEffect().resolve(
+        state, controller_id=0,
+        targets=(("permanent", knight.id),),
+    )
+
+    assert effective_protection_from_colors(state, knight) == frozenset({"W"})
+
+
+def test_sleight_of_mind_changes_block_legality():
+    """Pair Sleight of Mind with combat: rewriting White Knight's
+    protection from black to white flips which colors can block.
+
+    Pre-Sleight: black creature can't block (prot-B); white bear
+    can. After Sleight: black can block; white can't.
+    """
+    from mtg_bot.cards.demo_layers import SLEIGHT_OF_MIND
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.combat import can_block
+    from mtg_bot.effects.generic import SleightOfMindTextChangeEffect
+
+    state = _new_state(agent=_PickColor("W"))
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    grave_brute = _put(state, SYNTHETIC_CREATURES["Grave Brute"], owner_id=1)
+    # Synthesize a white creature opponent.
+    white_bear = _put(
+        state, make_creature("White Bear", "{1}{W}", 2, 2), owner_id=1,
+    )
+    # Pre-Sleight: black-can't-block, white-can-block.
+    assert can_block(state, blocker=grave_brute, attacker=knight) is False
+    assert can_block(state, blocker=white_bear, attacker=knight) is True
+
+    # Sleight of Mind: B → W on White Knight.
+    SleightOfMindTextChangeEffect().resolve(
+        state, 0, (("permanent", knight.id),),
+    )
+
+    # After: white-can't-block, black-can-block.
+    assert can_block(state, blocker=grave_brute, attacker=knight) is True
+    assert can_block(state, blocker=white_bear, attacker=knight) is False
+
+
+def test_sleight_of_mind_persistent_through_cleanup():
+    """Layer-3 entry is ``expires_at=None`` — text changes survive
+    cleanup. Rewriting protection persists into the next turn."""
+    from mtg_bot.effects.generic import SleightOfMindTextChangeEffect
+    from mtg_bot.game import effective_protection_from_colors
+
+    state = _new_state(agent=_PickColor("R"))
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    SleightOfMindTextChangeEffect().resolve(
+        state, 0, (("permanent", knight.id),),
+    )
+    assert effective_protection_from_colors(state, knight) == frozenset({"R"})
+
+    state.expire_continuous_effects("cleanup")
+
+    assert effective_protection_from_colors(state, knight) == frozenset({"R"})
+
+
+def test_two_sleights_of_mind_chain_color_substitutions():
+    """Two Sleight of Minds chained: first rewrites W to U, second
+    rewrites U to G. Walk in timestamp order. Final protection: G.
+    """
+    from mtg_bot.effects.generic import SleightOfMindTextChangeEffect
+    from mtg_bot.game import effective_protection_from_colors
+
+    state = _new_state()
+    knight = _put(state, WHITE_KNIGHT, owner_id=0)
+    # First: B → U.
+    state.players[0].agent = _PickColor("U")
+    SleightOfMindTextChangeEffect().resolve(
+        state, 0, (("permanent", knight.id),),
+    )
+    assert effective_protection_from_colors(state, knight) == frozenset({"U"})
+
+    # Second: U → G.
+    state.players[0].agent = _PickColor("G")
+    SleightOfMindTextChangeEffect().resolve(
+        state, 0, (("permanent", knight.id),),
+    )
+
+    assert effective_protection_from_colors(state, knight) == frozenset({"G"})
+
+
+def test_humility_alone_makes_creatures_1_1_no_abilities():
+    """Humility (Tempest): "All creatures lose all abilities and
+    have base power and toughness 1/1." Pin the canonical effect.
+    """
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    sentinel = _put(state, SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=0)
+    sentinel.etb_timestamp = 1
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    bear.etb_timestamp = 2
+    # Pre-Humility: sentinel 1/3 with flying, bear 2/2.
+    assert effective_power(state, sentinel) == 1
+    assert effective_toughness(state, sentinel) == 3
+    assert "flying" in effective_keywords(state, sentinel)
+
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 100
+
+    # Both creatures become 1/1 with no abilities.
+    assert effective_power(state, sentinel) == 1
+    assert effective_toughness(state, sentinel) == 1
+    assert effective_keywords(state, sentinel) == frozenset()
+    assert effective_power(state, bear) == 1
+    assert effective_toughness(state, bear) == 1
+    assert effective_keywords(state, bear) == frozenset()
+    # Humility itself is an enchantment, not a creature — its P/T
+    # isn't relevant. Pin that it's not a creature.
+    assert not is_creature_now(humility)
+
+
+def test_humility_destroyed_creatures_revert_to_printed():
+    """Lifecycle: Humility leaves play → creatures regain printed
+    P/T and abilities."""
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    sentinel = _put(state, SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=0)
+    sentinel.etb_timestamp = 1
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 100
+    assert effective_power(state, sentinel) == 1
+    assert effective_toughness(state, sentinel) == 1
+    assert "flying" not in effective_keywords(state, sentinel)
+
+    destroy(state, humility)
+
+    assert effective_power(state, sentinel) == 1
+    assert effective_toughness(state, sentinel) == 3
+    assert "flying" in effective_keywords(state, sentinel)
+
+
+def test_humility_then_lignify_lignify_set_wins_for_pt():
+    """Humility (older 7b, sets to 1/1) + Lignify (newer 7b, sets
+    to 0/4) on a creature. Within sublayer 7b, latest timestamp
+    wins → 0/4. Both layer-6 wipes apply (same effect). Result:
+    Lignified Sentinel is 0/4 with no abilities."""
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    sentinel = _put(state, SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=0)
+    sentinel.etb_timestamp = 1
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 5
+    aura = _put(state, LIGNIFY, owner_id=0)
+    state.next_timestamp = 50
+    _attach(state, aura, sentinel)
+
+    # Lignify's 7b is newer → 0/4.
+    assert effective_power(state, sentinel) == 0
+    assert effective_toughness(state, sentinel) == 4
+    assert effective_keywords(state, sentinel) == frozenset()
+
+
+def test_lignify_then_humility_humility_set_wins_for_pt():
+    """Reverse: Lignify older + Humility newer. Humility's 7b set
+    (1/1) wins. Sentinel is 1/1 with no abilities (both wipes still
+    apply)."""
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    sentinel = _put(state, SYNTHETIC_CREATURES["Sky Sentinel"], owner_id=0)
+    sentinel.etb_timestamp = 1
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, sentinel)
+    # Lignify's 7b at timestamp 1-3.
+    state.next_timestamp = 100
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 100  # newer
+
+    assert effective_power(state, sentinel) == 1
+    assert effective_toughness(state, sentinel) == 1
+    assert effective_keywords(state, sentinel) == frozenset()
+
+
+def test_humility_with_counters_creature_is_1_1_plus_counters():
+    """Humility sets base 1/1 (layer 7b). +1/+1 counters at layer
+    7d still apply on top: a creature with 3 counters under
+    Humility is 4/4."""
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    bear.etb_timestamp = 1
+    bear.plus_one_counters = 3
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 5
+
+    assert effective_power(state, bear) == 1 + 3
+    assert effective_toughness(state, bear) == 1 + 3
+
+
+def test_humility_dryad_layer4_persists():
+    """Strict CR layer order: Dryad's layer-4 contribution to
+    lands applies BEFORE layer 6/7 wipe Dryad herself. So lands
+    KEEP all 5 basic types under Humility, even though Dryad is
+    a 1/1 creature with no abilities.
+
+    This is the famous "Dryad of the Ilysian Grove + Humility"
+    ruling the user pointed out earlier — pin it again with the
+    real Humility card.
+    """
+    from mtg_bot.cards.demo_layers import HUMILITY
+
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 5
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 100
+
+    # Dryad herself: 1/1 with no abilities (Humility wipes).
+    assert effective_power(state, dryad) == 1
+    assert effective_toughness(state, dryad) == 1
+    assert effective_keywords(state, dryad) == frozenset()
+
+    # But her layer-4 contribution to lands persists.
+    forest_subs = effective_subtypes(state, forest)
+    assert "Plains" in forest_subs
+    assert "Island" in forest_subs
+    assert "Swamp" in forest_subs
+    assert "Mountain" in forest_subs
+    # All 5 colors still produced.
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+
+def test_humility_tarmogoyf_style_is_1_1():
+    """Humility on a Tarmogoyf-style CDA creature. Layer 6 wipes
+    the CDA. Layer 7a is empty. Layer 7b sets 1/1. Result: 1/1.
+    """
+    from mtg_bot.cards.demo_layers import HUMILITY
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    cosmogoyf = _put(state, EOE_SPELLS["Cosmogoyf"], owner_id=0)
+    cosmogoyf.etb_timestamp = 1
+    state.players[0].exile.extend([cosmogoyf.printing] * 5)
+    # Without Humility: Cosmogoyf is 5/6 from CDA.
+    assert effective_power(state, cosmogoyf) == 5
+
+    humility = _put(state, HUMILITY, owner_id=0)
+    humility.etb_timestamp = 10
+
+    assert effective_power(state, cosmogoyf) == 1
+    assert effective_toughness(state, cosmogoyf) == 1
+
+
 def test_blood_moon_urborg_older_blood_moon_wins():
     """The famous Blood Moon + Urborg ruling. Blood Moon
     (Enchantment, "Nonbasic lands are Mountains") + Urborg, Tomb

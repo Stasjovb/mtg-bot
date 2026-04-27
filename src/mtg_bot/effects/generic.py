@@ -7285,6 +7285,101 @@ class MagicalHackTextChangeEffect(Effect):
 
 
 @dataclass(frozen=True)
+class SleightOfMindTextChangeEffect(Effect):
+    """Sleight of Mind: 'Change the text of target spell or
+    permanent by replacing all instances of one color word with
+    another.' Layer 3 text-changing.
+
+    Implementation scope: rewrites color words in
+    ``protection_from_color`` on the target's printing. The OLD
+    color is auto-derived from the target's current effective
+    protection (the only color-word reference our engine
+    currently models on permanents); the controller picks the NEW
+    color via ``choose_mana_color``. Writes a layer-3
+    ``"replace_color_word"`` registry entry sourced by the
+    resolving spell with ``params=(old, new)`` and
+    ``expires_at=None`` (text changes persist per CR 612).
+
+    Limitations: doesn't rewrite color words inside other rules
+    text (e.g., "Whenever a black creature ETBs, ..."). The engine
+    doesn't have such color-keyed triggers in scope, so the
+    extension is a no-op there.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Permits any permanent on the battlefield. In practice
+        # only the protection-from-color holders get observable
+        # results; targeting elsewhere just writes a no-op entry.
+        return [
+            ("permanent", o.id) for o in state.battlefield
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_protection_from_colors
+
+        if not targets:
+            return
+        _, target_id = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == target_id), None,
+        )
+        if target is None:
+            return
+        # Derive the OLD color from the target's current effective
+        # protection set. If protection is empty or has multiple
+        # colors, we can't unambiguously rewrite — fizzle.
+        prot = effective_protection_from_colors(state, target)
+        if len(prot) != 1:
+            state.log.append(
+                f"Sleight of Mind fizzles: {target.printing.name} "
+                f"has no single color word to rewrite"
+            )
+            return
+        (old,) = prot
+        options = [c for c in ["W", "U", "B", "R", "G"] if c != old]
+        chosen = state.players[controller_id].agent.choose_mana_color(
+            state, controller_id, options,
+        )
+        if chosen not in options:
+            state.log.append(
+                f"Sleight of Mind fizzles: invalid new color choice"
+            )
+            return
+        src = state.resolving_source
+        source_id = src.id if src is not None else target.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=3,
+            kind="replace_color_word",
+            target_id=target.id,
+            params=(old, chosen),
+            description=(
+                f"Sleight of Mind rewrites {target.printing.name}: "
+                f"{old} -> {chosen}"
+            ),
+        )
+        state.log.append(
+            f"Sleight of Mind rewrites {target.printing.name}: "
+            f"{old} -> {chosen}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "change the text of target spell or permanent by replacing "
+            "all instances of one color word with another"
+        )
+
+
+
+@dataclass(frozen=True)
 class ScuttlemuttColorChangeUEOT(Effect):
     """Scuttlemutt: '{T}: Target creature becomes the color or colors
     of your choice until end of turn.' Layer 5 color-changing effect.

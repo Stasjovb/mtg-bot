@@ -203,6 +203,12 @@ class GameObject:
     # within-layer timestamp order matches CR 613.4. 0 means "not
     # yet entered" — orders before any registry entry.
     etb_timestamp: int = 0
+    # Painter's Servant: the color chosen as the printing's
+    # ``paints_all_objects_chosen_color_at_etb`` ETB resolves.
+    # Stored on the GameObject because the choice is per-instance.
+    # Consumed by ``effective_colors`` when synthesizing layer-5
+    # ``"add_colors"`` entries from this Painter source.
+    painter_chosen_color: Optional[str] = None
 
 
 def is_void_active(state: GameState) -> bool:
@@ -440,6 +446,11 @@ def _layer6_entries_for(
     - Equipment ``equipment_bonuses`` keyword riders attached to
       ``obj``. The Equipment's ``etb_timestamp`` is the rider's
       timestamp.
+    - Humility-style global wipes: when any source on the
+      battlefield has the ``wipes_all_creature_abilities`` flag
+      and ``obj`` is a creature, synthesize a
+      ``"lose_all_abilities"`` entry sourced by that permanent
+      with its ``etb_timestamp``.
     """
     entries: list["ContinuousEffect"] = [
         ce for ce in state.continuous_effects
@@ -482,6 +493,22 @@ def _layer6_entries_for(
                     f"{source.printing.name} grants {kw} via equip"
                 ),
             ))
+    # Humility-style global wipe: applies only to creatures.
+    if is_creature_now(obj):
+        for source in state.battlefield:
+            if source.printing.wipes_all_creature_abilities:
+                entries.append(ContinuousEffect(
+                    source_id=source.id,
+                    layer=6,
+                    timestamp=source.etb_timestamp,
+                    kind="lose_all_abilities",
+                    target_id=obj.id,
+                    params=(),
+                    description=(
+                        f"{source.printing.name}: "
+                        f"creatures lose all abilities"
+                    ),
+                ))
     return entries
 
 
@@ -815,13 +842,34 @@ def effective_colors(
         color in addition to its other colors" clauses.
     """
     colors: set[str] = set(obj.printing.mana_cost.colors)
-    layer5 = sorted(
-        (
-            ce for ce in state.continuous_effects
-            if ce.layer == 5 and ce.target_id == obj.id
-        ),
-        key=lambda ce: ce.timestamp,
-    )
+    # Real registry layer-5 entries on this object.
+    layer5: list[ContinuousEffect] = [
+        ce for ce in state.continuous_effects
+        if ce.layer == 5 and ce.target_id == obj.id
+    ]
+    # Synthesize Painter's-Servant-style ``add_colors`` entries from
+    # any source on the battlefield with the painter flag and a
+    # captured chosen color. Source's ``etb_timestamp`` is the
+    # entry timestamp so it interleaves with Scuttlemutt-style
+    # ``set_colors`` per CR 613 layer-5 timestamp rules.
+    for src in state.battlefield:
+        if (
+            src.printing.paints_all_objects_chosen_color_at_etb
+            and src.painter_chosen_color
+        ):
+            layer5.append(ContinuousEffect(
+                source_id=src.id,
+                layer=5,
+                timestamp=src.etb_timestamp,
+                kind="add_colors",
+                target_id=obj.id,
+                params=(frozenset({src.painter_chosen_color}),),
+                description=(
+                    f"{src.printing.name} paints "
+                    f"{src.painter_chosen_color}"
+                ),
+            ))
+    layer5.sort(key=lambda ce: ce.timestamp)
     for ce in layer5:
         if not ce.params:
             continue
@@ -838,13 +886,39 @@ def effective_colors(
 def effective_protection_from_colors(
     state: "GameState", obj: "GameObject"
 ) -> frozenset[str]:
-    """Return the colors ``obj`` has protection from. Currently only
-    sources protection from the printing's ``protection_from_color``
-    field (single color). Returned as a frozenset for future
-    extension to multi-color protection and to compose cleanly with
-    set intersection in ``can_block``."""
+    """Return the colors ``obj`` has protection from.
+
+    Sources:
+    - Printing's ``protection_from_color`` field (single color).
+    - Layer-3 ``"replace_color_word"`` registry entries on this
+      object (Sleight of Mind, Mind Bend) — substitute one color
+      letter for another, in timestamp order so the most-recent
+      rewrite wins for chained substitutions.
+
+    Returned as a frozenset for clean set-intersection in
+    ``can_block`` and for future extension to multi-color
+    protection.
+    """
     pc = obj.printing.protection_from_color
-    return frozenset({pc}) if pc else frozenset()
+    if not pc:
+        return frozenset()
+    layer3 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 3
+            and ce.kind == "replace_color_word"
+            and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    current = pc
+    for ce in layer3:
+        if not ce.params or len(ce.params) != 2:
+            continue
+        old, new = ce.params
+        if current == old:
+            current = new
+    return frozenset({current})
 
 
 def magus_of_the_moon_active(state: "GameState") -> bool:
@@ -1183,17 +1257,36 @@ def _registry_set_base_pt(
     state: "GameState", obj: "GameObject"
 ) -> "tuple[int, int] | None":
     """Highest-timestamp layer-7 sublayer-1 ``"set_base_pt"`` entry
-    targeting ``obj``, or None if no such entry exists. Lignify
-    ("base power and toughness 0/4 while attached") writes one of
-    these on attach. Multiple "set base PT" effects: the latest
-    timestamp wins (CR 613 timestamp rule within a sublayer)."""
-    matches = [
+    targeting ``obj``, or None if no such entry exists.
+
+    Walks both real registry entries (Lignify, manland animation,
+    Atomic Microsizer) AND synthesized entries from Humility-style
+    sources on the battlefield (any permanent with the
+    ``sets_all_creature_pt_to_1_1`` flag synthesizes a 1/1 set on
+    every creature with the source's ``etb_timestamp``). The most-
+    recent timestamp wins (CR 613 within-sublayer rule).
+    """
+    matches: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
         if ce.layer == 7
         and ce.sublayer == 1
         and ce.kind == "set_base_pt"
         and ce.target_id == obj.id
     ]
+    # Synthesize Humility-style global 1/1 set for creatures.
+    if is_creature_now(obj):
+        for source in state.battlefield:
+            if source.printing.sets_all_creature_pt_to_1_1:
+                matches.append(ContinuousEffect(
+                    source_id=source.id,
+                    layer=7, sublayer=1, kind="set_base_pt",
+                    target_id=obj.id,
+                    params=(1, 1),
+                    description=(
+                        f"{source.printing.name}: creatures are 1/1"
+                    ),
+                    timestamp=source.etb_timestamp,
+                ))
     if not matches:
         return None
     matches.sort(key=lambda ce: ce.timestamp)

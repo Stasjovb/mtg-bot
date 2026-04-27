@@ -2073,8 +2073,26 @@ def put_into_battlefield(
     obj.tapped = False
     obj.summoning_sick = True
     # Snapshot the moment of ETB for static-effect timestamp use
-    # (Magus / Dryad layer-4 synthesizing in effective_subtypes).
+    # (Magus / Dryad layer-4 synthesizing in effective_subtypes,
+    # Painter's Servant layer-5, Humility layer-6/7b). Bump
+    # ``next_timestamp`` past this snapshot so subsequent registry
+    # writes (including the synthesizing-side's expectation of a
+    # higher timestamp) are strictly later in the layer walks.
     obj.etb_timestamp = state.next_timestamp
+    state.next_timestamp += 1
+    # Painter's Servant: "As Painter's Servant enters, choose a
+    # color." The chosen color is captured on the GameObject and
+    # consumed by ``effective_colors`` when synthesizing the
+    # layer-5 ``add_colors`` entry sourced by this permanent.
+    if obj.printing.paints_all_objects_chosen_color_at_etb:
+        chosen = state.players[controller_id].agent.choose_mana_color(
+            state, controller_id, ["W", "U", "B", "R", "G"],
+        )
+        if chosen in ("W", "U", "B", "R", "G"):
+            obj.painter_chosen_color = chosen
+            state.log.append(
+                f"{obj.printing.name} enters; chose color {chosen}"
+            )
     # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's
