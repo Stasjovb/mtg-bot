@@ -20,7 +20,10 @@ from mtg_bot.cards.parser_source import (
     _build_creature_printing,
     _build_land_printing,
     _build_spell_printing,
+    _normalize_creature_effect_phrase,
+    _normalize_spell_effect_phrase,
     _parse_clause,
+    _parse_effect,
     _parse_effect_phrase,
     _parse_keyword_line,
     _parse_spell_effect_phrase,
@@ -99,6 +102,79 @@ def test_parse_clause_recognizes_each_evergreen_keyword(line, engine_keyword):
     assert parsed is not None
     assert parsed.keywords == (engine_keyword,)
     assert parsed.trigger is None
+
+
+# ---------- unified effect grammar (_parse_effect + normalizers) ----------
+
+
+def test_parse_effect_unknown_returns_none():
+    assert _parse_effect("scry 1") is None
+    assert _parse_effect("") is None
+
+
+def test_parse_effect_recognizes_normalized_phrases():
+    """Normalized form has no source-subject prefix, no trailing
+    period, and a lowercased first letter."""
+    assert _parse_effect("deals 3 damage to any target") == \
+        DealDamageAnyTarget(amount=3)
+    assert _parse_effect("deals 4 damage to target creature") == \
+        DealDamageToTargetCreature(amount=4)
+    assert _parse_effect("draw a card") == DrawCards(amount=1)
+    assert _parse_effect("draw 2 cards") == DrawCards(amount=2)
+    assert _parse_effect("you gain 2 life") == GainLife(amount=2)
+    assert _parse_effect("put a +1/+1 counter on target creature") == \
+        PutPlusOneCounterOnTargetCreature(amount=1)
+
+
+def test_normalize_creature_effect_phrase_strips_it_prefix():
+    assert _normalize_creature_effect_phrase(
+        "it deals 3 damage to any target"
+    ) == "deals 3 damage to any target"
+
+
+def test_normalize_creature_effect_phrase_passthrough_no_it():
+    """Effects without an ``it`` source-pronoun (draw, life-gain) pass
+    through unchanged after whitespace strip."""
+    assert _normalize_creature_effect_phrase("draw a card") == "draw a card"
+    assert _normalize_creature_effect_phrase(
+        "you gain 2 life"
+    ) == "you gain 2 life"
+
+
+def test_normalize_spell_effect_phrase_strips_name_period_and_lowercases():
+    assert _normalize_spell_effect_phrase(
+        "Bombard deals 4 damage to target creature.", "Bombard"
+    ) == "deals 4 damage to target creature"
+    assert _normalize_spell_effect_phrase(
+        "Draw a card.", "Honor"
+    ) == "draw a card"
+    assert _normalize_spell_effect_phrase(
+        "Put a +1/+1 counter on target creature.", "Honor"
+    ) == "put a +1/+1 counter on target creature"
+
+
+def test_normalize_spell_effect_phrase_leaves_phrase_when_name_absent():
+    """If the card-name prefix isn't present (e.g. clause uses a
+    generic shape), only the period is stripped."""
+    assert _normalize_spell_effect_phrase(
+        "Draw a card.", "Plasma Bolt"
+    ) == "draw a card"
+
+
+def test_unification_creature_and_spell_paths_agree_on_damage():
+    """Same semantic effect via both surface contexts produces the same
+    ``Effect`` — the whole point of the unified path."""
+    via_creature = _parse_effect_phrase("it deals 3 damage to any target")
+    via_spell = _parse_spell_effect_phrase(
+        "Plasma Bolt deals 3 damage to any target.", "Plasma Bolt"
+    )
+    assert via_creature == via_spell == DealDamageAnyTarget(amount=3)
+
+
+def test_unification_creature_and_spell_paths_agree_on_draw():
+    via_creature = _parse_effect_phrase("draw a card")
+    via_spell = _parse_spell_effect_phrase("Draw a card.", "Honor")
+    assert via_creature == via_spell == DrawCards(amount=1)
 
 
 # ---------- _parse_keyword_line / multi-keyword lines ----------
@@ -507,14 +583,6 @@ def test_parse_spell_effect_phrase_returns_none_for_unknown_text():
         "Bombard counters target spell.", "Bombard"
     ) is None
     assert _parse_spell_effect_phrase("", "Bombard") is None
-
-
-def test_parse_spell_effect_phrase_requires_trailing_period():
-    """Sentence shape: a missing period means the line isn't a complete
-    spell-effect sentence and must be skipped."""
-    assert _parse_spell_effect_phrase(
-        "Bombard deals 4 damage to target creature", "Bombard"
-    ) is None
 
 
 def test_parse_spell_effect_phrase_name_substituted_exactly():

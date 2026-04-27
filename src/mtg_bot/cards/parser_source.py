@@ -26,13 +26,27 @@ Currently recognized:
 - Trigger conditions: ``this creature enters`` → ``"etb"``;
   ``this creature dies`` → ``"dies"``;
   ``this creature attacks`` → ``"attacks"``.
-- Effects: ``it deals N damage to any target`` →
+- Effects (unified across creature triggered abilities and spells —
+  see ``_parse_effect``): ``deals N damage to any target`` →
   ``DealDamageAnyTarget(amount=N)``;
-  ``create a tapped 2/2 colorless Robot artifact creature token``
-  → ``CreateToken(token_printing=TOKEN_PRINTINGS["Robot"], count=1,
-  tapped=True)``; ``draw a card`` → ``DrawCards(amount=1)``;
+  ``deals N damage to target creature`` →
+  ``DealDamageToTargetCreature(amount=N)``;
+  ``draw a card`` → ``DrawCards(amount=1)``;
   ``draw N cards`` → ``DrawCards(amount=N)``;
-  ``you gain N life`` → ``GainLife(amount=N)``.
+  ``you gain N life`` → ``GainLife(amount=N)``;
+  ``put a +1/+1 counter on target creature`` →
+  ``PutPlusOneCounterOnTargetCreature(amount=1)``;
+  ``create a tapped 2/2 colorless Robot artifact creature token`` →
+  ``CreateToken(token_printing=TOKEN_PRINTINGS["Robot"], count=1,
+  tapped=True)``.
+
+  Each context (creature trigger / spell) preprocesses its surface text
+  into normalized form before dispatch — the creature parser strips a
+  leading ``it`` (the source-pronoun); the spell parser strips a
+  leading ``<Name>`` (the card-name subject), the trailing period, and
+  lowercases the first letter. After normalization both contexts feed
+  ``_parse_effect`` with the same canonical phrase, so adding an effect
+  here unlocks it everywhere.
 
 - Printing-level keyword: ``Warp {cost}`` (with optional reminder
   text) sets the creature's ``warp_cost`` so it can be cast for the
@@ -42,15 +56,9 @@ Currently recognized:
 
 Cards whose oracle text uses only those clauses get claimed.
 
-Spell support (instants and sorceries) is a separate small grammar:
-each supported shape is a narrow regex that templates the card's own
-name into a single sentence — e.g. ``"<Name> deals N damage to any
-target."`` → ``DealDamageAnyTarget(amount=N)`` and ``"<Name> deals N
-damage to target creature."`` → ``DealDamageToTargetCreature(amount=N)``.
-Generic shapes that don't reference the card name —
-``"Draw a card."`` → ``DrawCards(amount=1)``,
-``"Put a +1/+1 counter on target creature."`` →
-``PutPlusOneCounterOnTargetCreature(amount=1)`` — also parse.
+Spell support (instants and sorceries) shares the unified effect
+grammar above. Single-line spells produce one ``Effect`` directly;
+multi-line spells are described below.
 
 Multi-line spells split on ``\\n`` into clauses. Two combinator
 shapes are supported:
@@ -176,47 +184,47 @@ def _parse_trigger_phrase(phrase: str) -> str | None:
     return _TRIGGER_PHRASES.get(phrase.strip())
 
 
-# Effect phrases — start with damage. ``it`` resolves to the source
-# permanent and is treated as syntactic sugar; once the parser tracks
-# more pronouns / target referents we can promote it to a dedicated
-# pronoun resolver.
+# Unified effect grammar. Each shape's regex matches the *normalized*
+# effect phrase — no source-subject prefix (``it`` for creature triggers
+# or ``<Name>`` for spells), no trailing period, first letter lowercased.
+# Surface preprocessing (``_normalize_creature_effect_phrase`` and
+# ``_normalize_spell_effect_phrase``) strips the per-context noise before
+# dispatch, so both contexts share one effect grammar — adding a new
+# effect here makes it available to creature triggered abilities and to
+# spells (single-line and multi-line) at the same time.
 _DEAL_DAMAGE_ANY_TARGET = re.compile(
-    r"^it deals (\d+) damage to any target$"
+    r"^deals (\d+) damage to any target$"
 )
-
-
-# Narrow handler for Gravpack Monoist's exact dies-trigger payload.
-# Generalizes once another card needs a similar token-creation slice
-# (color/power/toughness/subtype variation).
+_DEAL_DAMAGE_TARGET_CREATURE = re.compile(
+    r"^deals (\d+) damage to target creature$"
+)
+_DRAW_A_CARD = re.compile(r"^draw a card$")
+_DRAW_N_CARDS = re.compile(r"^draw (\d+) cards$")
+_YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
+_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
+    r"^put a \+1/\+1 counter on target creature$"
+)
+# Narrow handler for Gravpack Monoist's exact token-creation payload.
+# Generalizes once another card needs a similar slice with different
+# color/power/toughness/subtype.
 _CREATE_TAPPED_2_2_ROBOT = re.compile(
     r"^create a tapped 2/2 colorless Robot artifact creature token$"
 )
 
 
-# Card-draw effects. Singular ``draw a card`` is the common shape on
-# EoE creature triggers; the plural ``draw N cards`` form covers
-# instant/sorcery and rarer trigger payloads.
-_DRAW_A_CARD = re.compile(r"^draw a card$")
-_DRAW_N_CARDS = re.compile(r"^draw (\d+) cards$")
+def _parse_effect(phrase: str) -> Effect | None:
+    """Parse a *normalized* effect phrase into an ``Effect``.
 
-
-# Life-gain effect. ``you gain N life`` covers both N=1 and N>1
-# without a separate singular form (oracle text always uses the
-# numeric form for life gain).
-_YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
-
-
-def _parse_effect_phrase(phrase: str) -> Effect | None:
-    phrase = phrase.strip()
+    Normalized form has no source-subject prefix, no trailing period,
+    and a lowercased first letter — see ``_normalize_*`` helpers below
+    for the per-context surface stripping.
+    """
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
-    if _CREATE_TAPPED_2_2_ROBOT.match(phrase) is not None:
-        return CreateToken(
-            token_printing=TOKEN_PRINTINGS["Robot"],
-            count=1,
-            tapped=True,
-        )
+    m = _DEAL_DAMAGE_TARGET_CREATURE.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreature(amount=int(m.group(1)))
     if _DRAW_A_CARD.match(phrase) is not None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
@@ -225,7 +233,46 @@ def _parse_effect_phrase(phrase: str) -> Effect | None:
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))
+    if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
+        return PutPlusOneCounterOnTargetCreature(amount=1)
+    if _CREATE_TAPPED_2_2_ROBOT.match(phrase) is not None:
+        return CreateToken(
+            token_printing=TOKEN_PRINTINGS["Robot"],
+            count=1,
+            tapped=True,
+        )
     return None
+
+
+def _normalize_creature_effect_phrase(phrase: str) -> str:
+    """Strip the ``it`` source-subject pronoun if present, leaving the
+    normalized phrase ready for ``_parse_effect``."""
+    phrase = phrase.strip()
+    if phrase.startswith("it "):
+        phrase = phrase[len("it "):]
+    return phrase
+
+
+def _normalize_spell_effect_phrase(phrase: str, name: str) -> str:
+    """Strip the ``<Name>`` source-subject prefix (if present), trailing
+    period, and lowercase the first letter — leaving the normalized
+    phrase ready for ``_parse_effect``."""
+    phrase = phrase.strip()
+    if phrase.endswith("."):
+        phrase = phrase[:-1]
+    prefix = name + " "
+    if phrase.startswith(prefix):
+        phrase = phrase[len(prefix):]
+    if phrase and phrase[0].isupper():
+        phrase = phrase[0].lower() + phrase[1:]
+    return phrase
+
+
+def _parse_effect_phrase(phrase: str) -> Effect | None:
+    """Parse a creature-triggered-ability effect phrase. Surface form
+    is ``it deals N damage…`` / ``draw a card`` / etc. Delegates to
+    the unified ``_parse_effect`` after stripping the ``it`` prefix."""
+    return _parse_effect(_normalize_creature_effect_phrase(phrase))
 
 
 def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
@@ -324,52 +371,16 @@ def _parse_warp_line(line: str) -> str | None:
     return m.group(1)
 
 
-# Spell-effect parsing. Spells use full sentences (period included) with
-# the card's own name as the subject — "<Name> deals N damage to <thing>."
-# — instead of the creature parser's "it deals N damage..." (where "it"
-# refers to the source permanent). Each supported shape is its own narrow
-# regex; we'll grow the grammar one card at a time. The card's name is
-# substituted into the pattern at parse time so the regex doesn't have
-# to model "<Name>" as a free-form token. Generic shapes (no name token)
-# are matched after name-substituted shapes.
-_SPELL_DEAL_DAMAGE_ANY_TARGET = (
-    r"^{name} deals (\d+) damage to any target\.$"
-)
-_SPELL_DEAL_DAMAGE_TARGET_CREATURE = (
-    r"^{name} deals (\d+) damage to target creature\.$"
-)
-# Generic (no name token) sentence-shaped effects. These appear as
-# whole spells (rare) and as clauses inside multi-line spells (common,
-# e.g. Honor's "Draw a card." rider).
-_SPELL_DRAW_A_CARD = re.compile(r"^Draw a card\.$")
-_SPELL_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
-    r"^Put a \+1/\+1 counter on target creature\.$"
-)
-
-
 def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
     """Parse a spell's full-sentence effect text.
 
     ``phrase`` is one sentence (period included) of oracle text. ``name``
-    is the card's own name and is substituted into each shape's regex
-    so we match the printed self-reference exactly. Returns ``None``
-    when no supported shape matches — the caller skips the spell.
+    is the card's own name and is stripped if it appears as the subject.
+    Delegates to the unified ``_parse_effect`` after normalization, so
+    every effect available to creature triggered abilities is also
+    available to spells (and vice versa).
     """
-    phrase = phrase.strip()
-    name_re = re.escape(name)
-    m = re.match(_SPELL_DEAL_DAMAGE_ANY_TARGET.format(name=name_re), phrase)
-    if m is not None:
-        return DealDamageAnyTarget(amount=int(m.group(1)))
-    m = re.match(
-        _SPELL_DEAL_DAMAGE_TARGET_CREATURE.format(name=name_re), phrase
-    )
-    if m is not None:
-        return DealDamageToTargetCreature(amount=int(m.group(1)))
-    if _SPELL_DRAW_A_CARD.match(phrase) is not None:
-        return DrawCards(amount=1)
-    if _SPELL_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
-        return PutPlusOneCounterOnTargetCreature(amount=1)
-    return None
+    return _parse_effect(_normalize_spell_effect_phrase(phrase, name))
 
 
 # Plasma-Bolt-shaped Void rider: a second clause of the form
