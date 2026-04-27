@@ -2371,6 +2371,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Slagdrill Scrapper", "{R}", 1, 2,
             artifact=True,
+            subtypes=("Robot", "Scout"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
