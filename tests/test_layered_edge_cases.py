@@ -761,6 +761,104 @@ def test_magus_and_dryad_both_lignified_lands_keep_all_basic_types():
     )
 
 
+def test_lignified_anthem_lord_keeps_keyword_grant_drops_pt_bonus():
+    """The Lord-of-Atlantis-vs-Humility shape, using cards in our
+    pool. Memorial Team Leader's static "Other creatures you
+    control get +1/+0" mixes a layer-6 effect (none here — no
+    keyword grant) and a layer-7c P/T bonus.
+
+    Synthesize a creature anthem with BOTH a +1/+0 P/T bonus AND a
+    haste keyword grant on the same static ability so both layer
+    sides are exercised. Lignify the anthem source. Per CR strict
+    layer order:
+      - Layer 6 keyword grant (haste): still applies via dependency
+        rule (the wipe targets the lord, not the recipients).
+      - Layer 7c P/T bonus (+1/+0): does NOT apply (layer 6 has
+        run by the time layer 7c reads — the lord's static doesn't
+        exist anymore).
+    """
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.base import StaticAbility, StaticScope
+
+    anthem_lord = make_creature(
+        "Test Anthem Lord", "{2}{R}", 3, 3,
+        static_abilities=(
+            StaticAbility(
+                scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                power_bonus=1,
+                toughness_bonus=0,
+                granted_keywords=frozenset({"haste"}),
+            ),
+        ),
+    )
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    lord = _put(state, anthem_lord, owner_id=0)
+    # Pre-Lignify: Bear is 3/2 with haste (+1/+0 + haste from lord).
+    assert effective_power(state, bear) == 3
+    assert effective_toughness(state, bear) == 2
+    assert "haste" in effective_keywords(state, bear)
+
+    # Lignify the lord (synthetic registry write, since the test
+    # creature isn't in the EoE pool and we want to exercise the
+    # post-wipe split cleanly).
+    state.add_continuous_effect(
+        source_id=999, layer=6, kind="lose_all_abilities",
+        target_id=lord.id, params=(),
+        description="(test) Lord loses all abilities",
+    )
+
+    # Layer 6 keyword grant survives: Bear still has haste.
+    assert "haste" in effective_keywords(state, bear)
+    # Layer 7c P/T bonus drops: Bear is back to 2/2.
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2
+
+
+def test_lignified_equipment_drops_pt_rider_keeps_keyword_rider():
+    """An Equipment with both a P/T rider and a keyword rider
+    follows the same layer split as static-ability anthems. A
+    Lignified Equipment keeps granting its keyword rider but drops
+    the P/T rider — the rider lives in ``equipment_bonuses`` on
+    the printing, but the layer attribution is the same.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    eq = CardPrinting(
+        name="Test Equipment",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Artifact — Equipment",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Equipment",),
+        # +1/+1 P/T rider (layer 7c) + first strike (layer 6).
+        equipment_bonuses=(1, 1, frozenset({"first strike"})),
+    )
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    equipment = _put(state, eq, owner_id=0)
+    equipment.attached_to = bear.id
+    # Pre-Lignify.
+    assert effective_power(state, bear) == 3
+    assert effective_toughness(state, bear) == 3
+    assert "first strike" in effective_keywords(state, bear)
+
+    state.add_continuous_effect(
+        source_id=999, layer=6, kind="lose_all_abilities",
+        target_id=equipment.id, params=(),
+        description="(test) Equipment loses all abilities",
+    )
+
+    # Keyword rider survives the wipe.
+    assert "first strike" in effective_keywords(state, bear)
+    # P/T rider drops at layer 7c.
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2
+
+
 def test_lignified_dominion_bracelet_keeps_granted_activated_ability():
     """The Dominion Bracelet's "equipped creature has [activated
     ability]" is a layer-6 keyword/ability grant. Per CR 613.7

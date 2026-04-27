@@ -299,34 +299,70 @@ def is_creature_now(obj: GameObject) -> bool:
     )
 
 
+def _source_layer6_wiped(
+    state: "GameState", source: "GameObject"
+) -> bool:
+    """True if the source has any layer-6 ``"lose_all_abilities"``
+    registry entry. Used to gate post-layer-6 reads (layer 7c P/T
+    bonuses from a static anthem) — by the time layer 7 runs, layer
+    6 has wiped the source's abilities, so its static doesn't
+    generate the layer-7c effect anymore.
+
+    Layer-6 effects (keyword grants, ability grants) still apply
+    via the within-layer dependency rule even when this returns
+    True — the dependency reorders the wipe and the grant within
+    layer 6 so the recipients keep the granted abilities.
+    """
+    return any(
+        ce.layer == 6
+        and ce.kind == "lose_all_abilities"
+        and ce.target_id == source.id
+        for ce in state.continuous_effects
+    )
+
+
 def _static_bonuses(
     state: GameState, obj: GameObject
 ) -> tuple[int, int, frozenset[str]]:
     """Walk the battlefield for static abilities that buff ``obj``.
 
     Returns (power_bonus, toughness_bonus, granted_keywords). Used by
-    the effective_* helpers below. Also folds in bonuses from any
+    the effective_* helpers. Also folds in bonuses from any
     Equipment attached to ``obj``.
 
-    A Lignified / Humility'd source still contributes its static
-    bonuses here: per CR 613.7 (within-layer dependency) and CR
-    613.1 (strict cross-layer order), the source's static-anthem
-    layer-6 keyword grant and layer-7c P/T bonus apply via
-    dependency before the source's own layer-6 wipe takes effect
-    on those granted modifications. The wipe targets THE SOURCE,
-    not the recipients of its grants — so the recipients keep what
-    they were granted.
+    Bifurcated by layer:
+
+    - Granted keywords (Sliver lord's "Slivers have haste/double
+      strike", Equipment riders) are layer-6 effects. A Lignified
+      / Humility'd source STILL contributes them via the CR 613.7
+      within-layer dependency rule — the wipe targets the source,
+      not the recipients of its grants.
+    - P/T bonuses (Lord of Atlantis's "+1/+1 to other Merfolk",
+      Memorial Team Leader's "+1/+0 to other creatures",
+      Bonesplitter's equipped-creature +3/+0) are layer-7c effects.
+      By the time layer 7c is computed, layer 6 has run and the
+      source's static doesn't exist anymore — so a Lignified
+      source DOES NOT contribute its P/T bonus.
+
+    The famous case: Lord of Atlantis + Humility. Coralhelm
+    Commander becomes 1/1, not 2/2 — the Lord's +1/+1 doesn't
+    apply because the Lord's static is wiped before layer 7c.
     """
     power_bonus = 0
     toughness_bonus = 0
     granted: set[str] = set()
     for source in state.battlefield:
+        wiped = _source_layer6_wiped(state, source)
         for ability in source.printing.static_abilities:
-            if ability.applies_to(source, obj, state):
+            if not ability.applies_to(source, obj, state):
+                continue
+            granted |= ability.granted_keywords
+            if not wiped:
                 power_bonus += ability.power_bonus
                 toughness_bonus += ability.toughness_bonus
-                granted |= ability.granted_keywords
     # Equipment attached to obj contributes its equipment_bonuses.
+    # The keyword grants and P/T bonuses on the equipment riders
+    # follow the same layer split as static abilities above.
     for source in state.battlefield:
         if source.attached_to != obj.id:
             continue
@@ -334,9 +370,10 @@ def _static_bonuses(
         if eb is None:
             continue
         ep, et, ek = eb
-        power_bonus += ep
-        toughness_bonus += et
         granted |= ek
+        if not _source_layer6_wiped(state, source):
+            power_bonus += ep
+            toughness_bonus += et
     return power_bonus, toughness_bonus, frozenset(granted)
 
 
