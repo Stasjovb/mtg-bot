@@ -434,6 +434,148 @@ def test_dryad_older_then_magus_newer_lands_become_just_mountains():
     assert effective_land_produces(state, land) == frozenset({"R"})
 
 
+def test_lignified_dryad_stops_granting_basic_land_types():
+    """A Lignified Dryad has its abilities wiped (layer 6
+    lose_all_abilities) — its "lands are every basic land type"
+    static is suppressed via the CR 613.7 dependency rule. Lands
+    revert to printed subtypes.
+    """
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 5
+    # Pre-Lignify: all 5 colors.
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+    # Now Lignify the Dryad.
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, dryad)
+
+    # Dryad's static is gone — lands are back to printed subtypes.
+    subs = effective_subtypes(state, forest)
+    assert subs == ("Forest",)
+    assert effective_land_produces(state, forest) == frozenset({"G"})
+
+
+def test_lignified_magus_stops_collapsing_nonbasic_lands():
+    """A Lignified Magus of the Moon has its static wiped — nonbasic
+    lands revert to their printed subtypes.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 5
+
+    # Magus active: dual is just Mountain.
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+    # Lignify the Magus.
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, magus)
+
+    # Magus's static suppressed: dual reverts to Forest+Mountain.
+    subs = effective_subtypes(state, land)
+    assert "Forest" in subs
+    assert "Mountain" in subs
+    assert effective_land_produces(state, land) == frozenset({"G", "R"})
+
+
+def test_lignified_sliver_lord_stops_granting_anthem_keywords():
+    """Thrumming Hivepool grants double-strike + haste to Slivers.
+    Lignifying the Hivepool wipes its static — Slivers no longer
+    get the anthem.
+    """
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    state.add_continuous_effect(
+        source_id=bear.id, layer=4, kind="add_subtype",
+        target_id=bear.id, params=("Sliver",),
+        description="(test) Bear is a Sliver",
+    )
+    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    # Pre-Lignify: anthem grants haste + double-strike.
+    kws = effective_keywords(state, bear)
+    assert "haste" in kws
+    assert "double strike" in kws
+
+    # Lignify the Hivepool.
+    aura = _put(state, LIGNIFY, owner_id=0)
+    # Hivepool isn't normally a creature — but Thrumming Hivepool is
+    # an Artifact, and Lignify only enchants creatures. Use the test
+    # path of writing the registry entry directly so we exercise the
+    # _source_abilities_suppressed gate without arguing about target
+    # legality (the engine question is "does the static skip when
+    # the source is Lignified", not "can Lignify legally attach to
+    # an artifact").
+    state.add_continuous_effect(
+        source_id=aura.id, layer=6, kind="lose_all_abilities",
+        target_id=hivepool.id, params=(),
+        description="(test) Hivepool loses all abilities",
+    )
+
+    # Hivepool's static is suppressed — anthem keywords gone.
+    kws = effective_keywords(state, bear)
+    assert "haste" not in kws
+    assert "double strike" not in kws
+
+
+def test_clone_of_dryad_grants_basic_land_types_too():
+    """Clone copies Dryad's printing including the
+    ``grants_all_basic_land_types_to_lands_you_control`` flag, so
+    the Clone (now a Dryad) ALSO contributes the layer-4 add_subtype
+    effect to lands its controller controls.
+    """
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    real_dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    real_dryad.etb_timestamp = 5
+    clone = state.new_object(CLONE, 0, Zone.STACK)
+    apply_clone_enters_as_copy_replacement(state, clone, controller_id=0)
+    state.battlefield.append(clone)
+    clone.etb_timestamp = 10
+
+    # Both Dryad and Clone-of-Dryad contribute. Forest still has all
+    # five basic land types.
+    subs = effective_subtypes(state, forest)
+    assert "Plains" in subs
+    assert "Island" in subs
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+    # Removing the original Dryad: the Clone keeps the static going.
+    destroy(state, real_dryad)
+    subs = effective_subtypes(state, forest)
+    assert "Plains" in subs
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+
 def test_dryad_does_not_affect_opponents_lands():
     """Dryad's "lands you control" filter keeps it scoped to its
     controller. An opponent's basic Forest is unaffected."""
