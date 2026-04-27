@@ -15,6 +15,8 @@ from mtg_bot.cards.base import (
     GainLife,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
+    StaticAbility,
+    StaticScope,
     TriggeredAbility,
     parse_mana_cost,
 )
@@ -33,6 +35,7 @@ from mtg_bot.cards.parser_source import (
     _parse_keyword_line,
     _parse_spell_effect_phrase,
     _parse_spell_oracle_text,
+    _parse_static_ability_line,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
     _parse_type_line,
@@ -2068,3 +2071,207 @@ def test_build_creature_printing_skips_sacrifice_cost_activated_ability():
         "oracle_text": "Sacrifice this creature: Draw a card.",
     }
     assert _build_creature_printing(card) is None
+
+
+# ---------- static abilities ----------
+
+def test_parse_static_ability_line_artifact_pt_only():
+    """Cloudsculpt Technician's exact static-ability line — bare
+    P/T modifier, no granted keyword."""
+    result = _parse_static_ability_line(
+        "As long as you control an artifact, this creature gets +1/+0."
+    )
+    assert result == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        toughness_bonus=0,
+        requires_artifact_you_control=True,
+    )
+
+
+def test_parse_static_ability_line_artifact_pt_and_keyword():
+    """Gravblade Heavy's exact static-ability line — P/T modifier
+    plus an ``and has <keyword>`` tail."""
+    result = _parse_static_ability_line(
+        "As long as you control an artifact, this creature gets +1/+0 "
+        "and has deathtouch."
+    )
+    assert result == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        toughness_bonus=0,
+        granted_keywords=frozenset({"deathtouch"}),
+        requires_artifact_you_control=True,
+    )
+
+
+def test_parse_static_ability_line_extracts_pt_amounts():
+    """The P/N capture groups should pick up the actual amounts, not
+    just always 1/0."""
+    result = _parse_static_ability_line(
+        "As long as you control an artifact, this creature gets +2/+3."
+    )
+    assert result == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        toughness_bonus=3,
+        requires_artifact_you_control=True,
+    )
+
+
+def test_parse_static_ability_line_strips_whitespace():
+    line = (
+        "  As long as you control an artifact, "
+        "this creature gets +1/+0.  "
+    )
+    assert _parse_static_ability_line(line) == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        toughness_bonus=0,
+        requires_artifact_you_control=True,
+    )
+
+
+def test_parse_static_ability_line_rejects_unknown_condition():
+    """Conditions other than ``you control an artifact`` are out of
+    scope this batch — the line must not match."""
+    assert _parse_static_ability_line(
+        "As long as you control a creature, this creature gets +1/+0."
+    ) is None
+    assert _parse_static_ability_line(
+        "As long as it's your turn, this creature gets +2/+0."
+    ) is None
+
+
+def test_parse_static_ability_line_rejects_unknown_keyword():
+    """An ``and has <keyword>`` tail with a non-evergreen keyword
+    fails the parse — the parser stays conservative."""
+    assert _parse_static_ability_line(
+        "As long as you control an artifact, this creature gets +1/+0 "
+        "and has scry."
+    ) is None
+
+
+def test_parse_static_ability_line_rejects_non_static_lines():
+    assert _parse_static_ability_line("Flying") is None
+    assert _parse_static_ability_line(
+        "When this creature enters, draw a card."
+    ) is None
+    assert _parse_static_ability_line("") is None
+
+
+def test_parse_static_ability_line_rejects_missing_period():
+    """The trailing period is part of the line shape — without it the
+    line doesn't match the pattern."""
+    assert _parse_static_ability_line(
+        "As long as you control an artifact, this creature gets +1/+0"
+    ) is None
+
+
+def test_parse_clause_recognizes_static_ability():
+    parsed = _parse_clause(
+        "As long as you control an artifact, this creature gets +1/+0."
+    )
+    assert parsed is not None
+    assert parsed.static == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        toughness_bonus=0,
+        requires_artifact_you_control=True,
+    )
+    assert parsed.keywords == ()
+    assert parsed.trigger is None
+    assert parsed.activated is None
+    assert parsed.keyword is None
+
+
+def test_build_creature_printing_handles_simple_static_ability():
+    """Synthetic creature with only a static-ability clause —
+    exercises the static-ability passthrough end-to-end without
+    depending on any other clause."""
+    card = {
+        "name": "Test Static",
+        "mana_cost": "{2}{U}",
+        "type_line": "Creature — Jellyfish",
+        "power": "1",
+        "toughness": "4",
+        "oracle_text": (
+            "As long as you control an artifact, "
+            "this creature gets +1/+0."
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.static_abilities == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            power_bonus=1,
+            toughness_bonus=0,
+            requires_artifact_you_control=True,
+        ),
+    )
+    assert printing.triggered_abilities == ()
+    assert printing.activated_abilities == ()
+
+
+def test_build_creature_printing_handles_static_with_keyword_line():
+    """Cloudsculpt Technician's exact two-line shape: a Flying
+    keyword line plus the static-ability line. Both clauses
+    contribute and end up on the resulting printing."""
+    card = {
+        "name": "Test Static Flyer",
+        "mana_cost": "{2}{U}",
+        "type_line": "Creature — Jellyfish Artificer",
+        "power": "1",
+        "toughness": "4",
+        "oracle_text": (
+            "Flying\n"
+            "As long as you control an artifact, "
+            "this creature gets +1/+0."
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset({"flying"})
+    assert printing.static_abilities == (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            power_bonus=1,
+            toughness_bonus=0,
+            requires_artifact_you_control=True,
+        ),
+    )
+
+
+def test_build_creature_printing_skips_unknown_static_condition():
+    """A creature whose static-ability condition is out of scope
+    falls through and the whole card must be skipped."""
+    card = {
+        "name": "Test Bad Static",
+        "mana_cost": "{2}{G}",
+        "type_line": "Creature — Beast",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "As long as you control a creature, "
+            "this creature gets +1/+0."
+        ),
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_source_claims_cloudsculpt_technician():
+    """Cloudsculpt Technician's Flying + artifacts-matter static is
+    now in the parser's grammar."""
+    source = OracleParserCardSource()
+    assert "Cloudsculpt Technician" in source.claimed_names
+    assert "Cloudsculpt Technician" in source.get_printings()
+
+
+def test_source_claims_gravblade_heavy():
+    """Gravblade Heavy's artifacts-matter static with both a P/T
+    bonus and a granted deathtouch keyword is now in the parser's
+    grammar."""
+    source = OracleParserCardSource()
+    assert "Gravblade Heavy" in source.claimed_names
+    assert "Gravblade Heavy" in source.get_printings()

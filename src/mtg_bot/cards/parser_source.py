@@ -39,6 +39,15 @@ Slice 1's grammar:
   appears with no preceding activated ability on the same card the
   whole card is skipped.
 
+- A static-ability line of the form ``As long as <condition>, this
+  creature gets +N/+N[ and has <keyword>].`` becomes a self-scoped
+  ``StaticAbility`` with the condition's gate kwarg, the P/T
+  modifier, and an optional granted keyword. Today only one
+  condition is recognized: ``you control an artifact``, which sets
+  ``requires_artifact_you_control=True`` — the EoE artifacts-matter
+  rider on Cloudsculpt Technician and Gravblade Heavy. Other
+  conditions fall through and skip the card.
+
 Currently recognized:
 
 - Trigger conditions: ``this creature enters`` → ``"etb"``;
@@ -138,6 +147,8 @@ from mtg_bot.cards.base import (
     GainLife,
     PutPlusOneCounterOnTargetCreature,
     Sequence,
+    StaticAbility,
+    StaticScope,
     TriggeredAbility,
     make_basic_land,
     make_creature,
@@ -159,16 +170,17 @@ class _ParsedClause:
     """One oracle-text clause that successfully parsed.
 
     Fields are mutually exclusive — a clause contributes either one
-    or more keyword strings, a triggered ability, or an activated
-    ability, never more than one. A keyword-only line that lists
-    several keywords joined by ``, `` parses to a single
-    ``_ParsedClause`` whose ``keywords`` tuple holds every keyword
-    on that line.
+    or more keyword strings, a triggered ability, an activated
+    ability, or a static ability, never more than one. A keyword-only
+    line that lists several keywords joined by ``, `` parses to a
+    single ``_ParsedClause`` whose ``keywords`` tuple holds every
+    keyword on that line.
     """
 
     keywords: tuple[str, ...] = ()
     trigger: TriggeredAbility | None = None
     activated: ActivatedAbility | None = None
+    static: StaticAbility | None = None
 
     @property
     def keyword(self) -> str | None:
@@ -437,6 +449,65 @@ def _is_sorcery_rider_line(line: str) -> bool:
     ``Activate only as a sorcery.`` (whitespace-stripped, exact match)."""
     return line.strip() == _SORCERY_RIDER_LINE
 
+
+# Static-ability parsing handles a single "As long as <condition>, this
+# creature gets +N/+N[ and has <keyword>]." line. Today only one
+# condition is wired up: ``you control an artifact``, which maps to
+# ``StaticAbility(scope=SELF, requires_artifact_you_control=True, ...)``.
+# The P/T modifier is required; an ``and has <keyword>`` tail is
+# optional and adds a single granted keyword. Other "As long as"
+# conditions (entered-this-turn, spells-cast counters, etc.) are out
+# of scope and intentionally don't match — those cards fall through
+# and get skipped.
+_STATIC_ABILITY_LINE = re.compile(
+    r"^As long as (?P<condition>.+?), this creature gets "
+    r"\+(?P<power>\d+)/\+(?P<toughness>\d+)"
+    r"(?: and has (?P<keyword>[A-Za-z ]+))?\.$"
+)
+
+# Conditions recognized as gates on the static ability. The mapping is
+# from the surface phrase (matched verbatim, no normalization) to the
+# kwargs passed to ``StaticAbility``. Today only one entry — the
+# artifacts-matter rider on Cloudsculpt Technician and Gravblade Heavy.
+_STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
+    "you control an artifact": {"requires_artifact_you_control": True},
+}
+
+
+def _parse_static_ability_line(line: str) -> StaticAbility | None:
+    """Return a ``StaticAbility`` for a single ``As long as <condition>,
+    this creature gets +N/+N[ and has <keyword>].`` line, or ``None`` if
+    the line shape doesn't match, the condition isn't recognized, or the
+    granted keyword isn't a known evergreen.
+
+    The static ability is always self-scoped (``StaticScope.SELF``); the
+    "this creature gets" subject in the surface form is what makes that
+    explicit. Only the EoE artifacts-matter condition is wired up today
+    — see ``_STATIC_CONDITION_KWARGS``.
+    """
+    m = _STATIC_ABILITY_LINE.match(line.strip())
+    if m is None:
+        return None
+    condition = m.group("condition").strip()
+    cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
+    if cond_kwargs is None:
+        return None
+    granted: frozenset[str] = frozenset()
+    keyword = m.group("keyword")
+    if keyword is not None:
+        engine_keyword = _KEYWORD_LINES.get(keyword.strip().capitalize())
+        if engine_keyword is None:
+            return None
+        granted = frozenset({engine_keyword})
+    return StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=int(m.group("power")),
+        toughness_bonus=int(m.group("toughness")),
+        granted_keywords=granted,
+        **cond_kwargs,
+    )
+
+
 _SUPERTYPES = frozenset({"Basic", "Legendary", "Snow", "World", "Ongoing"})
 
 _TYPE_LINE_SEPARATOR = "—"  # em-dash, used by Scryfall
@@ -494,6 +565,9 @@ def _parse_clause(line: str) -> _ParsedClause | None:
     activated = _parse_activated_ability_line(line)
     if activated is not None:
         return _ParsedClause(activated=activated)
+    static = _parse_static_ability_line(line)
+    if static is not None:
+        return _ParsedClause(static=static)
     return None
 
 
@@ -678,6 +752,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
     activated: list[ActivatedAbility] = []
+    statics: list[StaticAbility] = []
     warp: str | None = None
     ward: str | None = None
     text = card.get("oracle_text", "")
@@ -716,6 +791,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             triggers.append(parsed.trigger)
         if parsed.activated is not None:
             activated.append(parsed.activated)
+        if parsed.static is not None:
+            statics.append(parsed.static)
 
     return make_creature(
         name=card["name"],
@@ -725,6 +802,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         keywords=keywords,
         triggered_abilities=tuple(triggers),
         activated_abilities=tuple(activated),
+        static_abilities=tuple(statics),
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
