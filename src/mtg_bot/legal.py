@@ -327,8 +327,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     # controller currently controlling a Kavu. Both pay normal mana
     # cost and respect sorcery-speed rules. Lands use PlayLand;
     # non-land permanents / sorceries use CastSpell.
+    from mtg_bot.game import effective_subtypes
     controls_kavu = any(
-        o.controller_id == player_id and "Kavu" in o.printing.subtypes
+        o.controller_id == player_id
+        and "Kavu" in effective_subtypes(state, o)
         for o in state.battlefield
     )
     for card in p.exile:
@@ -476,7 +478,6 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 if not has_counter_creature:
                     continue
             if ability.cost.sacrifice_food:
-                from mtg_bot.game import effective_subtypes
                 has_food = any(
                     o2 for o2 in state.battlefield
                     if o2.controller_id == player_id
@@ -503,7 +504,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 has_desert = any(
                     o2 for o2 in state.battlefield
                     if o2.controller_id == player_id
-                    and "Desert" in o2.printing.subtypes
+                    and "Desert" in effective_subtypes(state, o2)
                 )
                 if not has_desert:
                     continue

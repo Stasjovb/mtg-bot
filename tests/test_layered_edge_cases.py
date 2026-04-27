@@ -270,6 +270,33 @@ def test_lignify_attached_to_clone_after_copy_works():
 # =====================================================================
 
 
+def test_synthetic_added_subtype_picked_up_by_subtype_keyed_anthem():
+    """A Conspiracy-style layer-4 ``add_subtype`` entry adds "Sliver"
+    to a non-Sliver creature. Thrumming Hivepool's anthem ("Slivers
+    you control have double strike and haste") should pick up the
+    granted Sliver subtype via ``effective_subtypes``, not just
+    printed subtypes."""
+    from mtg_bot.cards import EOE_CREATURES
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    # No layered effect → bear is no Sliver, no haste/double strike.
+    assert "haste" not in effective_keywords(state, bear)
+    assert "double strike" not in effective_keywords(state, bear)
+    # Synthetic Conspiracy-style add: Bear is also a Sliver.
+    state.add_continuous_effect(
+        source_id=bear.id, layer=4, kind="add_subtype",
+        target_id=bear.id, params=("Sliver",),
+        description="(synthetic) Conspiracy-style adds Sliver",
+    )
+    # Effective subtypes now include Sliver — anthem should grant.
+    assert "Sliver" in effective_subtypes(state, bear)
+    assert "haste" in effective_keywords(state, bear)
+    assert "double strike" in effective_keywords(state, bear)
+
+
 def test_subtype_keyed_read_uses_effective_subtypes():
     """A subtype-keyed query (e.g., 'Slivers count their lords' — but
     we don't have a real one in scope here) should read

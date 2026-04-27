@@ -484,12 +484,16 @@ class OptionalSacLandOrLanderForBasicLandRamp(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import effective_subtypes
         from mtg_bot.turn import sacrifice as _sacrifice
 
         options = [
             o for o in state.battlefield
             if o.controller_id == controller_id
-            and (o.printing.is_land or "Lander" in o.printing.subtypes)
+            and (
+                o.printing.is_land
+                or "Lander" in effective_subtypes(state, o)
+            )
         ]
         if not options:
             return

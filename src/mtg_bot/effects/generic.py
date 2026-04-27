@@ -19,6 +19,17 @@ if TYPE_CHECKING:
     from mtg_bot.game import GameState
 
 
+def _eff_subtypes(state: "GameState", obj) -> tuple[str, ...]:
+    """Local alias for ``mtg_bot.game.effective_subtypes`` so
+    subtype-keyed legal-target filters (anti-subtype, allowed-subtype,
+    target-subtype) can read the layered-effects view of a battlefield
+    permanent's subtypes without circular-import gymnastics. Lazy
+    import — the function-level fallthrough avoids importing game at
+    module load."""
+    from mtg_bot.game import effective_subtypes
+    return effective_subtypes(state, obj)
+
+
 @dataclass(frozen=True)
 class GainLife(Effect):
     amount: int
@@ -2784,6 +2795,8 @@ class PumpTargetCreatureUntilEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import effective_subtypes
+
         source = state.resolving_source if self.exclude_self else None
         source_id = source.id if source is not None else -1
         return [
@@ -2794,8 +2807,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             and (not self.opponents_only or o.controller_id != controller_id)
             and (
                 self.target_subtype is None
-                or self.target_subtype in o.printing.subtypes
-                or self.target_subtype == o.temp_subtype
+                or self.target_subtype in effective_subtypes(state, o)
             )
             and o.id != source_id
         ]
@@ -3925,7 +3937,10 @@ class ExileTargetCreatureUntilSourceLeaves(Effect):
             if o.printing.is_creature
             and not (
                 self.excluded_subtypes
-                and any(s in self.excluded_subtypes for s in o.printing.subtypes)
+                and any(
+                    s in self.excluded_subtypes
+                    for s in _eff_subtypes(state, o)
+                )
             )
             and not (
                 self.opponents_only and o.controller_id == controller_id
@@ -4963,7 +4978,8 @@ class RegenerateTargetCreature(Effect):
             and (
                 not self.allowed_subtypes
                 or any(
-                    s in self.allowed_subtypes for s in o.printing.subtypes
+                    s in self.allowed_subtypes
+                    for s in _eff_subtypes(state, o)
                 )
             )
         ]
@@ -6033,7 +6049,8 @@ class GainControlOfTargetSliverPermanently(Effect):
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature and "Sliver" in o.printing.subtypes
+            if o.printing.is_creature
+            and "Sliver" in _eff_subtypes(state, o)
         ]
 
     def resolve(
@@ -6050,7 +6067,7 @@ class GainControlOfTargetSliverPermanently(Effect):
         )
         if obj is None:
             return
-        if "Sliver" not in obj.printing.subtypes:
+        if "Sliver" not in _eff_subtypes(state, obj):
             return
         if obj.controller_id == controller_id:
             # Already yours — no change, but log for visibility.

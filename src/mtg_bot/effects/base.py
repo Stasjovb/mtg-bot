@@ -373,6 +373,14 @@ class StaticAbility:
                 and "Legendary" in target.printing.supertypes
             )
         if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
+            # Read effective_subtypes so a creature granted "Sliver"
+            # by a layer-4 add_subtype effect (Conspiracy-style) is
+            # picked up by Sliver lord anthems. ``state`` is optional
+            # in this signature; without it we fall back to printing
+            # to keep the static probe usable in card-list contexts.
+            if state is not None:
+                from mtg_bot.game import effective_subtypes
+                return "Sliver" in effective_subtypes(state, target)
             return "Sliver" in target.printing.subtypes
         return False
 

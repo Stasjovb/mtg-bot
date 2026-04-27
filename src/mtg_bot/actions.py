@@ -399,10 +399,11 @@ def _evaluate_cost_reduction(
         # Slivers the caster controls on the battlefield. The spell
         # itself is on the stack, not the battlefield, so it isn't
         # counted (matches MTG rules 702.41 for Affinity).
+        from mtg_bot.game import effective_subtypes
         sliver_count = sum(
             1 for o in state.battlefield
             if o.controller_id == caster_id
-            and "Sliver" in o.printing.subtypes
+            and "Sliver" in effective_subtypes(state, o)
         )
         return rule.amount * sliver_count
     elif rule.condition == "target_is_blocking_creature":
@@ -1519,13 +1520,14 @@ def _activate_ability(
 
     # "Sacrifice a Desert" cost (Scavenger Grounds). Subtype-filtered.
     if ability.cost.sacrifice_a_desert:
+        from mtg_bot.game import effective_subtypes
         from mtg_bot.turn import sacrifice as _sacrifice
 
         p = state.player_by_id(player_id)
         options = [
             o for o in state.battlefield
             if o.controller_id == player_id
-            and "Desert" in o.printing.subtypes
+            and "Desert" in effective_subtypes(state, o)
         ]
         if options:
             chosen = options[0]
@@ -2140,8 +2142,10 @@ def put_into_battlefield(
         _fire_artifact_enters_triggers(state, obj)
     if obj.printing.is_creature or obj.printing.is_artifact:
         _fire_creature_or_artifact_enters_triggers(state, obj)
-    if obj.printing.is_creature and "Kavu" in obj.printing.subtypes:
-        _fire_kavu_enters_triggers(state, obj)
+    if obj.printing.is_creature:
+        from mtg_bot.game import effective_subtypes
+        if "Kavu" in effective_subtypes(state, obj):
+            _fire_kavu_enters_triggers(state, obj)
 
 
 def _apply_devour(
