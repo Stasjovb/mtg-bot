@@ -1271,7 +1271,7 @@ def add_plus_one_counters(
     if obj.printing.is_creature and effective > 0:
         from mtg_bot.turn import fire_counters_added_to_your_creature_triggers
         fire_counters_added_to_your_creature_triggers(
-            state, obj.controller_id, effective,
+            state, obj.controller_id, effective, obj=obj,
         )
     return effective
 

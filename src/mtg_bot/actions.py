@@ -843,6 +843,15 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     # Fire "whenever you play a land or cast a spell" triggers (The
     # Endstone). The spell-cast path fires the same from _cast_spell.
     _fire_cast_or_play_triggers(state, player_id)
+    # Phase-8 predicate-style dispatch: fire the PLAYS_LAND event for
+    # every land-drop. Predicate-migrated triggers
+    # (``opponent_plays_land`` and ``cast_spell_or_play_land``'s land
+    # half) ride this dispatch alongside the legacy fire paths above.
+    from mtg_bot.effects.predicates import Event as _Event
+    dispatch_event(
+        state, _Event.PLAYS_LAND, label="plays-land",
+        land=card, controller=p,
+    )
 
 
 def _offer_echoing_deeps_copy(
@@ -1254,6 +1263,17 @@ def _cast_spell(
     # spell being cast is an artifact.
     if card.printing.is_artifact:
         _fire_cast_artifact_spell_triggers(state, player_id)
+    # Phase-8 predicate-style dispatch: fire the IS_CAST event for
+    # every spell cast. Predicate-migrated triggers
+    # (``cast_artifact_spell``, ``cast_spell_or_play_land``'s spell
+    # half, ``second_spell_each_turn``) ride this dispatch alongside
+    # the legacy fire paths above; ``__post_init__`` on
+    # TriggeredAbility ensures no ability fires through both.
+    from mtg_bot.effects.predicates import Event as _Event
+    dispatch_event(
+        state, _Event.IS_CAST, label="is-cast",
+        spell=card, controller=p,
+    )
 
 
 def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
@@ -2459,6 +2479,8 @@ def dispatch_event(
     label: str | None = None,
     extra_observers: "list | None" = None,
     combat_damage_amount: int = 0,
+    counter_amount: int = 0,
+    fixed_targets: tuple[tuple[str, int], ...] | None = None,
     **subjects,
 ) -> None:
     """Centralized predicate-trigger dispatcher.
@@ -2488,7 +2510,13 @@ def dispatch_event(
     pushed StackItem so resolving effects can read
     ``state.resolving_combat_damage_amount``. Used by the DEALT_DAMAGE
     dispatch (Pain for All's echo, Cryoshatter's destroy-on-damage,
-    etc.); zero for events that don't carry damage.
+    etc.); zero for events that don't carry damage. ``counter_amount``
+    is the analogous channel for the COUNTERS_ADDED event
+    (Terrasymbiosis's "draw that many cards" rider). ``fixed_targets``
+    forwards a pre-determined target tuple to every pushed StackItem
+    (used by DISCARDS_CARD to expose the discarding player as
+    ``("player", id)`` so Entropic Battlecruiser's "they lose 3 life"
+    half can damage them without needing target selection).
 
     For ``Event.ENTERS`` the per-source firings are multiplied by
     ``etb_trigger_multiplier`` (Starfield Vocalist's "triggers an
@@ -2532,6 +2560,8 @@ def dispatch_event(
                     controller_id=source.controller_id,
                     label=label,
                     combat_damage_amount=combat_damage_amount,
+                    counter_amount=counter_amount,
+                    fixed_targets=fixed_targets,
                 )
 
 

@@ -312,7 +312,7 @@ def move_off_battlefield(
 
 
 def fire_counters_added_to_your_creature_triggers(
-    state: GameState, controller_id: int, amount: int
+    state: GameState, controller_id: int, amount: int, obj=None,
 ) -> None:
     """Push "whenever you put one or more +1/+1 counters on a creature
     you control, ..." observer triggers onto the stack. ``amount`` is
@@ -320,6 +320,10 @@ def fire_counters_added_to_your_creature_triggers(
     the StackItem and exposed at resolve time via
     ``state.resolving_counter_amount`` for "you may draw that many"
     riders (Terrasymbiosis).
+
+    ``obj`` is the creature receiving the counters (used for the phase-8
+    predicate-style ``Event.COUNTERS_ADDED`` dispatch); legacy
+    string-key callers may omit it and only the legacy path fires.
     """
     from mtg_bot.actions import push_triggered_ability
 
@@ -338,6 +342,22 @@ def fire_counters_added_to_your_creature_triggers(
                 label=f"counters-added (amount {amount})",
                 counter_amount=amount,
             )
+    # Phase-8 predicate-style dispatch: fire COUNTERS_ADDED for the
+    # creature receiving the counters. Predicate-migrated observers
+    # (Terrasymbiosis) ride this dispatch alongside the legacy fire
+    # path above. Threading ``counter_amount`` exposes the effective
+    # post-doubling count to resolving effects via
+    # ``state.resolving_counter_amount``.
+    if obj is not None:
+        from mtg_bot.actions import dispatch_event as _dispatch_event
+        from mtg_bot.effects.predicates import Event as _Event
+
+        _dispatch_event(
+            state, _Event.COUNTERS_ADDED,
+            label=f"counters-added (amount {amount})",
+            counter_amount=amount,
+            obj=obj,
+        )
 
 
 def _fire_leaves_battlefield_triggers(
@@ -398,7 +418,7 @@ def fire_opponent_discards_triggers(
     discarding player exposed as ``("player", id)`` in targets so
     effects like Entropic Battlecruiser's 1+ trigger can damage them.
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
 
     for obs in list(state.battlefield):
         if obs.controller_id == discarding_player_id:
@@ -415,6 +435,21 @@ def fire_opponent_discards_triggers(
                 label="opponent-discards",
                 fixed_targets=(("player", discarding_player_id),),
             )
+    # Phase-8 predicate-style dispatch: fire DISCARDS_CARD with the
+    # discarding player as subject. Predicate-migrated observers
+    # (Entropic Battlecruiser, predicate ``Controlled(by=OPPONENT,
+    # subject="player")``) ride this dispatch alongside the legacy fire
+    # path above. The discarding player's id flows through as
+    # ``fixed_targets=(("player", id),)`` so the resolving effect can
+    # damage them without target selection.
+    from mtg_bot.effects.predicates import Event as _Event
+
+    discarding_player = state.player_by_id(discarding_player_id)
+    dispatch_event(
+        state, _Event.DISCARDS_CARD, label="discards-card",
+        fixed_targets=(("player", discarding_player_id),),
+        player=discarding_player,
+    )
 
 
 def should_fire_trigger(
@@ -465,7 +500,7 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
 
     controller_id = obj.controller_id
     was_creature = obj.printing.is_creature
@@ -496,6 +531,22 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
                 controller_id=controller_id,
                 label="sacrifice",
             )
+    # Phase-8 predicate-style dispatch: fire IS_SACRIFICED with the
+    # sacrificed permanent as subject. Predicate-migrated observers
+    # (Lightless Evangel for ``sacrifice_creature_or_artifact``, Biotech
+    # Specialist for ``sacrifice_artifact``) ride this dispatch
+    # alongside the legacy fire path above. The sacrificed object has
+    # already been moved to the graveyard so we include it via
+    # ``extra_observers`` (no observer in scope today triggers off its
+    # own sacrifice, but parity with DIES / LEAVES_BATTLEFIELD keeps
+    # the dispatch surface uniform).
+    from mtg_bot.effects.predicates import Event as _Event
+
+    dispatch_event(
+        state, _Event.IS_SACRIFICED, label="sacrifice",
+        extra_observers=[obj],
+        obj=obj,
+    )
 
 
 def destroy(state: GameState, obj: "GameObject") -> bool:

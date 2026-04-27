@@ -66,8 +66,44 @@ class Event(str, Enum):
     # invocation of the legacy
     # ``_fire_enchanted_dealt_damage_triggers`` helper.
     DEALT_DAMAGE = "dealt_damage"
+    # A spell has just been cast. Subjects are the spell ``GameObject``
+    # being cast (``"spell"``) and the casting Player (``"controller"``).
+    # Models the spell-cast observer family — ``IsArtifact(subject=
+    # "spell")`` for artifact-spell triggers (Pinnacle Emissary),
+    # ``Controlled(YOU, subject="controller")`` to gate "you cast" vs
+    # opponent. The dispatcher fires once per cast; the
+    # ``second_spell_each_turn`` trigger layers
+    # ``SpellsCastThisTurn(eq=2)`` on top to catch the 2nd spell.
     IS_CAST = "is_cast"
+    # A permanent has just been sacrificed. Subject is the sacrificed
+    # ``GameObject`` (``"obj"``); the dispatcher fires AFTER the object
+    # has been moved to the graveyard and includes the dearly-departed
+    # via ``extra_observers`` so a self-trigger ``IsSelf()`` can match
+    # though the object has left the battlefield. Predicates layer
+    # ``IsArtifact()`` / ``IsCreature()`` on the subject and ``~IsSelf()``
+    # to limit firing to "another" sacrifices.
     IS_SACRIFICED = "is_sacrificed"
+    # A player has just played a land (the land-drop action of CR 305.1,
+    # NOT effects that put a land onto the battlefield like Burgeoning).
+    # Subjects are the land permanent (``"land"``) and the player who
+    # played it (``"controller"``). Predicates use ``Controlled(by=
+    # OPPONENT, subject="controller")`` for Burgeoning's "an opponent
+    # plays a land" gate.
+    PLAYS_LAND = "plays_land"
+    # A player has just discarded a single card. Subject is the
+    # discarding Player (``"player"``). Predicates use ``Controlled(by=
+    # OPPONENT, subject="player")`` for "an opponent discards a card"
+    # observers (Entropic Battlecruiser). The discarding player's id is
+    # also threaded through to the resulting StackItem as a fixed target
+    # ``("player", id)`` so the resolving effect can damage them.
+    DISCARDS_CARD = "discards_card"
+    # One or more +1/+1 counters have just been put on a creature.
+    # Subject is the creature receiving the counters (``"obj"``); the
+    # effective amount (post-doubling) is threaded via ``counter_amount``
+    # so resolving effects can read ``state.resolving_counter_amount``
+    # (Terrasymbiosis's "draw that many cards"). Predicate
+    # ``IsCreature() & Controlled(YOU)`` gates "a creature you control".
+    COUNTERS_ADDED = "counters_added"
     # Turn-structure events. Subject is a Player (the player whose
     # phase/step is beginning), not a permanent — so the
     # ``Controlled(YOU)`` predicate matches a player subject by
@@ -95,6 +131,9 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DEALT_DAMAGE: ("obj",),
     Event.IS_CAST: ("spell", "controller"),
     Event.IS_SACRIFICED: ("obj",),
+    Event.PLAYS_LAND: ("land", "controller"),
+    Event.DISCARDS_CARD: ("player",),
+    Event.COUNTERS_ADDED: ("obj",),
     Event.BEGINNING_OF_UPKEEP: ("player",),
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
@@ -105,13 +144,19 @@ class _Controller(Enum):
     """Symbolic reference to a player relative to the firing source.
 
     ``YOU`` resolves to the source ability's controller at predicate
-    evaluation time. Future expansion: ``OPPONENT``, ``ANY``.
+    evaluation time. ``OPPONENT`` resolves to "any player who is NOT the
+    source's controller" — for two-player games this is the natural
+    encoding of "an opponent <does X>" trigger qualifiers (Burgeoning's
+    "an opponent plays a land", Entropic Battlecruiser's "an opponent
+    discards a card"). Future expansion: ``ANY``.
     """
 
     YOU = "you"
+    OPPONENT = "opponent"
 
 
 YOU = _Controller.YOU
+OPPONENT = _Controller.OPPONENT
 
 
 class Predicate(ABC):
@@ -303,8 +348,9 @@ class Controlled(Predicate):
     """The named subject is controlled by the indicated player.
 
     ``by`` of ``YOU`` resolves to the source ability's controller at
-    evaluation time. Future expansion: ``OPPONENT`` / ``ANY`` /
-    explicit player ids.
+    evaluation time; ``OPPONENT`` resolves to "any non-controller"
+    (which in two-player games is exactly "the other player"). Future
+    expansion: ``ANY`` / explicit player ids.
 
     Two subject shapes are supported:
 
@@ -319,7 +365,11 @@ class Controlled(Predicate):
       ``BEGINNING_OF_COMBAT``, ``BEGINNING_OF_END_STEP``) whose subject
       is a ``Player`` — ``Controlled(YOU)`` then reads as "this is
       MY phase/step", which is the natural mapping for the oracle
-      phrasing "at the beginning of YOUR upkeep".
+      phrasing "at the beginning of YOUR upkeep". The same branch
+      handles the "discarding player" / "land-playing player" subjects
+      threaded by ``DISCARDS_CARD`` / ``PLAYS_LAND`` dispatch — paired
+      with ``OPPONENT`` it gates Burgeoning's "an opponent plays a
+      land" and Entropic Battlecruiser's "an opponent discards" cleanly.
 
     The branch is selected by the presence of ``controller_id`` on the
     subject (``GameObject`` has it, ``Player`` does not), keeping the
@@ -334,14 +384,20 @@ class Controlled(Predicate):
         obj = _resolve_subject(subjects, self.subject)
         if obj is None:
             return False
+        # Player subjects expose ``id`` (no ``controller_id``);
+        # permanent subjects expose ``controller_id``. Distinguish on
+        # attribute presence rather than isinstance to avoid an
+        # import cycle into ``mtg_bot.game``.
+        if hasattr(obj, "controller_id"):
+            controller = obj.controller_id
+        else:
+            controller = getattr(obj, "id", None)
+        if controller is None:
+            return False
         if self.by == YOU:
-            # Player subjects expose ``id`` (no controller); permanent
-            # subjects expose ``controller_id``. Distinguish on
-            # attribute presence rather than isinstance to avoid an
-            # import cycle into ``mtg_bot.game``.
-            if hasattr(obj, "controller_id"):
-                return obj.controller_id == source.controller_id
-            return getattr(obj, "id", None) == source.controller_id
+            return controller == source.controller_id
+        if self.by == OPPONENT:
+            return controller != source.controller_id
         raise NotImplementedError(f"unsupported controller ref: {self.by!r}")
 
 
@@ -427,3 +483,47 @@ class HasCounter(Predicate):
             return False
         attr = _COUNTER_ATTRS[self.kind]
         return getattr(obj, attr, 0) > 0
+
+
+@dataclass(frozen=True)
+class SpellsCastThisTurn(Predicate):
+    """Game-state predicate: the named subject's controller has cast
+    exactly ``n`` spells this turn (counted via
+    ``Player.spells_cast_this_turn``).
+
+    Models the "second spell each turn" trigger family (Illvoi
+    Operative, Sunstar Lightsmith, Cosmogrand Zenith, Station Monitor):
+    when the subject is the cast spell itself (``"spell"``) and ``n=2``
+    the predicate latches the moment the controller's running total
+    flips to 2, mirroring the legacy
+    ``p.spells_cast_this_turn == 2`` gate at the
+    ``actions._fire_second_spell_triggers`` call site.
+
+    The predicate reads the spell-subject's controller (post-increment
+    of ``spells_cast_this_turn``, since the dispatcher fires AFTER
+    ``actions._cast_spell`` has bumped the counter). Layered with
+    ``Controlled(YOU, subject="controller")`` the trigger fires only
+    when the source's own controller casts their nth spell.
+    """
+
+    n: int
+    subject: str = "controller"
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        # Subject may be either a Player (``id`` attribute, no
+        # ``controller_id``) or a GameObject (cast spell). Resolve to
+        # the controlling player either way.
+        if hasattr(obj, "controller_id"):
+            pid = obj.controller_id
+        else:
+            pid = getattr(obj, "id", None)
+        if pid is None:
+            return False
+        try:
+            player = state.player_by_id(pid)
+        except (KeyError, AttributeError):
+            return False
+        return getattr(player, "spells_cast_this_turn", 0) == self.n
