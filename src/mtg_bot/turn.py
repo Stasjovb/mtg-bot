@@ -761,6 +761,11 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
     # damage path in combat._fire_enchanted_dealt_damage_triggers.
     # ``resolving_source`` is set to the dying object so the granted
     # effect can read it.
+    #
+    # Recognizes both legacy ``trigger="dies"`` shape and the migrated
+    # predicate-style ``event=Event.DIES`` shape (via ``matches_event``
+    # against the dying object as both subject and source — IsSelf()
+    # matches because the granted rider lives on the dying creature).
     from mtg_bot.game import effective_triggered_abilities
 
     granted_only = [
@@ -768,7 +773,11 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
         if ab not in dead.printing.triggered_abilities
     ]
     for ability in granted_only:
-        if ability.trigger != "dies":
+        is_legacy_dies = ability.trigger == "dies"
+        is_predicate_dies = ability.matches_event(
+            Event.DIES, {"obj": dead}, dead, state,
+        )
+        if not (is_legacy_dies or is_predicate_dies):
             continue
         state.log.append(
             f"{dead.printing.name}'s granted dies trigger fires"

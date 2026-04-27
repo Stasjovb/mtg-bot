@@ -20,7 +20,11 @@ Two trigger shapes coexist during the predicate-trigger migration:
   ``dispatch_event`` walks every triggered ability looking for a
   matching ``event`` whose ``predicate`` evaluates true. Phase 2
   migrated the ENTERS-event family (``etb`` / ``landfall`` /
-  ``artifact_enters_you_control`` and the qualified variants).
+  ``artifact_enters_you_control`` and the qualified variants); phase 4
+  migrated the DIES / LEAVES_BATTLEFIELD families (this-creature-dies,
+  this-creature-leaves-the-battlefield, counter-creature-dies, and
+  the broader your-creature-or-artifact-dies / another-creature-dies-
+  or-exiled observer patterns).
 
 Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
@@ -41,7 +45,9 @@ from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
+    HasCounter,
     IsArtifact,
+    IsCreature,
     IsLand,
     IsSelf,
     Predicate,
@@ -59,7 +65,6 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # ``_PREDICATE_TRIGGER_PHRASES`` below. The remaining entries here
 # stay on the string-key path until later phases migrate them.
 _TRIGGER_PHRASES: dict[str, str] = {
-    "this creature dies": "dies",
     "this creature attacks": "attacks",
     # Spell-cast triggers. The verbatim phrase
     # ``you cast your second spell each turn`` maps to the engine's
@@ -79,22 +84,11 @@ _TRIGGER_PHRASES: dict[str, str] = {
     # on the battlefield to trigger).
     "you sacrifice another creature or artifact":
         "sacrifice_creature_or_artifact",
-    # +1/+1 counter death trigger. ``Whenever a creature you control
-    # with a +1/+1 counter on it dies`` (Meltstrider Eulogist) maps
-    # to the engine's ``creature_you_control_with_counter_dies`` key.
-    "a creature you control with a +1/+1 counter on it dies":
-        "creature_you_control_with_counter_dies",
     # Becomes-tapped trigger. ``Whenever this creature becomes tapped``
     # is the most-common phrasing on EoE (Starfighter Pilot, Nanoform
     # Sentinel, Astrobiologist, etc.) and maps to the engine's
     # ``becomes_tapped`` key.
     "this creature becomes tapped": "becomes_tapped",
-    # Leaves-the-battlefield trigger. ``When this creature leaves the
-    # battlefield`` (Anticausal Vestige) maps to the engine's
-    # ``leaves_battlefield`` key. The compound ``enters or leaves``
-    # form (Cryogen Relic) is a different shape that this single-
-    # phrase entry intentionally does not claim.
-    "this creature leaves the battlefield": "leaves_battlefield",
     # Combat-damage-to-player trigger. ``Whenever this creature deals
     # combat damage to a player`` (Illvoi Infiltrator) is the simplest
     # form on EoE and maps to the engine's ``combat_damage_to_player``
@@ -144,6 +138,34 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     ),
     "another artifact you control enters": (
         Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+    ),
+    # ``When this creature dies`` — the source's own death (Gravpack
+    # Monoist's create-Robot trigger and the synthetic ``draw 2 cards``
+    # death triggers used in parser tests). Maps to the centralized
+    # DIES dispatch path; the dying object is included as a candidate
+    # observer via ``extra_observers`` so ``IsSelf()`` matches even
+    # though the object has been moved off the battlefield.
+    "this creature dies": (Event.DIES, IsSelf()),
+    # ``When this creature leaves the battlefield`` (Anticausal Vestige).
+    # The compound ``enters or leaves`` form (Cryogen Relic) is a
+    # different shape and intentionally stays out of this entry's
+    # scope.
+    "this creature leaves the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    # ``Whenever a creature you control with a +1/+1 counter on it
+    # dies`` (Meltstrider Eulogist). Predicate: another creature you
+    # control bearing a +1/+1 counter — the firing source's own death
+    # is naturally excluded because predicate matching considers the
+    # SUBJECT (dying object), and the most common static reading of
+    # this phrase is "any creature you control" including self. The
+    # engine fires once per death observer; if a printing also wants
+    # to gate self-firing, add an explicit ``& ~IsSelf()`` in its
+    # static definition (Meltstrider Eulogist's printed text doesn't
+    # have that qualifier so we keep it broad).
+    "a creature you control with a +1/+1 counter on it dies": (
+        Event.DIES,
+        IsCreature() & Controlled(YOU) & HasCounter("+1/+1"),
     ),
 }
 

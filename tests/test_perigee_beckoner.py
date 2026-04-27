@@ -16,6 +16,7 @@ from mtg_bot.effects import (
     PumpTargetCreatureUntilEOT,
     TriggeredAbility,
 )
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
     _fire_dies_triggers,
@@ -43,7 +44,7 @@ def _grant_dies_rider(state, target):
     Perigee Beckoner ETB target-selection so tests don't depend on
     agent/stack interactions)."""
     granted = TriggeredAbility(
-        trigger="dies",
+        event=Event.DIES, predicate=IsSelf(),
         effect=PerigeeBeckonerDiesReturnTappedEffect(),
     )
     PumpTargetCreatureUntilEOT(
@@ -93,7 +94,7 @@ def test_owners_control_not_casters_control():
     # owner-routing. Test that resolve directly.
     enemy_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
-        trigger="dies",
+        event=Event.DIES, predicate=IsSelf(),
         effect=PerigeeBeckonerDiesReturnTappedEffect(),
     )
     enemy_bear.temp_triggered_abilities = (granted,)
@@ -139,7 +140,7 @@ def test_perigee_beckoner_printing_wires_granted_rider():
     assert eff.you_control_only
     assert eff.exclude_self
     assert eff.granted_triggered_ability is not None
-    assert eff.granted_triggered_ability.trigger == "dies"
+    assert _matches_legacy_key(eff.granted_triggered_ability, "dies")
     assert isinstance(
         eff.granted_triggered_ability.effect,
         PerigeeBeckonerDiesReturnTappedEffect,

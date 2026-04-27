@@ -82,14 +82,18 @@ def test_becomes_tapped_end_to_end():
 # ---------- this creature leaves the battlefield ----------
 
 def test_parse_trigger_phrase_recognizes_leaves_battlefield():
-    # ``this creature leaves the battlefield`` (Anticausal Vestige)
-    # maps to the engine's ``leaves_battlefield`` key. The compound
+    # ``this creature leaves the battlefield`` (Anticausal Vestige).
+    # Phase 4 migrated this phrase to the predicate-style path:
+    # ``(Event.LEAVES_BATTLEFIELD, IsSelf())``. The compound
     # ``enters or leaves the battlefield`` form (Cryogen Relic) is a
     # different phrase shape and intentionally stays out of this
     # entry's scope.
     assert _parse_trigger_phrase(
         "this creature leaves the battlefield"
-    ) == "leaves_battlefield"
+    ) is None
+    assert _parse_predicate_trigger_phrase(
+        "this creature leaves the battlefield"
+    ) == (Event.LEAVES_BATTLEFIELD, IsSelf())
 
 
 def test_leaves_battlefield_end_to_end():
@@ -101,7 +105,7 @@ def test_leaves_battlefield_end_to_end():
         "When this creature leaves the battlefield, draw a card."
     )
     assert parsed == TriggeredAbility(
-        trigger="leaves_battlefield",
+        event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
         effect=DrawCards(amount=1),
     )
 

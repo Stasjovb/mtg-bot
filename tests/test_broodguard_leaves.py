@@ -5,6 +5,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
+from tests._etb_helpers import _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -56,8 +57,10 @@ def test_broodguard_transfer_counters_zero_noop():
 
 def test_broodguard_printing_has_leaves_trigger():
     p = EOE_SPELLS["Broodguard Elite"]
-    triggers = [ab for ab in p.triggered_abilities
-                if ab.trigger == "leaves_battlefield"]
+    triggers = [
+        ab for ab in p.triggered_abilities
+        if _matches_legacy_key(ab, "leaves_battlefield")
+    ]
     assert len(triggers) == 1
     assert "Insect" in p.subtypes
     assert "Knight" in p.subtypes

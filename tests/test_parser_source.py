@@ -299,7 +299,17 @@ def test_parse_trigger_phrase_recognizes_etb():
 
 
 def test_parse_trigger_phrase_recognizes_dies():
-    assert _parse_trigger_phrase("this creature dies") == "dies"
+    # Phase 4 migrated ``this creature dies`` from the legacy string-key
+    # lookup to the predicate-style path: it now resolves to
+    # ``(Event.DIES, IsSelf())``. The legacy lookup must therefore
+    # return ``None`` so a card claiming the phrase doesn't accidentally
+    # land on the obsolete string-key code path.
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.predicates import Event, IsSelf
+    assert _parse_trigger_phrase("this creature dies") is None
+    assert _parse_predicate_trigger_phrase(
+        "this creature dies"
+    ) == (Event.DIES, IsSelf())
 
 
 def test_parse_trigger_phrase_recognizes_attacks():
@@ -373,13 +383,16 @@ def test_parse_triggered_ability_line_full_etb_damage():
 
 
 def test_parse_triggered_ability_line_full_dies_create_robot():
-    """Gravpack Monoist's full dies-trigger line."""
+    """Gravpack Monoist's full dies-trigger line. Phase 4 migrated
+    ``this creature dies`` to the predicate-style path; the parser now
+    yields ``event=Event.DIES, predicate=IsSelf()``."""
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "When this creature dies, "
         "create a tapped 2/2 colorless Robot artifact creature token."
     )
     assert result == TriggeredAbility(
-        trigger="dies",
+        event=Event.DIES, predicate=IsSelf(),
         effect=CreateToken(
             token_printing=TOKEN_PRINTINGS["Robot"],
             count=1,
@@ -448,11 +461,12 @@ def test_parse_triggered_ability_line_full_attacks_deals_damage():
 
 
 def test_parse_triggered_ability_line_full_dies_draw_cards_plural():
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "When this creature dies, draw 2 cards."
     )
     assert result == TriggeredAbility(
-        trigger="dies", effect=DrawCards(amount=2)
+        event=Event.DIES, predicate=IsSelf(), effect=DrawCards(amount=2)
     )
 
 

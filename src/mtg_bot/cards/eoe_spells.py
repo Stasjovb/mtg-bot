@@ -13,6 +13,7 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     IsArtifact,
+    IsCreature,
     IsSelf,
 )
 
@@ -197,7 +198,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             enters_with_counters_from_x="x",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="leaves_battlefield",
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                     effect=MoveSelfCountersToTargetCreatureYouControl(),
                 ),
             ),
@@ -595,7 +596,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             keywords={"indestructible"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="leaves_battlefield",
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                     effect=DrawCards(amount=1),
                 ),
             ),
@@ -708,12 +709,19 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # creatures, sacrifice Sothera, then put a creature card
         # exiled with it onto the battlefield under your control with
         # two additional +1/+1 counters on it."
+        # Phase-4 predicate-style: ``IsCreature() & Controlled(YOU)``
+        # — strictly creatures (no artifacts), matching the printed
+        # text. Pre-migration this trigger was wired on the legacy
+        # ``your_creature_or_artifact_dies`` key it shared with
+        # Susurian Voidborn, which over-fired on artifacts; the
+        # migration tightens it to its actual scope.
         make_enchantment(
             "Sothera, the Supervoid", "{2}{B}{B}",
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="your_creature_or_artifact_dies",
+                    event=Event.DIES,
+                    predicate=IsCreature() & Controlled(YOU),
                     effect=SotheraExileOpponentCreatureEffect(),
                 ),
                 TriggeredAbility(

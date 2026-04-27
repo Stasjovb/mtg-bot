@@ -6413,7 +6413,8 @@ def test_dockworker_drone_etb_counter_and_dies_transfer():
 
     # Fire dies trigger — counter moves to ally.
     dies = next(
-        ab for ab in drone.printing.triggered_abilities if ab.trigger == "dies"
+        ab for ab in drone.printing.triggered_abilities
+        if _matches_legacy_key(ab, "dies")
     )
     state.resolving_source = drone
     dies.effect.resolve(state, 0, (("creature", ally.id),))

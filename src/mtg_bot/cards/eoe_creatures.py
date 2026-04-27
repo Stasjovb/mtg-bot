@@ -12,6 +12,7 @@ from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
+    HasCounter,
     HasSubtype,
     IsArtifact,
     IsCreature,
@@ -38,7 +39,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                 ),
                 TriggeredAbility(
-                    trigger="nontoken_creature_you_control_with_counter_dies",
+                    event=Event.DIES,
+                    predicate=(
+                        IsCreature()
+                        & Controlled(YOU)
+                        & IsNontoken()
+                        & HasCounter("+1/+1")
+                    ),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Human Soldier"],
                         count=1,
@@ -152,7 +159,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="dies",
+                    event=Event.DIES, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
@@ -169,7 +176,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="dies",
+                    event=Event.DIES, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -183,7 +190,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Beamsaw Prospector", "{1}{B}", 2, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="dies",
+                    event=Event.DIES, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -233,7 +240,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Thawbringer", "{2}{G}", 4, 2,
             triggered_abilities=(
                 TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=Surveil(amount=1)),
-                TriggeredAbility(trigger="dies", effect=Surveil(amount=1)),
+                TriggeredAbility(event=Event.DIES, predicate=IsSelf(), effect=Surveil(amount=1)),
             ),
         ),
         # Dauntless Scrapbot {3} 3/1 colorless — "ETB exile each opponent's
@@ -1047,7 +1054,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         you_control_only=True,
                         exclude_self=True,
                         granted_triggered_ability=TriggeredAbility(
-                            trigger="dies",
+                            event=Event.DIES, predicate=IsSelf(),
                             effect=PerigeeBeckonerDiesReturnTappedEffect(),
                         ),
                     ),
@@ -1058,12 +1065,19 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # oracle: "Whenever this creature or another creature or
         # artifact you control dies, target opponent loses 1 life and
         # you gain 1 life."
+        # Phase-4 predicate-style: any creature OR artifact controlled
+        # by you dying triggers the ability — including self (the
+        # ``this creature or another …`` wording explicitly covers
+        # self). The dispatcher's ``extra_observers=[dead]`` plumbing
+        # is what makes the self-firing reach this predicate even
+        # though Voidborn has been moved off the battlefield.
         make_creature(
             "Susurian Voidborn", "{2}{B}", 2, 2,
             warp="{B}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="your_creature_or_artifact_dies",
+                    event=Event.DIES,
+                    predicate=(IsCreature() | IsArtifact()) & Controlled(YOU),
                     effect=TargetOpponentLosesNYouGainN(amount=1),
                 ),
             ),
@@ -1408,22 +1422,28 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Vondam and you gain 1 life. When Syr Vondam dies or is put
         # into exile while its power is 4 or greater, destroy up to
         # one target nonland permanent."
-        # The self death-rider uses leaves_battlefield — it already
-        # fires on graveyard and exile paths and skips bounce-to-hand.
+        # Phase-4: both ``dies or is put into exile`` riders collapse
+        # cleanly to ``Event.LEAVES_BATTLEFIELD`` — the engine fires
+        # that event for both graveyard and exile destinations, which
+        # is exactly the surface semantics here. The observer trigger
+        # uses ``IsCreature() & Controlled(YOU) & ~IsSelf()`` for the
+        # ``another creature you control`` clause; the self trigger
+        # uses ``IsSelf()`` for the ``Syr Vondam`` clause.
         make_creature(
             "Syr Vondam, Sunstar Exemplar", "{W}{B}", 2, 2,
             legendary=True,
             keywords={"vigilance", "menace"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="another_creature_you_control_dies_or_exiled",
+                    event=Event.LEAVES_BATTLEFIELD,
+                    predicate=IsCreature() & Controlled(YOU) & ~IsSelf(),
                     effect=Sequence(effects=(
                         PutPlusOneCounterOnSelf(amount=1),
                         GainLife(amount=1),
                     )),
                 ),
                 TriggeredAbility(
-                    trigger="leaves_battlefield",
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                     effect=ConditionalIfSourcePowerAtLeast(
                         effect=DestroyTargetNonlandPermanent(),
                         threshold=4,
@@ -1511,7 +1531,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{4}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="leaves_battlefield",
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                     effect=AnticausalVestigeLeavesEffect(),
                 ),
             ),
@@ -1910,7 +1930,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
                 TriggeredAbility(
-                    trigger="dies",
+                    event=Event.DIES, predicate=IsSelf(),
                     effect=MoveSelfCountersToTargetCreatureYouControl(),
                 ),
             ),
@@ -2210,7 +2230,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1)),
                 TriggeredAbility(
-                    trigger="leaves_battlefield",
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                     effect=DrawCards(amount=1),
                 ),
             ),
@@ -2410,7 +2430,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Insect", "Soldier"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="creature_you_control_with_counter_dies",
+                    event=Event.DIES,
+                    predicate=(
+                        IsCreature()
+                        & Controlled(YOU)
+                        & HasCounter("+1/+1")
+                    ),
                     effect=DrawCards(amount=1),
                 ),
             ),

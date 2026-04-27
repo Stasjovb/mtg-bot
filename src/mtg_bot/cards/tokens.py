@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
 from mtg_bot.cards.base import _parse_type_line
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 def _make_lander_token() -> CardPrinting:
@@ -97,7 +98,7 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
         subtypes=("Munitions",),
         triggered_abilities=(
             TriggeredAbility(
-                trigger="leaves_battlefield",
+                event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
                 effect=DealDamageAnyTarget(amount=2),
             ),
         ),

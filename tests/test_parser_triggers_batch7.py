@@ -25,9 +25,20 @@ from mtg_bot.cards.base import (
     TriggeredAbility,
 )
 from mtg_bot.cards.parser.triggers import (
+    _parse_predicate_trigger_phrase,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    HasCounter,
+    IsCreature,
+)
+
+
+_COUNTER_DIES_PRED = IsCreature() & Controlled(YOU) & HasCounter("+1/+1")
 
 
 # ---------- you cast your second spell each turn ----------
@@ -87,25 +98,29 @@ def test_sacrifice_creature_or_artifact_end_to_end():
 # ---------- a creature you control with a +1/+1 counter on it dies ----------
 
 def test_parse_trigger_phrase_recognizes_counter_creature_dies():
-    # Meltstrider Eulogist's oracle uses
-    # ``a creature you control with a +1/+1 counter on it dies``,
-    # which maps to the engine's
-    # ``creature_you_control_with_counter_dies`` trigger key.
+    # Meltstrider Eulogist's oracle uses ``a creature you control with
+    # a +1/+1 counter on it dies``. Phase 4 migrated this phrase to the
+    # predicate-style path: ``(Event.DIES, IsCreature() & Controlled(
+    # YOU) & HasCounter("+1/+1"))``. The legacy lookup must therefore
+    # return ``None``.
     assert _parse_trigger_phrase(
         "a creature you control with a +1/+1 counter on it dies"
-    ) == "creature_you_control_with_counter_dies"
+    ) is None
+    assert _parse_predicate_trigger_phrase(
+        "a creature you control with a +1/+1 counter on it dies"
+    ) == (Event.DIES, _COUNTER_DIES_PRED)
 
 
 def test_counter_creature_dies_end_to_end():
-    # Meltstrider Eulogist's full oracle text — one line that
-    # composes the new condition with the existing ``draw a card``
-    # effect.
+    # Meltstrider Eulogist's full oracle text — one line that composes
+    # the new predicate-style condition with the existing
+    # ``draw a card`` effect.
     parsed = _parse_triggered_ability_line(
         "Whenever a creature you control with a +1/+1 counter on it dies, "
         "draw a card."
     )
     assert parsed == TriggeredAbility(
-        trigger="creature_you_control_with_counter_dies",
+        event=Event.DIES, predicate=_COUNTER_DIES_PRED,
         effect=DrawCards(amount=1),
     )
 
@@ -190,7 +205,7 @@ def test_meltstrider_eulogist_is_claimed_with_counter_dies_trigger():
     assert parsed == static["Meltstrider Eulogist"]
     assert parsed.triggered_abilities == (
         TriggeredAbility(
-            trigger="creature_you_control_with_counter_dies",
+            event=Event.DIES, predicate=_COUNTER_DIES_PRED,
             effect=DrawCards(amount=1),
         ),
     )
