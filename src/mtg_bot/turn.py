@@ -528,11 +528,26 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
 
     If the object is already tapped, this is a no-op (no re-trigger).
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
 
     if obj.tapped:
         return
     obj.tapped = True
+    # Predicate-style ``Event.BECOMES_TAPPED`` dispatch (phase 7).
+    # Subject ``obj`` is the just-tapped permanent. Both shapes —
+    # ``IsSelf()`` (this creature becomes tapped) on the tapped
+    # permanent itself, and ``IsHost()`` (enchanted permanent becomes
+    # tapped) on attached auras — are matched in a single sweep
+    # because ``IsSelf`` keys off ``subject is source`` while
+    # ``IsHost`` keys off ``source.attached_to == subject.id``.
+    # Runs alongside the legacy walks below; phase-7 commit 3
+    # migrates the static cards, commit 4 collapses the legacy
+    # branch.
+    dispatch_event(
+        state, Event.BECOMES_TAPPED,
+        label="becomes-tapped", obj=obj,
+    )
     for i, ability in enumerate(obj.printing.triggered_abilities):
         if ability.trigger != "becomes_tapped":
             continue

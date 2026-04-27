@@ -2316,6 +2316,7 @@ def dispatch_event(
     *,
     label: str | None = None,
     extra_observers: "list | None" = None,
+    combat_damage_amount: int = 0,
     **subjects,
 ) -> None:
     """Centralized predicate-trigger dispatcher.
@@ -2340,6 +2341,12 @@ def dispatch_event(
     candidate observer for its own self-triggers (``IsSelf()`` against
     the dying object). Permanents on the battlefield that ALSO appear
     in ``extra_observers`` are not double-counted.
+
+    ``combat_damage_amount`` threads the damage amount through to each
+    pushed StackItem so resolving effects can read
+    ``state.resolving_combat_damage_amount``. Used by the DEALT_DAMAGE
+    dispatch (Pain for All's echo, Cryoshatter's destroy-on-damage,
+    etc.); zero for events that don't carry damage.
 
     For ``Event.ENTERS`` the per-source firings are multiplied by
     ``etb_trigger_multiplier`` (Starfield Vocalist's "triggers an
@@ -2382,6 +2389,7 @@ def dispatch_event(
                     ability_index=ability_index,
                     controller_id=source.controller_id,
                     label=label,
+                    combat_damage_amount=combat_damage_amount,
                 )
 
 

@@ -491,7 +491,24 @@ def _fire_enchanted_dealt_damage_triggers(
     that want to read it (e.g., Pain for All's
     echo-damage-to-each-opponent, Requiem Monolith's draw-and-lose).
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
+
+    # Predicate-style ``Event.DEALT_DAMAGE`` dispatch (phase 7).
+    # Subject ``obj`` is the damaged permanent. ``IsHost()`` on an
+    # attached aura matches when ``aura.attached_to == obj.id``,
+    # subsuming the legacy aura-walk below for migrated abilities.
+    # ``combat_damage_amount`` threads the damage amount through to
+    # each pushed StackItem so resolving effects (Pain for All's echo)
+    # can read ``state.resolving_combat_damage_amount``. Runs
+    # alongside the legacy walks; phase-7 commit 3 migrates the static
+    # cards, commit 4 collapses the legacy branch.
+    dispatch_event(
+        state, Event.DEALT_DAMAGE,
+        label="enchanted-creature-dealt-damage",
+        combat_damage_amount=amount,
+        obj=obj,
+    )
 
     for aura in list(state.battlefield):
         if aura.attached_to != obj.id:

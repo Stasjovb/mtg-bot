@@ -54,6 +54,18 @@ class Event(str, Enum):
     ATTACKS = "attacks"
     BLOCKS = "blocks"
     DEALS_COMBAT_DAMAGE = "deals_combat_damage"
+    # A permanent has just been dealt damage (combat damage from an
+    # attacker/blocker hitting a creature, or non-combat damage from a
+    # spell/ability). Subject is the damaged permanent. The amount is
+    # threaded through ``dispatch_event``'s ``combat_damage_amount``
+    # parameter so resolving effects can read
+    # ``state.resolving_combat_damage_amount``. Models the
+    # aura/Equipment "Whenever enchanted creature is dealt damage"
+    # observer family — the dispatcher fires once per
+    # source-target damage application, mirroring the per-event
+    # invocation of the legacy
+    # ``_fire_enchanted_dealt_damage_triggers`` helper.
+    DEALT_DAMAGE = "dealt_damage"
     IS_CAST = "is_cast"
     IS_SACRIFICED = "is_sacrificed"
     # Turn-structure events. Subject is a Player (the player whose
@@ -80,6 +92,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.ATTACKS: ("attacker",),
     Event.BLOCKS: ("blocker", "attacker"),
     Event.DEALS_COMBAT_DAMAGE: ("source", "target"),
+    Event.DEALT_DAMAGE: ("obj",),
     Event.IS_CAST: ("spell", "controller"),
     Event.IS_SACRIFICED: ("obj",),
     Event.BEGINNING_OF_UPKEEP: ("player",),
