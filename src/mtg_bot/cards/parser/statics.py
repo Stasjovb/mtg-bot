@@ -1,20 +1,26 @@
 """Static-ability grammar.
 
-A static-ability line of the form ``As long as <condition>, this
-creature gets +N/+N[ and has <keyword>].`` becomes a self-scoped
-``StaticAbility`` with the condition's gate kwarg, the P/T modifier,
-and an optional granted keyword. Recognized conditions today:
+Two surface forms of the same semantics are recognized:
+
+* **Leading** ``As long as <condition>, this creature gets +N/+N[ and has
+  <keyword>].`` — the original shape. Cloudsculpt Technician and
+  Gravblade Heavy in EoE.
+* **Trailing** ``This creature gets +N/+N[ and has <keyword>] as long as
+  <condition>.`` — the rider trails the P/T modifier. Brightspear
+  Zealot in EoE prints in this form.
+
+Both shapes share the same condition phrasebook and produce identical
+``StaticAbility`` outputs; the parser tries the leading regex first
+and falls back to the trailing regex.
+
+Recognized conditions today:
 
 * ``you control an artifact`` →
   ``requires_artifact_you_control=True`` (Cloudsculpt Technician,
-  Gravblade Heavy in EoE).
+  Gravblade Heavy).
 * ``you've cast two or more spells this turn`` →
-  ``requires_spells_cast_this_turn=2``. Forward-looking grammar; the
-  one EoE printing that uses this engine gate (Mm'menon, Uthros
-  Exile) has its own surface form with the rider trailing the P/T
-  modifier rather than leading it, so no EoE card is unlocked yet —
-  but the phrasebook entry is here for cards whose oracle text uses
-  the leading-``As long as`` shape.
+  ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
+  trailing shape).
 
 Other "As long as" conditions (entered-this-turn, void, you-control-a-
 creature, ``it's your turn``, etc.) either have no matching engine
@@ -36,6 +42,18 @@ _STATIC_ABILITY_LINE = re.compile(
     r"(?: and has (?P<keyword>[A-Za-z ]+))?\.$"
 )
 
+# The trailing surface form: same semantics, rider after the P/T
+# modifier instead of before it. The optional ``and has <keyword>``
+# tail lives between the P/T modifier and the ``as long as`` clause,
+# matching how MTG oracle text would print a keyword-granting
+# trailing-rider line.
+_STATIC_ABILITY_LINE_TRAILING = re.compile(
+    r"^This creature gets "
+    r"\+(?P<power>\d+)/\+(?P<toughness>\d+)"
+    r"(?: and has (?P<keyword>[A-Za-z ]+))?"
+    r" as long as (?P<condition>.+?)\.$"
+)
+
 # Conditions recognized as gates on the static ability. The mapping is
 # from the surface phrase (matched verbatim, no normalization) to the
 # kwargs passed to ``StaticAbility``. Each phrase corresponds 1:1 to a
@@ -51,16 +69,25 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 
 
 def _parse_static_ability_line(line: str) -> StaticAbility | None:
-    """Return a ``StaticAbility`` for a single ``As long as <condition>,
-    this creature gets +N/+N[ and has <keyword>].`` line, or ``None`` if
-    the line shape doesn't match, the condition isn't recognized, or the
-    granted keyword isn't a known evergreen.
+    """Return a ``StaticAbility`` for a single static-ability line in
+    either the leading (``As long as <condition>, this creature gets
+    +N/+N[ and has <keyword>].``) or trailing (``This creature gets
+    +N/+N[ and has <keyword>] as long as <condition>.``) shape, or
+    ``None`` if the line shape doesn't match, the condition isn't
+    recognized, or the granted keyword isn't a known evergreen.
+
+    The two shapes are semantically identical and produce identical
+    ``StaticAbility`` outputs. The leading regex is tried first; the
+    trailing regex is the fallback.
 
     The static ability is always self-scoped (``StaticScope.SELF``); the
     "this creature gets" subject in the surface form is what makes that
     explicit.
     """
-    m = _STATIC_ABILITY_LINE.match(line.strip())
+    stripped = line.strip()
+    m = _STATIC_ABILITY_LINE.match(stripped)
+    if m is None:
+        m = _STATIC_ABILITY_LINE_TRAILING.match(stripped)
     if m is None:
         return None
     condition = m.group("condition").strip()
