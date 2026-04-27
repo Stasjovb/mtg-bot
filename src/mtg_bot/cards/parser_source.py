@@ -9,12 +9,12 @@ in ``tests/test_parser_parity.py``.
 
 Slice 1's grammar:
 
-- A keyword line is one of the recognized evergreen standalone
-  keywords (``Flying``, ``Trample``, ``Vigilance``, ``Haste``,
-  ``Reach``, ``Deathtouch``, ``Lifelink``, ``Defender``,
-  ``Flash``, ``Menace``, ``Double strike``, ``First strike``,
-  ``Prowess``) and contributes its lowercase engine spelling to
-  ``keywords``.
+- A keyword line is one or more evergreen keywords joined by
+  ``, ``. Each piece must be a recognized standalone keyword
+  (``Flying``, ``Trample``, ``Vigilance``, ``Haste``, ``Reach``,
+  ``Deathtouch``, ``Lifelink``, ``Defender``, ``Flash``,
+  ``Menace``, ``Double strike``, ``First strike``, ``Prowess``)
+  and contributes its lowercase engine spelling to ``keywords``.
 - A triggered-ability line of the form
   ``When/Whenever <condition>, <effect>.`` is decomposed into a
   trigger condition and an effect, each handled by its own parser.
@@ -56,12 +56,25 @@ _DATA_PATH = (
 class _ParsedClause:
     """One oracle-text clause that successfully parsed.
 
-    Fields are mutually exclusive — a clause contributes either a
-    keyword string or a triggered ability, never both.
+    Fields are mutually exclusive — a clause contributes either one
+    or more keyword strings or a triggered ability, never both. A
+    keyword-only line that lists several keywords joined by ``, ``
+    parses to a single ``_ParsedClause`` whose ``keywords`` tuple
+    holds every keyword on that line.
     """
 
-    keyword: str | None = None
+    keywords: tuple[str, ...] = ()
     trigger: TriggeredAbility | None = None
+
+    @property
+    def keyword(self) -> str | None:
+        """Back-compat shim for callers that still want a single
+        keyword. Returns ``None`` if no keywords or more than one
+        — multi-keyword clauses must be consumed via ``keywords``.
+        """
+        if len(self.keywords) == 1:
+            return self.keywords[0]
+        return None
 
 
 _KEYWORD_LINES: dict[str, str] = {
@@ -159,13 +172,29 @@ def _parse_type_line(
     return supertypes, card_types, subtypes
 
 
+def _parse_keyword_line(line: str) -> tuple[str, ...] | None:
+    """Parse a (possibly comma-separated) keyword-only line.
+
+    A single keyword like ``"Flying"`` returns ``("flying",)``. A
+    multi-keyword line like ``"Flash, Flying"`` returns
+    ``("flash", "flying")``. Returns ``None`` if any piece is not a
+    recognized keyword — the caller may then try other clause
+    patterns (e.g. triggered abilities).
+    """
+    pieces = [p.strip() for p in line.split(", ")]
+    if not all(p in _KEYWORD_LINES for p in pieces):
+        return None
+    return tuple(_KEYWORD_LINES[p] for p in pieces)
+
+
 def _parse_clause(line: str) -> _ParsedClause | None:
     """Return a ``_ParsedClause`` for a recognized line, or ``None``
     if the parser doesn't know how to handle it. ``None`` causes the
     enclosing card to be skipped."""
     line = line.strip()
-    if line in _KEYWORD_LINES:
-        return _ParsedClause(keyword=_KEYWORD_LINES[line])
+    keywords = _parse_keyword_line(line)
+    if keywords is not None:
+        return _ParsedClause(keywords=keywords)
     triggered = _parse_triggered_ability_line(line)
     if triggered is not None:
         return _ParsedClause(trigger=triggered)
@@ -198,8 +227,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         parsed = _parse_clause(line)
         if parsed is None:
             return None
-        if parsed.keyword is not None:
-            keywords.add(parsed.keyword)
+        keywords.update(parsed.keywords)
         if parsed.trigger is not None:
             triggers.append(parsed.trigger)
 

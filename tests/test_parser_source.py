@@ -10,6 +10,7 @@ from mtg_bot.cards.parser_source import (
     _build_creature_printing,
     _parse_clause,
     _parse_effect_phrase,
+    _parse_keyword_line,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
     _parse_type_line,
@@ -79,8 +80,72 @@ def test_parse_clause_returns_none_for_unknown_line():
 def test_parse_clause_recognizes_each_evergreen_keyword(line, engine_keyword):
     parsed = _parse_clause(line)
     assert parsed is not None
-    assert parsed.keyword == engine_keyword
+    assert parsed.keywords == (engine_keyword,)
     assert parsed.trigger is None
+
+
+# ---------- _parse_keyword_line / multi-keyword lines ----------
+
+
+def test_parse_keyword_line_single_keyword():
+    assert _parse_keyword_line("Flying") == ("flying",)
+
+
+def test_parse_keyword_line_two_keywords():
+    assert _parse_keyword_line("Flash, Flying") == ("flash", "flying")
+
+
+def test_parse_keyword_line_three_keywords_preserves_order():
+    assert _parse_keyword_line("Trample, Vigilance, Haste") == (
+        "trample",
+        "vigilance",
+        "haste",
+    )
+
+
+def test_parse_keyword_line_returns_none_when_any_piece_unknown():
+    # First piece known, second unknown → whole line fails so the
+    # caller can fall back to other clause patterns.
+    assert _parse_keyword_line("Flying, Bogus") is None
+    assert _parse_keyword_line("Bogus, Flying") is None
+
+
+def test_parse_keyword_line_returns_none_for_non_keyword_line():
+    assert _parse_keyword_line(
+        "When this creature enters, it deals 3 damage to any target."
+    ) is None
+
+
+def test_parse_clause_recognizes_multi_keyword_line():
+    parsed = _parse_clause("Flash, Flying")
+    assert parsed is not None
+    assert parsed.keywords == ("flash", "flying")
+    assert parsed.trigger is None
+
+
+def test_parse_clause_keyword_shim_returns_none_for_multi_keyword():
+    """The single-``keyword`` back-compat shim should not silently
+    return one of several keywords; multi-keyword clauses must be
+    consumed via ``keywords``."""
+    parsed = _parse_clause("Flash, Flying")
+    assert parsed is not None
+    assert parsed.keyword is None
+    assert parsed.keywords == ("flash", "flying")
+
+
+def test_build_creature_printing_handles_multi_keyword_line():
+    card = {
+        "name": "Test Vanilla",
+        "mana_cost": "{2}{G}",
+        "type_line": "Creature — Beast",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": "Trample, Vigilance",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.keywords == frozenset({"trample", "vigilance"})
+    assert printing.triggered_abilities == ()
 
 
 def test_build_creature_printing_handles_each_evergreen_standalone():
