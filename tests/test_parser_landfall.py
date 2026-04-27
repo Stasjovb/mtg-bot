@@ -1,10 +1,13 @@
-"""Tests for the Landfall keyword-prefix triggered-ability recognizer.
+"""Tests for ability-word-prefixed triggered abilities.
 
-Covers the surface form ``Landfall — Whenever a land you control
-enters, <effect>.`` — recognized by stripping the keyword-prefix
-label before parsing the body through the normal triggered-ability
-grammar. The resulting ``TriggeredAbility`` uses the engine's
-``landfall`` trigger key (matching the static registry).
+Ability words (Landfall, Magecraft, Constellation, Domain, …) are
+italicized labels with no rules consequence — the substance is the
+``Whenever …`` clause that follows the em-dash. The parser strips
+any ``<Capitalized Words> — `` prefix before parsing the body
+through the normal triggered-ability grammar; we never enumerate
+ability words individually. This file covers the stripping behavior
+plus the Landfall trigger-key mapping that lets Eumidian
+Terrabotanist claim end-to-end.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import GainLife, TriggeredAbility
 from mtg_bot.cards.parser.triggers import (
     _parse_triggered_ability_line,
-    _strip_keyword_prefix,
+    _strip_ability_word_prefix,
 )
 
 
@@ -81,42 +84,28 @@ def test_landfall_prefix_without_trigger_body_returns_none():
     assert parsed is None
 
 
-# ---------- Negative: other keyword prefixes are not silently accepted
+# ---------- Generic ability-word stripping ----------
 
-def test_other_keyword_prefix_not_silently_accepted_as_landfall():
-    # Saga is not a recognized keyword prefix in this slice. The
-    # ``Saga — `` label must NOT be stripped, so the line fails to
-    # match the triggered-ability pattern (Saga chapters use ``I —``,
-    # ``II —`` etc., not ``Whenever``) and the parser returns
-    # ``None``. This guards against the recognizer over-generalizing
-    # to ``<AnyKeyword> — <body>``.
-    parsed = _parse_triggered_ability_line(
-        "Saga — Whenever a land you control enters, "
-        "you gain 1 life."
-    )
-    # Even if the body is itself a recognized triggered-ability line,
-    # it would still be a bug to accept it under the wrong keyword
-    # label — the resulting TriggeredAbility, if any, should not be
-    # the result of silently treating Saga as Landfall.
-    # Concretely: with the prefix not stripped, the entire line
-    # ``Saga — Whenever …`` does not match the trigger-line regex.
-    assert parsed is None
+def test_any_ability_word_prefix_is_stripped_generically():
+    # Ability words are labels with no rules consequence, so the
+    # parser doesn't enumerate them individually — any
+    # ``<Capitalized Words> — Whenever <body>`` strips cleanly. Saga,
+    # Magecraft, Constellation, etc. all flow through the same path.
+    for label in ("Saga", "Magecraft", "Constellation", "Domain"):
+        parsed = _parse_triggered_ability_line(
+            f"{label} — Whenever a land you control enters, "
+            "you gain 1 life."
+        )
+        assert parsed == TriggeredAbility(
+            trigger="landfall",
+            effect=GainLife(amount=1),
+        )
 
 
-def test_magecraft_keyword_prefix_not_silently_accepted():
-    # Magecraft is another keyword-prefix triggered ability that this
-    # slice does NOT support. Its prefix must not be silently stripped.
-    parsed = _parse_triggered_ability_line(
-        "Magecraft — Whenever a land you control enters, "
-        "you gain 1 life."
-    )
-    assert parsed is None
+# ---------- _strip_ability_word_prefix unit tests ----------
 
-
-# ---------- _strip_keyword_prefix unit tests ----------
-
-def test_strip_keyword_prefix_strips_landfall_label():
-    stripped = _strip_keyword_prefix(
+def test_strip_ability_word_prefix_strips_landfall_label():
+    stripped = _strip_ability_word_prefix(
         "Landfall — Whenever a land you control enters, "
         "you gain 1 life."
     )
@@ -125,18 +114,34 @@ def test_strip_keyword_prefix_strips_landfall_label():
     )
 
 
-def test_strip_keyword_prefix_passes_through_unrecognized_keyword():
-    line = (
-        "Saga — Whenever a land you control enters, "
+def test_strip_ability_word_prefix_strips_any_label_before_whenever():
+    # Generic strip — ``<Capitalized Words> — `` followed by
+    # ``Whenever`` is removed regardless of the label content.
+    assert _strip_ability_word_prefix(
+        "Magecraft — Whenever a land you control enters, "
         "you gain 1 life."
-    )
-    assert _strip_keyword_prefix(line) == line
+    ) == "Whenever a land you control enters, you gain 1 life."
 
 
-def test_strip_keyword_prefix_passes_through_plain_line():
-    # Lines without any keyword-prefix label are returned unchanged.
+def test_strip_ability_word_prefix_passes_through_plain_line():
+    # Lines without any ability-word-prefix label are returned unchanged.
     line = "When this creature enters, it deals 3 damage to any target."
-    assert _strip_keyword_prefix(line) == line
+    assert _strip_ability_word_prefix(line) == line
+
+
+def test_strip_ability_word_prefix_does_not_strip_type_line_dash():
+    # Type lines use the same em-dash separator (``Creature — Dragon``)
+    # but never have ``When``/``Whenever`` after the dash, so the
+    # lookahead in the strip pattern keeps them untouched.
+    assert _strip_ability_word_prefix("Creature — Dragon") == \
+        "Creature — Dragon"
+
+
+def test_strip_ability_word_prefix_does_not_strip_non_when_bodies():
+    # Saga chapters use roman-numeral notation (``Saga — I — Draw a
+    # card.``) — no ``Whenever`` body, so the prefix is preserved.
+    line = "Saga — I, II, III — Draw a card."
+    assert _strip_ability_word_prefix(line) == line
 
 
 # ---------- Bare condition (no prefix) is also recognized ----------

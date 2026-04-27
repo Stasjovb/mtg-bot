@@ -8,12 +8,13 @@ Each is handled by its own parser — the condition by
 ``effects``. Adding a new condition or effect grows its respective
 grammar without touching the line-level pattern.
 
-Some triggered-ability lines are prefixed by a keyword-ability label
+Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
-control enters, …``). The prefix is reminder text — the substance is
-the ``Whenever …`` clause that follows. ``_strip_keyword_prefix``
-recognizes the narrow set of keyword prefixes we currently support
-and strips them so the body parses through the normal grammar.
+control enters, …``). Ability words are reminder labels with no
+rules consequence — the substance is the ``Whenever …`` clause that
+follows. ``_strip_ability_word_prefix`` strips any such label
+generically so the body parses through the normal grammar; we never
+need to enumerate ability words individually.
 """
 
 from __future__ import annotations
@@ -34,36 +35,39 @@ _TRIGGER_PHRASES: dict[str, str] = {
     "this creature enters": "etb",
     "this creature dies": "dies",
     "this creature attacks": "attacks",
-    # Landfall: the inner ``Whenever a land you control enters`` body
-    # is the ability's trigger condition. The engine uses ``landfall``
-    # as the canonical trigger key (see ``eoe_creatures.py``), so the
-    # phrase maps directly to that key. The keyword-prefix label is
-    # stripped by ``_strip_keyword_prefix`` before this lookup runs.
+    # Land-enters trigger. The engine uses ``landfall`` as the
+    # canonical trigger key (see ``eoe_creatures.py``); the
+    # ``Landfall —`` ability-word label, when present in oracle text,
+    # is stripped by ``_strip_ability_word_prefix`` before this
+    # lookup runs.
     "a land you control enters": "landfall",
 }
 
 
-# Keyword-prefix labels we recognize at the start of a triggered-ability
-# line. The prefix is reminder text wrapping the substantive
-# ``Whenever …`` body. Only Landfall is supported in this slice — other
-# keyword-prefixed triggered abilities (Saga, Magecraft, etc.) fall
-# through and the enclosing card is skipped, as expected.
-_KEYWORD_PREFIXES: frozenset[str] = frozenset({"Landfall"})
+# Ability-word prefix on a triggered-ability line. An ability word is
+# one or more capitalized words followed by `` — `` and a triggered-
+# ability body. Per the comprehensive rules ability words have no
+# rules consequence, so we strip whatever label appears without
+# enumerating them — Landfall, Magecraft, Constellation, Domain, etc.
+# all flow through the same path. The lookahead requires
+# ``When``/``Whenever`` after the dash so type-line strings (e.g.
+# ``Creature — Dragon``) and other em-dash uses don't accidentally
+# match.
+_ABILITY_WORD_PREFIX = re.compile(
+    r"^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — (?=When |Whenever )"
+)
 
 
-def _strip_keyword_prefix(line: str) -> str:
-    """Strip a recognized ``<Keyword> — `` prefix from ``line``.
+def _strip_ability_word_prefix(line: str) -> str:
+    """Strip a generic ``<Ability Word> — `` prefix from ``line`` if
+    one is present in front of a ``When``/``Whenever`` body.
 
-    Returns the unprefixed line if a recognized keyword label precedes
-    an em-dash (U+2014) with surrounding spaces; otherwise returns
-    ``line`` unchanged. The em-dash is the same character used as the
-    type-line separator in Scryfall data.
+    Ability words carry no rules meaning, so the parser doesn't need
+    to know which ability word it's looking at — the substance lives
+    entirely in the ``Whenever …`` clause that follows. Returns
+    ``line`` unchanged when no such prefix is present.
     """
-    for keyword in _KEYWORD_PREFIXES:
-        prefix = f"{keyword} — "
-        if line.startswith(prefix):
-            return line[len(prefix):]
-    return line
+    return _ABILITY_WORD_PREFIX.sub("", line, count=1)
 
 
 def _parse_trigger_phrase(phrase: str) -> str | None:
@@ -71,7 +75,7 @@ def _parse_trigger_phrase(phrase: str) -> str | None:
 
 
 def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
-    line = _strip_keyword_prefix(line)
+    line = _strip_ability_word_prefix(line)
     m = _TRIGGERED_ABILITY_LINE.match(line)
     if m is None:
         return None
