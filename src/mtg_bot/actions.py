@@ -1860,6 +1860,10 @@ def resolve_top_of_stack(state: GameState) -> None:
                 state.log.append(
                     f"{card.printing.name} resolves onto the battlefield"
                 )
+                if card.printing.enters_as_copy_of_creature:
+                    apply_clone_enters_as_copy_replacement(
+                        state, card, item.controller_id,
+                    )
             put_into_battlefield(state, card, item.controller_id)
             return
         if card.printing.is_instant or card.printing.is_sorcery:
@@ -1978,6 +1982,76 @@ def apply_aura_static_grants_on_attach(
                 f"a {sub}"
             ),
         )
+
+
+def apply_clone_enters_as_copy_replacement(
+    state: GameState, clone: "GameObject", controller_id: int,
+) -> None:
+    """Clone-style ETB replacement: 'this creature may enter as a
+    copy of any creature on the battlefield.' Called during spell
+    resolution AFTER the resolves-onto-battlefield log line and
+    BEFORE ``put_into_battlefield``, so the clone is still off-
+    battlefield when the controller picks a target.
+
+    Asks the controller's agent to choose a creature on the
+    battlefield. If chosen, snapshots ``original_printing`` (so the
+    clone remembers what it was) and replaces ``printing`` with the
+    target's printing (CR 706.2 copiable values — auras, counters,
+    animations, and other continuous effects on the target are NOT
+    copied since they don't live on the printing). Writes a layer-1
+    ``"is_copy"`` registry entry sourced by the clone with
+    ``expires_at=None``; ``move_off_battlefield(only_static=True)``
+    drops the entry when the clone leaves play (the entry is
+    informational since the printing mutation is the source of
+    truth for cached reads).
+
+    If no creature is on the battlefield or the agent declines, the
+    clone enters as its printed self (no mutation, no log).
+    """
+    from mtg_bot.game import is_creature_now
+
+    if not clone.printing.enters_as_copy_of_creature:
+        return
+    # ``is_creature_now`` (not just ``printing.is_creature``) so an
+    # animated manland is a legal copy target. The clone still copies
+    # the manland's printing — which is the LAND printing — so the
+    # clone enters as a land. See test_clone_of_animated_manland.
+    candidates: list[tuple[str, int]] = [
+        ("creature", o.id)
+        for o in state.battlefield
+        if is_creature_now(o)
+    ]
+    if not candidates:
+        return
+    p = state.players[controller_id]
+    chosen = p.agent.choose_target(state, controller_id, candidates)
+    if chosen is None:
+        return
+    _, target_id = chosen
+    target = next(
+        (o for o in state.battlefield if o.id == target_id), None,
+    )
+    if target is None:
+        return
+    if clone.original_printing is None:
+        clone.original_printing = clone.printing
+    target_printing = target.printing
+    clone.printing = target_printing
+    state.add_continuous_effect(
+        source_id=clone.id,
+        layer=1,
+        kind="is_copy",
+        target_id=clone.id,
+        params=(target_printing,),
+        description=(
+            f"{clone.original_printing.name} is a copy of "
+            f"{target_printing.name}"
+        ),
+    )
+    state.log.append(
+        f"{clone.original_printing.name} enters as a copy of "
+        f"{target_printing.name}"
+    )
 
 
 def put_into_battlefield(
