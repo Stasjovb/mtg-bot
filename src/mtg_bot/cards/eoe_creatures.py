@@ -831,6 +831,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Mm'menon, Uthros Exile", "{1}{U}{R}", 1, 3,
             keywords={"flying"},
             legendary=True,
+            subtypes=("Jellyfish", "Advisor"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="artifact_enters_you_control",
