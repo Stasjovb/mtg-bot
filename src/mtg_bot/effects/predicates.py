@@ -56,6 +56,14 @@ class Event(str, Enum):
     DEALS_COMBAT_DAMAGE = "deals_combat_damage"
     IS_CAST = "is_cast"
     IS_SACRIFICED = "is_sacrificed"
+    # Turn-structure events. Subject is a Player (the player whose
+    # phase/step is beginning), not a permanent — so the
+    # ``Controlled(YOU)`` predicate matches a player subject by
+    # ``player.id == source.controller_id`` rather than the
+    # ``obj.controller_id == source.controller_id`` rule used for
+    # permanent subjects. ``Always()`` paired with
+    # ``BEGINNING_OF_END_STEP`` models the "each end step" variant
+    # (Ragost) that fires regardless of whose end step it is.
     BEGINNING_OF_UPKEEP = "beginning_of_upkeep"
     BEGINNING_OF_COMBAT = "beginning_of_combat"
     BEGINNING_OF_END_STEP = "beginning_of_end_step"
@@ -253,6 +261,26 @@ class Controlled(Predicate):
     ``by`` of ``YOU`` resolves to the source ability's controller at
     evaluation time. Future expansion: ``OPPONENT`` / ``ANY`` /
     explicit player ids.
+
+    Two subject shapes are supported:
+
+    - **Permanent subject** (``GameObject``): match by
+      ``obj.controller_id == source.controller_id`` — the standard
+      "you control this permanent" check used by ENTERS / DIES /
+      ATTACKS / etc.
+    - **Player subject** (``Player``, no ``controller_id`` attribute
+      because a player isn't controlled by another player): match by
+      ``player.id == source.controller_id``. This is the path used by
+      turn-structure events (``BEGINNING_OF_UPKEEP``,
+      ``BEGINNING_OF_COMBAT``, ``BEGINNING_OF_END_STEP``) whose subject
+      is a ``Player`` — ``Controlled(YOU)`` then reads as "this is
+      MY phase/step", which is the natural mapping for the oracle
+      phrasing "at the beginning of YOUR upkeep".
+
+    The branch is selected by the presence of ``controller_id`` on the
+    subject (``GameObject`` has it, ``Player`` does not), keeping the
+    predicate identifier-stable across both event families instead of
+    introducing a separate ``IsControllerOfSource`` for the player case.
     """
 
     by: _Controller = YOU
@@ -263,7 +291,13 @@ class Controlled(Predicate):
         if obj is None:
             return False
         if self.by == YOU:
-            return getattr(obj, "controller_id", None) == source.controller_id
+            # Player subjects expose ``id`` (no controller); permanent
+            # subjects expose ``controller_id``. Distinguish on
+            # attribute presence rather than isinstance to avoid an
+            # import cycle into ``mtg_bot.game``.
+            if hasattr(obj, "controller_id"):
+                return obj.controller_id == source.controller_id
+            return getattr(obj, "id", None) == source.controller_id
         raise NotImplementedError(f"unsupported controller ref: {self.by!r}")
 
 
