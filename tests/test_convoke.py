@@ -260,31 +260,27 @@ def test_vote_out_convoke_makes_otherwise_unplayable_castable():
 
 
 def test_convoke_and_scion_sac_mutually_exclusive_on_same_cast():
-    """A Scion has "{T}, Sacrifice this: Add {C}". If tapped for
-    convoke, the {T} cost can't be paid for a separate sac-for-mana
-    activation — so the Scion can EITHER convoke OR sac, not both,
-    on a single cast. Pin that mutual exclusion: when convoke taps
-    the Scion, sac-for-mana activation isn't legal afterward."""
-    from mtg_bot.actions import ActivateAbility
+    """A Scion has "{T}, Sacrifice this: Add {C}". CR ordering:
+    mana abilities fire at 601.2g (BEFORE convoke at 601.2h). The
+    Scion's sac-for-mana activates first to help pay the cost, which
+    sacrifices it — so it's no longer available for convoke. Either
+    direction yields mutual exclusion: a single Scion contributes
+    EITHER mana via sac OR a convoke pip, never both on the same cast.
+
+    The runtime here exercises the sac-first half: Scion sacs into
+    {C} that pays one generic, and the bears convoke the rest.
+    """
     state = _new_state()
     scion = _put(state, _SCION, 0)
     scion.summoning_sick = False
-    # Need 3 more pips for {3}{B}. Convoke 4 things → fully paid.
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(3)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
     vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
-    # Scion was tapped for convoke.
-    assert scion.tapped
-    # Resolve the spell so we can probe legal actions cleanly.
-    resolve_top_of_stack(state)
-    # Scion's only ability has {T} as part of the cost; tapped Scion
-    # can't activate it.
-    scion_acts = [
-        a for a in legal_actions(state, 0)
-        if isinstance(a, ActivateAbility) and a.object_id == scion.id
-    ]
-    assert scion_acts == []
+    # Scion sacrificed at 601.2g (no longer on the battlefield).
+    assert scion not in state.battlefield
+    # Bears were used for convoke at 601.2h.
+    assert any(b.tapped for b in bears)
 
 
 def test_convoke_excess_candidates_stops_when_cost_fully_paid():
