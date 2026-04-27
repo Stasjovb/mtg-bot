@@ -269,14 +269,19 @@ def test_utility_land_with_triggered_abilities():
     """make_utility_land threads triggered_abilities too."""
     from mtg_bot.cards import make_utility_land
     from mtg_bot.effects import GainLife, TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
     p = make_utility_land(
         "test",
         triggered_abilities=(
-            TriggeredAbility(trigger="becomes_tapped", effect=GainLife(amount=1)),
+            TriggeredAbility(
+                event=Event.BECOMES_TAPPED, predicate=IsSelf(),
+                effect=GainLife(amount=1),
+            ),
         ),
     )
     assert len(p.triggered_abilities) == 1
-    assert p.triggered_abilities[0].trigger == "becomes_tapped"
+    assert p.triggered_abilities[0].event is Event.BECOMES_TAPPED
+    assert p.triggered_abilities[0].predicate == IsSelf()
 
 
 def test_scavenger_grounds_not_offered_without_desert():

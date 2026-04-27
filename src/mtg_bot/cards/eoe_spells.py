@@ -14,6 +14,7 @@ from mtg_bot.effects.predicates import (
     Event,
     IsArtifact,
     IsCreature,
+    IsHost,
     IsSelf,
 )
 
@@ -450,7 +451,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Chorale of the Void", "{3}{B}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="enchanted_creature_attacks",
+                    event=Event.ATTACKS, predicate=IsHost(subject="attacker"),
                     effect=ChoraleReanimateDefenderGraveCreatureEffect(),
                 ),
                 TriggeredAbility(
@@ -473,7 +474,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=PainForAllETBEffect(),
                 ),
                 TriggeredAbility(
-                    trigger="enchanted_creature_dealt_damage",
+                    event=Event.DEALT_DAMAGE, predicate=IsHost(),
                     effect=PainForAllDamageEchoEffect(),
                 ),
             ),
@@ -676,7 +677,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     effect=AttachToTargetCreatureYouControl(),
                 ),
                 TriggeredAbility(
-                    trigger="equipped_creature_attacks",
+                    event=Event.ATTACKS, predicate=IsHost(subject="attacker"),
                     effect=AtomicMicrosizerAttackEffect(),
                 ),
             ),

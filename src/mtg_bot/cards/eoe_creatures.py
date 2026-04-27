@@ -17,6 +17,7 @@ from mtg_bot.effects.predicates import (
     HasSubtype,
     IsArtifact,
     IsCreature,
+    IsHost,
     IsLand,
     IsNontoken,
     IsSelf,
@@ -59,7 +60,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Starfighter Pilot", "{1}{W}", 2, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=Surveil(amount=1),
                 ),
             ),
@@ -314,7 +315,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Mechan Navigator", "{1}{U}", 2, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         DrawCards(amount=1),
                         DiscardSelf(amount=1),
@@ -902,7 +903,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=UntapTargetOtherPermanent(),
                     once_per_turn=True,
                 ),
@@ -1204,7 +1205,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Hemosymbic Mite", "{G}", 1, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=(
                         PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()
                     ),
@@ -1503,7 +1504,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=GainLife(amount=1),
                 ),
             ),
@@ -2039,7 +2040,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=OptionalSacAnotherForEffect(
                         inner_effect=DrawCards(amount=1),
                     ),
@@ -2525,11 +2526,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             power_bonus=-5, toughness_bonus=0,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="enchanted_permanent_becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsHost(),
                     effect=DestroyEnchantedPermanent(),
                 ),
                 TriggeredAbility(
-                    trigger="enchanted_creature_dealt_damage",
+                    event=Event.DEALT_DAMAGE, predicate=IsHost(),
                     effect=DestroyEnchantedPermanent(),
                 ),
             ),
@@ -2655,7 +2656,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Seedship Agrarian", "{3}{G}", 3, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="becomes_tapped",
+                    event=Event.BECOMES_TAPPED, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,

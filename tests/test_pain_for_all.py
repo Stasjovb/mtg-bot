@@ -124,7 +124,7 @@ def test_aura_fires_when_enchanted_creature_takes_damage():
 
 def test_pain_for_all_printing_has_both_triggers():
     p = EOE_SPELLS["Pain for All"]
-    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab, p) for ab in p.triggered_abilities}
     assert "etb" in triggers
     assert "enchanted_creature_dealt_damage" in triggers
 

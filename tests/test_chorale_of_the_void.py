@@ -141,6 +141,6 @@ def test_chorale_end_step_sacrifice_integration():
 
 def test_chorale_printing_has_both_triggers():
     c = EOE_SPELLS["Chorale of the Void"]
-    triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab, c) for ab in c.triggered_abilities}
     assert "enchanted_creature_attacks" in triggers
     assert "beginning_of_end_step" in triggers

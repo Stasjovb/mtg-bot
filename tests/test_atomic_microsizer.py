@@ -118,7 +118,7 @@ def test_equipment_attacks_trigger_fires():
 
 def test_microsizer_printing_has_both_triggers():
     m = EOE_SPELLS["Atomic Microsizer"]
-    triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab, m) for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert "equipped_creature_attacks" in triggers
     # Printed +1/+0 bonus preserved from stand-in.

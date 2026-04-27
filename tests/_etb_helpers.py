@@ -46,6 +46,7 @@ from mtg_bot.effects.predicates import (
     HasSubtype,
     IsArtifact,
     IsCreature,
+    IsHost,
     IsLand,
     IsNontoken,
     IsSelf,
@@ -170,19 +171,59 @@ def _legacy_key_for_leaves(ability) -> str | None:
     return None
 
 
-def _legacy_key_for_attacks(ability) -> str | None:
+def _legacy_key_for_attacks(ability, source_printing=None) -> str | None:
     """Map a predicate-style ATTACKS ability back to its legacy key.
 
-    Phase 5 only migrated the bare ``IsSelf()`` shape ("this creature
-    attacks") — the aura/equipment relational variants
+    Phase 5 migrated the bare ``IsSelf()`` shape ("this creature
+    attacks"); phase 7 migrated the aura/equipment relational variants
     ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
-    stay on the legacy string-key path until a ``Host`` predicate
-    lands.
+    via the new ``IsHost(subject="attacker")`` predicate. The
+    aura-vs-equipment distinction is determined by the source
+    printing's type (``is_aura`` vs Equipment subtype) since both
+    relational forms share the same predicate shape.
     """
     leaves = _flatten_and(ability.predicate)
     types = {type(leaf) for leaf in leaves}
     if IsSelf in types and len(leaves) == 1:
         return "attacks"
+    # Aura/Equipment "Whenever enchanted/equipped creature attacks":
+    # IsHost(subject="attacker") on the aura/Equipment as the source.
+    if (
+        len(leaves) == 1
+        and isinstance(leaves[0], IsHost)
+        and leaves[0].subject == "attacker"
+    ):
+        if source_printing is not None and source_printing.is_aura:
+            return "enchanted_creature_attacks"
+        return "equipped_creature_attacks"
+    return None
+
+
+def _legacy_key_for_becomes_tapped(ability) -> str | None:
+    """Map a predicate-style BECOMES_TAPPED ability back to its legacy
+    key.
+
+    Two shapes:
+      - ``IsSelf()`` → ``becomes_tapped`` ("this creature becomes
+        tapped" on the tapped permanent itself).
+      - ``IsHost()`` → ``enchanted_permanent_becomes_tapped`` (Aura
+        "whenever enchanted permanent becomes tapped" — Cryoshatter).
+    """
+    leaves = _flatten_and(ability.predicate)
+    if len(leaves) == 1 and isinstance(leaves[0], IsSelf):
+        return "becomes_tapped"
+    if len(leaves) == 1 and isinstance(leaves[0], IsHost):
+        return "enchanted_permanent_becomes_tapped"
+    return None
+
+
+def _legacy_key_for_dealt_damage(ability) -> str | None:
+    """Map a predicate-style DEALT_DAMAGE ability back to its legacy
+    key. Phase 7 migrated the aura ``enchanted_creature_dealt_damage``
+    family via ``IsHost()`` (Cryoshatter, Pain for All)."""
+    leaves = _flatten_and(ability.predicate)
+    if len(leaves) == 1 and isinstance(leaves[0], IsHost):
+        return "enchanted_creature_dealt_damage"
     return None
 
 
@@ -215,14 +256,20 @@ def _legacy_key_for_player_phase(ability, your_key: str) -> str | None:
     return None
 
 
-def _legacy_key_for_predicate(ability) -> str | None:
+def _legacy_key_for_predicate(ability, source_printing=None) -> str | None:
     """Return the legacy string key a predicate-style ability is
     structurally equivalent to, or ``None`` if no mapping applies.
 
     The mapping mirrors the rewriting done in
     ``src/mtg_bot/cards/parser/triggers.py``'s
     ``_PREDICATE_TRIGGER_PHRASES`` table and the static-card
-    migrations from phases 2, 4, 5, and 6.
+    migrations from phases 2, 4, 5, 6, and 7.
+
+    ``source_printing`` is consulted only by the ATTACKS branch to
+    distinguish aura ``enchanted_creature_attacks`` from equipment
+    ``equipped_creature_attacks`` (both share the same predicate
+    shape ``IsHost(subject="attacker")``); pass ``None`` and ATTACKS
+    via IsHost defaults to the equipment key.
     """
     if ability.event is None or ability.predicate is None:
         return None
@@ -233,7 +280,11 @@ def _legacy_key_for_predicate(ability) -> str | None:
     if ability.event is Event.LEAVES_BATTLEFIELD:
         return _legacy_key_for_leaves(ability)
     if ability.event is Event.ATTACKS:
-        return _legacy_key_for_attacks(ability)
+        return _legacy_key_for_attacks(ability, source_printing)
+    if ability.event is Event.BECOMES_TAPPED:
+        return _legacy_key_for_becomes_tapped(ability)
+    if ability.event is Event.DEALT_DAMAGE:
+        return _legacy_key_for_dealt_damage(ability)
     if ability.event is Event.BEGINNING_OF_UPKEEP:
         return _legacy_key_for_player_phase(ability, "beginning_of_upkeep")
     if ability.event is Event.BEGINNING_OF_COMBAT:
@@ -243,14 +294,19 @@ def _legacy_key_for_predicate(ability) -> str | None:
     return None
 
 
-def _legacy_or_inferred_key(ability) -> str:
+def _legacy_or_inferred_key(ability, source_printing=None) -> str:
     """Return ``ability.trigger`` if non-empty, else infer the legacy
     key from the predicate-style fields. Tests that built sets of
     trigger keys for membership checks use this so the assertion logic
-    survives the predicate migration intact."""
+    survives the predicate migration intact.
+
+    Pass ``source_printing`` (the ``CardPrinting`` whose
+    ``triggered_abilities`` contains the ability) when the inference
+    needs to disambiguate aura-vs-equipment shapes — currently just
+    the ATTACKS-via-IsHost branch."""
     if ability.trigger:
         return ability.trigger
-    inferred = _legacy_key_for_predicate(ability)
+    inferred = _legacy_key_for_predicate(ability, source_printing)
     return inferred or ""
 
 

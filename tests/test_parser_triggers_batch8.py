@@ -58,23 +58,29 @@ _ARTIFACT_ENTERS_PRED = IsArtifact() & Controlled(YOU) & ~IsSelf()
 def test_parse_trigger_phrase_recognizes_becomes_tapped():
     # ``this creature becomes tapped`` is the most-common
     # becomes-tapped phrasing on EoE creatures (Starfighter Pilot,
-    # Nanoform Sentinel, Astrobiologist, Sterling Hippogriff, etc.)
-    # and resolves to the engine's ``becomes_tapped`` key.
+    # Nanoform Sentinel, Astrobiologist, Sterling Hippogriff, etc.).
+    # Phase 7 migrated this phrase to the predicate-style path:
+    # ``(Event.BECOMES_TAPPED, IsSelf())``.
     assert _parse_trigger_phrase(
         "this creature becomes tapped"
-    ) == "becomes_tapped"
+    ) is None
+    assert _parse_predicate_trigger_phrase(
+        "this creature becomes tapped"
+    ) == (Event.BECOMES_TAPPED, IsSelf())
 
 
 def test_becomes_tapped_end_to_end():
     # Composes the new condition with the existing
     # ``put a +1/+1 counter on this creature`` effect — both halves
-    # run through the unified line parser.
+    # run through the unified line parser. After the phase-7
+    # migration the parsed ability is on the predicate path:
+    # ``event=Event.BECOMES_TAPPED, predicate=IsSelf()``.
     parsed = _parse_triggered_ability_line(
         "Whenever this creature becomes tapped, "
         "put a +1/+1 counter on this creature."
     )
     assert parsed == TriggeredAbility(
-        trigger="becomes_tapped",
+        event=Event.BECOMES_TAPPED, predicate=IsSelf(),
         effect=PutPlusOneCounterOnSelf(amount=1),
     )
 

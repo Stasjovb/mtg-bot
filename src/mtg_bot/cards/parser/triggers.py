@@ -32,9 +32,16 @@ Two trigger shapes coexist during the predicate-trigger migration:
   turn-structure trigger is wired directly in the static-card
   registries) so this module's parser tables stay unchanged for that
   phase, but the engine-side predicate dispatch now subsumes the
-  string-key path. The aura/equipment relational variants
-  ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
-  stay on the legacy string-key path until a ``Host`` predicate lands.
+  string-key path. Phase 7 migrated the BECOMES_TAPPED family
+  (this-creature-becomes-tapped — parsed from oracle text — plus the
+  aura ``enchanted_permanent_becomes_tapped`` variant which is only
+  built statically) and the aura/equipment relational ATTACKS variants
+  (``enchanted_creature_attacks``, ``equipped_creature_attacks``) plus
+  the aura DEALT_DAMAGE family (``enchanted_creature_dealt_damage``)
+  — all built directly in static-card registries via the new
+  ``IsHost`` predicate, so the parser tables grow only by the
+  ``this creature becomes tapped`` entry moving from
+  ``_TRIGGER_PHRASES`` to ``_PREDICATE_TRIGGER_PHRASES``.
 
 Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
@@ -93,11 +100,6 @@ _TRIGGER_PHRASES: dict[str, str] = {
     # on the battlefield to trigger).
     "you sacrifice another creature or artifact":
         "sacrifice_creature_or_artifact",
-    # Becomes-tapped trigger. ``Whenever this creature becomes tapped``
-    # is the most-common phrasing on EoE (Starfighter Pilot, Nanoform
-    # Sentinel, Astrobiologist, etc.) and maps to the engine's
-    # ``becomes_tapped`` key.
-    "this creature becomes tapped": "becomes_tapped",
     # Combat-damage-to-player trigger. ``Whenever this creature deals
     # combat damage to a player`` (Illvoi Infiltrator) is the simplest
     # form on EoE and maps to the engine's ``combat_damage_to_player``
@@ -169,6 +171,14 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # subject default. Phase 5 migrated every ``trigger="attacks"``
     # static card to this predicate shape.
     "this creature attacks": (Event.ATTACKS, IsSelf()),
+    # ``Whenever this creature becomes tapped`` — the source's own
+    # tap (Starfighter Pilot, Nanoform Sentinel, Astrobiologist,
+    # Sterling Hippogriff, etc.). ``Event.BECOMES_TAPPED`` carries a
+    # single subject ``"obj"``; ``IsSelf()`` resolves it via the
+    # single-subject default. Phase 7 migrated every
+    # ``trigger="becomes_tapped"`` static card to this predicate
+    # shape.
+    "this creature becomes tapped": (Event.BECOMES_TAPPED, IsSelf()),
     # ``Whenever a creature you control with a +1/+1 counter on it
     # dies`` (Meltstrider Eulogist). Predicate: another creature you
     # control bearing a +1/+1 counter — the firing source's own death
