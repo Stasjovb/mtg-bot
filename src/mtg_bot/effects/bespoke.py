@@ -1123,6 +1123,25 @@ class AtomicMicrosizerAttackEffect(Effect):
         if obj is None:
             return
         obj.temp_unblockable = True
+        # Layer-7a "set base P/T to 1/1 UEOT" — write a registry
+        # entry so timestamp ordering with other layer-7a effects
+        # (Lignify, manland animation, Wandering Fumarole switch)
+        # is correct: the most recent set_base_pt wins, regardless
+        # of which writer's lifetime is longer. The legacy
+        # ``temp_base_pt_override`` field is mirrored as a
+        # write-through cache for any non-registry reader.
+        src = state.resolving_source
+        source_id = src.id if src is not None else obj.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=7, sublayer=1, kind="set_base_pt",
+            target_id=obj.id,
+            params=(1, 1),
+            expires_at="cleanup",
+            description=(
+                f"{obj.printing.name} has base P/T 1/1 UEOT"
+            ),
+        )
         obj.temp_base_pt_override = (1, 1)
         state.log.append(
             f"{obj.printing.name} can't be blocked this turn and has "

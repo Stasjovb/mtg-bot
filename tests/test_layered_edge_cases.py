@@ -468,6 +468,29 @@ def test_lignify_then_newer_set_base_pt_newer_wins():
     assert effective_toughness(state, bear) == 1
 
 
+def test_lignify_then_atomic_microsizer_real_card_newer_wins():
+    """End-to-end with a real card: Lignify attaches first, then
+    Atomic Microsizer's 'becomes 1/1 UEOT' resolves. Verify the
+    newer Microsizer effect wins via registry timestamp ordering."""
+    from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, bear)
+    assert effective_power(state, bear) == 0
+    assert effective_toughness(state, bear) == 4
+
+    # Atomic Microsizer's effect resolves on the bear, AFTER Lignify.
+    state.resolving_source = aura  # any source for source_id
+    AtomicMicrosizerAttackEffect().resolve(
+        state, controller_id=0, targets=(("creature", bear.id),),
+    )
+
+    assert effective_power(state, bear) == 1
+    assert effective_toughness(state, bear) == 1
+
+
 # =====================================================================
 # F. Lifetime / expiration corners
 # =====================================================================
