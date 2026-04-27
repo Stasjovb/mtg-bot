@@ -23,10 +23,13 @@ from mtg_bot.cards.base import (
     DealDamageEachOpponent,
     DealDamageToTargetCreature,
     DestroyTargetArtifact,
+    DestroyTargetArtifactOrTappedCreature,
     DestroyTargetCreature,
     DestroyTargetLand,
     DestroyTargetNoncreaturePermanent,
+    DiscardSelf,
     DrawCards,
+    EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
     ExileAllArtifactsWithManaValueAtMost,
@@ -48,6 +51,7 @@ from mtg_bot.cards.base import (
     SelfMill,
     Sequence,
     Surveil,
+    TapTargetArtifactOrCreature,
     TargetOpponentLosesLife,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
@@ -344,6 +348,52 @@ _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT = re.compile(
 _OPTIONAL_SAC_ANOTHER_FOR_EFFECT = re.compile(
     r"^you may sacrifice another creature or artifact\. If you do, (.+)$"
 )
+# "Each opponent discards a card" / "Each opponent discards N cards" —
+# untargeted opponent-wide discard (Virus Beetle's ETB and any other
+# wide-discard surface). The amount tail accepts the article ``a`` for
+# the singular form (Scryfall's printed shape — every EoE card uses
+# ``a card``) plus bare digits and spelled-out small cardinals so a
+# future ``each opponent discards two cards`` line parses without
+# further grammar work. ``a`` collapses to count=1 in the handler.
+_EACH_OPPONENT_DISCARDS = re.compile(
+    rf"^each opponent discards (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
+# "Exile target creature or Spacecraft." — Gravkill's printed surface.
+# The static ``cards/eoe_spells.py`` Gravkill entry intentionally fudges
+# this to ``ExileTargetCreature()`` because Spacecraft aren't yet a
+# legal target type for the engine's exile path; the parser mirrors
+# that fudge to stay in parity. When the engine grows a target kind
+# that covers Spacecraft, both sides will need to switch in lockstep
+# to a Spacecraft-aware engine class.
+_EXILE_TARGET_CREATURE_OR_SPACECRAFT = re.compile(
+    r"^exile target creature or Spacecraft$"
+)
+# "Destroy target artifact or tapped creature." — Radiant Strike's
+# destroy clause. Maps to ``DestroyTargetArtifactOrTappedCreature()``
+# whose ``legal_targets`` filters to artifacts (any) or creatures that
+# are currently tapped. The "permanent" target kind is used because
+# either an artifact or a creature can be hit; legality is policed by
+# the engine class's predicate.
+_DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE = re.compile(
+    r"^destroy target artifact or tapped creature$"
+)
+# "Tap target artifact or creature." — Mental Modulation's middle
+# clause and any future card that ships the same surface form. Maps to
+# ``TapTargetArtifactOrCreature()``. No-op if the chosen target is
+# already tapped at resolution.
+_TAP_TARGET_ARTIFACT_OR_CREATURE = re.compile(
+    r"^tap target artifact or creature$"
+)
+# "Discard a card" / "you discard a card" / "you discard N cards" —
+# controller-discards. The bare ``discard a card`` surface is what
+# appears post-compound-split for ``draw a card, then discard a card``
+# (Mechan Navigator's becomes-tapped trigger); the ``you `` prefix
+# variant is included for symmetry with ``you gain N life`` /
+# ``you lose N life``. Maps to ``DiscardSelf(amount=N)``. ``a``
+# collapses to amount=1 in the handler.
+_DISCARD_N_CARDS = re.compile(
+    rf"^(?:you )?discard (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
 
 
 def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
@@ -424,20 +474,33 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
 
 def _parse_compound_effect(phrase: str) -> Effect | None:
     """Try to parse ``phrase`` as a compound effect: two or more
-    primitive effects joined by `` and ``.
+    primitive effects joined by `` and `` or by ``, then ``.
 
-    Splits on `` and ``, parses each piece via ``_parse_effect``, and
-    returns a ``Sequence`` only if EVERY piece parses cleanly.
-    Returns ``None`` if the phrase contains no `` and ``, or if any
-    piece fails to parse — never falls back to single-effect parsing
-    on the original (the caller does that).
+    Splits on whichever joiner appears (`` and `` is preferred — see
+    below), parses each piece via ``_parse_effect``, and returns a
+    ``Sequence`` only if EVERY piece parses cleanly. Returns ``None``
+    if the phrase contains neither joiner, or if any piece fails to
+    parse — never falls back to single-effect parsing on the original
+    (the caller does that).
 
     The strict all-or-nothing rule keeps us from accidentally
-    consuming `` and ``-bearing single effects (e.g. a future
-    ``destroy all artifacts and creatures`` whose `` and `` is part
-    of one effect's grammar): if a split-and-parse attempt fails on
-    any piece, we punt and let the caller try the single-effect
-    grammar on the unsplit phrase.
+    consuming joiner-bearing single effects (e.g. the
+    ``search your library for an artifact card, reveal it, put it into
+    your hand, then shuffle`` artifact-tutor primitive whose ``, then
+    `` is part of one effect's surface): if a split-and-parse attempt
+    fails on any piece, we punt and let the caller try the single-
+    effect grammar on the unsplit phrase. The artifact-tutor primitive
+    in particular survives because its ``shuffle`` half doesn't parse
+    as a standalone effect, so the ``, then `` split rejects and the
+    full-phrase regex wins.
+
+    Joiner precedence: `` and `` is tried first; only if that joiner
+    is absent do we attempt a `` , then `` split. The order matters
+    because the two joiners can co-occur (a future ``draw a card and
+    you gain 1 life, then discard a card`` would have both) and
+    splitting on the leftmost-occurring joiner preserves the same
+    left-to-right resolve order the engine expects from ``Sequence``
+    regardless of which joiner the printing chose.
 
     A compound where two or more sub-effects each require a target is
     also rejected (returns ``None``) — ``Sequence`` only supports a
@@ -445,9 +508,12 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     pipeline is single-choice). A multi-target spell needs a
     different combinator and isn't claimed by this slice.
     """
-    if " and " not in phrase:
+    if " and " in phrase:
+        pieces = phrase.split(" and ")
+    elif ", then " in phrase:
+        pieces = phrase.split(", then ")
+    else:
         return None
-    pieces = phrase.split(" and ")
     parsed: list[Effect] = []
     for piece in pieces:
         eff = _parse_effect(piece)
@@ -517,6 +583,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     if _COUNTER_TARGET_SPELL.match(phrase) is not None:
         return CounterTargetSpell()
+    # ``exile target creature or Spacecraft`` — Gravkill's printed
+    # surface. Tried BEFORE the bare ``exile target creature`` regex so
+    # the Spacecraft-tail variant wins. Both produce the same engine
+    # class today (``ExileTargetCreature()``) — the static side fudges
+    # the same way pending engine support for Spacecraft as a target
+    # kind. When the engine grows that, this primitive should switch to
+    # a Spacecraft-aware engine class in lockstep with the static.
+    if _EXILE_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
+        return ExileTargetCreature()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:
@@ -535,6 +610,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
+    m = _EACH_OPPONENT_DISCARDS.match(phrase)
+    if m is not None:
+        # ``each opponent discards a card`` / ``each opponent discards
+        # N cards`` — controller-untargeted opponent-wide discard.
+        # ``a`` collapses to count=1; digits and spelled-out small
+        # cardinals go through ``_parse_amount``.
+        token = m.group(1)
+        count = 1 if token == "a" else _parse_amount(token)
+        return EachOpponentDiscards(count=count)
     token_eff = _parse_create_token_effect(phrase)
     if token_eff is not None:
         return token_eff
@@ -550,6 +634,23 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyTargetLand()
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
+    if _DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE.match(phrase) is not None:
+        # ``destroy target artifact or tapped creature`` — Radiant
+        # Strike's destroy clause. The engine class's
+        # ``legal_targets`` filters to artifacts (any) plus creatures
+        # currently tapped, and re-checks the predicate at resolution
+        # in case a between-cast-and-resolve untap removes the tapped
+        # creature from the legal pool. Tried after the bare
+        # ``destroy target artifact`` regex would have matched (which
+        # this surface text doesn't) so the more-specific shape only
+        # claims phrases that actually carry the ``or tapped
+        # creature`` tail.
+        return DestroyTargetArtifactOrTappedCreature()
+    if _TAP_TARGET_ARTIFACT_OR_CREATURE.match(phrase) is not None:
+        # ``tap target artifact or creature`` — Mental Modulation's
+        # middle clause and any future card with the same surface.
+        # No-op if the chosen target is already tapped at resolution.
+        return TapTargetArtifactOrCreature()
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))
@@ -591,6 +692,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _LOSE_N_LIFE.match(phrase)
     if m is not None:
         return LoseLife(amount=int(m.group(1)))
+    m = _DISCARD_N_CARDS.match(phrase)
+    if m is not None:
+        # ``discard a card`` / ``you discard a card`` / ``discard N
+        # cards`` — controller-discards. Surfaces inside compound
+        # ``draw a card, then discard a card`` (Mechan Navigator) and
+        # any future card that prints a bare discard clause. ``a``
+        # collapses to amount=1; digits and spelled-out small
+        # cardinals go through ``_parse_amount``.
+        token = m.group(1)
+        amount = 1 if token == "a" else _parse_amount(token)
+        return DiscardSelf(amount=amount)
     m = _YOU_MAY_PAY_THEN_EFFECT.match(phrase)
     if m is not None:
         # Parse the inner-effect phrase recursively. The inner phrase is
