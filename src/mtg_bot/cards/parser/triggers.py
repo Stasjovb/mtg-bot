@@ -64,6 +64,38 @@ _TRIGGER_PHRASES: dict[str, str] = {
     # to the engine's ``creature_you_control_with_counter_dies`` key.
     "a creature you control with a +1/+1 counter on it dies":
         "creature_you_control_with_counter_dies",
+    # Becomes-tapped trigger. ``Whenever this creature becomes tapped``
+    # is the most-common phrasing on EoE (Starfighter Pilot, Nanoform
+    # Sentinel, Astrobiologist, etc.) and maps to the engine's
+    # ``becomes_tapped`` key.
+    "this creature becomes tapped": "becomes_tapped",
+    # Leaves-the-battlefield trigger. ``When this creature leaves the
+    # battlefield`` (Anticausal Vestige) maps to the engine's
+    # ``leaves_battlefield`` key. The compound ``enters or leaves``
+    # form (Cryogen Relic) is a different shape that this single-
+    # phrase entry intentionally does not claim.
+    "this creature leaves the battlefield": "leaves_battlefield",
+    # Combat-damage-to-player trigger. ``Whenever this creature deals
+    # combat damage to a player`` (Illvoi Infiltrator) is the simplest
+    # form on EoE and maps to the engine's ``combat_damage_to_player``
+    # key. The broader ``a creature you control deals combat damage``
+    # variant is a different engine key and stays out of scope.
+    "this creature deals combat damage to a player":
+        "combat_damage_to_player",
+    # Blocks-creature-with-flying trigger. ``Whenever this creature
+    # blocks a creature with flying`` (Skystinger) maps to the
+    # engine's ``blocks_creature_with_flying`` key.
+    "this creature blocks a creature with flying":
+        "blocks_creature_with_flying",
+    # Artifact-enters-you-control trigger. The engine collapses the
+    # ``a``-vs-``another`` distinction in
+    # ``_fire_artifact_enters_triggers`` (the source object is excluded
+    # from the firing loop), so both surface phrases map to the single
+    # ``artifact_enters_you_control`` key. Mm'menon, Uthros Exile uses
+    # ``an artifact you control enters``; Mechan Assembler and
+    # Oreplate Pangolin use ``another artifact you control enters``.
+    "an artifact you control enters": "artifact_enters_you_control",
+    "another artifact you control enters": "artifact_enters_you_control",
 }
 
 
