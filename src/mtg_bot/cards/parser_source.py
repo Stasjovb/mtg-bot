@@ -7,11 +7,21 @@ unrecognized clause are silently skipped — only fully-parsed cards
 appear in ``claimed_names`` and gate against the static registry
 in ``tests/test_parser_parity.py``.
 
-Slice 1 supports two clause forms:
+Slice 1's grammar:
 
-- ``Flying`` (a keyword line) → contributes ``keywords={"flying"}``.
-- ``When this creature enters, it deals N damage to any target.`` →
-  contributes a single ETB-triggered ``DealDamageAnyTarget`` ability.
+- ``Flying`` (keyword line, exact match) → contributes
+  ``keywords={"flying"}``.
+- A triggered-ability line of the form
+  ``When/Whenever <condition>, <effect>.`` is decomposed into a
+  trigger condition and an effect, each handled by its own parser.
+  Adding a new condition or effect grows its respective grammar
+  without touching the line-level pattern.
+
+Currently recognized:
+
+- Trigger conditions: ``this creature enters`` → ``"etb"``.
+- Effects: ``it deals N damage to any target`` →
+  ``DealDamageAnyTarget(amount=N)``.
 
 Cards whose oracle text uses only those clauses get claimed. Today
 that is exactly one EoE card: Nebula Dragon.
@@ -27,6 +37,7 @@ from pathlib import Path
 from mtg_bot.cards.base import (
     CardPrinting,
     DealDamageAnyTarget,
+    Effect,
     TriggeredAbility,
     make_creature,
 )
@@ -51,9 +62,56 @@ class _ParsedClause:
 
 _KEYWORD_LINES: dict[str, str] = {"Flying": "flying"}
 
-_ETB_DAMAGE_TO_ANY_TARGET = re.compile(
-    r"^When this creature enters, it deals (\d+) damage to any target\.$"
+
+# Triggered-ability parsing decomposes a line of the form
+# ``When/Whenever <condition>, <effect>.`` into a condition phrase and
+# an effect phrase, each handled by its own parser. Adding a new
+# trigger condition or a new effect grows its respective grammar
+# without touching the line-level regex.
+
+_TRIGGERED_ABILITY_LINE = re.compile(
+    r"^(?:When|Whenever) (.+?), (.+)\.$"
 )
+
+
+# Trigger-condition phrases → engine-level trigger key.
+_TRIGGER_PHRASES: dict[str, str] = {
+    "this creature enters": "etb",
+}
+
+
+def _parse_trigger_phrase(phrase: str) -> str | None:
+    return _TRIGGER_PHRASES.get(phrase.strip())
+
+
+# Effect phrases — start with damage. ``it`` resolves to the source
+# permanent and is treated as syntactic sugar; once the parser tracks
+# more pronouns / target referents we can promote it to a dedicated
+# pronoun resolver.
+_DEAL_DAMAGE_ANY_TARGET = re.compile(
+    r"^it deals (\d+) damage to any target$"
+)
+
+
+def _parse_effect_phrase(phrase: str) -> Effect | None:
+    phrase = phrase.strip()
+    m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
+    if m is not None:
+        return DealDamageAnyTarget(amount=int(m.group(1)))
+    return None
+
+
+def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
+    m = _TRIGGERED_ABILITY_LINE.match(line)
+    if m is None:
+        return None
+    trigger = _parse_trigger_phrase(m.group(1))
+    if trigger is None:
+        return None
+    effect = _parse_effect_phrase(m.group(2))
+    if effect is None:
+        return None
+    return TriggeredAbility(trigger=trigger, effect=effect)
 
 _SUPERTYPES = frozenset({"Basic", "Legendary", "Snow", "World", "Ongoing"})
 
@@ -90,14 +148,9 @@ def _parse_clause(line: str) -> _ParsedClause | None:
     line = line.strip()
     if line in _KEYWORD_LINES:
         return _ParsedClause(keyword=_KEYWORD_LINES[line])
-    m = _ETB_DAMAGE_TO_ANY_TARGET.match(line)
-    if m is not None:
-        return _ParsedClause(
-            trigger=TriggeredAbility(
-                trigger="etb",
-                effect=DealDamageAnyTarget(amount=int(m.group(1))),
-            )
-        )
+    triggered = _parse_triggered_ability_line(line)
+    if triggered is not None:
+        return _ParsedClause(trigger=triggered)
     return None
 
 

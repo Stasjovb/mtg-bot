@@ -9,6 +9,9 @@ from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
     _parse_clause,
+    _parse_effect_phrase,
+    _parse_trigger_phrase,
+    _parse_triggered_ability_line,
     _parse_type_line,
 )
 
@@ -50,6 +53,68 @@ def test_parse_clause_returns_none_for_unknown_line():
     assert _parse_clause("Trample") is None
     assert _parse_clause("This creature has menace.") is None
     assert _parse_clause("") is None
+
+
+# ---------- compositional triggered-ability parsing ----------
+
+def test_parse_trigger_phrase_recognizes_etb():
+    assert _parse_trigger_phrase("this creature enters") == "etb"
+
+
+def test_parse_trigger_phrase_strips_whitespace():
+    assert _parse_trigger_phrase("  this creature enters  ") == "etb"
+
+
+def test_parse_trigger_phrase_returns_none_for_unknown():
+    assert _parse_trigger_phrase("you draw a card") is None
+    assert _parse_trigger_phrase("") is None
+
+
+def test_parse_effect_phrase_recognizes_deal_damage_any_target():
+    assert _parse_effect_phrase(
+        "it deals 2 damage to any target"
+    ) == DealDamageAnyTarget(amount=2)
+
+
+def test_parse_effect_phrase_returns_none_for_unknown():
+    assert _parse_effect_phrase("you gain 2 life") is None
+    assert _parse_effect_phrase("") is None
+
+
+def test_parse_triggered_ability_line_full_etb_damage():
+    result = _parse_triggered_ability_line(
+        "When this creature enters, it deals 5 damage to any target."
+    )
+    assert result == TriggeredAbility(
+        trigger="etb", effect=DealDamageAnyTarget(amount=5)
+    )
+
+
+def test_parse_triggered_ability_line_accepts_whenever():
+    """The line-level pattern matches both ``When`` and ``Whenever``;
+    individual condition and effect parsers decide whether the
+    surface pieces are recognized."""
+    # No "Whenever this creature enters" trigger phrase, but the
+    # line-level structural match should still be tried — failure
+    # comes from the condition parser, not the line regex.
+    assert _parse_triggered_ability_line(
+        "Whenever you draw a card, it deals 1 damage to any target."
+    ) is None  # condition phrase unknown
+
+
+def test_parse_triggered_ability_line_rejects_non_trigger_lines():
+    assert _parse_triggered_ability_line("Flying") is None
+    assert _parse_triggered_ability_line(
+        "This creature has menace."
+    ) is None
+
+
+def test_parse_triggered_ability_line_rejects_unknown_effect():
+    """Trigger condition parses, effect doesn't → line as a whole
+    fails (no fallback)."""
+    assert _parse_triggered_ability_line(
+        "When this creature enters, you gain 2 life."
+    ) is None
 
 
 # ---------- _parse_type_line ----------
