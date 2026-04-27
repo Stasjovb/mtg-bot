@@ -21,8 +21,11 @@ Coverage targets:
     not be hard-coded to two modes).
   - Synthetic modal spell with at least one unrecognized mode
     returns ``None``.
-  - The ``Choose one or both`` shape (Scour for Scrap) is NOT claimed
-    by this branch — out of scope this batch.
+  - The ``Choose one or both`` shape (Scour for Scrap) is recognized
+    (extended in a follow-up batch) and produces a ``ModalChooseOne``
+    with ``or_both=True`` so the engine routes mode-pick through
+    the agent's ``choose_modes`` (plural) hook. See
+    ``tests/test_parser_modal_extensions.py`` for happy-path coverage.
   - The ``Choose two`` shape is NOT claimed by this branch — out of
     scope this batch.
   - A header without bullet lines (or with only one mode) is rejected.
@@ -156,18 +159,21 @@ def test_modal_with_first_mode_unrecognized_returns_none():
 
 # ---------- shape rejections (variants out of scope) ----------
 
-def test_choose_one_or_both_header_is_not_claimed_by_this_branch():
-    # `Choose one or both` is a different combinator
-    # (`ModalChooseOne(or_both=True)`) and out of scope this batch.
-    # The shape must NOT be silently claimed as a plain modal — the
-    # spell must fall through to the Sequence path (and from there
-    # to None, since the header doesn't parse as a spell effect).
+def test_choose_one_or_both_header_is_claimed_with_or_both_flag():
+    # `Choose one or both` is supported via the same modal helper —
+    # the resulting ``ModalChooseOne`` carries ``or_both=True`` so
+    # the engine routes mode-pick through ``choose_modes`` (plural).
+    # See tests/test_parser_modal_extensions.py for additional
+    # coverage of the happy-path and reject paths.
     text = (
         "Choose one or both —\n"
         "• Destroy target creature.\n"
         "• Draw a card."
     )
-    assert _parse_spell_oracle_text(text, "Bogus Both") is None
+    assert _parse_spell_oracle_text(text, "Bogus Both") == ModalChooseOne(
+        modes=(DestroyTargetCreature(), DrawCards(amount=1)),
+        or_both=True,
+    )
 
 
 def test_choose_two_header_is_not_claimed_by_this_branch():

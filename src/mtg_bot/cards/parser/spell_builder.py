@@ -22,12 +22,15 @@ stream and surfaced separately on the ``CardPrinting`` via the
 scans the original text for those rules; ``_parse_spell_oracle_
 text`` drops the matching clauses before combinator dispatch.
 
-The modal branch handles only the simplest Scryfall printed shape:
-a header line of exactly ``Choose one —`` followed by two or
-more mode lines that each begin with ``• `` (bullet + space)
+The modal branch handles two Scryfall printed header shapes:
+``Choose one —`` (single-mode pick) and ``Choose one or both —``
+(controller may resolve either mode alone or both). Each is followed
+by two or more mode lines that begin with ``• `` (bullet + space)
 and contain a single sentence parseable by the unified spell-effect
-grammar. ``Choose one or both`` (Scour for Scrap), ``Choose two``,
-multi-line modes, and ``up to two target`` mode-counts are out of
+grammar. The ``Choose one or both`` shape constructs
+``ModalChooseOne(or_both=True)`` so the engine routes mode-pick
+through the agent's ``choose_modes`` (plural) hook. ``Choose two``,
+multi-line modes, and ``up to two target`` mode-counts remain out of
 scope; the parser declines those spells until the engine grows the
 matching machinery.
 """
@@ -53,13 +56,12 @@ from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 
 
-# Modal spell header: exactly ``Choose one —`` (em-dash, U+2014).
-# We deliberately do NOT accept ``Choose one or both`` here — that is a
-# different combinator (``ModalChooseOne(or_both=True)``) and the
-# only EoE printing of it (Scour for Scrap) has modes whose effects
-# the unified grammar can't parse anyway. ``Choose two`` and other
-# mode-counts are also out of scope this batch.
+# Modal spell headers: ``Choose one —`` (single-mode pick) or
+# ``Choose one or both —`` (controller may resolve either mode alone
+# or both — currently only Scour for Scrap in EoE). Both em-dashes are
+# U+2014. ``Choose two`` and other mode-counts remain out of scope.
 _MODAL_CHOOSE_ONE_HEADER_RE = re.compile(r"^Choose one —$")
+_MODAL_CHOOSE_ONE_OR_BOTH_HEADER_RE = re.compile(r"^Choose one or both —$")
 # A mode line begins with U+2022 BULLET + a single space, then the
 # mode's effect sentence. Trailing period is preserved here and stripped
 # downstream by the spell-effect-phrase normalizer.
@@ -131,12 +133,13 @@ def _parse_void_damage_replacement(
 def _parse_modal_choose_one(
     clauses: list[str], name: str
 ) -> Effect | None:
-    """If ``clauses`` is a ``Choose one —`` modal-spell shape, return the
-    corresponding ``ModalChooseOne`` effect; otherwise ``None``.
+    """If ``clauses`` is a ``Choose one —`` or ``Choose one or both —``
+    modal-spell shape, return the corresponding ``ModalChooseOne``
+    effect; otherwise ``None``.
 
-    Recognized shape (from Scryfall printed text):
+    Recognized shapes (from Scryfall printed text):
 
-      ``Choose one —``  (header — em-dash, U+2014)
+      ``Choose one —``               (or ``Choose one or both —``)
       ``• <mode 1 sentence>``
       ``• <mode 2 sentence>``
       ``• <mode 3 sentence>``  (optional)
@@ -150,12 +153,18 @@ def _parse_modal_choose_one(
     A header by itself (zero mode lines) or a header with exactly one
     mode line is rejected — printed modal spells always have at least
     two modes, and a single-mode "modal" spell would be indistinguishable
-    from a non-modal effect. ``Choose one or both``, ``Choose two``, and
-    other variants don't match the header regex and fall through.
+    from a non-modal effect. ``Choose two`` and other variants don't
+    match either header regex and fall through. The ``or both`` shape
+    constructs ``ModalChooseOne(or_both=True)`` so the engine routes
+    mode-pick through the agent's ``choose_modes`` (plural) hook.
     """
     if not clauses:
         return None
-    if _MODAL_CHOOSE_ONE_HEADER_RE.match(clauses[0]) is None:
+    if _MODAL_CHOOSE_ONE_HEADER_RE.match(clauses[0]) is not None:
+        or_both = False
+    elif _MODAL_CHOOSE_ONE_OR_BOTH_HEADER_RE.match(clauses[0]) is not None:
+        or_both = True
+    else:
         return None
     mode_lines = clauses[1:]
     if len(mode_lines) < 2:
@@ -169,7 +178,7 @@ def _parse_modal_choose_one(
         if eff is None:
             return None
         parsed_modes.append(eff)
-    return ModalChooseOne(modes=tuple(parsed_modes))
+    return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
 
 
 def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
@@ -179,8 +188,9 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     Multi-line: each ``\\n``-separated clause is parsed; clauses are
     combined either via ``ConditionalIfVoid`` (when the second clause
     is a Void replacement of the first damage effect), via
-    ``ModalChooseOne`` (Scryfall ``Choose one —`` shape), or via
-    ``Sequence`` (every clause is a plain spell-effect sentence).
+    ``ModalChooseOne`` (Scryfall ``Choose one —`` or
+    ``Choose one or both —`` shape), or via ``Sequence`` (every clause
+    is a plain spell-effect sentence).
     Leading clauses that are unimplemented spell-keyword preambles
     (e.g. Vote Out's Convoke) are dropped before combinator dispatch
     so they don't fail the per-clause parse. ``This spell costs {N}
@@ -227,11 +237,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
                 return ConditionalIfVoid(
                     then_effect=void_then, else_effect=first
                 )
-    # Modal "Choose one —" shape (header line + ≥2 bullet mode lines).
-    # Tried before the Sequence fallback because Sequence would
-    # uselessly attempt to parse the modal header as a spell-effect
-    # sentence, fail, and return None — losing any modal spell whose
-    # modes are individually parseable.
+    # Modal shape: ``Choose one —`` / ``Choose one or both —`` header
+    # line + ≥2 bullet mode lines. Tried before the Sequence fallback
+    # because Sequence would uselessly attempt to parse the modal
+    # header as a spell-effect sentence, fail, and return None —
+    # losing any modal spell whose modes are individually parseable.
     modal = _parse_modal_choose_one(clauses, name)
     if modal is not None:
         return modal
