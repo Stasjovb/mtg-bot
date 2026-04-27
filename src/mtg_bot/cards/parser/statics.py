@@ -3,10 +3,23 @@
 A static-ability line of the form ``As long as <condition>, this
 creature gets +N/+N[ and has <keyword>].`` becomes a self-scoped
 ``StaticAbility`` with the condition's gate kwarg, the P/T modifier,
-and an optional granted keyword. Today only one condition is wired
-up: ``you control an artifact``. Other "As long as" conditions
-(entered-this-turn, spells-cast counters, etc.) are out of scope and
-intentionally don't match — those cards fall through and get skipped.
+and an optional granted keyword. Recognized conditions today:
+
+* ``you control an artifact`` →
+  ``requires_artifact_you_control=True`` (Cloudsculpt Technician,
+  Gravblade Heavy in EoE).
+* ``you've cast two or more spells this turn`` →
+  ``requires_spells_cast_this_turn=2``. Forward-looking grammar; the
+  one EoE printing that uses this engine gate (Mm'menon, Uthros
+  Exile) has its own surface form with the rider trailing the P/T
+  modifier rather than leading it, so no EoE card is unlocked yet —
+  but the phrasebook entry is here for cards whose oracle text uses
+  the leading-``As long as`` shape.
+
+Other "As long as" conditions (entered-this-turn, void, you-control-a-
+creature, ``it's your turn``, etc.) either have no matching engine
+gate or are pinned as out-of-scope by an existing parser-source test;
+they intentionally don't match and the card falls through.
 """
 
 from __future__ import annotations
@@ -25,10 +38,15 @@ _STATIC_ABILITY_LINE = re.compile(
 
 # Conditions recognized as gates on the static ability. The mapping is
 # from the surface phrase (matched verbatim, no normalization) to the
-# kwargs passed to ``StaticAbility``. Today only one entry — the
-# artifacts-matter rider on Cloudsculpt Technician and Gravblade Heavy.
+# kwargs passed to ``StaticAbility``. Each phrase corresponds 1:1 to a
+# gate field on ``StaticAbility``; if no field exists for a given
+# condition, we deliberately leave it out so the ability falls through
+# and the card gets skipped rather than being silently mis-modeled.
 _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     "you control an artifact": {"requires_artifact_you_control": True},
+    "you've cast two or more spells this turn": {
+        "requires_spells_cast_this_turn": 2
+    },
 }
 
 
