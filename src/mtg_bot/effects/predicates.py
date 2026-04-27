@@ -216,6 +216,37 @@ class IsSelf(Predicate):
 
 
 @dataclass(frozen=True)
+class IsHost(Predicate):
+    """The named subject IS the permanent this source is attached to.
+
+    Models the aura/equipment relational triggers — "Whenever
+    enchanted creature attacks", "Whenever enchanted permanent
+    becomes tapped", "Whenever equipped creature attacks",
+    "Whenever enchanted creature is dealt damage" — where the
+    *source* of the trigger is the aura/Equipment and the firing
+    subject is its host (the enchanted/equipped permanent it's
+    attached to).
+
+    The match keys off ``source.attached_to == subject.id``. When
+    the source isn't attached to anything (``attached_to is None``)
+    or the named subject isn't a permanent with an ``id``, the
+    predicate evaluates false — auras that have lost their host
+    via SBA cleanup never spuriously fire.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        host_id = getattr(source, "attached_to", None)
+        if host_id is None:
+            return False
+        return getattr(obj, "id", None) == host_id
+
+
+@dataclass(frozen=True)
 class IsLand(Predicate):
     """The named subject is a land (``"Land"`` in its card_types)."""
 

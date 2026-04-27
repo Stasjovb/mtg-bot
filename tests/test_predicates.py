@@ -22,6 +22,7 @@ from mtg_bot.effects.predicates import (
     HasSubtype,
     IsArtifact,
     IsCreature,
+    IsHost,
     IsLand,
     IsNontoken,
     IsSelf,
@@ -52,6 +53,8 @@ class FakeObject:
     charge_counters: int = 0
     stun_counters: int = 0
     loyalty_counters: int = 0
+    # Attachment id (an aura/Equipment's host) — None means unattached.
+    attached_to: int | None = None
 
 
 @dataclass
@@ -121,6 +124,67 @@ def test_is_self_with_named_subject():
     subjects = {"blocker": src, "attacker": other}
     assert IsSelf(subject="blocker").matches(FakeState(), subjects, src)
     assert not IsSelf(subject="attacker").matches(FakeState(), subjects, src)
+
+
+# ---------- IsHost ----------
+
+def test_is_host_true_when_source_is_attached_to_subject():
+    """``IsHost`` matches when the firing subject is the permanent the
+    source aura/Equipment is attached to. Models the
+    ``Whenever enchanted creature attacks`` / ``Whenever enchanted
+    permanent becomes tapped`` family — the trigger lives on the aura
+    (the source), but fires against an event whose subject is the
+    aura's host."""
+    host = FakeObject(id=42, controller_id=0)
+    aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
+    assert IsHost().matches(FakeState(), {"obj": host}, aura) is True
+
+
+def test_is_host_false_when_source_is_unattached():
+    """An aura/Equipment not attached to anything (``attached_to is
+    None``) never satisfies ``IsHost`` — the predicate gracefully
+    rejects the no-host case rather than crashing."""
+    aura = FakeObject(id=99, controller_id=0, attached_to=None)
+    other = FakeObject(id=42, controller_id=0)
+    assert IsHost().matches(FakeState(), {"obj": other}, aura) is False
+
+
+def test_is_host_false_when_subject_is_not_the_host():
+    """The aura is attached to one permanent; a different permanent
+    triggers the event. ``IsHost`` rejects the unrelated subject."""
+    host = FakeObject(id=42, controller_id=0)
+    other = FakeObject(id=7, controller_id=0)
+    aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
+    assert IsHost().matches(FakeState(), {"obj": other}, aura) is False
+
+
+def test_is_host_false_when_subject_missing():
+    """No subject in the dispatch mapping → predicate evaluates false
+    rather than raising (matches the IsSelf/IsLand/etc. convention)."""
+    host = FakeObject(id=42, controller_id=0)
+    aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
+    assert IsHost().matches(FakeState(), {}, aura) is False
+
+
+def test_is_host_resolves_named_subject():
+    """``IsHost(subject="attacker")`` against the ATTACKS-event subject
+    mapping picks the named slot, matching the wired-in shape used by
+    the migrated ``enchanted_creature_attacks`` /
+    ``equipped_creature_attacks`` triggers."""
+    host = FakeObject(id=42, controller_id=0)
+    aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
+    subjects = {"attacker": host}
+    assert IsHost(subject="attacker").matches(
+        FakeState(), subjects, aura
+    ) is True
+    # Wrong slot → false.
+    other_subjects = {"attacker": FakeObject(id=7), "blocker": host}
+    assert IsHost(subject="blocker").matches(
+        FakeState(), other_subjects, aura
+    ) is True
+    assert IsHost(subject="attacker").matches(
+        FakeState(), other_subjects, aura
+    ) is False
 
 
 # ---------- type predicates ----------
