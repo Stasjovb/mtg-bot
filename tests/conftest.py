@@ -1,10 +1,10 @@
 """Session-scoped card-source swap driven by ``MTG_BOT_CARD_SOURCE``.
 
 Default (env var unset) leaves the production ``StaticCardSource``
-in place, so ``pytest`` runs unchanged. Set ``MTG_BOT_CARD_SOURCE``
-to ``parser`` or ``parser_with_fallback`` to point the engine at
-the parser source for the duration of the session — used to gate
-suite-wide parser parity.
+in place, so ``pytest`` runs unchanged. Set ``MTG_BOT_CARD_SOURCE=parser``
+to point the engine at the parser source for the session — most
+simulation tests will fail until parser coverage is complete; that's
+the intended acceptance gate.
 """
 
 from __future__ import annotations

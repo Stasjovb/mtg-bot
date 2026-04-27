@@ -4,18 +4,20 @@ Card printings reach the engine through a ``CardSource``. Today's
 production source is ``StaticCardSource``, which delegates to the
 hand-coded printings in ``mtg_bot.cards.registry``. The future
 oracle-text parser will live as a second ``CardSource`` implementation
-(see ``cards.parser_source``).
+(see ``cards.parser_source``) and replace the static source wholesale
+once it reaches parity.
 
 The active source is module-global; ``set_active_source`` swaps it.
 Production code never calls that — it's the seam parity tests use to
 point the engine at an alternative source for the duration of a test
 session.
 
-``FallbackCardSource`` is a development-only decorator: it routes
-claimed names to the parser source and falls back to the static
-source for everything else, so suite-wide parity can grow
-incrementally as parser coverage grows. It is never the production
-source.
+There is intentionally no hybrid / fallback source: the suite-wide
+gate against an alternative source must stay strict. Mixing in the
+static source to paper over gaps would hide real coverage. Per-card
+structural parity (``tests/test_parser_parity.py``) is the
+incremental progress signal; the full suite under
+``MTG_BOT_CARD_SOURCE=parser`` is the final acceptance gate.
 """
 
 from __future__ import annotations
@@ -56,34 +58,6 @@ class StaticCardSource:
         return build_mono_color_deck(color, seed=seed)
 
 
-class FallbackCardSource:
-    """Routes claimed names to ``primary``; falls back to ``fallback``
-    for everything else.
-
-    Deck building is delegated to ``fallback``: the primary source
-    typically covers a partial pool during parser build-out, and decks
-    need to be built from a complete pool so the engine has cards to
-    play with. When the primary's lookups are then exercised, claimed
-    cards return the primary's printing and the rest fall through.
-    """
-
-    def __init__(
-        self, primary: CardSource, fallback: CardSource
-    ) -> None:
-        self.primary = primary
-        self.fallback = fallback
-
-    def get_printings(self) -> dict[str, CardPrinting]:
-        merged = dict(self.fallback.get_printings())
-        merged.update(self.primary.get_printings())
-        return merged
-
-    def build_mono_color_deck(
-        self, color: str, seed: int | None = None
-    ) -> list[str]:
-        return self.fallback.build_mono_color_deck(color, seed=seed)
-
-
 _active_source: CardSource = StaticCardSource()
 
 
@@ -104,23 +78,19 @@ def card_source_from_env(value: str | None) -> CardSource:
     Recognized values:
 
     - ``None`` / ``""`` / ``"static"``: the default ``StaticCardSource``.
-    - ``"parser"``: the bare parser source, strict — cards the parser
-      doesn't claim are simply absent.
-    - ``"parser_with_fallback"``: the parser wrapped by
-      ``FallbackCardSource`` over the static source. Use during
-      parser build-out to keep the suite green while parser coverage
-      is incomplete.
+    - ``"parser"``: the parser source, strict — cards the parser
+      doesn't claim are simply absent, so most simulation tests will
+      fail until parser coverage is complete. That's the intended
+      acceptance gate.
     """
     normalized = (value or "static").lower()
     if normalized == "static":
         return StaticCardSource()
-    from mtg_bot.cards.parser_source import StubParserCardSource
-
     if normalized == "parser":
+        from mtg_bot.cards.parser_source import StubParserCardSource
+
         return StubParserCardSource()
-    if normalized == "parser_with_fallback":
-        return FallbackCardSource(StubParserCardSource(), StaticCardSource())
     raise ValueError(
         f"unknown MTG_BOT_CARD_SOURCE value: {value!r} "
-        f"(expected 'static', 'parser', or 'parser_with_fallback')"
+        f"(expected 'static' or 'parser')"
     )

@@ -36,7 +36,7 @@ class StubParserCardSource:
         self, color: str, seed: int | None = None
     ) -> list[str]:
         raise NotImplementedError(
-            "stub parser source does not build decks; wrap with "
-            "FallbackCardSource(parser, StaticCardSource()) to delegate "
-            "deck building to the static pool during parser build-out"
+            "stub parser source does not build decks. Once the real "
+            "parser claims a deckable pool, implement this against the "
+            "parser's own printings."
         )
