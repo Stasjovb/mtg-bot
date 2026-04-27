@@ -129,6 +129,10 @@ def test_dyadrine_full_attack_trigger_flow():
 
 
 def test_dyadrine_subtypes_and_trigger_wired():
+    from mtg_bot.effects.predicates import Event, IsSelf
     d = EOE_SPELLS["Dyadrine, Synthesis Amalgam"]
     assert "Construct" in d.subtypes
-    assert any(ab.trigger == "attacks" for ab in d.triggered_abilities)
+    assert any(
+        ab.event == Event.ATTACKS and ab.predicate == IsSelf()
+        for ab in d.triggered_abilities
+    )

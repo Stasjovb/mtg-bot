@@ -9,13 +9,17 @@ DIES / LEAVES_BATTLEFIELD families (``"dies"``,
 ``"creature_you_control_with_counter_dies"``,
 ``"nontoken_creature_you_control_with_counter_dies"``,
 ``"another_creature_you_control_dies_or_exiled"``,
-``"your_creature_or_artifact_dies"``).
+``"your_creature_or_artifact_dies"``). Phase 5 migrated the ATTACKS
+family — currently just the ``"attacks"`` self-attack key (the
+aura/equipment ``"enchanted_creature_attacks"`` and
+``"equipped_creature_attacks"`` relational variants stay on the
+string-key path until a ``Host`` predicate lands).
 
 Existing tests that scan trigger-key strings
 (``ab.trigger == "etb"``, ``"landfall" in {ab.trigger ...}``) need
 to recognize either the legacy or the migrated shape, since some
 abilities on a printing may be on the predicate path while others
-are still on the string-key path (ATTACKS, BLOCKS, etc.).
+are still on the string-key path (BLOCKS, deals_combat_damage, etc.).
 
 These helpers paper over the difference for assertion code only —
 production code never calls back into them. They are intentionally
@@ -158,6 +162,22 @@ def _legacy_key_for_leaves(ability) -> str | None:
     return None
 
 
+def _legacy_key_for_attacks(ability) -> str | None:
+    """Map a predicate-style ATTACKS ability back to its legacy key.
+
+    Phase 5 only migrated the bare ``IsSelf()`` shape ("this creature
+    attacks") — the aura/equipment relational variants
+    ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
+    stay on the legacy string-key path until a ``Host`` predicate
+    lands.
+    """
+    leaves = _flatten_and(ability.predicate)
+    types = {type(leaf) for leaf in leaves}
+    if IsSelf in types and len(leaves) == 1:
+        return "attacks"
+    return None
+
+
 def _legacy_key_for_predicate(ability) -> str | None:
     """Return the legacy string key a predicate-style ability is
     structurally equivalent to, or ``None`` if no mapping applies.
@@ -165,7 +185,7 @@ def _legacy_key_for_predicate(ability) -> str | None:
     The mapping mirrors the rewriting done in
     ``src/mtg_bot/cards/parser/triggers.py``'s
     ``_PREDICATE_TRIGGER_PHRASES`` table and the static-card
-    migrations from phases 2 and 4.
+    migrations from phases 2, 4, and 5.
     """
     if ability.event is None or ability.predicate is None:
         return None
@@ -175,6 +195,8 @@ def _legacy_key_for_predicate(ability) -> str | None:
         return _legacy_key_for_dies(ability)
     if ability.event is Event.LEAVES_BATTLEFIELD:
         return _legacy_key_for_leaves(ability)
+    if ability.event is Event.ATTACKS:
+        return _legacy_key_for_attacks(ability)
     return None
 
 

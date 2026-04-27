@@ -805,7 +805,7 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
                     power=3, toughness=3,
                     granted_triggered_abilities=(
                         TriggeredAbility(
-                            trigger="attacks",
+                            event=Event.ATTACKS, predicate=IsSelf(),
                             effect=PutPlusOneCounterOnSelf(amount=1),
                         ),
                     ),

@@ -313,7 +313,17 @@ def test_parse_trigger_phrase_recognizes_dies():
 
 
 def test_parse_trigger_phrase_recognizes_attacks():
-    assert _parse_trigger_phrase("this creature attacks") == "attacks"
+    # Phase 5 migrated ``this creature attacks`` from the legacy
+    # string-key lookup to the predicate-style path: it now resolves
+    # to ``(Event.ATTACKS, IsSelf())``. The legacy lookup must therefore
+    # return ``None`` so a card claiming the phrase doesn't accidentally
+    # land on the obsolete string-key code path.
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.predicates import Event, IsSelf
+    assert _parse_trigger_phrase("this creature attacks") is None
+    assert _parse_predicate_trigger_phrase(
+        "this creature attacks"
+    ) == (Event.ATTACKS, IsSelf())
 
 
 def test_parse_trigger_phrase_strips_whitespace():
@@ -451,12 +461,16 @@ def test_parse_triggered_ability_line_full_etb_gain_life():
 
 
 def test_parse_triggered_ability_line_full_attacks_deals_damage():
+    """Phase 5: ``this creature attacks`` parses to predicate-style
+    ``event=Event.ATTACKS, predicate=IsSelf()``."""
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "Whenever this creature attacks, "
         "it deals 1 damage to any target."
     )
     assert result == TriggeredAbility(
-        trigger="attacks", effect=DealDamageAnyTarget(amount=1)
+        event=Event.ATTACKS, predicate=IsSelf(),
+        effect=DealDamageAnyTarget(amount=1),
     )
 
 

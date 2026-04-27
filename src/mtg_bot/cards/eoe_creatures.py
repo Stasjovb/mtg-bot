@@ -532,7 +532,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=EachOpponentMillsCards(amount=4),
                 ),
             ),
@@ -693,7 +693,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     tier_threshold=1,
                 ),
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=EachOpponentDiscardsOrLosesLife(life_if_cant=3),
                 ),
             ),
@@ -734,7 +734,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=OptionalPutCreatureFromHandOntoBattlefield(),
                 ),
             ),
@@ -988,7 +988,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ward_discard_random=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=DefendingPlayerLosesHalfLifeRoundedUp(),
                     requires_void=True,
                 ),
@@ -1091,7 +1091,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=KavaronHarrierAttackEffect(),
                 ),
             ),
@@ -1313,7 +1313,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                 ),
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                 ),
                 TriggeredAbility(
@@ -1469,7 +1469,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=PumpCreaturesYouControlUntilEOT(
                         power_bonus=1, toughness_bonus=0,
                         granted_keywords=frozenset({"deathtouch"}),
@@ -2052,7 +2052,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=OptionalSacAnotherForPumpSelfUEOT(
                         power_bonus=2, toughness_bonus=0,
                     ),
@@ -2080,7 +2080,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ward_discard_chosen=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnOpponentsCreature(amount=1),
                 ),
             ),

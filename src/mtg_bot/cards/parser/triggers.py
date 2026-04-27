@@ -24,7 +24,10 @@ Two trigger shapes coexist during the predicate-trigger migration:
   migrated the DIES / LEAVES_BATTLEFIELD families (this-creature-dies,
   this-creature-leaves-the-battlefield, counter-creature-dies, and
   the broader your-creature-or-artifact-dies / another-creature-dies-
-  or-exiled observer patterns).
+  or-exiled observer patterns); phase 5 migrated the ATTACKS family
+  (this-creature-attacks). The aura/equipment relational variants
+  ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
+  stay on the legacy string-key path until a ``Host`` predicate lands.
 
 Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
@@ -65,7 +68,6 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # ``_PREDICATE_TRIGGER_PHRASES`` below. The remaining entries here
 # stay on the string-key path until later phases migrate them.
 _TRIGGER_PHRASES: dict[str, str] = {
-    "this creature attacks": "attacks",
     # Spell-cast triggers. The verbatim phrase
     # ``you cast your second spell each turn`` maps to the engine's
     # canonical ``second_spell_each_turn`` key (see Illvoi Operative,
@@ -153,6 +155,13 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "this creature leaves the battlefield": (
         Event.LEAVES_BATTLEFIELD, IsSelf(),
     ),
+    # ``Whenever this creature attacks`` — the source's own attack
+    # (Spacecraft attack triggers, Stellar Sights creatures, etc.).
+    # ``Event.ATTACKS`` carries a single subject ``"attacker"``;
+    # ``IsSelf()`` resolves it via ``_resolve_subject``'s single-
+    # subject default. Phase 5 migrated every ``trigger="attacks"``
+    # static card to this predicate shape.
+    "this creature attacks": (Event.ATTACKS, IsSelf()),
     # ``Whenever a creature you control with a +1/+1 counter on it
     # dies`` (Meltstrider Eulogist). Predicate: another creature you
     # control bearing a +1/+1 counter — the firing source's own death

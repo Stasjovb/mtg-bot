@@ -264,7 +264,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             enters_with_counters_from_x="mana_spent",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=DyadrineAttackEffect(),
                 ),
             ),
@@ -328,7 +328,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=DrawCardPerMulticoloredPermanent(),
                 ),
             ),
@@ -349,7 +349,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="attacks",
+                    event=Event.ATTACKS, predicate=IsSelf(),
                     effect=DealDamageToTargetCreature(amount=100),
                     tier_threshold=10,
                 ),

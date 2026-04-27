@@ -3366,9 +3366,10 @@ def test_specimen_freighter_attacks_trigger_mills_4_from_each_opponent():
         EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(freighter)
+    from mtg_bot.effects.predicates import Event, IsSelf
     attacks_ability = next(
         ab for ab in freighter.printing.triggered_abilities
-        if ab.trigger == "attacks"
+        if ab.event == Event.ATTACKS and ab.predicate == IsSelf()
     )
     before_lib = len(state.players[1].library)
     before_grave = len(state.players[1].graveyard)

@@ -188,7 +188,16 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
     ]
     enumerated.extend((1000 + i, ab) for i, ab in enumerate(granted_only))
     for i, ability in enumerated:
-        if ability.trigger != "attacks":
+        is_legacy_attacks = ability.trigger == "attacks"
+        is_predicate_attacks = ability.matches_event(
+            Event.ATTACKS, {"attacker": attacker}, attacker, state,
+        )
+        # Skip predicate-style printed abilities — those already fired
+        # via dispatch_event above. Only walk granted predicate-style
+        # abilities (offset >= 1000) here so they're not double-pushed.
+        if is_predicate_attacks and i < 1000:
+            continue
+        if not (is_legacy_attacks or is_predicate_attacks):
             continue
         push_triggered_ability(
             state,
