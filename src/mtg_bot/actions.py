@@ -1225,7 +1225,7 @@ def _select_spell_targets(
         spell_effect = _effective_spell_effect_for_targets(
             spell_effect, mode_indices,
         )
-        _min_t, max_t = spell_effect.target_count_range()
+        min_t, max_t = spell_effect.target_count_range()
         if max_t > 0:
             legal = spell_effect.legal_targets(state, player_id)
             chosen_list: list[tuple[str, int]] = []
@@ -1240,15 +1240,18 @@ def _select_spell_targets(
                 if not pool:
                     break
                 pick = p.agent.choose_target(state, player_id, pool)
-                # Agent declines → stop. In practice every EoE multi-
-                # target effect we model has min_t=0 so declines are
-                # always honored. If min_t > 0 is ever added, revive
-                # the "forced pick" branch.
-                if pick is None:
-                    break
-                if pick not in pool:
-                    # Agent picked an out-of-range target; ignore.
-                    break
+                # CR 601.2c: when the agent must pick (slot_idx < min_t)
+                # a None / out-of-range answer is illegal — coerce to
+                # the first legal pool entry. Above min_t, the agent's
+                # decline is honored as "stop adding optional targets"
+                # since target_count_range allows fewer than max_t.
+                # Removing the picked target from ``remaining`` keeps
+                # subsequent slots different (CR 115.1b).
+                if pick is None or pick not in pool:
+                    if slot_idx < min_t:
+                        pick = pool[0]
+                    else:
+                        break
                 chosen_list.append(pick)
                 remaining.remove(pick)
             targets = tuple(chosen_list)
