@@ -889,6 +889,151 @@ def test_lignified_dominion_bracelet_keeps_granted_activated_ability():
     assert len(abilities) == 1
 
 
+def test_lignify_on_tarmogoyf_style_cda_overrides_with_0_4():
+    """Tarmogoyf-vs-Diminish / Turn-to-Frog ruling. Cosmogoyf has a
+    characteristic-defining ability (CDA) at layer 7a that sets
+    P/T = N / N+1 where N is cards in exile. Lignify's
+    ``set_base_pt`` is at layer 7b. Per CR strict layer order,
+    7b runs after 7a, so Lignify's 0/4 overrides Cosmogoyf's CDA.
+
+    Even if Lignify also wipes Cosmogoyf's CDA at layer 6 (so 7a
+    is empty), the layer-7b set still gives 0/4. Both reasonings
+    converge on 0/4.
+    """
+    from mtg_bot.cards.eoe_spells import EOE_SPELLS
+
+    state = _new_state()
+    cosmogoyf = _put(state, EOE_SPELLS["Cosmogoyf"], owner_id=0)
+    # No exile yet → Cosmogoyf is 0/1.
+    assert effective_power(state, cosmogoyf) == 0
+    assert effective_toughness(state, cosmogoyf) == 1
+
+    # Add cards to exile so Cosmogoyf grows to 3/4.
+    state.players[0].exile.extend([cosmogoyf.printing] * 3)
+    assert effective_power(state, cosmogoyf) == 3
+    assert effective_toughness(state, cosmogoyf) == 4
+
+    # Lignify Cosmogoyf — layer-7b set should override the CDA.
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, cosmogoyf)
+
+    assert effective_power(state, cosmogoyf) == 0
+    assert effective_toughness(state, cosmogoyf) == 4
+    # Even if exile grows further, the 7b override holds.
+    state.players[0].exile.extend([cosmogoyf.printing] * 5)
+    assert effective_power(state, cosmogoyf) == 0
+    assert effective_toughness(state, cosmogoyf) == 4
+
+
+def test_lignified_animated_manland_keeps_animation_at_1_1():
+    """A manland animation grants the land a layer-7b set_base_pt
+    entry with ``expires_at="cleanup"``. Lignify writes a NEWER
+    layer-7b set_base_pt entry (0/4) and a layer-6 lose_all_abilities
+    entry. Per CR strict layer order:
+      - Layer 4: animation makes the land a creature.
+      - Layer 6: Lignify wipes any abilities the land would have
+        — but the animation is a granted UEOT continuous effect
+        already in the registry, not a printed static, so it's
+        unaffected.
+      - Layer 7b: Lignify's 0/4 (newer) wins over animation's 4/4.
+    Result: the manland is a 0/4 Treefolk creature with no
+    abilities.
+    """
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    state.grant_become_creature_ueot(
+        source_id=forest.id, target_id=forest.id,
+        power=4, toughness=4,
+        subtype="Elemental",
+        description="manland animation",
+    )
+    assert effective_power(state, forest) == 4
+    assert effective_toughness(state, forest) == 4
+    assert is_creature_now(forest)
+
+    # Lignify the animated manland.
+    aura = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura, forest)
+
+    # Lignify's 7b set is newer → 0/4. Layer-4 effects (animation
+    # add_type, animation add_subtype + Lignify add_subtype) all
+    # apply — the manland is still a creature with all its
+    # Elemental + Treefolk subtypes.
+    assert effective_power(state, forest) == 0
+    assert effective_toughness(state, forest) == 4
+    assert is_creature_now(forest)
+    subs = effective_subtypes(state, forest)
+    assert "Elemental" in subs
+    assert "Treefolk" in subs
+
+
+def test_blood_moon_urborg_dependency_GAP():
+    """KNOWN GAP: CR 613.7 same-layer dependency rule isn't
+    implemented in our engine. Blood Moon (synthesized as a
+    layer-4 set_basic_land_subtype Mountain) and Urborg-style
+    "all lands are Swamps" (synthesized as layer-4 add_subtype
+    Swamp on every land) both apply at layer 4.
+
+    Per CR dependency, Urborg's effect DEPENDS on Blood Moon's
+    effect (Blood Moon makes Urborg a Mountain, which removes
+    Urborg's ability — the dependency rule says Urborg waits
+    until after Blood Moon applies, then doesn't apply because
+    its ability was wiped). Result: Blood Moon ALWAYS wins
+    regardless of timestamps.
+
+    Our engine uses simple timestamp order within a layer. With
+    Blood Moon older + Urborg newer, our engine CORRECTLY puts
+    the Mountain (Blood Moon) on the land, then ADDS Swamp on top
+    (Urborg). The CR-correct result is Mountain only.
+
+    This test pins the current (incorrect-by-CR) behavior so a
+    future dependency-rule implementation has a target to flip.
+    Not labeled xfail since it documents observable engine
+    behavior, not aspirational behavior.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    state = _new_state()
+    # Synthesize a nonbasic land with no printed basic land subtypes.
+    nonbasic = CardPrinting(
+        name="Strip Mine",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=(),
+        produces=frozenset(),
+    )
+    land = state.new_object(nonbasic, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+
+    # Blood Moon (older, T=10): set basic land subtype to Mountain.
+    state.add_continuous_effect(
+        source_id=999, layer=4, kind="set_basic_land_subtype",
+        target_id=land.id, params=("Mountain",),
+        description="(synthetic) Blood Moon",
+    )
+    # Urborg-style (newer, T=11): add Swamp to every land.
+    state.add_continuous_effect(
+        source_id=998, layer=4, kind="add_subtype",
+        target_id=land.id, params=("Swamp",),
+        description="(synthetic) Urborg adds Swamp",
+    )
+
+    subs = effective_subtypes(state, land)
+    # Engine result (timestamp order): Mountain (set) then add Swamp →
+    # land is Mountain + Swamp, taps for {R, B}.
+    assert "Mountain" in subs
+    assert "Swamp" in subs
+    assert effective_land_produces(state, land) == frozenset({"R", "B"})
+
+    # CR-correct result would be Mountain only via dependency, but
+    # we don't implement that yet.
+
+
 def test_clone_of_dryad_grants_basic_land_types_too():
     """Clone copies Dryad's printing including the
     ``grants_all_basic_land_types_to_lands_you_control`` flag, so
