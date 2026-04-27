@@ -835,17 +835,17 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     # legacy-only landfall path and the dispatcher handles the
     # migrated abilities.
     _trigger_etb_abilities(state, card)
-    # "Whenever an opponent plays a land" triggers (Burgeoning) —
-    # specifically the land-drop action, not any ETB. Fires under each
-    # opposing permanent-controller. The same call also dispatches the
-    # phase-8 ``Event.PLAYS_LAND`` event so The Endstone's land half
-    # (predicate-style ``Controlled(YOU, subject="controller")``) fires
-    # via the dispatcher's same-controller branch.
+    # Phase-8 ``Event.PLAYS_LAND`` dispatch (via
+    # ``fire_opponent_plays_land_triggers``, kept named for backward-
+    # compatible direct test access). The function's internal legacy
+    # walk over ``opponent_plays_land`` string-key abilities is now
+    # dead — every land-play observer in the static pool migrated to
+    # predicate shape (Burgeoning's ``Controlled(by=OPPONENT,
+    # subject="controller")`` and The Endstone's land-half
+    # ``Controlled(YOU, subject="controller")``). Both ride the same
+    # PLAYS_LAND dispatch sweep.
     from mtg_bot.turn import fire_opponent_plays_land_triggers
     fire_opponent_plays_land_triggers(state, player_id, land=card)
-    # Fire "whenever you play a land or cast a spell" triggers (The
-    # Endstone). The spell-cast path fires the same from _cast_spell.
-    _fire_cast_or_play_triggers(state, player_id)
 
 
 def _offer_echoing_deeps_copy(
@@ -1248,91 +1248,22 @@ def _cast_spell(
     # spell each turn").
     if not card.printing.is_creature:
         p.noncreature_spells_cast_this_turn += 1
-    if p.spells_cast_this_turn == 2:
-        _fire_second_spell_triggers(state, player_id)
-    # Fire "whenever you play a land or cast a spell" triggers — both
-    # events share a trigger type since The Endstone wants them both.
-    _fire_cast_or_play_triggers(state, player_id)
-    # Fire "whenever you cast an artifact spell" triggers when the
-    # spell being cast is an artifact.
-    if card.printing.is_artifact:
-        _fire_cast_artifact_spell_triggers(state, player_id)
     # Phase-8 predicate-style dispatch: fire the IS_CAST event for
-    # every spell cast. Predicate-migrated triggers
-    # (``cast_artifact_spell``, ``cast_spell_or_play_land``'s spell
-    # half, ``second_spell_each_turn``) ride this dispatch alongside
-    # the legacy fire paths above; ``__post_init__`` on
-    # TriggeredAbility ensures no ability fires through both.
+    # every spell cast. The legacy ``second_spell_each_turn`` /
+    # ``cast_spell_or_play_land`` (spell half) /
+    # ``cast_artifact_spell`` per-key walks were collapsed into this
+    # single dispatch when the last in-pool static migrated to
+    # predicate shape — every spell-cast observer now flows through
+    # the dispatcher's predicate-evaluation loop. The
+    # ``Controlled(YOU, subject="controller")`` and
+    # ``IsArtifact(subject="spell")`` and ``SpellsCastThisTurn(n=2)``
+    # branches all evaluate against the same subject mapping in a
+    # single sweep over the battlefield.
     from mtg_bot.effects.predicates import Event as _Event
     dispatch_event(
         state, _Event.IS_CAST, label="is-cast",
         spell=card, controller=p,
     )
-
-
-def _fire_second_spell_triggers(state: GameState, caster_id: int) -> None:
-    """Push "whenever you cast your second spell each turn" triggers onto
-    the stack for permanents the caster controls.
-    """
-    for obj in list(state.battlefield):
-        if obj.controller_id != caster_id:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "second_spell_each_turn":
-                continue
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=caster_id,
-                label="second-spell",
-            )
-
-
-def _fire_cast_artifact_spell_triggers(
-    state: GameState, player_id: int
-) -> None:
-    """Push "whenever you cast an artifact spell" triggers onto the
-    stack. Called from _cast_spell after the StackItem is pushed when
-    the spell being cast is an artifact. Matches Pinnacle Emissary and
-    similar EoE artifact-matters cards.
-    """
-    for obj in list(state.battlefield):
-        if obj.controller_id != player_id:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "cast_artifact_spell":
-                continue
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=player_id,
-                label="cast-artifact-spell",
-            )
-
-
-def _fire_cast_or_play_triggers(state: GameState, player_id: int) -> None:
-    """Push "whenever you play a land or cast a spell" triggers onto the
-    stack. Called from both _play_land (land event) and _cast_spell
-    (spell event) so both paths fire it. Matches The Endstone.
-    """
-    for obj in list(state.battlefield):
-        if obj.controller_id != player_id:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "cast_spell_or_play_land":
-                continue
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=player_id,
-                label="cast-or-play",
-            )
 
 
 def _apply_ward_check(

@@ -314,50 +314,32 @@ def move_off_battlefield(
 def fire_counters_added_to_your_creature_triggers(
     state: GameState, controller_id: int, amount: int, obj=None,
 ) -> None:
-    """Push "whenever you put one or more +1/+1 counters on a creature
-    you control, ..." observer triggers onto the stack. ``amount`` is
-    the effective count added (post-doubling). The amount is carried in
-    the StackItem and exposed at resolve time via
-    ``state.resolving_counter_amount`` for "you may draw that many"
-    riders (Terrasymbiosis).
+    """Dispatch the phase-8 predicate-style ``Event.COUNTERS_ADDED``
+    event so observer triggers (Terrasymbiosis's "draw that many
+    cards") fire. ``amount`` is the effective count added (post-
+    doubling); it threads through ``counter_amount`` to each pushed
+    StackItem and resolving effects read it via
+    ``state.resolving_counter_amount``.
 
-    ``obj`` is the creature receiving the counters (used for the phase-8
-    predicate-style ``Event.COUNTERS_ADDED`` dispatch); legacy
-    string-key callers may omit it and only the legacy path fires.
+    The retained name and ``controller_id`` parameter are scaffolding
+    from the dual-path migration era — the legacy walk over
+    ``counters_added_to_your_creature`` string-key abilities was
+    dropped once Terrasymbiosis migrated to the predicate path.
+    Calls without ``obj`` are no-ops today (no observer can fire);
+    kept for API stability with the single in-tree caller
+    (``game.add_plus_one_counters``).
     """
-    from mtg_bot.actions import push_triggered_ability
+    if obj is None:
+        return
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event as _Event
 
-    for obs in list(state.battlefield):
-        if obs.controller_id != controller_id:
-            continue
-        for i, ability in enumerate(obs.printing.triggered_abilities):
-            if ability.trigger != "counters_added_to_your_creature":
-                continue
-            push_triggered_ability(
-                state,
-                source=obs,
-                ability=ability,
-                ability_index=i,
-                controller_id=controller_id,
-                label=f"counters-added (amount {amount})",
-                counter_amount=amount,
-            )
-    # Phase-8 predicate-style dispatch: fire COUNTERS_ADDED for the
-    # creature receiving the counters. Predicate-migrated observers
-    # (Terrasymbiosis) ride this dispatch alongside the legacy fire
-    # path above. Threading ``counter_amount`` exposes the effective
-    # post-doubling count to resolving effects via
-    # ``state.resolving_counter_amount``.
-    if obj is not None:
-        from mtg_bot.actions import dispatch_event as _dispatch_event
-        from mtg_bot.effects.predicates import Event as _Event
-
-        _dispatch_event(
-            state, _Event.COUNTERS_ADDED,
-            label=f"counters-added (amount {amount})",
-            counter_amount=amount,
-            obj=obj,
-        )
+    dispatch_event(
+        state, _Event.COUNTERS_ADDED,
+        label=f"counters-added (amount {amount})",
+        counter_amount=amount,
+        obj=obj,
+    )
 
 
 def _fire_leaves_battlefield_triggers(
@@ -409,39 +391,20 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
 def fire_opponent_discards_triggers(
     state: GameState, discarding_player_id: int
 ) -> None:
-    """Fire observer triggers on permanents controlled by players OTHER
-    than ``discarding_player_id`` whose trigger type is
-    ``"opponent_discards_a_card"``. Called after any single-card
-    discard event.
+    """Dispatch the phase-8 predicate-style ``Event.DISCARDS_CARD``
+    event so opponent-discards observer triggers (Entropic
+    Battlecruiser, predicate ``Controlled(by=OPPONENT)``) fire.
+    Called after any single-card discard event.
 
-    Triggers go on the stack via push_triggered_ability with the
-    discarding player exposed as ``("player", id)`` in targets so
-    effects like Entropic Battlecruiser's 1+ trigger can damage them.
+    The discarding player flows through as
+    ``fixed_targets=(("player", id),)`` so the resolving effect can
+    damage them without target selection. The legacy
+    ``opponent_discards_a_card`` string-key walk was dropped once
+    Entropic Battlecruiser migrated to the predicate path; the
+    function name is preserved because ``effects/generic.py`` and
+    ``effects/bespoke.py`` per-discard sites import it directly.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
-
-    for obs in list(state.battlefield):
-        if obs.controller_id == discarding_player_id:
-            continue
-        for i, ability in enumerate(obs.printing.triggered_abilities):
-            if ability.trigger != "opponent_discards_a_card":
-                continue
-            push_triggered_ability(
-                state,
-                source=obs,
-                ability=ability,
-                ability_index=i,
-                controller_id=obs.controller_id,
-                label="opponent-discards",
-                fixed_targets=(("player", discarding_player_id),),
-            )
-    # Phase-8 predicate-style dispatch: fire DISCARDS_CARD with the
-    # discarding player as subject. Predicate-migrated observers
-    # (Entropic Battlecruiser, predicate ``Controlled(by=OPPONENT,
-    # subject="player")``) ride this dispatch alongside the legacy fire
-    # path above. The discarding player's id flows through as
-    # ``fixed_targets=(("player", id),)`` so the resolving effect can
-    # damage them without target selection.
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event as _Event
 
     discarding_player = state.player_by_id(discarding_player_id)
@@ -500,46 +463,24 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
-
-    controller_id = obj.controller_id
     was_creature = obj.printing.is_creature
     was_artifact = obj.printing.is_artifact
     move_off_battlefield(state, obj, destination="graveyard")
     if not (was_creature or was_artifact):
         return
-    for other in list(state.battlefield):
-        if other.id == obj.id:
-            continue
-        if other.controller_id != controller_id:
-            continue
-        for i, ability in enumerate(other.printing.triggered_abilities):
-            fires = (
-                ability.trigger == "sacrifice_creature_or_artifact"
-                or (
-                    ability.trigger == "sacrifice_artifact"
-                    and was_artifact
-                )
-            )
-            if not fires:
-                continue
-            push_triggered_ability(
-                state,
-                source=other,
-                ability=ability,
-                ability_index=i,
-                controller_id=controller_id,
-                label="sacrifice",
-            )
     # Phase-8 predicate-style dispatch: fire IS_SACRIFICED with the
-    # sacrificed permanent as subject. Predicate-migrated observers
-    # (Lightless Evangel for ``sacrifice_creature_or_artifact``, Biotech
-    # Specialist for ``sacrifice_artifact``) ride this dispatch
-    # alongside the legacy fire path above. The sacrificed object has
-    # already been moved to the graveyard so we include it via
-    # ``extra_observers`` (no observer in scope today triggers off its
-    # own sacrifice, but parity with DIES / LEAVES_BATTLEFIELD keeps
-    # the dispatch surface uniform).
+    # sacrificed permanent as subject. The legacy per-key walks for
+    # ``sacrifice_creature_or_artifact`` (Lightless Evangel) and
+    # ``sacrifice_artifact`` (Biotech Specialist) were dropped once
+    # both migrated to the predicate path — the predicate
+    # ``(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()``
+    # (Lightless) and ``IsArtifact() & Controlled(YOU) & ~IsSelf()``
+    # (Biotech) reproduce the same firing scope. The sacrificed
+    # object has already been moved to the graveyard so we include it
+    # via ``extra_observers`` (no observer in scope today triggers off
+    # its own sacrifice, but parity with DIES / LEAVES_BATTLEFIELD
+    # keeps the dispatch surface uniform).
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event as _Event
 
     dispatch_event(
@@ -652,49 +593,40 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
 def fire_opponent_plays_land_triggers(
     state: GameState, land_controller_id: int, land=None,
 ) -> None:
-    """Fire "Whenever an opponent plays a land" triggers on every
-    non-controller's permanents AND dispatch the phase-8 predicate-
-    style ``Event.PLAYS_LAND`` event so any predicate-migrated
-    land-play observers (Burgeoning, The Endstone's land half) fire.
+    """Dispatch the phase-8 predicate-style ``Event.PLAYS_LAND`` event
+    so every land-play observer (Burgeoning's
+    ``Controlled(by=OPPONENT)`` and The Endstone's land-half
+    ``Controlled(YOU)``) fires from a single sweep.
 
     Called from ``actions.play_land`` only (NOT from effects that
     merely put a land onto the battlefield — "plays a land" is the
-    land-drop action per 305.1). For each opposing player we scan
-    their permanents and push every matching trigger onto the stack
-    under that opponent's control (so Burgeoning's "you may put a land
-    from your hand onto the battlefield" resolves under the enchantment's
-    controller).
+    land-drop action per 305.1). The predicate dispatcher walks every
+    battlefield permanent; ``Controlled(by=OPPONENT,
+    subject="controller")`` evaluates true for sources whose
+    controller is NOT the land's controller (so Burgeoning's "you may
+    put a land from your hand onto the battlefield" resolves under the
+    enchantment's controller).
 
-    ``land`` is the land permanent that was played (used for the
-    predicate-style dispatch); legacy callers may omit it and only the
-    legacy fire path runs.
+    ``land`` is the land permanent that was played (the dispatch
+    subject). The retained name and the optional ``land=`` keyword
+    are scaffolding from the dual-path migration era — direct callers
+    in tests pre-date the dispatch infrastructure and pass
+    ``land_controller_id`` only; once Burgeoning's tests pivoted to
+    pass a synthetic land via the ``_fire_played_land`` helper the
+    legacy ``opponent_plays_land`` string-key walk had no live
+    entries left and was dropped. Calls without ``land`` are no-ops
+    today (no observer can fire); kept for API stability.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    if land is None:
+        return
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event as _Event
 
-    for p in state.players:
-        if p.id == land_controller_id:
-            continue
-        for obj in list(state.battlefield):
-            if obj.controller_id != p.id:
-                continue
-            for i, ability in enumerate(obj.printing.triggered_abilities):
-                if ability.trigger != "opponent_plays_land":
-                    continue
-                push_triggered_ability(
-                    state,
-                    source=obj,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=p.id,
-                    label="opponent-plays-land",
-                )
-    if land is not None:
-        from mtg_bot.effects.predicates import Event as _Event
-        land_controller = state.player_by_id(land_controller_id)
-        dispatch_event(
-            state, _Event.PLAYS_LAND, label="plays-land",
-            land=land, controller=land_controller,
-        )
+    land_controller = state.player_by_id(land_controller_id)
+    dispatch_event(
+        state, _Event.PLAYS_LAND, label="plays-land",
+        land=land, controller=land_controller,
+    )
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
