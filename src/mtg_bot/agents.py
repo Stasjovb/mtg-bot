@@ -225,6 +225,32 @@ class Agent:
         """
         return list(candidates)
 
+    def choose_sac_for_mana(
+        self,
+        state: "GameState",
+        player_id: int,
+        candidates: list[tuple[int, tuple[tuple[str, int], ...]]],
+        remaining_generic: int,
+        remaining_colored: list[tuple[str, int]],
+    ) -> list[int]:
+        """CR 605 + 601.2g: pick which sac-for-mana mana abilities to
+        activate during a spell's cost-payment step. Each candidate is
+        ``(object_id, produces)`` where ``produces`` is the source's
+        per-activation mana output (tuple of ``(color, count)``).
+
+        ``remaining_generic`` and ``remaining_colored`` describe the
+        post-reduction cost not yet covered by the pool or lands. The
+        caller activates the returned sources in order while the cost
+        remains unpayable; once payable the rest are left alone (so
+        Treasures aren't blown up unless they're actually needed).
+
+        Default: return every candidate id in the order presented —
+        matches the engine's auto-greedy behavior. Override for smarter
+        selection (e.g., prefer Treasures whose color the cost
+        actually needs, defer "any"-color sources, etc.).
+        """
+        return [oid for oid, _produces in candidates]
+
     def choose_legend_keep(
         self,
         state: "GameState",
@@ -338,3 +364,15 @@ class RandomAgent(Agent):
     def choose_yes_no(self, state, player_id, prompt):
         # Coin flip — true to the random-action baseline.
         return self.rng.random() < 0.5
+
+    def choose_sac_for_mana(
+        self, state, player_id, candidates,
+        remaining_generic, remaining_colored,
+    ):
+        # Random shuffle so different runs explore different sac
+        # orderings; the engine still stops as soon as the cost is
+        # payable, so unnecessary sacrifices are avoided regardless
+        # of the order returned.
+        ids = [oid for oid, _produces in candidates]
+        self.rng.shuffle(ids)
+        return ids

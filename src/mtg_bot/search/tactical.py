@@ -125,3 +125,13 @@ class DefaultTacticalAgent(Agent):
         # Convoke: tap as many candidates as the cost needs. The
         # caller bounds-checks. Deterministic ordering for search.
         return list(candidates)
+
+    def choose_sac_for_mana(
+        self, state, player_id, candidates,
+        remaining_generic, remaining_colored,
+    ):
+        # Sac-for-mana: offer every candidate in the order the engine
+        # surfaced them. Caller stops as soon as the cost is payable,
+        # so Treasures don't get blown up unnecessarily. Deterministic
+        # for search.
+        return [oid for oid, _produces in candidates]
