@@ -64,7 +64,10 @@ def test_become_land_creature_sets_temp_flags():
         state.resolving_source = None
     assert land.temp_is_creature
     assert land.temp_base_pt_override == (3, 3)
-    assert "flying" in land.temp_keywords
+    # Granted keyword now lives in the layer-6 registry; query via
+    # effective_keywords (Phase 2 migration).
+    from mtg_bot.game import effective_keywords
+    assert "flying" in effective_keywords(state, land)
     assert is_creature_now(land)
 
 

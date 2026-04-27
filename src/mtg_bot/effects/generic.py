@@ -3019,16 +3019,24 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
         )
         if obj is None:
             return
-        obj.temp_is_creature = True
-        obj.temp_base_pt_override = (self.power, self.toughness)
+        src = state.resolving_source
+        state.grant_become_creature_ueot(
+            source_id=src.id if src is not None else obj.id,
+            target_id=obj.id,
+            power=self.power,
+            toughness=self.toughness,
+            description=(
+                f"{obj.printing.name} becomes a "
+                f"{self.power}/{self.toughness} artifact creature UEOT"
+            ),
+        )
         if self.granted_keywords:
-            source = state.resolving_source
             state.grant_keywords_ueot(
-                source_id=source.id if source is not None else obj.id,
+                source_id=src.id if src is not None else obj.id,
                 target_id=obj.id,
                 keywords=self.granted_keywords,
                 log_source_name=(
-                    source.printing.name if source is not None
+                    src.printing.name if src is not None
                     else obj.printing.name
                 ),
                 log_target_name=obj.printing.name,
@@ -4122,16 +4130,27 @@ class BecomeLandCreatureUEOT(Effect):
         source = state.resolving_source
         if source is None:
             return
-        source.temp_is_creature = True
-        source.temp_base_pt_override = (self.power, self.toughness)
+        state.grant_become_creature_ueot(
+            source_id=source.id,
+            target_id=source.id,
+            power=self.power,
+            toughness=self.toughness,
+            subtype=self.granted_subtype,
+            description=(
+                f"{source.printing.name} becomes a "
+                f"{self.power}/{self.toughness} creature UEOT"
+            ),
+        )
         if self.granted_keywords:
-            source.temp_keywords = (
-                source.temp_keywords | self.granted_keywords
+            state.grant_keywords_ueot(
+                source_id=source.id,
+                target_id=source.id,
+                keywords=self.granted_keywords,
+                log_source_name=source.printing.name,
+                log_target_name=source.printing.name,
             )
         if self.unblockable:
             source.temp_unblockable = True
-        if self.granted_subtype is not None:
-            source.temp_subtype = self.granted_subtype
         for ab in self.granted_activated_abilities:
             state.grant_activated_ability_ueot(
                 source_id=source.id,
