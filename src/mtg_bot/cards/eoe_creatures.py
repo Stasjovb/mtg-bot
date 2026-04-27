@@ -1823,10 +1823,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Gigastorm Titan: {4}{U} 4/4. Costs {3} less to cast if you've
-        # already cast another spell this turn.
+        # Gigastorm Titan: {4}{U} 4/4 Creature — Elemental. Costs {3}
+        # less to cast if you've already cast another spell this turn.
         make_creature(
             "Gigastorm Titan", "{4}{U}", 4, 4,
+            subtypes=("Elemental",),
             cost_reductions=(
                 CostReduction(
                     amount=3,
@@ -2802,10 +2803,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Lashwhip Predator: {4}{G}{G} 5/7 Reach. Costs {2} less if
-        # your opponents control three or more creatures.
+        # Lashwhip Predator: {4}{G}{G} 5/7 Creature — Plant Beast with
+        # Reach. Costs {2} less if your opponents control three or more
+        # creatures.
         make_creature(
             "Lashwhip Predator", "{4}{G}{G}", 5, 7,
+            subtypes=("Plant", "Beast"),
             keywords={"reach"},
             cost_reductions=(
                 CostReduction(
