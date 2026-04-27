@@ -9,8 +9,12 @@ in ``tests/test_parser_parity.py``.
 
 Slice 1's grammar:
 
-- ``Flying`` (keyword line, exact match) → contributes
-  ``keywords={"flying"}``.
+- A keyword line is one of the recognized evergreen standalone
+  keywords (``Flying``, ``Trample``, ``Vigilance``, ``Haste``,
+  ``Reach``, ``Deathtouch``, ``Lifelink``, ``Defender``,
+  ``Flash``, ``Menace``, ``Double strike``, ``First strike``,
+  ``Prowess``) and contributes its lowercase engine spelling to
+  ``keywords``.
 - A triggered-ability line of the form
   ``When/Whenever <condition>, <effect>.`` is decomposed into a
   trigger condition and an effect, each handled by its own parser.
@@ -60,7 +64,21 @@ class _ParsedClause:
     trigger: TriggeredAbility | None = None
 
 
-_KEYWORD_LINES: dict[str, str] = {"Flying": "flying"}
+_KEYWORD_LINES: dict[str, str] = {
+    "Flying": "flying",
+    "Trample": "trample",
+    "Vigilance": "vigilance",
+    "Haste": "haste",
+    "Reach": "reach",
+    "Deathtouch": "deathtouch",
+    "Lifelink": "lifelink",
+    "Defender": "defender",
+    "Flash": "flash",
+    "Menace": "menace",
+    "Double strike": "double strike",
+    "First strike": "first strike",
+    "Prowess": "prowess",
+}
 
 
 # Triggered-ability parsing decomposes a line of the form
@@ -194,6 +212,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         triggered_abilities=tuple(triggers),
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
+        artifact="Artifact" in card_types,
     )
 
 

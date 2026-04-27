@@ -97,8 +97,18 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Black
-        make_creature("Hullcarver", "{B}", 1, 1, keywords={"deathtouch"}),
-        make_creature("Monoist Sentry", "{B}", 4, 1, keywords={"defender"}),
+        make_creature(
+            "Hullcarver", "{B}", 1, 1,
+            keywords={"deathtouch"},
+            artifact=True,
+            subtypes=("Robot", "Assassin"),
+        ),
+        make_creature(
+            "Monoist Sentry", "{B}", 4, 1,
+            keywords={"defender"},
+            artifact=True,
+            subtypes=("Robot",),
+        ),
         make_creature(
             "Virus Beetle", "{1}{B}", 1, 1,
             triggered_abilities=(

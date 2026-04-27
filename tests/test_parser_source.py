@@ -50,9 +50,68 @@ def test_parse_clause_etb_damage_extracts_amount():
 
 
 def test_parse_clause_returns_none_for_unknown_line():
-    assert _parse_clause("Trample") is None
+    assert _parse_clause("Regenerate") is None
     assert _parse_clause("This creature has menace.") is None
     assert _parse_clause("") is None
+
+
+# ---------- evergreen keyword lines ----------
+
+
+@pytest.mark.parametrize(
+    "line,engine_keyword",
+    [
+        ("Flying", "flying"),
+        ("Trample", "trample"),
+        ("Vigilance", "vigilance"),
+        ("Haste", "haste"),
+        ("Reach", "reach"),
+        ("Deathtouch", "deathtouch"),
+        ("Lifelink", "lifelink"),
+        ("Defender", "defender"),
+        ("Flash", "flash"),
+        ("Menace", "menace"),
+        ("Double strike", "double strike"),
+        ("First strike", "first strike"),
+        ("Prowess", "prowess"),
+    ],
+)
+def test_parse_clause_recognizes_each_evergreen_keyword(line, engine_keyword):
+    parsed = _parse_clause(line)
+    assert parsed is not None
+    assert parsed.keyword == engine_keyword
+    assert parsed.trigger is None
+
+
+def test_build_creature_printing_handles_each_evergreen_standalone():
+    """Smoke-test: every evergreen keyword on its own oracle-text
+    line produces the expected engine keyword on the printing."""
+    base = {
+        "name": "Test Creature",
+        "mana_cost": "{1}",
+        "type_line": "Creature — Human",
+        "power": "1",
+        "toughness": "1",
+    }
+    cases = [
+        ("Flying", "flying"),
+        ("Trample", "trample"),
+        ("Vigilance", "vigilance"),
+        ("Haste", "haste"),
+        ("Reach", "reach"),
+        ("Deathtouch", "deathtouch"),
+        ("Lifelink", "lifelink"),
+        ("Defender", "defender"),
+        ("Flash", "flash"),
+        ("Menace", "menace"),
+        ("Double strike", "double strike"),
+        ("First strike", "first strike"),
+        ("Prowess", "prowess"),
+    ]
+    for line, engine_keyword in cases:
+        printing = _build_creature_printing(dict(base, oracle_text=line))
+        assert printing is not None, line
+        assert printing.keywords == frozenset({engine_keyword}), line
 
 
 # ---------- compositional triggered-ability parsing ----------
@@ -188,7 +247,9 @@ def test_build_creature_printing_skips_non_creatures():
 def test_build_creature_printing_skips_unparsed_clause():
     card = dict(
         _NEBULA_DRAGON_CARD,
-        oracle_text="Flying\nTrample",  # Trample not yet supported
+        # ``Regenerate`` is not in the keyword grammar, so this
+        # whole card must be skipped.
+        oracle_text="Flying\nRegenerate",
     )
     assert _build_creature_printing(card) is None
 
