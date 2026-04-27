@@ -36,6 +36,7 @@ from mtg_bot.effects import (
     TargetOpponentDiscards,
     TriggeredAbility,
 )
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import (
     Step,
@@ -161,7 +162,11 @@ def _etb_lifegain_creature(name="Test Wisp", amount=2):
     return make_creature(
         name, "{W}", 1, 1,
         triggered_abilities=(
-            TriggeredAbility(trigger="etb", effect=GainLife(amount=amount)),
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=GainLife(amount=amount),
+            ),
         ),
     )
 
@@ -173,7 +178,9 @@ def _virus_beetle(name="Virus Beetle"):
         name, "{B}", 1, 2,
         triggered_abilities=(
             TriggeredAbility(
-                trigger="etb", effect=TargetOpponentDiscards(count=1)
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=TargetOpponentDiscards(count=1),
             ),
         ),
     )

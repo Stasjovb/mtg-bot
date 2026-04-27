@@ -198,10 +198,12 @@ def test_never_predicate_does_not_fire():
 
 # ---------- Coexistence with legacy string-key triggers ----------
 
-def test_legacy_string_key_etb_still_fires():
-    """Backward-compat smoke test: a creature using the legacy
-    ``trigger="etb"`` field still fires through the existing
-    ``_trigger_etb_abilities`` string-match path."""
+def test_legacy_string_key_etb_does_not_fire_after_phase3_cleanup():
+    """Phase 3 removed the legacy ``trigger="etb"`` string-match path
+    from ``_trigger_etb_abilities``; only predicate-path abilities
+    fire now. A leftover legacy-style ability has no firing path —
+    every static card was migrated in phase 2 so this state isn't
+    reachable from real cards, but the test pins the behavior."""
     legacy = make_creature(
         "Legacy ETB", "{W}", 1, 1,
         triggered_abilities=(
@@ -212,8 +214,7 @@ def test_legacy_string_key_etb_still_fires():
     obj = _put_on_battlefield(state, legacy)
     state.stack.clear()
     _trigger_etb_abilities(state, obj)
-    assert len(state.stack) == 1
-    assert state.stack[0].ability.trigger == "etb"
+    assert state.stack == []
 
 
 # ---------- dispatch_event direct call ----------

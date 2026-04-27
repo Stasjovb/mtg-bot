@@ -14,6 +14,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, make_creature
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.effects import (
     DealDamageAnyTarget,
     DrawCards,
@@ -112,8 +113,8 @@ def test_multiple_etb_triggers_stack_in_printing_order():
     card = make_creature(
         "Double Wisp", "{W}", 1, 1,
         triggered_abilities=(
-            TriggeredAbility(trigger="etb", effect=GainLife(amount=1)),
-            TriggeredAbility(trigger="etb", effect=GainLife(amount=3)),
+            TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=GainLife(amount=1)),
+            TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=GainLife(amount=3)),
         ),
     )
     state = _arena(
@@ -136,7 +137,7 @@ def test_etb_draw_card_gives_controller_a_card():
     scholar_printing = make_creature(
         "Inquirer", "{2}{U}", 2, 2,
         triggered_abilities=(
-            TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+            TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1)),
         ),
     )
     state = _arena(
@@ -163,7 +164,7 @@ def test_etb_each_player_draws_gives_both_players_a_card():
     archivist = make_creature(
         "Library", "{3}{U}", 2, 3,
         triggered_abilities=(
-            TriggeredAbility(trigger="etb", effect=EachPlayerDraws(amount=1)),
+            TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=EachPlayerDraws(amount=1)),
         ),
     )
     state = _arena(

@@ -2162,14 +2162,6 @@ def put_into_battlefield(
             controller_id
         ).artifacts_entered_under_your_control_this_turn += 1
     _trigger_etb_abilities(state, obj)
-    if obj.printing.is_artifact:
-        _fire_artifact_enters_triggers(state, obj)
-    if obj.printing.is_creature or obj.printing.is_artifact:
-        _fire_creature_or_artifact_enters_triggers(state, obj)
-    if obj.printing.is_creature:
-        from mtg_bot.game import effective_subtypes
-        if "Kavu" in effective_subtypes(state, obj):
-            _fire_kavu_enters_triggers(state, obj)
 
 
 def _apply_devour(
@@ -2209,114 +2201,6 @@ def _apply_devour(
             f"{obj.printing.name} devours {sacrificed} land(s) and "
             f"enters with {counters} +1/+1 counters"
         )
-
-
-def _fire_kavu_enters_triggers(
-    state: GameState, new_obj: "GameObject"
-) -> None:
-    """Fire "whenever this creature or another Kavu you control enters"
-    triggers on permanents the controller controls. Possibility
-    Technician's observer ability — fires for the entering Kavu itself
-    as well as every other Kavu the controller controls (so the
-    Technician's own ETB also fires once via this path when a separate
-    Kavu enters under it). The "this creature" half is already covered
-    by the standard ETB trigger that fires the same effect; this helper
-    handles the "another Kavu" half by also firing on permanents OTHER
-    than ``new_obj``.
-
-    Caller already restricted ``new_obj`` to creatures with the "Kavu"
-    subtype.
-    """
-    from mtg_bot.game import etb_trigger_multiplier
-    from mtg_bot.turn import should_fire_trigger
-
-    controller = new_obj.controller_id
-    firings = etb_trigger_multiplier(state, controller)
-    for obj in list(state.battlefield):
-        if obj.id == new_obj.id:
-            continue  # self-ETB handled by the standard ``etb`` trigger
-        if obj.controller_id != controller:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "kavu_you_control_enters":
-                continue
-            if not should_fire_trigger(state, obj.id, i, ability):
-                continue
-            for _ in range(firings):
-                state.log.append(
-                    f"{obj.printing.name}'s Kavu-enters trigger fires"
-                )
-                state.resolving_source = obj
-                try:
-                    ability.effect.resolve(state, controller, ())
-                finally:
-                    state.resolving_source = None
-
-
-def _fire_creature_or_artifact_enters_triggers(
-    state: GameState, new_obj: "GameObject"
-) -> None:
-    """Push 'whenever another creature or artifact you control enters'
-    triggers onto the stack for other permanents the controller controls.
-    Excludes the entering object itself. Honors etb_trigger_multiplier
-    (Panharmonicon-style) by pushing the trigger N times.
-    """
-    from mtg_bot.game import etb_trigger_multiplier
-
-    controller = new_obj.controller_id
-    firings = etb_trigger_multiplier(state, controller)
-    for obj in list(state.battlefield):
-        if obj.id == new_obj.id:
-            continue
-        if obj.controller_id != controller:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "creature_or_artifact_enters_you_control":
-                continue
-            for _ in range(firings):
-                push_triggered_ability(
-                    state,
-                    source=obj,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=controller,
-                    label="creature-or-artifact-enters",
-                )
-
-
-def _fire_artifact_enters_triggers(
-    state: GameState, new_artifact: "GameObject"
-) -> None:
-    """Push "whenever another artifact you control enters" triggers onto
-    the stack. Also pushes "nontoken_artifact_enters_you_control"
-    triggers when the entering artifact is not a token. Honors
-    etb_trigger_multiplier by pushing N times.
-    """
-    from mtg_bot.game import etb_trigger_multiplier
-
-    controller = new_artifact.controller_id
-    firings = etb_trigger_multiplier(state, controller)
-    is_nontoken = not new_artifact.printing.is_token
-    for obj in list(state.battlefield):
-        if obj.id == new_artifact.id:
-            continue
-        if obj.controller_id != controller:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger == "nontoken_artifact_enters_you_control":
-                if not is_nontoken:
-                    continue
-            elif ability.trigger != "artifact_enters_you_control":
-                continue
-            for _ in range(firings):
-                push_triggered_ability(
-                    state,
-                    source=obj,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=controller,
-                    label="artifact-enters",
-                )
 
 
 def push_triggered_ability(
@@ -2487,37 +2371,22 @@ def dispatch_event(
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
-    """Push any ETB triggers from ``creature`` onto the stack, in printing order.
+    """Push every ENTERS-event triggered ability that matches when
+    ``creature`` enters the battlefield.
 
-    If an ability requires a target, legal targets are gathered and the
-    controller's agent picks one as the ability goes on the stack. If there
-    are no legal targets, the ability fizzles (doesn't go on the stack at
-    all), per the simplified Stage-3 targeting model.
+    All ETB-family triggers (this-creature-enters, landfall,
+    artifact-enters-you-control, kavu-enters-you-control, etc.) flow
+    through ``dispatch_event(state, Event.ENTERS, obj=creature)``. The
+    dispatcher walks every battlefield permanent, evaluates each
+    ability's predicate against the entering object, and pushes
+    matched abilities onto the stack via ``push_triggered_ability``.
 
-    After firing the legacy string-key ``"etb"`` triggers from the
-    entering permanent itself, calls ``dispatch_event(state,
-    Event.ENTERS, obj=creature)`` so any predicate-style ENTERS
-    abilities anywhere on the battlefield can also fire. Both
-    paths coexist while migration is in progress.
+    Phase 2 migrated every static card from the legacy string-key
+    ``trigger="etb"`` (and the family of ``"landfall"`` /
+    ``"artifact_enters_you_control"`` / etc. keys) to the predicate
+    shape, so the legacy per-key ``_fire_*`` paths are gone — there
+    are no string-key abilities left to fire.
     """
     from mtg_bot.effects.predicates import Event
-    from mtg_bot.game import etb_trigger_multiplier
 
-    for ability_index, ability in enumerate(creature.printing.triggered_abilities):
-        if ability.trigger != "etb":
-            continue
-        controller_id = creature.controller_id
-        # Starfield Vocalist and similar permanents multiply ETB-caused
-        # trigger firings. Each firing independently selects its target
-        # set via the controller's agent.
-        firings = etb_trigger_multiplier(state, controller_id)
-        for _ in range(firings):
-            push_triggered_ability(
-                state,
-                source=creature,
-                ability=ability,
-                ability_index=ability_index,
-                controller_id=controller_id,
-                label="ETB",
-            )
     dispatch_event(state, Event.ENTERS, label="enters", obj=creature)
