@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    AddManaToPool,
     CounterTargetSpell,
     CreateToken,
     DealDamageAnyTarget,
@@ -29,10 +30,15 @@ from mtg_bot.cards.base import (
     Effect,
     ExileTargetCreature,
     GainLife,
+    PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnCreatureFromYourGraveyardToHand,
+    ReturnTargetArtifactCardFromYourGraveyardToHand,
     SelfMill,
     Surveil,
+    TargetOpponentLosesLife,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
@@ -96,6 +102,48 @@ _DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
 _DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
+)
+# "Add {<color>}." — single coin of a single color. Mana ability surface
+# form. The captured letter is one of WUBRG (no colorless single-coin
+# add in EoE today; extend to ``[WUBRGC]`` if a future card needs it).
+# Note: this returns a bare AddManaToPool effect; the surrounding
+# ActivatedAbility built by the activated-grammar layer doesn't yet
+# auto-flag ``is_mana_ability=True`` — wiring that up is a separate
+# concern. Today no EoE card becomes parser-claimed solely by this
+# addition (Zookeeper Mechan / Steelswarm Operator both have a second
+# line the parser can't yet handle), so static-vs-parser parity is
+# unaffected.
+_ADD_SINGLE_COLOR_MANA = re.compile(r"^add \{([WUBRG])\}$")
+# "Target opponent loses N life" — pure life-loss spell/ability surface.
+# TargetOpponentLosesLife filters its legal-targets pool to opponents.
+_TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
+    r"^target opponent loses (\d+) life$"
+)
+# "Return target creature card from your graveyard to your hand" —
+# graveyard-to-hand reanimation surface.
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
+    r"^return target creature card from your graveyard to your hand$"
+)
+# "Return target creature card from your graveyard to the battlefield"
+# — graveyard reanimation surface (Xu-Ifit and forward-compat for any
+# future "raise dead" oracle line).
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return target creature card from your graveyard to the battlefield$"
+)
+# "Return target artifact card from your graveyard to your hand" —
+# matches Scour for Scrap's mode (parsed via the modal combinator
+# elsewhere, but a primitive worth surfacing in the unified grammar).
+_RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
+    r"^return target artifact card from your graveyard to your hand$"
+)
+# "Target creature gets +N/+M until end of turn" or
+# "Target creature gets -N/-M until end of turn". Both signs supported
+# (PumpTargetCreatureUntilEOT folds positive and negative bonuses
+# through the same pump path). Mixed signs (``+1/-1``) are also
+# accepted to keep the grammar uniform — no EoE card prints that today
+# but the regex stays the simplest correct shape.
+_PUMP_TARGET_CREATURE_UEOT = re.compile(
+    r"^target creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
 
 
@@ -161,6 +209,26 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyTargetLand()
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
+    m = _ADD_SINGLE_COLOR_MANA.match(phrase)
+    if m is not None:
+        return AddManaToPool(produces=((m.group(1), 1),))
+    m = _TARGET_OPPONENT_LOSES_N_LIFE.match(phrase)
+    if m is not None:
+        return TargetOpponentLosesLife(amount=int(m.group(1)))
+    if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
+        return ReturnCreatureFromYourGraveyardToHand()
+    if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        return ReturnCreatureFromYourGraveyardToBattlefield()
+    if _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND.match(phrase) is not None:
+        return ReturnTargetArtifactCardFromYourGraveyardToHand()
+    m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+        )
     return None
 
 
