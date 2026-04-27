@@ -648,7 +648,14 @@ def test_build_spell_printing_skips_creatures():
 
 
 def test_build_spell_printing_skips_unsupported_effect_text():
-    card = dict(_BOMBARD_CARD, oracle_text="Counter target spell.")
+    # Use a phrase the unified effect grammar deliberately doesn't claim
+    # (target self-card return — no engine class for it). "Counter
+    # target spell" used to live here but is now claimed by batch-7's
+    # CounterTargetSpell handler.
+    card = dict(
+        _BOMBARD_CARD,
+        oracle_text="Return Bombard from your graveyard to your hand.",
+    )
     assert _build_spell_printing(card) is None
 
 
