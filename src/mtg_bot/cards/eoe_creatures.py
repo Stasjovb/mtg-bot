@@ -2079,6 +2079,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # sacrifice another creature or artifact for a draw.
         make_creature(
             "Swarm Culler", "{3}{B}", 2, 4,
+            subtypes=("Insect", "Warrior"),
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2093,6 +2094,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # another creature or artifact for +2/+0 UEOT.
         make_creature(
             "Comet Crawler", "{2}{B}", 2, 3,
+            subtypes=("Insect", "Horror"),
             keywords={"lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2461,12 +2463,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Kavaron Turbodrone: {2}{R} 2/3 Artifact Creature — Robot. {T}:
-        # target creature you control gets +1/+1 and haste UEOT.
+        # Kavaron Turbodrone: {2}{R} 2/3 Artifact Creature — Robot Scout.
+        # {T}: target creature you control gets +1/+1 and haste UEOT.
         # Sorcery-speed activation.
         make_creature(
             "Kavaron Turbodrone", "{2}{R}", 2, 3,
             artifact=True,
+            subtypes=("Robot", "Scout"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(tap_self=True),
