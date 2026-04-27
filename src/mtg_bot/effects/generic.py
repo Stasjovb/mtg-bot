@@ -7281,3 +7281,77 @@ class MagicalHackTextChangeEffect(Effect):
         )
 
 
+
+@dataclass(frozen=True)
+class ScuttlemuttColorChangeUEOT(Effect):
+    """Scuttlemutt: '{T}: Target creature becomes the color or colors
+    of your choice until end of turn.' Layer 5 color-changing effect.
+
+    Demo scope: picks exactly one color via ``choose_mana_color``.
+    Real Scuttlemutt allows zero, one, or multiple colors; the demo
+    keeps it to a single color since that's enough to exercise
+    block legality with protection-from-color.
+
+    Resolution writes a layer-5 ``"set_colors"`` registry entry
+    sourced by Scuttlemutt with ``params=(frozenset({chosen}),)``
+    and ``expires_at="cleanup"``. The entry REPLACES the target's
+    color set (matching real-card "becomes" semantics, not
+    "becomes ... in addition to"). At cleanup the entry is dropped
+    via ``expire_continuous_effects("cleanup")`` and the target
+    reverts to its printed colors.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        _, target_id = targets[0]
+        target = next(
+            (o for o in state.battlefield if o.id == target_id), None,
+        )
+        if target is None:
+            return
+        chosen = state.players[controller_id].agent.choose_mana_color(
+            state, controller_id, ["W", "U", "B", "R", "G"],
+        )
+        if chosen not in ("W", "U", "B", "R", "G"):
+            return
+        src = state.resolving_source
+        source_id = src.id if src is not None else target.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=5,
+            kind="set_colors",
+            target_id=target.id,
+            params=(frozenset({chosen}),),
+            expires_at="cleanup",
+            description=(
+                f"{target.printing.name} becomes {chosen} until end "
+                f"of turn"
+            ),
+        )
+        state.log.append(
+            f"{target.printing.name} becomes {chosen} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "target creature becomes the color of your choice until "
+            "end of turn"
+        )
+
+

@@ -573,6 +573,54 @@ def effective_subtypes(
     return tuple(subtypes)
 
 
+def effective_colors(
+    state: "GameState", obj: "GameObject"
+) -> frozenset[str]:
+    """Return ``obj``'s effective colors as a frozenset of color
+    letters (W/U/B/R/G), applying CR 613 layer 5 (color-changing
+    effects). Base colors come from ``printing.mana_cost.colors``.
+
+    Layer-5 entries are walked in timestamp order:
+      - ``kind="set_colors"`` REPLACES the color set with
+        ``params[0]`` (frozenset). Matches Scuttlemutt's "Target
+        creature becomes the color or colors of your choice UEOT".
+      - ``kind="add_colors"`` UNIONS ``params[0]`` into the current
+        color set. Matches Painter's Servant-style "is the chosen
+        color in addition to its other colors" clauses.
+    """
+    colors: set[str] = set(obj.printing.mana_cost.colors)
+    layer5 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 5 and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for ce in layer5:
+        if not ce.params:
+            continue
+        added = ce.params[0]
+        if not isinstance(added, (frozenset, set)):
+            continue
+        if ce.kind == "set_colors":
+            colors = set(added)
+        elif ce.kind == "add_colors":
+            colors |= set(added)
+    return frozenset(colors)
+
+
+def effective_protection_from_colors(
+    state: "GameState", obj: "GameObject"
+) -> frozenset[str]:
+    """Return the colors ``obj`` has protection from. Currently only
+    sources protection from the printing's ``protection_from_color``
+    field (single color). Returned as a frozenset for future
+    extension to multi-color protection and to compose cleanly with
+    set intersection in ``can_block``."""
+    pc = obj.printing.protection_from_color
+    return frozenset({pc}) if pc else frozenset()
+
+
 def magus_of_the_moon_active(state: "GameState") -> bool:
     """True when any permanent on the battlefield has the
     ``nonbasic_lands_are_mountains`` flag. Used by

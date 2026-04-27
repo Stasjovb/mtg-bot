@@ -64,7 +64,18 @@ def can_block(
     "Can block only creatures with flying" (EoE Drone token): a blocker
     whose printing carries this flag may only declare blocks against
     attackers that have flying.
+
+    Protection from color (CR 702.16): an attacker with protection
+    from color X can't be blocked by a creature whose effective
+    color includes X. Composes with layer 5 (Scuttlemutt) — once
+    the blocker's effective color set drops X, the block becomes
+    legal. (Damage-prevention and targeting protections are handled
+    elsewhere; only the block-legality clause lives here.)
     """
+    from mtg_bot.game import (
+        effective_colors, effective_protection_from_colors,
+    )
+
     attacker_kws = effective_keywords(state, attacker)
     blocker_kws = effective_keywords(state, blocker)
     if "flying" in attacker_kws:
@@ -76,6 +87,11 @@ def can_block(
             return False
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
+            return False
+    attacker_protect = effective_protection_from_colors(state, attacker)
+    if attacker_protect:
+        blocker_colors = effective_colors(state, blocker)
+        if attacker_protect & blocker_colors:
             return False
     return True
 
