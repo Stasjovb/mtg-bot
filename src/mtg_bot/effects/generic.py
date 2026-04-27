@@ -7380,6 +7380,100 @@ class SleightOfMindTextChangeEffect(Effect):
 
 
 @dataclass(frozen=True)
+class CytoshapeBecomeCopyUEOT(Effect):
+    """Cytoshape (Saviors of Kamigawa, simplified): "Until end of
+    turn, target creature becomes a copy of another target
+    creature." Layer 1 copy effect with ``expires_at="cleanup"``.
+
+    The architectural payoff over Clone (which is permanent /
+    ``expires_at=None``): the printing mutation must REVERT at
+    cleanup. Wired via the new ``revert_printing_if_no_layer1_copies``
+    helper called from ``run_cleanup_step`` after layer-1 entries
+    expire.
+
+    Demo simplifications:
+    - Drops the real card's "Sacrifice a Spirit" cost.
+    - Drops the "except it isn't a Spirit" rider on the resulting
+      copy.
+    - Activate-as-sorcery is moot because we ship as a sorcery
+      directly.
+
+    Two creature targets: slot 0 is the creature being changed;
+    slot 1 is the source whose printing is copied. The two must
+    differ ("another target creature") — fizzles if same.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        return ("creature", "creature")
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if len(targets) < 2:
+            return
+        first_id = targets[0][1]
+        second_id = targets[1][1]
+        if first_id == second_id:
+            state.log.append(
+                "Cytoshape fizzles: targets must be different creatures"
+            )
+            return
+        first = next(
+            (o for o in state.battlefield if o.id == first_id), None,
+        )
+        second = next(
+            (o for o in state.battlefield if o.id == second_id), None,
+        )
+        if first is None or second is None:
+            return
+        if first.original_printing is None:
+            first.original_printing = first.printing
+        copied_printing = second.printing
+        first.printing = copied_printing
+        src = state.resolving_source
+        source_id = src.id if src is not None else first.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=1,
+            kind="is_copy",
+            target_id=first.id,
+            params=(copied_printing,),
+            expires_at="cleanup",
+            description=(
+                f"{first.original_printing.name} becomes a copy of "
+                f"{copied_printing.name} UEOT"
+            ),
+        )
+        state.log.append(
+            f"{first.original_printing.name} becomes a copy of "
+            f"{copied_printing.name} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "until end of turn, target creature becomes a copy of "
+            "another target creature"
+        )
+
+
+
+@dataclass(frozen=True)
 class ScuttlemuttColorChangeUEOT(Effect):
     """Scuttlemutt: '{T}: Target creature becomes the color or colors
     of your choice until end of turn.' Layer 5 color-changing effect.

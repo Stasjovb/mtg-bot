@@ -937,6 +937,42 @@ def magus_of_the_moon_active(state: "GameState") -> bool:
     )
 
 
+def revert_printing_if_no_layer1_copies(
+    state: "GameState", obj: "GameObject"
+) -> None:
+    """Restore ``obj.printing`` from ``obj.original_printing`` when
+    no layer-1 ``"is_copy"`` registry entries remain on it.
+
+    Used by:
+    - ``run_cleanup_step``: after ``expire_continuous_effects(
+      "cleanup")`` drops UEOT layer-1 entries (Cytoshape, Mirage
+      Mirror), revert printing on creatures still on the
+      battlefield.
+    - ``move_off_battlefield``: when a permanent leaves play, its
+      layered effects stop applying. The leaving object's printing
+      reverts to its printed self before the zone change so a
+      future reanimation enters as the printed object (CR
+      400.7-style "becomes a new object on zone change").
+
+    No-op if ``original_printing`` is unset (the object was never
+    a copy) or if at least one layer-1 ``is_copy`` entry on
+    ``obj`` is still active (a longer-lived copy effect like
+    Clone's persistent ``expires_at=None`` entry).
+    """
+    if obj.original_printing is None:
+        return
+    has_layer1 = any(
+        ce.layer == 1
+        and ce.kind == "is_copy"
+        and ce.target_id == obj.id
+        for ce in state.continuous_effects
+    )
+    if has_layer1:
+        return
+    obj.printing = obj.original_printing
+    obj.original_printing = None
+
+
 def _has_basic_land_type_set_effect(
     state: "GameState", obj: "GameObject"
 ) -> bool:

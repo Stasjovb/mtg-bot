@@ -18,6 +18,12 @@ Currently:
   not auras, counters, or current animations). Writes a layer-1
   ``"is_copy"`` registry entry so the layered system records the
   copy event; the entry is dropped when the clone leaves play.
+- ``CYTOSHAPE`` (Saviors of Kamigawa, simplified) — "Until end
+  of turn, target creature becomes a copy of another target
+  creature." Sorcery, layer-1 copy effect with
+  ``expires_at="cleanup"``. The cleanup-time printing revert is
+  wired via ``revert_printing_if_no_layer1_copies`` called from
+  ``run_cleanup_step`` after expiring registry entries.
 - ``MAGICAL_HACK`` (Alpha) — "Change the text of target spell or
   permanent by replacing all instances of one basic land type with
   another." Sorcery, layer 3 text-changing. The demo targets a
@@ -78,6 +84,7 @@ Currently:
 from __future__ import annotations
 
 from mtg_bot.effects import (
+    CytoshapeBecomeCopyUEOT,
     MagicalHackTextChangeEffect, ScuttlemuttColorChangeUEOT,
     SleightOfMindTextChangeEffect,
 )
@@ -99,6 +106,12 @@ LIGNIFY: CardPrinting = make_aura(
 CLONE: CardPrinting = make_creature(
     "Clone", "{3}{U}", 0, 0,
     enters_as_copy_of_creature=True,
+)
+
+
+CYTOSHAPE: CardPrinting = make_sorcery(
+    "Cytoshape", "{1}{G}",
+    effect=CytoshapeBecomeCopyUEOT(),
 )
 
 
