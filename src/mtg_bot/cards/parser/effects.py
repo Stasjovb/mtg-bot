@@ -30,6 +30,8 @@ from mtg_bot.cards.base import (
     Effect,
     ExileTargetCreature,
     GainLife,
+    LoseLife,
+    OptionalManaCostThenEffect,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -85,11 +87,61 @@ _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
 _EACH_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^each opponent loses (\d+) life$"
 )
-# Narrow handler for Gravpack Monoist's exact token-creation payload.
-# Generalizes once another card needs a similar slice with different
-# color/power/toughness/subtype.
-_CREATE_TAPPED_2_2_ROBOT = re.compile(
-    r"^create a tapped 2/2 colorless Robot artifact creature token$"
+# Token-creation effect grammar. Two related shapes co-exist in Scryfall
+# oracle text:
+#
+# 1. **Stat-bearing creature tokens** — e.g.
+#    ``create a tapped 2/2 colorless Robot artifact creature token`` or
+#    ``create two 1/1 white Human Soldier creature tokens``. Carries
+#    explicit power/toughness, a color word, one or more subtype words,
+#    and a ``[artifact ]?creature token[s]?`` tail.
+# 2. **Bare-name tokens** — e.g. ``create a Lander token``. No stats /
+#    color / "creature" tail; the subtype word IS the token name and
+#    fully identifies the registered printing (Lander, Munitions, etc.).
+#
+# Both paths look up the resolved token name in ``TOKEN_PRINTINGS``. The
+# parser is NOT in the business of building token printings on the fly —
+# if the registry doesn't already carry an entry for the matched name,
+# parsing fails (returns ``None``) and the card stays unclaimed. Adding
+# new token shapes is a separate concern handled in ``cards/tokens.py``.
+#
+# The leading count phrase is one of:
+#   - ``a`` / ``an``    → 1
+#   - a small spelled-out cardinal (``two``, ``three``, …)
+#   - a bare digit
+# The optional ``tapped`` keyword sits between the count and the stats
+# (or directly before the bare-name in shape 2).
+_TOKEN_COUNT_PATTERN = rf"a|an|\d+|{_SMALL_CARDINAL_PATTERN}"
+# Color word — one of the five colors plus colorless. Not captured for
+# correctness (the registry already encodes color via the printing's
+# ``card_types``/``produces``); we just need to consume it so the regex
+# matches the surface form.
+_TOKEN_COLOR_PATTERN = r"white|blue|black|red|green|colorless"
+# Stat-bearing creature-token shape. The captured groups are:
+#   1. count word/digit
+#   2. literal ``tapped`` if present (None otherwise)
+#   3. power
+#   4. toughness
+#   5. color word (consumed only — see above)
+#   6. subtype phrase (one or more space-separated capitalized words)
+#   7. literal ``artifact`` if the token is also an artifact
+# The trailing ``creature token[s]?`` is required — bare-name tokens
+# (Lander, Munitions) take a different surface form and parse via
+# ``_CREATE_BARE_NAME_TOKEN`` below.
+_CREATE_CREATURE_TOKEN = re.compile(
+    rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?(\d+)/(\d+) "
+    rf"({_TOKEN_COLOR_PATTERN}) ([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
+    rf"(artifact )?creature tokens?$"
+)
+# Bare-name token shape — ``create a Lander token`` /
+# ``create two Lander tokens``. The captured subtype IS the registry
+# key. Optional ``tapped`` sits between the count and the name (no EoE
+# card prints a tapped Lander today, but the slot is reserved so a
+# future ``create a tapped Lander token`` line parses without further
+# grammar work).
+_CREATE_BARE_NAME_TOKEN = re.compile(
+    rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?"
+    rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
 )
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 # Mill is "mill <amount> cards" where the amount is either a digit or
@@ -146,6 +198,36 @@ _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
 _PUMP_TARGET_CREATURE_UEOT = re.compile(
     r"^target creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
+# Controller loses N life. Surface forms ``lose N life`` (post-compound
+# split, where the carried-over subject is implicit — Decode
+# Transmissions, Elegy Acolyte, Voidforged Titan all print
+# ``you draw a card and lose 1 life``) and ``you lose N life`` (the
+# explicit form, included for symmetry with ``you gain N life``). Both
+# map to the same ``LoseLife`` primitive — the ``you`` is purely
+# surface noise here because the controller is already implicit in
+# every effect's resolve signature.
+_LOSE_N_LIFE = re.compile(r"^(?:you )?lose (\d+) life$")
+# "You may pay {COST}. If you do, <inner-effect>." — the ``OptionalManaCost
+# ThenEffect`` wrapper. The inner-effect phrase is parsed recursively via
+# the unified grammar, so any single-effect (or compound) primitive that
+# parses on its own can serve as the ``If you do, …`` payload — e.g.
+# ``put a +1/+1 counter on this creature`` (Oreplate Pangolin) or
+# ``draw a card and you gain 1 life`` (synthetic compound).
+#
+# Cost shape is the standard ``{...}`` braced mana-cost mini-language
+# (e.g. ``{2}`` or ``{1}{R}``); it's captured verbatim and handed to
+# ``OptionalManaCostThenEffect`` which parses it via
+# ``parse_mana_cost`` at resolve time.
+#
+# Note the embedded period after the cost: oracle text always prints
+# ``You may pay {N}. If you do, …`` as TWO sentences. The
+# normalization layers (``_normalize_creature_effect_phrase`` and
+# ``_normalize_spell_effect_phrase``) only strip the OUTER trailing
+# period — the inner sentence-boundary period stays as a literal
+# match here.
+_YOU_MAY_PAY_THEN_EFFECT = re.compile(
+    r"^you may pay (\{[^}]+(?:\}\{[^}]+)*\})\. If you do, (.+)$"
+)
 
 
 def _parse_amount(token: str) -> int:
@@ -156,6 +238,55 @@ def _parse_amount(token: str) -> int:
     if token.isdigit():
         return int(token)
     return _SMALL_CARDINAL_WORDS[token]
+
+
+def _parse_token_count(token: str) -> int:
+    """Convert a token-count word into the integer N. Adds the singular
+    articles ``a`` / ``an`` (= 1) to ``_parse_amount``'s digit-or-
+    spelled-out-cardinal coverage. Assumes the token already passed
+    ``_TOKEN_COUNT_PATTERN``."""
+    if token in ("a", "an"):
+        return 1
+    return _parse_amount(token)
+
+
+def _parse_create_token_effect(phrase: str) -> Effect | None:
+    """Try to parse ``phrase`` as a token-creation effect (either the
+    stat-bearing creature shape or the bare-name shape). Returns
+    ``None`` if neither shape matches OR if the resolved token name
+    has no ``TOKEN_PRINTINGS`` entry — the parser doesn't fabricate
+    new token printings on the fly.
+    """
+    m = _CREATE_CREATURE_TOKEN.match(phrase)
+    if m is not None:
+        count = _parse_token_count(m.group(1))
+        tapped = m.group(2) is not None
+        # Stats and color word are consumed by the regex but not used
+        # to look up the token — the registered ``TOKEN_PRINTINGS``
+        # entry is the canonical source of those values. Mismatches
+        # between oracle text and registry would be a static-vs-
+        # parser parity bug caught downstream.
+        subtype = m.group(6)
+        if subtype not in TOKEN_PRINTINGS:
+            return None
+        return CreateToken(
+            token_printing=TOKEN_PRINTINGS[subtype],
+            count=count,
+            tapped=tapped,
+        )
+    m = _CREATE_BARE_NAME_TOKEN.match(phrase)
+    if m is not None:
+        count = _parse_token_count(m.group(1))
+        tapped = m.group(2) is not None
+        name = m.group(3)
+        if name not in TOKEN_PRINTINGS:
+            return None
+        return CreateToken(
+            token_printing=TOKEN_PRINTINGS[name],
+            count=count,
+            tapped=tapped,
+        )
+    return None
 
 
 def _parse_compound_effect(phrase: str) -> Effect | None:
@@ -240,12 +371,9 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
-    if _CREATE_TAPPED_2_2_ROBOT.match(phrase) is not None:
-        return CreateToken(
-            token_printing=TOKEN_PRINTINGS["Robot"],
-            count=1,
-            tapped=True,
-        )
+    token_eff = _parse_create_token_effect(phrase)
+    if token_eff is not None:
+        return token_eff
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))
@@ -277,6 +405,24 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PumpTargetCreatureUntilEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
+        )
+    m = _LOSE_N_LIFE.match(phrase)
+    if m is not None:
+        return LoseLife(amount=int(m.group(1)))
+    m = _YOU_MAY_PAY_THEN_EFFECT.match(phrase)
+    if m is not None:
+        # Parse the inner-effect phrase recursively. The inner phrase is
+        # already in normalized form (lowercased first letter doesn't
+        # apply here — Scryfall prints "If you do, <lowercase-inner>"
+        # because the inner is a sub-clause, not a sentence start). If
+        # the inner doesn't parse, the whole "you may pay …" line
+        # rejects so the wrapping card stays unclaimed (rather than
+        # silently dropping the consequence).
+        inner = _parse_effect(m.group(2))
+        if inner is None:
+            return None
+        return OptionalManaCostThenEffect(
+            cost_str=m.group(1), inner_effect=inner,
         )
     return None
 
