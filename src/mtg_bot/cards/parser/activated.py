@@ -13,13 +13,16 @@ An activated-ability line of the form ``{cost}: <effect>.`` where
     sacrifice-self.
   * ``{mana}, Sacrifice this creature`` (or reversed) — mana plus
     sacrifice-self.
+  * ``Pay N life`` — pure pay-life cost. Mana Confluence-style.
+  * ``{T}, Pay N life`` (or reversed) — tap plus pay-life.
+  * ``{mana}, Pay N life`` (or reversed) — mana plus pay-life.
 
 ``<effect>`` is a single sentence parsed via the unified
 ``_parse_effect`` after lowercase + period stripping. Other cost
-shapes (pay-life, counter-removal, "tap another permanent",
-multi-comma costs like tap + mana + sacrifice, …) are out of scope
-this slice — the line falls through and causes the card to be
-skipped.
+shapes (counter-removal, "tap another permanent", multi-comma costs
+like tap + mana + sacrifice or tap + pay-life + sacrifice, …) are
+out of scope this slice — the line falls through and causes the
+card to be skipped.
 
 The ``Activate only as a sorcery.`` rider has two surface shapes:
 
@@ -58,6 +61,10 @@ _MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
 # "Sacrifice this creature" for a creature's own activated ability.
 _SACRIFICE_SELF_PIECE = "Sacrifice this creature"
 
+# Pay-life cost piece. ``Pay 1 life``, ``Pay 2 life``, etc. The
+# integer is captured into the ``pay_life`` field on ActivationCost.
+_PAY_LIFE_PIECE = re.compile(r"^Pay (\d+) life$")
+
 
 def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     """Parse the cost segment of an activated-ability line into an
@@ -75,10 +82,15 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     * Mana + sacrifice-self (either order): ``{1}{R}, Sacrifice this
       creature`` or ``Sacrifice this creature, {1}{R}``
       → ``ActivationCost(mana=…, mana_str=…, sacrifice_self=True)``.
+    * Pure pay-life: ``Pay 1 life`` → ``ActivationCost(pay_life=1)``.
+    * Tap + pay-life (either order): ``{T}, Pay 1 life`` or
+      ``Pay 1 life, {T}`` → ``ActivationCost(tap_self=True, pay_life=1)``.
+    * Mana + pay-life (either order): ``{1}, Pay 2 life`` or
+      ``Pay 2 life, {1}`` → ``ActivationCost(mana=…, mana_str=…, pay_life=2)``.
 
-    Anything else (pay-life, counter removal, three-piece costs like
-    tap + mana + sacrifice, etc.) returns ``None`` so the caller can
-    skip the card.
+    Anything else (counter removal, three-piece costs like
+    tap + mana + sacrifice or tap + pay-life + sacrifice, etc.)
+    returns ``None`` so the caller can skip the card.
     """
     cost_str = cost_str.strip()
     # Pure tap.
@@ -87,8 +99,13 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     # Pure sacrifice-self.
     if cost_str == _SACRIFICE_SELF_PIECE:
         return ActivationCost(sacrifice_self=True)
+    # Pure pay-life.
+    pay_life_match = _PAY_LIFE_PIECE.match(cost_str)
+    if pay_life_match is not None:
+        return ActivationCost(pay_life=int(pay_life_match.group(1)))
     # Two-piece comma-separated costs: tap + mana, tap + sacrifice,
-    # or mana + sacrifice (in either order for each pair).
+    # mana + sacrifice, or any two-piece pay-life combo (in either
+    # order for each pair).
     if "," in cost_str:
         pieces = [p.strip() for p in cost_str.split(",")]
         if len(pieces) != 2:
@@ -96,9 +113,15 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
         # Tap + sacrifice-self (no mana).
         if "{T}" in pieces and _SACRIFICE_SELF_PIECE in pieces:
             return ActivationCost(tap_self=True, sacrifice_self=True)
-        # Tap + mana.
+        # Tap + pay-life (no mana, no sac).
         if "{T}" in pieces:
             other = pieces[0] if pieces[1] == "{T}" else pieces[1]
+            other_pay_life = _PAY_LIFE_PIECE.match(other)
+            if other_pay_life is not None:
+                return ActivationCost(
+                    tap_self=True, pay_life=int(other_pay_life.group(1))
+                )
+            # Tap + mana.
             if _MANA_COST_ONLY.match(other) is None:
                 return None
             try:
@@ -123,6 +146,28 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
                 return None
             return ActivationCost(
                 mana=mana, mana_str=other, sacrifice_self=True
+            )
+        # Mana + pay-life — neither piece is tap or sacrifice-self,
+        # so one piece must be a pay-life phrase and the other a
+        # bare mana cost.
+        pay_life_idx = None
+        for i, piece in enumerate(pieces):
+            if _PAY_LIFE_PIECE.match(piece) is not None:
+                pay_life_idx = i
+                break
+        if pay_life_idx is not None:
+            pay_life_n = int(
+                _PAY_LIFE_PIECE.match(pieces[pay_life_idx]).group(1)
+            )
+            other = pieces[1 - pay_life_idx]
+            if _MANA_COST_ONLY.match(other) is None:
+                return None
+            try:
+                mana = parse_mana_cost(other)
+            except ValueError:
+                return None
+            return ActivationCost(
+                mana=mana, mana_str=other, pay_life=pay_life_n
             )
         return None
     # Pure mana — everything else with no comma must be a pure brace
