@@ -426,6 +426,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # control get +1/+0. Warp {1}{R}."
         make_creature(
             "Memorial Team Leader", "{3}{R}", 4, 3,
+            subtypes=("Kavu", "Soldier"),
             static_abilities=(
                 StaticAbility(
                     scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
