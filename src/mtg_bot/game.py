@@ -607,6 +607,46 @@ def effective_activated_abilities(
     # end so printed-ability indices stay stable.
     if obj.temp_activated_abilities:
         base.extend(obj.temp_activated_abilities)
+    # Layer-6 ``"grant_activated_ability"`` registry entries targeting
+    # this object (Phase 2 migration of UEOT activated-ability
+    # grants — currently empty for unmigrated callers).
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "grant_activated_ability"
+            and ce.target_id == obj.id
+            and ce.params
+        ):
+            base.append(ce.params[0])
+    return tuple(base)
+
+
+def effective_triggered_abilities(
+    state: "GameState", obj: "GameObject",
+) -> tuple:
+    """Return the printing's triggered abilities + any UEOT-granted
+    triggered abilities, including layer-6 registry entries.
+
+    Phase 2 of the layered-effects refactor: callers that previously
+    iterated ``obj.temp_triggered_abilities`` directly should now go
+    through this helper so registry-granted triggers (Requiem
+    Monolith's UEOT trigger, Raging Ravine's animated attack
+    trigger, Perigee Beckoner's granted dies-rider) are picked up.
+    Indices match the order the engine fires them: printed first,
+    then ``temp_*`` field grants (legacy path), then registry
+    grants.
+    """
+    base = list(obj.printing.triggered_abilities)
+    if obj.temp_triggered_abilities:
+        base.extend(obj.temp_triggered_abilities)
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "grant_triggered_ability"
+            and ce.target_id == obj.id
+            and ce.params
+        ):
+            base.append(ce.params[0])
     return tuple(base)
 
 
@@ -1196,6 +1236,49 @@ class GameState:
         self.continuous_effects.append(effect)
         return effect
 
+    def grant_triggered_ability_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        ability,
+        description: str = "",
+    ) -> ContinuousEffect:
+        """Helper for UEOT triggered-ability grants. Writes a layer-6
+        ``"grant_triggered_ability"`` entry with ``expires_at="cleanup"``.
+        Read via ``effective_triggered_abilities``."""
+        return self.add_continuous_effect(
+            source_id=source_id,
+            layer=6,
+            kind="grant_triggered_ability",
+            target_id=target_id,
+            params=(ability,),
+            expires_at="cleanup",
+            description=description,
+        )
+
+    def grant_activated_ability_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        ability,
+        description: str = "",
+    ) -> ContinuousEffect:
+        """Helper for UEOT activated-ability grants (manland
+        animations). Writes a layer-6 ``"grant_activated_ability"``
+        entry with ``expires_at="cleanup"``. Read via
+        ``effective_activated_abilities``."""
+        return self.add_continuous_effect(
+            source_id=source_id,
+            layer=6,
+            kind="grant_activated_ability",
+            target_id=target_id,
+            params=(ability,),
+            expires_at="cleanup",
+            description=description,
+        )
+
     def grant_keywords_ueot(
         self,
         *,
@@ -1251,17 +1334,33 @@ class GameState:
         return dropped
 
     def remove_continuous_effects_from_source(
-        self, source_id: int
+        self, source_id: int, *, only_static: bool = False,
     ) -> list[ContinuousEffect]:
         """Drop every registry entry produced by ``source_id`` (called
         when that source leaves the battlefield, or when a one-shot
         effect's window closes). Returns the dropped entries — useful
         for log/debug and for tests that want to assert which effects
-        were torn down."""
+        were torn down.
+
+        ``only_static`` (default False): when True, only drop entries
+        with ``expires_at is None`` — the static-while-source-on-the-
+        battlefield kind (Tractor Beam's control grant, Mm'menon's
+        ability grant, etc.). UEOT entries (``expires_at="cleanup"``)
+        survive the source leaving — they end at the next cleanup
+        step regardless of whether the granting source is still on
+        the battlefield. ``move_off_battlefield`` uses
+        ``only_static=True`` so a UEOT-grant from a permanent that
+        subsequently dies still fires its dependent triggers /
+        queries before cleanup wipes it (Perigee Beckoner's granted
+        dies-rider being the canonical case).
+        """
         kept: list[ContinuousEffect] = []
         dropped: list[ContinuousEffect] = []
         for ce in self.continuous_effects:
-            if ce.source_id == source_id:
+            matches = ce.source_id == source_id
+            if only_static and ce.expires_at is not None:
+                matches = False
+            if matches:
                 dropped.append(ce)
             else:
                 kept.append(ce)

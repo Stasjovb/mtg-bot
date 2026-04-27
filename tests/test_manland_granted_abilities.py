@@ -111,9 +111,13 @@ def test_lavaclaw_x_pump_actually_pumps_power():
 def test_lavaclaw_granted_pump_clears_at_cleanup():
     state = _new_state()
     land = _animate(state, "Lavaclaw Reaches", "{1}{B}{R}")
-    assert len(land.temp_activated_abilities) == 1
+    pre = effective_activated_abilities(state, land)
+    granted_pre = [a for a in pre if a not in land.printing.activated_abilities]
+    assert len(granted_pre) == 1
     run_cleanup_step(state)
-    assert land.temp_activated_abilities == ()
+    post = effective_activated_abilities(state, land)
+    granted_post = [a for a in post if a not in land.printing.activated_abilities]
+    assert granted_post == []
     assert land.temp_is_creature is False
 
 
@@ -168,10 +172,16 @@ def test_wandering_fumarole_swap_toggles_back():
 
 
 def test_raging_ravine_grants_attacks_trigger():
+    from mtg_bot.game import effective_triggered_abilities
+
     state = _new_state()
     land = _animate(state, "Raging Ravine", "{2}{R}{G}")
-    assert len(land.temp_triggered_abilities) == 1
-    trig = land.temp_triggered_abilities[0]
+    granted = [
+        ab for ab in effective_triggered_abilities(state, land)
+        if ab not in land.printing.triggered_abilities
+    ]
+    assert len(granted) == 1
+    trig = granted[0]
     assert trig.trigger == "attacks"
     assert isinstance(trig.effect, PutPlusOneCounterOnSelf)
 
@@ -196,11 +206,21 @@ def test_raging_ravine_attack_puts_counter():
 
 
 def test_raging_ravine_trigger_clears_at_cleanup():
+    from mtg_bot.game import effective_triggered_abilities
+
     state = _new_state()
     land = _animate(state, "Raging Ravine", "{2}{R}{G}")
-    assert land.temp_triggered_abilities != ()
+    pre = [
+        ab for ab in effective_triggered_abilities(state, land)
+        if ab not in land.printing.triggered_abilities
+    ]
+    assert pre  # granted trigger present pre-cleanup
     run_cleanup_step(state)
-    assert land.temp_triggered_abilities == ()
+    post = [
+        ab for ab in effective_triggered_abilities(state, land)
+        if ab not in land.printing.triggered_abilities
+    ]
+    assert post == []
 
 
 # -----------------------
@@ -210,7 +230,11 @@ def test_raging_ravine_trigger_clears_at_cleanup():
 
 def test_become_land_creature_appends_granted_abilities():
     """Direct invocation of BecomeLandCreatureUEOT with both granted
-    fields populates the temp_* tuples on the source."""
+    fields writes layer-6 ``grant_*`` registry entries (Phase 2)."""
+    from mtg_bot.game import (
+        effective_activated_abilities, effective_triggered_abilities,
+    )
+
     state = _new_state()
     land = _put(state, BASIC_LANDS["Forest"])
     sample_act = ActivatedAbility(
@@ -230,5 +254,5 @@ def test_become_land_creature_appends_granted_abilities():
         ).resolve(state, 0, ())
     finally:
         state.resolving_source = None
-    assert sample_act in land.temp_activated_abilities
-    assert sample_trig in land.temp_triggered_abilities
+    assert sample_act in effective_activated_abilities(state, land)
+    assert sample_trig in effective_triggered_abilities(state, land)

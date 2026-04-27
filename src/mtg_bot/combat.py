@@ -148,13 +148,20 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
     # ``(source_id, ability_index)`` cannot collide with a printed-
     # ability index. None of the wired-in granted triggers are
     # once-per-turn, so the offset is purely defensive.
+    # Printed abilities first (stable indices), then UEOT-granted
+    # abilities — both legacy ``temp_triggered_abilities`` field
+    # contents and layer-6 registry entries via
+    # ``effective_triggered_abilities``.
     enumerated: list[tuple[int, "object"]] = list(
         enumerate(attacker.printing.triggered_abilities)
     )
-    enumerated.extend(
-        (1000 + i, ab)
-        for i, ab in enumerate(attacker.temp_triggered_abilities)
-    )
+    from mtg_bot.game import effective_triggered_abilities
+
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, attacker)
+        if ab not in attacker.printing.triggered_abilities
+    ]
+    enumerated.extend((1000 + i, ab) for i, ab in enumerate(granted_only))
     for i, ability in enumerated:
         if ability.trigger != "attacks":
             continue
@@ -484,7 +491,13 @@ def _fire_enchanted_dealt_damage_triggers(
     # broadening the ledger key type. Sets resolving_source +
     # combat_damage_amount around the resolve so the inner effect can
     # read the damage amount.
-    for ability in obj.temp_triggered_abilities:
+    from mtg_bot.game import effective_triggered_abilities
+
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, obj)
+        if ab not in obj.printing.triggered_abilities
+    ]
+    for ability in granted_only:
         if ability.trigger != "this_dealt_damage":
             continue
         state.log.append(

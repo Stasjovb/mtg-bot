@@ -173,7 +173,13 @@ def move_off_battlefield(
     # reading the post-revert controller.
     from mtg_bot.game import effective_controller
 
-    dropped = state.remove_continuous_effects_from_source(obj.id)
+    # ``only_static=True`` so UEOT grants this object made (e.g.,
+    # Perigee Beckoner's granted dies-rider on itself) survive into
+    # the dies-trigger fire below; cleanup wipes them at end of
+    # turn.
+    dropped = state.remove_continuous_effects_from_source(
+        obj.id, only_static=True,
+    )
     revert_targets: set[int] = {
         ce.target_id for ce in dropped
         if ce.layer == 2
@@ -673,15 +679,22 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
             controller_id=dead.controller_id,
             label="dies",
         )
-    # UEOT-granted "When this creature dies, ..." triggers sitting in
-    # ``dead.temp_triggered_abilities`` (Perigee Beckoner's pump rider).
-    # Direct resolve rather than stack-push because the granted ability
-    # is ephemeral and isn't represented in the printed-ability ledger;
-    # using synthetic indices for push_triggered_ability would require
-    # broadening the ledger key type. Mirrors the dealt-damage path in
-    # combat._fire_enchanted_dealt_damage_triggers. resolving_source is
-    # set to the dying object so the granted effect can read it.
-    for ability in dead.temp_triggered_abilities:
+    # UEOT-granted "When this creature dies, ..." triggers — Perigee
+    # Beckoner's pump rider grants exactly this. Direct resolve
+    # rather than stack-push because the granted ability is
+    # ephemeral and isn't represented in the printed-ability ledger;
+    # using synthetic indices for push_triggered_ability would
+    # require broadening the ledger key type. Mirrors the dealt-
+    # damage path in combat._fire_enchanted_dealt_damage_triggers.
+    # ``resolving_source`` is set to the dying object so the granted
+    # effect can read it.
+    from mtg_bot.game import effective_triggered_abilities
+
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, dead)
+        if ab not in dead.printing.triggered_abilities
+    ]
+    for ability in granted_only:
         if ability.trigger != "dies":
             continue
         state.log.append(

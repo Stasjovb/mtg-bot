@@ -55,8 +55,13 @@ def test_accepted_ping_grants_trigger_pings_and_fires_rider():
     assert state.players[1].life == life_before - 1
     assert len(state.players[1].hand) == 1
     # The granted trigger is still on the creature for the rest of the turn.
-    assert len(enemy_bear.temp_triggered_abilities) == 1
-    assert enemy_bear.temp_triggered_abilities[0].trigger == "this_dealt_damage"
+    from mtg_bot.game import effective_triggered_abilities
+    granted = [
+        ab for ab in effective_triggered_abilities(state, enemy_bear)
+        if ab not in enemy_bear.printing.triggered_abilities
+    ]
+    assert len(granted) == 1
+    assert granted[0].trigger == "this_dealt_damage"
 
 
 def test_declined_ping_grants_trigger_but_no_damage():
@@ -74,7 +79,12 @@ def test_declined_ping_grants_trigger_but_no_damage():
     assert state.players[1].life == life_before
     assert len(state.players[1].hand) == 0
     # Trigger granted regardless of the may-decision.
-    assert len(enemy_bear.temp_triggered_abilities) == 1
+    from mtg_bot.game import effective_triggered_abilities
+    granted = [
+        ab for ab in effective_triggered_abilities(state, enemy_bear)
+        if ab not in enemy_bear.printing.triggered_abilities
+    ]
+    assert len(granted) == 1
 
 
 def test_effect_noop_no_target():

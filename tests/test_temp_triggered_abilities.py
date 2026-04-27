@@ -53,7 +53,12 @@ def test_grant_then_damage_fires_rider_once():
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
         state, 0, (("creature", bear.id),),
     )
-    assert len(bear.temp_triggered_abilities) == 1
+    from mtg_bot.game import effective_triggered_abilities
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert len(granted_only) == 1
     life_before = state.players[1].life
     _apply_damage(state, ("creature", bear.id), 2)
     # 2 damage → controller draws 2 and loses 2 life.
@@ -92,9 +97,18 @@ def test_cleanup_clears_temp_triggered_abilities():
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
         state, 0, (("creature", bear.id),),
     )
-    assert bear.temp_triggered_abilities  # present pre-cleanup
+    from mtg_bot.game import effective_triggered_abilities
+    pre = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert pre  # present pre-cleanup
     run_cleanup_step(state)
-    assert bear.temp_triggered_abilities == ()
+    post = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert post == []
     # Post-cleanup damage doesn't fire any rider.
     hand_before = len(state.players[1].hand)
     life_before = state.players[1].life
@@ -117,7 +131,12 @@ def test_pump_with_granted_trigger_combo():
         granted_triggered_ability=granted,
     ).resolve(state, 0, (("creature", bear.id),))
     assert bear.temp_power_bonus == 2
-    assert len(bear.temp_triggered_abilities) == 1
+    from mtg_bot.game import effective_triggered_abilities
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert len(granted_only) == 1
     # Trigger fires the rider on damage.
     _apply_damage(state, ("creature", bear.id), 1)
     assert len(state.players[1].hand) == 1

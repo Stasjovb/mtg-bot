@@ -2817,9 +2817,15 @@ class PumpTargetCreatureUntilEOT(Effect):
                 log_target_name=obj.printing.name,
             )
         if self.granted_triggered_ability is not None:
-            obj.temp_triggered_abilities = (
-                obj.temp_triggered_abilities
-                + (self.granted_triggered_ability,)
+            src = state.resolving_source
+            state.grant_triggered_ability_ueot(
+                source_id=src.id if src is not None else obj.id,
+                target_id=obj.id,
+                ability=self.granted_triggered_ability,
+                description=(
+                    f"{src.printing.name if src else obj.printing.name} "
+                    f"grants UEOT trigger to {obj.printing.name}"
+                ),
             )
         state.log.append(
             f"{obj.printing.name} gets "
@@ -2907,8 +2913,15 @@ class GrantTriggeredAbilityUEOT(Effect):
         )
         if obj is None:
             return
-        obj.temp_triggered_abilities = (
-            obj.temp_triggered_abilities + (self.ability,)
+        src = state.resolving_source
+        state.grant_triggered_ability_ueot(
+            source_id=src.id if src is not None else obj.id,
+            target_id=obj.id,
+            ability=self.ability,
+            description=(
+                f"{src.printing.name if src else obj.printing.name} "
+                f"grants UEOT trigger to {obj.printing.name}"
+            ),
         )
         state.log.append(
             f"{obj.printing.name} gains a granted triggered ability "
@@ -4049,15 +4062,25 @@ class BecomeLandCreatureUEOT(Effect):
             source.temp_unblockable = True
         if self.granted_subtype is not None:
             source.temp_subtype = self.granted_subtype
-        if self.granted_activated_abilities:
-            source.temp_activated_abilities = (
-                source.temp_activated_abilities
-                + tuple(self.granted_activated_abilities)
+        for ab in self.granted_activated_abilities:
+            state.grant_activated_ability_ueot(
+                source_id=source.id,
+                target_id=source.id,
+                ability=ab,
+                description=(
+                    f"{source.printing.name} grants activated ability "
+                    f"UEOT to itself (manland animation)"
+                ),
             )
-        if self.granted_triggered_abilities:
-            source.temp_triggered_abilities = (
-                source.temp_triggered_abilities
-                + tuple(self.granted_triggered_abilities)
+        for ab in self.granted_triggered_abilities:
+            state.grant_triggered_ability_ueot(
+                source_id=source.id,
+                target_id=source.id,
+                ability=ab,
+                description=(
+                    f"{source.printing.name} grants triggered ability "
+                    f"UEOT to itself (manland animation)"
+                ),
             )
         kw_note = (
             f" with {', '.join(sorted(self.granted_keywords))}"

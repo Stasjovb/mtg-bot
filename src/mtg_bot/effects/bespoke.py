@@ -1034,12 +1034,21 @@ class RequiemMonolithActivatedEffect(Effect):
         )
         if tgt is None:
             return
-        # Grant the UEOT trigger.
+        # Grant the UEOT trigger via the layer-6 registry.
         granted = TriggeredAbility(
             trigger="this_dealt_damage",
             effect=RequiemMonolithDealtDamageEffect(),
         )
-        tgt.temp_triggered_abilities = tgt.temp_triggered_abilities + (granted,)
+        src = state.resolving_source
+        state.grant_triggered_ability_ueot(
+            source_id=src.id if src is not None else tgt.id,
+            target_id=tgt.id,
+            ability=granted,
+            description=(
+                f"Requiem Monolith grants dealt-damage trigger UEOT to "
+                f"{tgt.printing.name}"
+            ),
+        )
         state.log.append(
             f"Requiem Monolith: {tgt.printing.name} gains the "
             f"dealt-damage trigger until end of turn"
@@ -2553,12 +2562,25 @@ class PerigeeBeckonerDiesReturnTappedEffect(Effect):
         if source not in owner.graveyard:
             return
         owner.graveyard.remove(source)
-        # Clear the temp_triggered_abilities now so a second death this
-        # turn (re-killed after the return) doesn't re-fire the rider —
-        # rules-wise the granted UEOT trigger is on the FORMER object;
-        # the returned object is a "new object" with no memory of UEOT
-        # grants. (Cleanup wipes them at end of turn anyway.)
+        # Clear UEOT-granted triggered abilities targeting this object
+        # so a second death this turn (re-killed after the return)
+        # doesn't re-fire the rider — rules-wise the granted UEOT
+        # trigger is on the FORMER object; the returned object is a
+        # "new object" with no memory of UEOT grants.
+        # Drop both the legacy ``temp_triggered_abilities`` field
+        # contents and any layer-6 registry grant entries targeting
+        # this source. Cleanup wipes the registry at end of turn
+        # anyway, but immediate clearing keeps the dies-trigger
+        # firing semantics correct mid-turn.
         source.temp_triggered_abilities = ()
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects
+            if not (
+                ce.layer == 6
+                and ce.kind == "grant_triggered_ability"
+                and ce.target_id == source.id
+            )
+        ]
         put_into_battlefield(state, source, owner.id)
         source.tapped = True
         state.log.append(

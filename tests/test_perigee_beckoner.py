@@ -59,7 +59,12 @@ def test_granted_dies_rider_returns_creature_tapped():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     _grant_dies_rider(state, bear)
-    assert len(bear.temp_triggered_abilities) == 1
+    from mtg_bot.game import effective_triggered_abilities
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert len(granted_only) == 1
     assert bear.temp_power_bonus == 2
 
     # Send it to the graveyard (simulates lethal damage / destroy).
@@ -103,9 +108,18 @@ def test_cleanup_clears_rider_then_death_does_not_fire():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     _grant_dies_rider(state, bear)
-    assert bear.temp_triggered_abilities  # present pre-cleanup
+    from mtg_bot.game import effective_triggered_abilities
+    granted_pre = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert granted_pre  # present pre-cleanup
     run_cleanup_step(state)
-    assert bear.temp_triggered_abilities == ()
+    granted_post = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert granted_post == []
     # Now kill it; should go to graveyard normally and stay there.
     move_off_battlefield(state, bear, destination="graveyard")
     assert bear not in state.battlefield
