@@ -248,11 +248,13 @@ def test_parser_matches_static_for_claimed_multi_line_spells(name):
 
 def test_make_sorcery_round_trip_for_vote_out():
     # Sanity: the parser produces the exact CardPrinting that
-    # `make_sorcery("Vote Out", "{3}{B}", DestroyTargetCreature())`
-    # would produce.
+    # `make_sorcery("Vote Out", "{3}{B}", DestroyTargetCreature(),
+    # has_convoke=True)` would produce. The Convoke preamble in the
+    # oracle text drives ``has_convoke=True`` via _detect_preamble_flags.
     card = _eoe_card("Vote Out")
     parsed = _build_spell_printing(card)
     expected = make_sorcery(
-        "Vote Out", "{3}{B}", effect=DestroyTargetCreature()
+        "Vote Out", "{3}{B}", effect=DestroyTargetCreature(),
+        has_convoke=True,
     )
     assert parsed == expected

@@ -35,11 +35,13 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         make_instant(
             "Bombard", "{2}{R}", effect=DealDamageToTargetCreature(amount=4),
         ),
-        # Real Vote Out has Convoke (pay cost with creatures tapping as mana)
-        # in addition to its mana cost. Convoke isn't implemented, so this
-        # plays at its full printed cost only.
+        # Vote Out: Convoke (CR 702.51). The caster may tap untapped
+        # creatures they control to pay the spell's cost; each tapped
+        # creature pays {1} or one mana of its color.
         make_sorcery(
-            "Vote Out", "{3}{B}", effect=DestroyTargetCreature(),
+            "Vote Out", "{3}{B}",
+            effect=DestroyTargetCreature(),
+            has_convoke=True,
         ),
         # Real Gravkill reads "exile target creature or Spacecraft" — since
         # Spacecraft aren't implemented yet, ours only targets creatures.

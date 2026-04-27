@@ -244,6 +244,7 @@ def _coin_satisfies_context(
 def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
+    *, convoke: bool = False,
 ) -> bool:
     """Check whether the player can pay ``cost`` by consuming floating
     mana in their pool (respecting spend restrictions for ``spell_kind``)
@@ -252,7 +253,14 @@ def can_pay_cost(
     ``spell_kind`` accepts a single string (legacy) or a frozenset of
     context tags — see ``_coin_satisfies_context`` for the supported
     tags.
+
+    When ``convoke=True``, the controller's untapped creatures are
+    pre-applied as convoke contributions before checking pool + lands.
+    Convoke is optional and only ever makes a spell cheaper, so for
+    legality we use the maximum convoke contribution.
     """
+    if convoke:
+        cost = _convoke_max_contribution(state, player_id, cost)
     p = state.player_by_id(player_id)
     usable_pool = [
         c for c in p.mana_pool
@@ -535,6 +543,133 @@ def _choose_and_apply_x(
         chosen = upper_bound
     state.log.append(f"P{player_id} chooses X={chosen} for {card.printing.name}")
     return chosen
+
+
+def _convoke_candidates(
+    state: GameState, player_id: int
+) -> list[GameObject]:
+    """Untapped creatures ``player_id`` controls. CR 702.51 doesn't
+    care about summoning sickness because tapping a creature for
+    convoke isn't an activated ability."""
+    from mtg_bot.game import is_creature_now
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and is_creature_now(o)
+        and not o.tapped
+    ]
+
+
+def _apply_convoke_pip(
+    state: GameState, creature: GameObject,
+    generic: int, colored: list[tuple[str, int]],
+) -> tuple[int, list[tuple[str, int]], bool]:
+    """Apply one creature's convoke contribution to ``(generic, colored)``.
+
+    Per CR 702.51: each tapped creature pays {1} OR one mana of one of
+    its colors. Greedy: prefer paying a still-owed colored pip the
+    creature matches; otherwise drop {1} from generic. If the creature
+    can't pay anything (cost already 0), returns the inputs unchanged
+    with ``applied=False`` so the caller can skip the tap.
+    """
+    from mtg_bot.game import effective_colors
+    cols = effective_colors(state, creature)
+    for i, (color, n) in enumerate(colored):
+        if n > 0 and color in cols:
+            new_colored = list(colored)
+            new_colored[i] = (color, n - 1)
+            return generic, new_colored, True
+    if generic > 0:
+        return generic - 1, colored, True
+    return generic, colored, False
+
+
+def _convoke_max_contribution(
+    state: GameState, player_id: int, cost: ManaCost
+) -> ManaCost:
+    """Lower ``cost`` by the maximum convoke contribution available.
+
+    Used by the affordability check (``can_pay_cost(..., convoke=True)``)
+    to compute "cheapest possible cost after convoke". Convoke is
+    always optional and only ever makes a spell cheaper, so the
+    legality check uses the upper-bound contribution. The actual cast
+    pipeline taps whatever subset the agent chooses.
+    """
+    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+        return cost
+    candidates = _convoke_candidates(state, player_id)
+    generic = cost.generic
+    colored = list(cost.colored)
+    for o in candidates:
+        if generic == 0 and all(n == 0 for _, n in colored):
+            break
+        generic, colored, _applied = _apply_convoke_pip(
+            state, o, generic, colored,
+        )
+    return ManaCost(
+        generic=generic,
+        colored=tuple((c, n) for c, n in colored if n > 0),
+        x_pips=cost.x_pips,
+    )
+
+
+def _apply_convoke(
+    state: GameState, player_id: int, cost: ManaCost,
+) -> ManaCost:
+    """Run the convoke prompt during cost-payment (CR 601.2g/h with
+    702.51). Asks the controller's agent which untapped creatures to
+    tap, then taps each one and reduces the cost by one pip per
+    creature. Returns the post-convoke cost for ``auto_tap_for_cost``
+    to finish paying from pool + lands.
+
+    A creature tapped for convoke can't separately activate its own
+    sac-or-tap mana ability for the same cast (it's already tapped),
+    matching the CR-required mutual exclusion that flagged Eldrazi
+    Scion + convoke spells in the original design audit.
+    """
+    p = state.player_by_id(player_id)
+    if p.agent is None:
+        return cost
+    if cost.generic == 0 and not any(n > 0 for _, n in cost.colored):
+        return cost
+    candidates = _convoke_candidates(state, player_id)
+    if not candidates:
+        return cost
+    candidate_ids = [o.id for o in candidates]
+    chosen_ids = p.agent.choose_convoke_creatures(
+        state, player_id, candidate_ids,
+        cost.generic, list(cost.colored),
+    )
+    if not chosen_ids:
+        return cost
+    from mtg_bot.turn import tap_permanent
+    by_id = {o.id: o for o in candidates}
+    seen: set[int] = set()
+    generic = cost.generic
+    colored = list(cost.colored)
+    for cid in chosen_ids:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        creature = by_id.get(cid)
+        if creature is None or creature.tapped:
+            continue
+        if generic == 0 and all(n == 0 for _, n in colored):
+            break
+        generic, colored, applied = _apply_convoke_pip(
+            state, creature, generic, colored,
+        )
+        if not applied:
+            continue
+        tap_permanent(state, creature)
+        state.log.append(
+            f"P{player_id} taps {creature.printing.name} for convoke"
+        )
+    return ManaCost(
+        generic=generic,
+        colored=tuple((c, n) for c, n in colored if n > 0),
+        x_pips=cost.x_pips,
+    )
 
 
 def auto_tap_for_cost(
@@ -1016,6 +1151,13 @@ def _cast_spell(
     # of library — set above when we resolved the spell's source zone).
     if cast_from_outside_hand:
         spell_kinds.add("cast_from_outside_hand")
+    # Convoke (CR 702.51): after total cost is determined (601.2f) but
+    # before the remaining cost is paid from pool + lands (601.2g/h),
+    # the controller may tap creatures they control. Each tapped
+    # creature pays {1} or one mana of its color. ``cast_for_free``
+    # zeroed the cost above, so convoke is a no-op there.
+    if card.printing.has_convoke:
+        cost = _apply_convoke(state, player_id, cost)
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
     )
