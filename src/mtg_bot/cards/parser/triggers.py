@@ -41,6 +41,29 @@ _TRIGGER_PHRASES: dict[str, str] = {
     # is stripped by ``_strip_ability_word_prefix`` before this
     # lookup runs.
     "a land you control enters": "landfall",
+    # Spell-cast triggers. The verbatim phrase
+    # ``you cast your second spell each turn`` maps to the engine's
+    # canonical ``second_spell_each_turn`` key (see Illvoi Operative,
+    # Sunstar Lightsmith, Station Monitor, etc. in
+    # ``eoe_creatures.py``). The "second-ness" lives in the engine's
+    # turn counter, not in this phrase's parameters — the only thing
+    # the parser has to do is map the literal English clause to the
+    # right key.
+    "you cast your second spell each turn": "second_spell_each_turn",
+    # Sacrifice trigger. ``Whenever you sacrifice another creature or
+    # artifact`` is the simplest-and-most-common form on EoE
+    # creatures (Lightless Evangel). The engine key is
+    # ``sacrifice_creature_or_artifact``; the ``another``-vs-``a``
+    # distinction is handled engine-side (the trigger naturally
+    # ignores self-sacrifice firings since the source must still be
+    # on the battlefield to trigger).
+    "you sacrifice another creature or artifact":
+        "sacrifice_creature_or_artifact",
+    # +1/+1 counter death trigger. ``Whenever a creature you control
+    # with a +1/+1 counter on it dies`` (Meltstrider Eulogist) maps
+    # to the engine's ``creature_you_control_with_counter_dies`` key.
+    "a creature you control with a +1/+1 counter on it dies":
+        "creature_you_control_with_counter_dies",
 }
 
 
