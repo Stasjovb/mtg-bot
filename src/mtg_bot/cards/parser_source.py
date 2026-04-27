@@ -47,7 +47,27 @@ each supported shape is a narrow regex that templates the card's own
 name into a single sentence — e.g. ``"<Name> deals N damage to any
 target."`` → ``DealDamageAnyTarget(amount=N)`` and ``"<Name> deals N
 damage to target creature."`` → ``DealDamageToTargetCreature(amount=N)``.
-Multi-sentence spells return ``None`` and are skipped.
+Generic shapes that don't reference the card name —
+``"Draw a card."`` → ``DrawCards(amount=1)``,
+``"Put a +1/+1 counter on target creature."`` →
+``PutPlusOneCounterOnTargetCreature(amount=1)`` — also parse.
+
+Multi-line spells split on ``\\n`` into clauses. Two combinator
+shapes are supported:
+
+1. ``ConditionalIfVoid`` — exactly two clauses where the second is a
+   "Void —" replacement of the first damage effect. Matches
+   Plasma Bolt: ``"<Name> deals N damage to any target.\\nVoid — <Name>
+   deals M damage instead if a nonland permanent left the
+   battlefield this turn or a spell was warped this turn."`` →
+   ``ConditionalIfVoid(then=DealDamageAnyTarget(M),
+   else=DealDamageAnyTarget(N))``.
+2. ``Sequence`` — every clause parses as a plain spell-effect
+   sentence. Matches Honor: ``"Put a +1/+1 counter on target creature.
+   \\nDraw a card."`` → ``Sequence((PutPlusOneCounterOnTargetCreature(1),
+   DrawCards(1)))``.
+
+If any clause fails to parse the whole spell is skipped.
 
 Land support starts with **basic lands** (``Basic`` supertype +
 ``Land`` card type). The oracle text is a single parenthesized
@@ -68,12 +88,15 @@ from pathlib import Path
 
 from mtg_bot.cards.base import (
     CardPrinting,
+    ConditionalIfVoid,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
     DrawCards,
     Effect,
     GainLife,
+    PutPlusOneCounterOnTargetCreature,
+    Sequence,
     TriggeredAbility,
     make_basic_land,
     make_creature,
@@ -307,12 +330,20 @@ def _parse_warp_line(line: str) -> str | None:
 # refers to the source permanent). Each supported shape is its own narrow
 # regex; we'll grow the grammar one card at a time. The card's name is
 # substituted into the pattern at parse time so the regex doesn't have
-# to model "<Name>" as a free-form token.
+# to model "<Name>" as a free-form token. Generic shapes (no name token)
+# are matched after name-substituted shapes.
 _SPELL_DEAL_DAMAGE_ANY_TARGET = (
     r"^{name} deals (\d+) damage to any target\.$"
 )
 _SPELL_DEAL_DAMAGE_TARGET_CREATURE = (
     r"^{name} deals (\d+) damage to target creature\.$"
+)
+# Generic (no name token) sentence-shaped effects. These appear as
+# whole spells (rare) and as clauses inside multi-line spells (common,
+# e.g. Honor's "Draw a card." rider).
+_SPELL_DRAW_A_CARD = re.compile(r"^Draw a card\.$")
+_SPELL_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
+    r"^Put a \+1/\+1 counter on target creature\.$"
 )
 
 
@@ -334,14 +365,88 @@ def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
     )
     if m is not None:
         return DealDamageToTargetCreature(amount=int(m.group(1)))
+    if _SPELL_DRAW_A_CARD.match(phrase) is not None:
+        return DrawCards(amount=1)
+    if _SPELL_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
+        return PutPlusOneCounterOnTargetCreature(amount=1)
     return None
+
+
+# Plasma-Bolt-shaped Void rider: a second clause of the form
+# "Void — <Name> deals M damage instead if a nonland permanent left the
+# battlefield this turn or a spell was warped this turn."
+# Pairs with a preceding "<Name> deals N damage to any target." clause
+# to form a ConditionalIfVoid switching the damage amount.
+_SPELL_VOID_DAMAGE_REPLACEMENT = (
+    r"^Void — {name} deals (\d+) damage instead "
+    r"if a nonland permanent left the battlefield this turn "
+    r"or a spell was warped this turn\.$"
+)
+
+
+def _parse_void_damage_replacement(
+    phrase: str, name: str, base_effect: Effect
+) -> Effect | None:
+    """If ``phrase`` is a Void rider replacing the damage amount of
+    ``base_effect``, return the void-branch ``Effect`` (same shape as
+    base, new amount). Returns ``None`` otherwise.
+
+    Currently only handles ``DealDamageAnyTarget`` as the base — the
+    only damage shape that pairs with a Void rider in the EoE pool we
+    support today (Plasma Bolt). Extend per-card as new pairings show up.
+    """
+    if not isinstance(base_effect, DealDamageAnyTarget):
+        return None
+    name_re = re.escape(name)
+    m = re.match(
+        _SPELL_VOID_DAMAGE_REPLACEMENT.format(name=name_re), phrase.strip()
+    )
+    if m is None:
+        return None
+    return DealDamageAnyTarget(amount=int(m.group(1)))
+
+
+def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
+    """Parse a spell's full oracle text into a single ``Effect``.
+
+    Single-line: parsed by ``_parse_spell_effect_phrase`` directly.
+    Multi-line: each ``\\n``-separated clause is parsed; clauses are
+    combined either via ``ConditionalIfVoid`` (when the second clause
+    is a Void replacement of the first damage effect) or via
+    ``Sequence`` (every clause is a plain spell-effect sentence).
+    Returns ``None`` if any clause fails to parse.
+    """
+    clauses = [c.strip() for c in text.split("\n") if c.strip()]
+    if not clauses:
+        return None
+    if len(clauses) == 1:
+        return _parse_spell_effect_phrase(clauses[0], name)
+    # Two-clause Void-replacement shape (Plasma Bolt).
+    if len(clauses) == 2:
+        first = _parse_spell_effect_phrase(clauses[0], name)
+        if first is not None:
+            void_then = _parse_void_damage_replacement(
+                clauses[1], name, first
+            )
+            if void_then is not None:
+                return ConditionalIfVoid(
+                    then_effect=void_then, else_effect=first
+                )
+    # Sequence shape: every clause must be a plain spell-effect sentence.
+    parsed: list[Effect] = []
+    for clause in clauses:
+        eff = _parse_spell_effect_phrase(clause, name)
+        if eff is None:
+            return None
+        parsed.append(eff)
+    return Sequence(effects=tuple(parsed))
 
 
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
-    neither an instant nor a sorcery, or if its oracle text isn't a
-    single sentence the spell-effect grammar recognizes.
+    neither an instant nor a sorcery, or if its oracle text doesn't
+    parse into a supported single-effect or composite shape.
     """
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
@@ -349,9 +454,9 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     if "Instant" not in card_types and "Sorcery" not in card_types:
         return None
     text = card.get("oracle_text", "").strip()
-    if not text or "\n" in text:
+    if not text:
         return None
-    effect = _parse_spell_effect_phrase(text, card["name"])
+    effect = _parse_spell_oracle_text(text, card["name"])
     if effect is None:
         return None
     factory = make_instant if "Instant" in card_types else make_sorcery

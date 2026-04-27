@@ -5,11 +5,14 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.base import (
+    ConditionalIfVoid,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
     DrawCards,
     GainLife,
+    PutPlusOneCounterOnTargetCreature,
+    Sequence,
     TriggeredAbility,
 )
 from mtg_bot.cards.parser_source import (
@@ -21,9 +24,11 @@ from mtg_bot.cards.parser_source import (
     _parse_effect_phrase,
     _parse_keyword_line,
     _parse_spell_effect_phrase,
+    _parse_spell_oracle_text,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
     _parse_type_line,
+    _parse_void_damage_replacement,
     _parse_warp_line,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -450,11 +455,12 @@ def test_source_claims_gravpack_monoist():
 
 
 def test_source_skips_cards_with_unsupported_clauses():
-    """A card whose oracle text uses any clause beyond Flying or
-    ETB-deals-N-damage-to-any-target must not be claimed."""
+    """A card whose oracle text uses any clause beyond what the parser
+    supports must not be claimed. Decode Transmissions has a Void rider
+    with an unsupported life-loss/each-opponent-loses-life shape, so the
+    second clause fails and the whole spell is skipped."""
     source = OracleParserCardSource()
-    # Plasma Bolt is an instant, not a creature — definitely not claimed.
-    assert "Plasma Bolt" not in source.claimed_names
+    assert "Decode Transmissions" not in source.claimed_names
 
 
 def test_source_get_printings_returns_only_claimed():
@@ -569,21 +575,6 @@ def test_build_spell_printing_skips_unsupported_effect_text():
     assert _build_spell_printing(card) is None
 
 
-def test_build_spell_printing_skips_multi_line_oracle_text():
-    """Plasma Bolt has a Void rider on a second line — outside slice
-    grammar, so the whole spell is skipped."""
-    card = dict(
-        _BOMBARD_CARD,
-        name="Plasma Bolt",
-        type_line="Sorcery",
-        oracle_text=(
-            "Plasma Bolt deals 2 damage to any target.\n"
-            "Void — Plasma Bolt deals 3 damage instead."
-        ),
-    )
-    assert _build_spell_printing(card) is None
-
-
 def test_build_spell_printing_skips_empty_oracle_text():
     card = dict(_BOMBARD_CARD, oracle_text="")
     assert _build_spell_printing(card) is None
@@ -597,10 +588,12 @@ def test_source_claims_bombard():
     assert "Bombard" in source.get_printings()
 
 
-def test_source_does_not_claim_plasma_bolt():
-    """Plasma Bolt has a Void rider — outside slice-1 spell grammar."""
+def test_source_claims_plasma_bolt():
+    """Plasma Bolt's two-clause Void rider parses to a
+    ``ConditionalIfVoid`` switching the damage amount."""
     source = OracleParserCardSource()
-    assert "Plasma Bolt" not in source.claimed_names
+    assert "Plasma Bolt" in source.claimed_names
+    assert "Plasma Bolt" in source.get_printings()
 
 
 # ---------- _build_land_printing ----------
@@ -913,3 +906,216 @@ def test_source_does_not_claim_timeline_culler():
     out of scope this batch — the card must remain unclaimed."""
     source = OracleParserCardSource()
     assert "Timeline Culler" not in source.claimed_names
+
+
+def test_source_claims_honor():
+    """Honor's two-clause oracle text parses to a ``Sequence`` of
+    counter-on-target-creature followed by draw-a-card."""
+    source = OracleParserCardSource()
+    assert "Honor" in source.claimed_names
+    assert "Honor" in source.get_printings()
+
+
+# ---------- _parse_spell_effect_phrase: generic shapes ----------
+
+def test_parse_spell_effect_phrase_recognizes_draw_a_card_sentence():
+    """The spell-side ``Draw a card.`` sentence (capital D, period)
+    parses to ``DrawCards(amount=1)``. Distinct from the creature-side
+    lowercase ``draw a card`` clause used inside trigger payloads."""
+    assert _parse_spell_effect_phrase(
+        "Draw a card.", "Honor"
+    ) == DrawCards(amount=1)
+
+
+def test_parse_spell_effect_phrase_recognizes_put_plus_one_counter():
+    assert _parse_spell_effect_phrase(
+        "Put a +1/+1 counter on target creature.", "Honor"
+    ) == PutPlusOneCounterOnTargetCreature(amount=1)
+
+
+# ---------- _parse_void_damage_replacement ----------
+
+def test_parse_void_damage_replacement_recognizes_plasma_bolt_rider():
+    base = DealDamageAnyTarget(amount=2)
+    result = _parse_void_damage_replacement(
+        "Void — Plasma Bolt deals 3 damage instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn.",
+        "Plasma Bolt",
+        base,
+    )
+    assert result == DealDamageAnyTarget(amount=3)
+
+
+def test_parse_void_damage_replacement_returns_none_for_non_void_clause():
+    base = DealDamageAnyTarget(amount=2)
+    assert _parse_void_damage_replacement(
+        "Plasma Bolt deals 3 damage to any target.",
+        "Plasma Bolt",
+        base,
+    ) is None
+
+
+def test_parse_void_damage_replacement_returns_none_for_unsupported_base():
+    """Void-damage-replacement only pairs with ``DealDamageAnyTarget``
+    today. A non-damage base effect can't carry a damage-amount Void
+    rider, so the parse fails and the spell falls through to the
+    Sequence path (which will also reject the unknown clause)."""
+    base = DrawCards(amount=1)
+    assert _parse_void_damage_replacement(
+        "Void — Plasma Bolt deals 3 damage instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn.",
+        "Plasma Bolt",
+        base,
+    ) is None
+
+
+def test_parse_void_damage_replacement_requires_full_tail():
+    """The Void rider regex is anchored to the full Plasma-Bolt-shape
+    tail; truncated versions don't match."""
+    base = DealDamageAnyTarget(amount=2)
+    assert _parse_void_damage_replacement(
+        "Void — Plasma Bolt deals 3 damage instead.",
+        "Plasma Bolt",
+        base,
+    ) is None
+
+
+# ---------- _parse_spell_oracle_text (multi-line spells) ----------
+
+def test_parse_spell_oracle_text_single_line_passes_through():
+    """A single-line oracle text returns the same effect as the
+    underlying single-sentence parser."""
+    assert _parse_spell_oracle_text(
+        "Bombard deals 4 damage to target creature.", "Bombard"
+    ) == DealDamageToTargetCreature(amount=4)
+
+
+def test_parse_spell_oracle_text_plasma_bolt_void_conditional():
+    """Plasma Bolt's exact Scryfall oracle text parses to a
+    ``ConditionalIfVoid`` switching the damage amount."""
+    text = (
+        "Plasma Bolt deals 2 damage to any target.\n"
+        "Void — Plasma Bolt deals 3 damage instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn."
+    )
+    assert _parse_spell_oracle_text(text, "Plasma Bolt") == ConditionalIfVoid(
+        then_effect=DealDamageAnyTarget(amount=3),
+        else_effect=DealDamageAnyTarget(amount=2),
+    )
+
+
+def test_parse_spell_oracle_text_honor_sequence():
+    """Honor's exact Scryfall oracle text parses to a two-effect
+    ``Sequence``."""
+    text = "Put a +1/+1 counter on target creature.\nDraw a card."
+    assert _parse_spell_oracle_text(text, "Honor") == Sequence(
+        effects=(
+            PutPlusOneCounterOnTargetCreature(amount=1),
+            DrawCards(amount=1),
+        )
+    )
+
+
+def test_parse_spell_oracle_text_skips_when_any_clause_unparseable():
+    """If even one clause fails to parse, the whole spell is skipped."""
+    # First clause OK, second clause unknown shape.
+    assert _parse_spell_oracle_text(
+        "Put a +1/+1 counter on target creature.\nScry 1.", "Honor"
+    ) is None
+    # First clause unknown, second clause OK.
+    assert _parse_spell_oracle_text(
+        "Scry 1.\nDraw a card.", "Honor"
+    ) is None
+
+
+def test_parse_spell_oracle_text_skips_truncated_void_rider_falls_to_sequence():
+    """A 'Void — ... instead.' rider missing the full tail isn't a
+    valid Void replacement, and isn't a plain spell-effect sentence
+    either — so the Sequence fallback also fails and the whole spell
+    is skipped."""
+    text = (
+        "Plasma Bolt deals 2 damage to any target.\n"
+        "Void — Plasma Bolt deals 3 damage instead."
+    )
+    assert _parse_spell_oracle_text(text, "Plasma Bolt") is None
+
+
+def test_parse_spell_oracle_text_empty_returns_none():
+    assert _parse_spell_oracle_text("", "Bombard") is None
+    # Whitespace-only clauses are filtered out — net result is empty.
+    assert _parse_spell_oracle_text("\n\n", "Bombard") is None
+
+
+def test_parse_spell_oracle_text_blank_lines_between_clauses_ignored():
+    """Blank lines between real clauses don't change the effective
+    clause list — the Honor pattern still parses cleanly with an
+    extra blank line."""
+    text = "Put a +1/+1 counter on target creature.\n\nDraw a card."
+    assert _parse_spell_oracle_text(text, "Honor") == Sequence(
+        effects=(
+            PutPlusOneCounterOnTargetCreature(amount=1),
+            DrawCards(amount=1),
+        )
+    )
+
+
+# ---------- _build_spell_printing (multi-line) ----------
+
+def test_build_spell_printing_handles_plasma_bolt():
+    card = {
+        "name": "Plasma Bolt",
+        "mana_cost": "{R}",
+        "type_line": "Sorcery",
+        "oracle_text": (
+            "Plasma Bolt deals 2 damage to any target.\n"
+            "Void — Plasma Bolt deals 3 damage instead "
+            "if a nonland permanent left the battlefield this turn "
+            "or a spell was warped this turn."
+        ),
+    }
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.is_sorcery
+    assert printing.spell_effect == ConditionalIfVoid(
+        then_effect=DealDamageAnyTarget(amount=3),
+        else_effect=DealDamageAnyTarget(amount=2),
+    )
+
+
+def test_build_spell_printing_handles_honor():
+    card = {
+        "name": "Honor",
+        "mana_cost": "{W}",
+        "type_line": "Sorcery",
+        "oracle_text": "Put a +1/+1 counter on target creature.\nDraw a card.",
+    }
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.is_sorcery
+    assert printing.spell_effect == Sequence(
+        effects=(
+            PutPlusOneCounterOnTargetCreature(amount=1),
+            DrawCards(amount=1),
+        )
+    )
+
+
+def test_build_spell_printing_skips_multi_line_with_unparseable_clause():
+    """A multi-line spell whose first clause is fine but second is an
+    unsupported shape is skipped — the all-or-nothing rule from the
+    creature builder applies to spells too."""
+    card = {
+        "name": "Decode Transmissions",
+        "mana_cost": "{2}{B}",
+        "type_line": "Sorcery",
+        "oracle_text": (
+            "You draw two cards and lose 2 life.\n"
+            "Void — If a nonland permanent left the battlefield this turn "
+            "or a spell was warped this turn, instead you draw two cards "
+            "and each opponent loses 2 life."
+        ),
+    }
+    assert _build_spell_printing(card) is None
