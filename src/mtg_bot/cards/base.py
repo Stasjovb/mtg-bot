@@ -414,6 +414,25 @@ class CardPrinting:
     # ``move_off_battlefield`` drops the entry when the aura leaves
     # play. Supports nested swaps in CR-613 timestamp order.
     attached_grants_control: bool = False
+    # Lignify-style aura flags. When set on an Aura's printing,
+    # ``apply_aura_static_grants_on_attach`` writes corresponding
+    # registry entries on attach so the layered registry models the
+    # full Lignify effect (CR 613, layers 4 + 6 + 7b):
+    #   - ``attached_sets_base_pt`` — layer 7 sublayer 1 set-base-PT,
+    #     params ``(power, toughness)``. Overrides the enchanted
+    #     permanent's base power and toughness while attached.
+    #   - ``attached_grants_lose_all_abilities`` — layer 6
+    #     ``"lose_all_abilities"``. Suppresses every printed and
+    #     granted ability/keyword/trigger on the enchanted permanent.
+    #   - ``attached_grants_subtype`` — layer 4 ``"add_subtype"``
+    #     adding the named subtype to the enchanted permanent (e.g.
+    #     "Treefolk" for Lignify).
+    # All three live with ``expires_at=None`` so they end when the
+    # source aura leaves play (``remove_continuous_effects_from_source(
+    # only_static=True)`` drops them in ``move_off_battlefield``).
+    attached_sets_base_pt: "tuple[int, int] | None" = None
+    attached_grants_lose_all_abilities: bool = False
+    attached_grants_subtype: "str | None" = None
     # "The first time you would create one or more tokens each turn,
     # you may instead create that many tokens that are copies of
     # enchanted permanent." Moonlit Meditation. Aura-only flag.
@@ -993,6 +1012,9 @@ def make_aura(
     aura_enchant_type: str = "creature",
     attached_prevents_untap: bool = False,
     attached_grants_control: bool = False,
+    attached_sets_base_pt: "tuple[int, int] | None" = None,
+    attached_grants_lose_all_abilities: bool = False,
+    attached_grants_subtype: "str | None" = None,
     replaces_first_tokens_with_copies: bool = False,
     attached_grants_ward: str | None = None,
 ) -> CardPrinting:
@@ -1029,6 +1051,9 @@ def make_aura(
         aura_enchant_type=aura_enchant_type,
         attached_prevents_untap=attached_prevents_untap,
         attached_grants_control=attached_grants_control,
+        attached_sets_base_pt=attached_sets_base_pt,
+        attached_grants_lose_all_abilities=attached_grants_lose_all_abilities,
+        attached_grants_subtype=attached_grants_subtype,
         replaces_first_tokens_with_copies=replaces_first_tokens_with_copies,
         attached_grants_ward_cost=(
             parse_mana_cost(attached_grants_ward)
