@@ -6,6 +6,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DrawCardsEqualToResolvingCounterAmount
 from mtg_bot.game import GameState, Player, Zone, add_plus_one_counters
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -107,5 +108,5 @@ def test_terrasymbiosis_does_not_fire_for_opponents_counters():
 
 def test_terrasymbiosis_printing_has_trigger():
     t = EOE_SPELLS["Terrasymbiosis"]
-    triggers = {ab.trigger for ab in t.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "counters_added_to_your_creature" in triggers

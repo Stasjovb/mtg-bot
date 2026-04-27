@@ -14,6 +14,7 @@ so "if you do" is not satisfied and the draw is skipped.
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _YesAgent(Agent):
@@ -75,7 +76,7 @@ def test_melded_moxite_etb_yes_with_card_in_hand_discards_one_draws_two():
 
     etb = next(
         ab for ab in moxite.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     etb.effect.resolve(state, 0)
 
@@ -103,7 +104,7 @@ def test_melded_moxite_etb_no_path_skips_discard_and_draw():
 
     etb = next(
         ab for ab in moxite.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     etb.effect.resolve(state, 0)
 
@@ -129,7 +130,7 @@ def test_melded_moxite_etb_yes_with_empty_hand_skips_draw():
 
     etb = next(
         ab for ab in moxite.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     etb.effect.resolve(state, 0)
 

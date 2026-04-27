@@ -8,6 +8,7 @@ from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import PutCardFromGraveyardOnBottomOfLibrary
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import tap_permanent
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -117,7 +118,7 @@ def test_chrome_companion_lifegain_does_not_repeat_when_already_tapped():
 
 def test_chrome_printing_has_trigger_and_activated_ability():
     c = EOE_CREATURES["Chrome Companion"]
-    triggers = {ab.trigger for ab in c.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
     assert "becomes_tapped" in triggers
     assert len(c.activated_abilities) == 1
     cost = c.activated_abilities[0].cost

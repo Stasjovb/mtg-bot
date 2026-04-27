@@ -17,6 +17,7 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import fire_opponent_discards_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -212,6 +213,6 @@ def test_entropic_attack_trigger_empty_hand_loses_3_life():
 
 def test_entropic_printing_has_both_triggers():
     p = EOE_CREATURES["Entropic Battlecruiser"]
-    triggers = {ab.trigger for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "opponent_discards_a_card" in triggers
     assert "attacks" in triggers

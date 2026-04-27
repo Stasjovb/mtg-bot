@@ -12,6 +12,7 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_end_step_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -140,6 +141,6 @@ def test_chorale_end_step_sacrifice_integration():
 
 def test_chorale_printing_has_both_triggers():
     c = EOE_SPELLS["Chorale of the Void"]
-    triggers = {ab.trigger for ab in c.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
     assert "enchanted_creature_attacks" in triggers
     assert "beginning_of_end_step" in triggers

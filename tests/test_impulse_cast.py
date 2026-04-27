@@ -12,6 +12,7 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -146,7 +147,7 @@ def test_memorial_vault_describe():
 
 def test_territorial_bruntar_printing_has_landfall_trigger():
     t = EOE_CREATURES["Territorial Bruntar"]
-    triggers = {ab.trigger for ab in t.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "landfall" in triggers
 
 

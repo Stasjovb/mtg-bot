@@ -7,6 +7,7 @@ from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SotheraEndStepReanimateEffect, SotheraExileOpponentCreatureEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy, run_beginning_of_end_step_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -123,6 +124,6 @@ def test_end_step_sacrifices_sothera_and_reanimates_when_player_creatureless():
 def test_sothera_printing_metadata():
     s = EOE_SPELLS["Sothera, the Supervoid"]
     assert "Legendary" in s.supertypes
-    triggers = {ab.trigger for ab in s.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "your_creature_or_artifact_dies" in triggers
     assert "beginning_of_end_step" in triggers

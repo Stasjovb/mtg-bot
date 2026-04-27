@@ -17,6 +17,7 @@ from mtg_bot.cards import (
     TOKEN_PRINTINGS,
 )
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _make_fixed_mode_agent(mode_idx: int = 0) -> RandomAgent:
@@ -150,7 +151,7 @@ def test_pinnacle_emissary_does_not_trigger_for_non_artifact_spell():
 
 def test_pinnacle_emissary_printing_has_trigger():
     p = EOE_CREATURES["Pinnacle Emissary"]
-    triggers = {ab.trigger for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "cast_artifact_spell" in triggers
 
 
@@ -193,7 +194,7 @@ def test_blade_of_the_swarm_etb_is_modal_with_two_modes():
         PutPlusOneCounterOnSelf,
     )
     blade = EOE_CREATURES["Blade of the Swarm"]
-    etb = next(a for a in blade.triggered_abilities if a.trigger == "etb")
+    etb = next(a for a in blade.triggered_abilities if _matches_legacy_key(a, "etb"))
     assert isinstance(etb.effect, ModalChooseOne)
     assert len(etb.effect.modes) == 2
     assert isinstance(etb.effect.modes[0], PutPlusOneCounterOnSelf)

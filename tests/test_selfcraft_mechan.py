@@ -6,6 +6,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import SelfcraftMechanETBEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -106,7 +107,7 @@ def test_selfcraft_etb_fizzles_when_no_artifact_can_be_sacrificed():
 
 def test_selfcraft_printing_has_etb():
     m = EOE_CREATURES["Selfcraft Mechan"]
-    triggers = {ab.trigger for ab in m.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert m.is_artifact
 

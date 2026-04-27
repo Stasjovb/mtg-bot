@@ -38,6 +38,7 @@ from mtg_bot.turn import (
 
 
 from tests._rules_helpers import *  # noqa: F401,F403
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def test_mill_target_player_fixed_amount():
@@ -394,7 +395,7 @@ def test_blooming_stinger_grants_deathtouch():
 
     # Manually apply the ETB targeting ally (test the grant path directly).
     etb = next(
-        ab for ab in stinger.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in stinger.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = stinger
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -448,7 +449,7 @@ def test_biomechan_engineer_etb_and_activation():
     state.battlefield.append(eng)
     # Fire ETB manually.
     etb = next(
-        ab for ab in eng.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in eng.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = eng
     etb.effect.resolve(state, 0)
@@ -478,7 +479,7 @@ def test_interceptor_mechan_etb_grabs_from_graveyard():
     )
     state.battlefield.append(mechan)
     etb = next(
-        ab for ab in mechan.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in mechan.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = mechan
     etb.effect.resolve(state, 0, (("graveyard_creature", ghost.id),))
@@ -536,7 +537,7 @@ def test_seedship_broodtender_etb_and_reanimate():
     state.battlefield.append(broodt)
     # Fire ETB (mills 3).
     etb = next(
-        ab for ab in broodt.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in broodt.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = broodt
     etb.effect.resolve(state, 0)
@@ -836,7 +837,7 @@ def test_wurmwall_sweeper_etb_surveil():
     state.battlefield.append(ws)
     # Trigger ETB surveil 2.
     etb = next(
-        ab for ab in ws.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ws.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ws
     etb.effect.resolve(state, 0)
@@ -861,7 +862,7 @@ def test_fell_gravship_etb_mill_and_return():
     state.players[0].graveyard.append(ghost)
 
     etb = next(
-        ab for ab in fg.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in fg.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     legal = etb.effect.legal_targets(state, 0)
     # Legal targets from ReturnCreatureFromYourGraveyardToHand — at least
@@ -890,7 +891,7 @@ def test_pinnacle_kill_ship_etb_deals_damage():
     )
     state.battlefield.append(ship)
     etb = next(
-        ab for ab in ship.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ship.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ship
     etb.effect.resolve(state, 0, (("creature", target.id),))
@@ -905,7 +906,7 @@ def test_pinnacle_kill_ship_etb_target_is_optional_no_creatures():
 
     ship_p = EOE_CREATURES["Pinnacle Kill-Ship"]
     etb = next(
-        ab for ab in ship_p.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ship_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert etb.effect.target_count_range() == (0, 1)
     assert etb.effect.requires_target() is False
@@ -933,7 +934,7 @@ def test_warmaker_gunship_damage_scales_with_artifacts():
     )
     state.battlefield.append(lander)
     etb = next(
-        ab for ab in gunship.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in gunship.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = gunship
     etb.effect.resolve(state, 0, (("creature", target.id),))
@@ -986,7 +987,7 @@ def test_susurian_dirgecraft_forces_opponent_sac():
     )
     state.battlefield.append(ship)
     etb = next(
-        ab for ab in ship.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ship.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ship
     etb.effect.resolve(state, 0)
@@ -1282,7 +1283,7 @@ def test_luxknight_breacher_enters_with_scaled_counters():
     )
     state.battlefield.append(lux)
     etb = next(
-        ab for ab in lux.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in lux.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = lux
     etb.effect.resolve(state, 0)
@@ -1299,7 +1300,7 @@ def test_luxknight_breacher_noop_with_empty_board():
     )
     state.battlefield.append(lux)
     etb = next(
-        ab for ab in lux.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in lux.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = lux
     etb.effect.resolve(state, 0)
@@ -1334,7 +1335,7 @@ def test_fallers_faithful_etb_destroys_creature():
     )
     state.battlefield.append(ff)
     etb = next(
-        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ff.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ff
     etb.effect.resolve(state, 0, (("creature", victim.id),))
@@ -1360,7 +1361,7 @@ def test_fallers_faithful_undamaged_target_draws_two():
     )
     state.battlefield.append(ff)
     etb = next(
-        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ff.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ff
     p1_hand_before = len(state.players[1].hand)
@@ -1392,7 +1393,7 @@ def test_fallers_faithful_damaged_target_no_draw():
     )
     state.battlefield.append(ff)
     etb = next(
-        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ff.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ff
     p1_hand_before = len(state.players[1].hand)
@@ -1412,7 +1413,7 @@ def test_fallers_faithful_etb_target_is_optional():
 
     ff_p = EOE_CREATURES["Faller's Faithful"]
     etb = next(
-        ab for ab in ff_p.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ff_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert etb.effect.target_count_range() == (0, 1)
     assert etb.effect.requires_target() is False
@@ -1439,7 +1440,7 @@ def test_fallers_faithful_excludes_self_target():
     )
     state.battlefield.append(ff)
     etb = next(
-        ab for ab in ff.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in ff.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = ff
     legal = etb.effect.legal_targets(state, controller_id=0)
@@ -1493,7 +1494,7 @@ def test_biotech_specialist_and_kav_landseeker_make_landers():
         )
         state.battlefield.append(c)
         etb = next(
-            ab for ab in c.printing.triggered_abilities if ab.trigger == "etb"
+            ab for ab in c.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
         )
         state.resolving_source = c
         etb.effect.resolve(state, 0)
@@ -1576,7 +1577,7 @@ def test_exosuit_savior_bounces_own_permanent():
     assert "flying" in savior.printing.keywords
 
     etb = next(
-        ab for ab in savior.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in savior.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = savior
     etb.effect.resolve(state, 0, (("permanent", plains.id),))
@@ -1593,7 +1594,7 @@ def test_exosuit_savior_target_is_optional_and_excludes_self():
 
     savior_p = EOE_CREATURES["Exosuit Savior"]
     etb = next(
-        ab for ab in savior_p.triggered_abilities if ab.trigger == "etb"
+        ab for ab in savior_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert etb.effect.target_count_range() == (0, 1)
     assert etb.effect.requires_target() is False
@@ -1625,7 +1626,7 @@ def test_exosuit_savior_excludes_self_with_other_permanents():
     state.battlefield.append(savior)
     etb = next(
         ab for ab in savior.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = savior
     legal = etb.effect.legal_targets(state, controller_id=0)
@@ -1762,7 +1763,7 @@ def test_bioengineered_future_etb_makes_lander():
     )
     state.battlefield.append(enc)
     etb = next(
-        ab for ab in enc.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in enc.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = enc
     etb.effect.resolve(state, 0)
@@ -2239,7 +2240,7 @@ def test_melded_moxite_etb_loot_and_sac_for_robot():
     state.battlefield.append(moxite)
     # Fire ETB (loot: discard 1, draw 2).
     etb = next(
-        ab for ab in moxite.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in moxite.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = moxite
     hand_before = len(state.players[0].hand)
@@ -2323,7 +2324,7 @@ def test_dubious_delicacy_etb_and_activated():
 
     # Fire ETB (-3/-3 UEOT on victim).
     etb = next(
-        ab for ab in dd.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in dd.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = dd
     etb.effect.resolve(state, 0, (("creature", victim.id),))
@@ -2774,7 +2775,7 @@ def test_sunstar_expansionist_etb_triggers_only_when_behind():
     )
     state.battlefield.append(se)
     etb = next(
-        ab for ab in se.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in se.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = se
     etb.effect.resolve(state, 0)
@@ -2803,7 +2804,7 @@ def test_sunstar_expansionist_etb_skipped_when_ahead():
     )
     state.battlefield.append(se)
     etb = next(
-        ab for ab in se.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in se.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = se
     etb.effect.resolve(state, 0)
@@ -3105,7 +3106,7 @@ def test_meltstriders_gear_equips_and_buffs():
     assert "Equipment" in gear.printing.subtypes
     # Trigger ETB to attach.
     etb = next(
-        ab for ab in gear.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in gear.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = gear
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -3161,7 +3162,7 @@ def test_illvoi_light_jammer_has_flash_plus_buff():
     )
     state.battlefield.append(jammer)
     etb = next(
-        ab for ab in jammer.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in jammer.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = jammer
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -3215,7 +3216,7 @@ def test_auxiliary_boosters_etb_creates_and_attaches():
     )
     state.battlefield.append(gear)
     etb = next(
-        ab for ab in gear.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in gear.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = gear
     etb.effect.resolve(state, 0)
@@ -3295,7 +3296,7 @@ def test_specimen_freighter_bounces_up_to_two():
     state.battlefield.append(freighter)
     # Fire the ETB with multi-target: pick both bears.
     etb = next(
-        ab for ab in freighter.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in freighter.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = freighter
     etb.effect.resolve(
@@ -3340,7 +3341,7 @@ def test_specimen_freighter_etb_excludes_spacecraft_targets():
     state.battlefield.append(freighter)
     etb = next(
         ab for ab in freighter.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = freighter
     legal = etb.effect.legal_targets(state, controller_id=0)
@@ -4283,7 +4284,7 @@ def test_kav_landseeker_schedules_sacrifice_and_fires():
     state.battlefield.append(kav)
     # Fire ETB: schedules delayed trigger.
     etb = next(
-        ab for ab in kav.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in kav.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = kav
     etb.effect.resolve(state, 0)
@@ -4316,7 +4317,7 @@ def test_delayed_trigger_survives_removal_if_target_gone():
     )
     state.battlefield.append(kav)
     etb = next(
-        ab for ab in kav.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in kav.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = kav
     etb.effect.resolve(state, 0)
@@ -4573,7 +4574,7 @@ def test_drix_fatemaker_etb_adds_counter_to_target():
     )
     state.battlefield.append(ally)
     etb = next(
-        ab for ab in drix.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in drix.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = drix
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -4655,7 +4656,7 @@ def test_banishing_light_exiles_then_returns_on_leave():
     state.battlefield.append(bl)
     # Fire Banishing Light's ETB trigger.
     etb = next(
-        ab for ab in bl.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in bl.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = bl
     etb.effect.resolve(state, 0, (("permanent", victim.id),))
@@ -4692,7 +4693,7 @@ def test_warp_card_exiled_by_banishing_light_is_not_castable_from_exile():
     state.battlefield.append(bl)
     # Fire Banishing Light's ETB exile.
     etb = next(
-        ab for ab in bl.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in bl.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = bl
     etb.effect.resolve(state, 0, (("permanent", victim.id),))
@@ -5443,7 +5444,7 @@ def test_seriema_tutors_legendary_creature_to_hand():
     )
     state.battlefield.append(seriema)
     etb = next(
-        ab for ab in seriema.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in seriema.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = seriema
     etb.effect.resolve(state, 0)
@@ -5483,7 +5484,7 @@ def test_starfield_shepherd_tutors_small_creature():
     )
     state.battlefield.append(shep)
     etb = next(
-        ab for ab in shep.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in shep.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = shep
     etb.effect.resolve(state, 0)
@@ -5527,7 +5528,7 @@ def test_starfield_shepherd_tutors_basic_plains():
     )
     state.battlefield.append(shep)
     etb = next(
-        ab for ab in shep.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in shep.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = shep
     etb.effect.resolve(state, 0)
@@ -5548,7 +5549,7 @@ def test_starfield_shepherd_modal_describes_both_modes():
 
     shep = EOE_CREATURES["Starfield Shepherd"]
     etb = next(
-        ab for ab in shep.triggered_abilities if ab.trigger == "etb"
+        ab for ab in shep.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert isinstance(etb.effect, ModalChooseOne)
     assert len(etb.effect.modes) == 2
@@ -5909,7 +5910,7 @@ def test_command_bridge_in_all_printings_with_full_rules_text():
     cb = UTILITY_LANDS["Command Bridge"]
     assert cb.enters_tapped is True
     assert len(cb.triggered_abilities) == 1
-    assert cb.triggered_abilities[0].trigger == "etb"
+    assert _matches_legacy_key(cb.triggered_abilities[0], "etb")
     assert isinstance(
         cb.triggered_abilities[0].effect, SacrificeSelfUnlessTapPermanent
     )
@@ -6067,7 +6068,7 @@ def test_all_fates_stalker_exiles_and_returns_on_death():
     state.battlefield.append(stalker)
     # Fire ETB.
     etb = next(
-        ab for ab in stalker.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in stalker.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = stalker
     etb.effect.resolve(state, 0, (("creature", victim.id),))
@@ -6112,7 +6113,7 @@ def test_codecracker_hound_splits_top_two():
     hand_before = len(state.players[0].hand)
     gy_before = len(state.players[0].graveyard)
     etb = next(
-        ab for ab in hound.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in hound.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = hound
     etb.effect.resolve(state, 0)
@@ -6398,7 +6399,7 @@ def test_dockworker_drone_etb_counter_and_dies_transfer():
     state.battlefield.append(drone)
     # Fire ETB to put the counter.
     etb = next(
-        ab for ab in drone.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in drone.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = drone
     etb.effect.resolve(state, 0)
@@ -6814,17 +6815,26 @@ def test_lost_in_space_agent_returning_invalid_mode_normalizes_to_top():
 def test_etb_triggers_fire_in_full_game_flow():
     """End-to-end: with at least one ETB card in the deck, a real simulated
     game should fire some ETB triggers. Uses a white deck (Healing Wisp is
-    the Stage-1 ETB card)."""
+    the Stage-1 ETB card).
+
+    Phase 2 migrated ETB-family triggers to the predicate dispatcher,
+    which logs ``"<source>'s enters trigger goes on the stack"``
+    rather than ``"<source>'s ETB trigger goes on the stack"``. We
+    accept either log shape — both signal the predicate-side
+    self-ETB ability fired."""
     from mtg_bot.simulate import simulate_game
 
     seen_etb = False
     for seed in range(10):
         state = simulate_game(colors=["W", "W"], seed=seed, max_turns=300)
-        if any("ETB trigger" in entry for entry in state.log):
+        if any(
+            "ETB trigger" in entry or "enters trigger" in entry
+            for entry in state.log
+        ):
             seen_etb = True
             break
     assert seen_etb, (
-        "expected at least one ETB trigger across 10 seeded W-vs-W games"
+        "expected at least one ETB/enters trigger across 10 seeded W-vs-W games"
     )
 
 
@@ -6915,7 +6925,7 @@ def test_mouth_of_the_storm_card_definition_has_etb_trigger():
 
     mouth = EOE_CREATURES["Mouth of the Storm"]
     etb_abilities = [
-        ab for ab in mouth.triggered_abilities if ab.trigger == "etb"
+        ab for ab in mouth.triggered_abilities if _matches_legacy_key(ab, "etb")
     ]
     assert len(etb_abilities) == 1
     eff = etb_abilities[0].effect

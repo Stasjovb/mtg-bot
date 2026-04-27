@@ -20,6 +20,7 @@ from mtg_bot.agents import Agent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
 from mtg_bot.effects import AlpharaelDreamingAcolyteDiscardEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _ScriptedAgent(Agent):
@@ -268,7 +269,7 @@ def test_alpharael_dreaming_acolyte_printing_metadata():
     # Single ETB triggered ability.
     assert len(a.triggered_abilities) == 1
     ab = a.triggered_abilities[0]
-    assert ab.trigger == "etb"
+    assert _matches_legacy_key(ab, "etb")
     # Static deathtouch on own turn.
     assert len(a.static_abilities) == 1
     sa = a.static_abilities[0]

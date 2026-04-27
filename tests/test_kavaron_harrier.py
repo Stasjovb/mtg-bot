@@ -7,6 +7,7 @@ from mtg_bot.actions import drain_stack
 from mtg_bot.combat import clear_combat_state, declare_attackers
 from mtg_bot.effects import KavaronHarrierAttackEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -101,6 +102,6 @@ def test_harrier_attack_fires_and_token_dies_at_eoc():
 
 def test_harrier_printing_has_attacks_trigger():
     h = EOE_CREATURES["Kavaron Harrier"]
-    triggers = {ab.trigger for ab in h.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}
     assert "attacks" in triggers
     assert h.is_artifact

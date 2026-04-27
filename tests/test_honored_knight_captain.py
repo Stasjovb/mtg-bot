@@ -13,6 +13,7 @@ on the battlefield, library is missing it, library is shuffled).
 from mtg_bot.actions import (
     ActivateAbility, apply_action, drain_stack, resolve_top_of_stack,
 )
+from tests._etb_helpers import _matches_legacy_key
 from mtg_bot.agents import Agent
 from mtg_bot.cards import (
     BASIC_LANDS, EOE_CREATURES, parse_mana_cost,
@@ -75,7 +76,7 @@ def _mana_for(state, cost_str):
 def test_printing_has_etb_token_and_activated_tutor():
     p = EOE_CREATURES["Honored Knight-Captain"]
     assert len(p.triggered_abilities) == 1
-    assert p.triggered_abilities[0].trigger == "etb"
+    assert p.triggered_abilities[0] and _matches_legacy_key(p.triggered_abilities[0], "etb")
     assert len(p.activated_abilities) == 1
     ab = p.activated_abilities[0]
     assert ab.cost.mana_str == "{4}{W}{W}"

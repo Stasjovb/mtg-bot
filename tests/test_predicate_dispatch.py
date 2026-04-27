@@ -24,6 +24,7 @@ from mtg_bot.effects.predicates import (
     YOU,
 )
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():

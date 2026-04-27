@@ -6,6 +6,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import TapTargetOpponentPermanentAndStunIt
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -118,5 +119,5 @@ def test_mechanozoa_etb_taps_and_stuns_opponent_creature():
 def test_mechanozoa_printing_has_warp_and_etb_trigger():
     m = EOE_CREATURES["Mechanozoa"]
     assert m.warp_cost_str == "{2}{U}"
-    triggers = {ab.trigger for ab in m.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers

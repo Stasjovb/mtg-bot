@@ -14,6 +14,7 @@ from mtg_bot.game import (
     effective_keywords, effective_power, effective_toughness,
 )
 from mtg_bot.turn import run_cleanup_step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -51,7 +52,7 @@ def test_printing_has_flash_and_equipment_bonus_unchanged():
 
 def test_printing_etb_attaches_via_attach_effect():
     c = EOE_CREATURES["Squire's Lightblade"]
-    etbs = [ab for ab in c.triggered_abilities if ab.trigger == "etb"]
+    etbs = [ab for ab in c.triggered_abilities if _matches_legacy_key(ab, "etb")]
     assert len(etbs) == 1
     assert isinstance(etbs[0].effect, AttachToTargetCreatureYouControl)
 
@@ -60,7 +61,7 @@ def test_printing_etb_grants_first_strike_ueot():
     """The dropped 'first strike UEOT' rider is now wired."""
     c = EOE_CREATURES["Squire's Lightblade"]
     etb_effect = next(
-        ab.effect for ab in c.triggered_abilities if ab.trigger == "etb"
+        ab.effect for ab in c.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert isinstance(etb_effect, AttachToTargetCreatureYouControl)
     assert etb_effect.granted_keywords_ueot == frozenset({"first strike"})
@@ -80,7 +81,7 @@ def test_etb_attaches_and_grants_first_strike_until_eot():
 
     etb = next(
         ab for ab in blade.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = blade
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -102,7 +103,7 @@ def test_first_strike_clears_at_cleanup_but_attach_and_buff_persist():
 
     etb = next(
         ab for ab in blade.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = blade
     etb.effect.resolve(state, 0, (("creature", ally.id),))
@@ -127,7 +128,7 @@ def test_etb_does_not_grant_first_strike_to_other_creatures():
 
     etb = next(
         ab for ab in blade.printing.triggered_abilities
-        if ab.trigger == "etb"
+        if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = blade
     etb.effect.resolve(state, 0, (("creature", chosen.id),))

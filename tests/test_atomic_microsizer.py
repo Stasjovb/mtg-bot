@@ -11,6 +11,7 @@ from mtg_bot.game import (
     effective_power, effective_toughness,
 )
 from mtg_bot.turn import run_cleanup_step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -117,7 +118,7 @@ def test_equipment_attacks_trigger_fires():
 
 def test_microsizer_printing_has_both_triggers():
     m = EOE_SPELLS["Atomic Microsizer"]
-    triggers = {ab.trigger for ab in m.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert "equipped_creature_attacks" in triggers
     # Printed +1/+0 bonus preserved from stand-in.

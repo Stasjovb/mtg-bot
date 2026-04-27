@@ -5,6 +5,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES
 from mtg_bot.effects import TerrapactIntimidatorETBEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickOpponentAgent(Agent):
@@ -102,5 +103,5 @@ def test_terrapact_etb_opponent_declines_gives_two_counters():
 
 def test_terrapact_printing_has_etb():
     t = EOE_CREATURES["Terrapact Intimidator"]
-    triggers = {ab.trigger for ab in t.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "etb" in triggers

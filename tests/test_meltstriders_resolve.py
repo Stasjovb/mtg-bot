@@ -17,6 +17,7 @@ from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import EnchantedCreatureFightsTargetEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -244,7 +245,7 @@ def test_etb_resolve_with_missing_enchanted_creature_is_noop():
 
 def test_printing_has_etb_trigger_and_buffs():
     p = EOE_CREATURES["Meltstrider's Resolve"]
-    triggers = {ab.trigger for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "etb" in triggers
     # The +0/+2 + menace continuous bonus is preserved.
     assert p.equipment_bonuses[0] == 0
@@ -252,6 +253,6 @@ def test_printing_has_etb_trigger_and_buffs():
     assert "menace" in p.equipment_bonuses[2]
     # The ETB effect is the fight rider, not some other Effect.
     etb = next(
-        ab for ab in p.triggered_abilities if ab.trigger == "etb"
+        ab for ab in p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     assert isinstance(etb.effect, EnchantedCreatureFightsTargetEffect)

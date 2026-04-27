@@ -7,6 +7,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_beginning_of_upkeep_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -62,5 +63,5 @@ def test_hivepool_printing_metadata():
     h = EOE_SPELLS["Thrumming Hivepool"]
     assert h.is_artifact
     assert len(h.static_abilities) == 1
-    triggers = {ab.trigger for ab in h.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}
     assert "beginning_of_upkeep" in triggers

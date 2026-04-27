@@ -12,6 +12,7 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy, move_off_battlefield
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -190,7 +191,7 @@ def test_vondam_death_below_power_4_does_nothing():
 
 def test_vondam_printing_metadata():
     v = EOE_CREATURES["Syr Vondam, Sunstar Exemplar"]
-    triggers = {ab.trigger for ab in v.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in v.triggered_abilities}
     assert "another_creature_you_control_dies_or_exiled" in triggers
     assert "leaves_battlefield" in triggers
     assert "vigilance" in v.keywords

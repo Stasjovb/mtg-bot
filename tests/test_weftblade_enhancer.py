@@ -6,6 +6,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import PutPlusOneCounterOnEachOfUpToNTargetCreatures
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -103,5 +104,5 @@ def test_weftblade_etb_puts_counters_on_two_creatures():
 def test_weftblade_printing_has_warp_and_etb():
     w = EOE_CREATURES["Weftblade Enhancer"]
     assert w.warp_cost_str == "{2}{W}"
-    triggers = {ab.trigger for ab in w.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in w.triggered_abilities}
     assert "etb" in triggers

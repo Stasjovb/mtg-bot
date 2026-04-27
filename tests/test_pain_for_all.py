@@ -8,6 +8,7 @@ from mtg_bot.effects import PainForAllDamageEchoEffect, PainForAllETBEffect
 from mtg_bot.game import (
     GameState, Player, Zone, effective_power, effective_toughness,
 )
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -123,7 +124,7 @@ def test_aura_fires_when_enchanted_creature_takes_damage():
 
 def test_pain_for_all_printing_has_both_triggers():
     p = EOE_SPELLS["Pain for All"]
-    triggers = {ab.trigger for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "etb" in triggers
     assert "enchanted_creature_dealt_damage" in triggers
 

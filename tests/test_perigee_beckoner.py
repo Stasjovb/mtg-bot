@@ -22,6 +22,7 @@ from mtg_bot.turn import (
     move_off_battlefield,
     run_cleanup_step,
 )
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -131,7 +132,7 @@ def test_perigee_beckoner_printing_wires_granted_rider():
     pb = EOE_CREATURES["Perigee Beckoner"]
     assert len(pb.triggered_abilities) == 1
     etb = pb.triggered_abilities[0]
-    assert etb.trigger == "etb"
+    assert _matches_legacy_key(etb, "etb")
     eff = etb.effect
     assert isinstance(eff, PumpTargetCreatureUntilEOT)
     assert eff.power_bonus == 2

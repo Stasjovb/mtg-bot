@@ -12,6 +12,7 @@ from mtg_bot.game import (
     effective_activated_abilities, effective_subtypes, gain_life,
 )
 from mtg_bot.turn import Step, run_beginning_of_end_step_triggers, run_cleanup_step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -297,5 +298,5 @@ def test_ragost_printing_metadata():
     assert len(r.activated_abilities) == 1
     cost = r.activated_abilities[0].cost
     assert cost.tap_self and cost.mana_str == "{1}" and cost.sacrifice_food
-    triggers = {ab.trigger for ab in r.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in r.triggered_abilities}
     assert "beginning_of_each_end_step" in triggers

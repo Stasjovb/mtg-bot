@@ -24,6 +24,7 @@ from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
     Step, destroy, move_off_battlefield, run_untap_step, tap_permanent,
 )
+from tests._etb_helpers import _matches_legacy_key
 
 
 class _PickFirst(Agent):
@@ -197,7 +198,7 @@ def test_printing_is_aura_with_correct_etb_and_static_flags():
     assert p.attached_prevents_untap is True
     assert p.attached_grants_control is True
     assert len(p.triggered_abilities) == 1
-    assert p.triggered_abilities[0].trigger == "etb"
+    assert _matches_legacy_key(p.triggered_abilities[0], "etb")
 
 
 # -----------------------

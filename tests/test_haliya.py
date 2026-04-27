@@ -8,6 +8,7 @@ from mtg_bot.combat import (
     declare_attackers,
 )
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -58,7 +59,7 @@ def test_haliya_attack_puts_counter_on_target():
 
 def test_haliya_printing_has_both_triggers():
     h = EOE_CREATURES["Haliya, Ascendant Cadet"]
-    triggers = {ab.trigger for ab in h.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}
     assert "etb" in triggers
     assert "attacks" in triggers
     assert (

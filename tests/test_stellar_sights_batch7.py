@@ -12,6 +12,7 @@ from mtg_bot.cards.base import make_creature
 from mtg_bot.effects import SacrificeNLandsYouControl
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+from tests._etb_helpers import _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -109,7 +110,7 @@ def test_lotus_field_metadata():
     assert "hexproof" in p.keywords
     assert p.enters_tapped is True
     assert len(p.triggered_abilities) == 1
-    assert p.triggered_abilities[0].trigger == "etb"
+    assert _matches_legacy_key(p.triggered_abilities[0], "etb")
     assert len(p.activated_abilities) == 1
 
 

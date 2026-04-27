@@ -7,6 +7,7 @@ from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREA
 from mtg_bot.effects import AnticausalVestigeLeavesEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -119,5 +120,5 @@ def test_vestige_leaves_battlefield_fires_trigger():
 def test_vestige_printing_has_leaves_trigger_and_warp():
     v = EOE_CREATURES["Anticausal Vestige"]
     assert v.warp_cost_str == "{4}"
-    triggers = {ab.trigger for ab in v.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in v.triggered_abilities}
     assert "leaves_battlefield" in triggers

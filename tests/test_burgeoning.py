@@ -13,6 +13,7 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import fire_opponent_plays_land_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirst(Agent):
@@ -158,7 +159,7 @@ def test_burgeoning_dropped_land_fires_landfall():
 
     landfaller = next(
         (p for p in EOE_CREATURES.values()
-         if any(t.trigger == "landfall" for t in p.triggered_abilities)),
+         if any(_matches_legacy_key(t, "landfall") for t in p.triggered_abilities)),
         None,
     )
     if landfaller is None:

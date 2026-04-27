@@ -7,6 +7,7 @@ from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_combat_damage_to_player_triggers
 from mtg_bot.effects import DrawCardsEqualToResolvingCombatDamage
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -105,5 +106,5 @@ def test_starwinder_does_not_fire_for_opponents_creature():
 def test_starwinder_printing_has_warp_and_damage_trigger():
     s = EOE_CREATURES["Starwinder"]
     assert s.warp_cost_str == "{2}{U}{U}"
-    triggers = {ab.trigger for ab in s.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "your_creature_combat_damage_to_player" in triggers

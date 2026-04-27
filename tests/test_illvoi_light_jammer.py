@@ -27,6 +27,7 @@ from mtg_bot.game import (
 from mtg_bot.turn import run_cleanup_step
 
 from tests._rules_helpers import _arena
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _put_bear(state, owner_id):
@@ -49,7 +50,7 @@ def _put_jammer(state, owner_id):
 
 def _resolve_etb(state, jammer, target_creature):
     etb = next(
-        ab for ab in jammer.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in jammer.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = jammer
     try:
@@ -128,7 +129,7 @@ def test_etb_no_legal_target_fizzles_no_hexproof_granted():
     enemy = _put_bear(state, owner_id=1)
 
     etb = next(
-        ab for ab in jammer.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in jammer.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = jammer
     try:

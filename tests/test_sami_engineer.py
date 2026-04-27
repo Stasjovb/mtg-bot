@@ -6,6 +6,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_end_step_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -60,5 +61,5 @@ def test_sami_does_not_count_opponents_tapped_creatures():
 def test_sami_printing_metadata():
     s = EOE_CREATURES["Sami, Ship's Engineer"]
     assert "Legendary" in s.supertypes
-    triggers = {ab.trigger for ab in s.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "beginning_of_end_step" in triggers

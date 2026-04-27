@@ -11,6 +11,7 @@ from mtg_bot.cards import (
 from mtg_bot.effects import TargetOpponentLosesNYouGainN
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import destroy, sacrifice
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -188,5 +189,5 @@ def test_alpharael_deathtouch_only_during_your_turn():
 
 def test_alpharael_has_triggered_and_static_abilities_wired():
     a = EOE_CREATURES["Alpharael, Dreaming Acolyte"]
-    assert any(ab.trigger == "etb" for ab in a.triggered_abilities)
+    assert any(_matches_legacy_key(ab, "etb") for ab in a.triggered_abilities)
     assert len(a.static_abilities) == 1

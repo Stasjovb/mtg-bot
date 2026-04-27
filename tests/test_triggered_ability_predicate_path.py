@@ -20,6 +20,7 @@ from mtg_bot.effects.predicates import (
     IsSelf,
     Never,
 )
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 @dataclass
@@ -44,7 +45,7 @@ def _ab_predicate(predicate=None, event=Event.ENTERS):
 def test_string_key_style_still_constructible():
     """Backward compat: existing ``trigger=`` calls work unchanged."""
     ab = TriggeredAbility(trigger="etb", effect=object())
-    assert ab.trigger == "etb"
+    assert _matches_legacy_key(ab, "etb")
     assert ab.event is None
     assert ab.predicate is None
 

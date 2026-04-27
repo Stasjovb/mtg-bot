@@ -7,6 +7,7 @@ from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
 from mtg_bot.effects import TannukEnsignLandfallEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_cleanup_step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -122,5 +123,5 @@ def test_cleanup_resets_resolution_counter():
 def test_tannuk_printing_metadata():
     t = EOE_CREATURES["Tannuk, Memorial Ensign"]
     assert "Legendary" in t.supertypes
-    triggers = {ab.trigger for ab in t.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "landfall" in triggers

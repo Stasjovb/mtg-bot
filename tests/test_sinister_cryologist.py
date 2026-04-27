@@ -6,6 +6,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
 from mtg_bot.effects import PumpTargetCreatureUntilEOT
 from mtg_bot.game import GameState, Player, Zone, effective_power
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -107,5 +108,5 @@ def test_cryologist_etb_debuffs_opponent_creature():
 def test_cryologist_printing_has_warp_and_etb_trigger():
     c = EOE_CREATURES["Sinister Cryologist"]
     assert c.warp_cost_str == "{U}"
-    triggers = {ab.trigger for ab in c.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
     assert "etb" in triggers

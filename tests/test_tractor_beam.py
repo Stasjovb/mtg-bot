@@ -4,6 +4,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import TractorBeamETBEffect
 from mtg_bot.game import GameState, Player, Zone, effective_power, effective_toughness
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -53,7 +54,7 @@ def test_etb_noop_when_not_attached():
 
 def test_tractor_printing_has_etb():
     t = EOE_SPELLS["Tractor Beam"]
-    triggers = {ab.trigger for ab in t.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "etb" in triggers
 
 

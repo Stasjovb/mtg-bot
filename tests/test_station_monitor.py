@@ -9,6 +9,7 @@ from mtg_bot.cards import (
     TOKEN_PRINTINGS,
 )
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -77,5 +78,5 @@ def test_station_monitor_only_fires_once_per_turn():
 
 def test_station_monitor_printing_has_second_spell_trigger():
     sm = EOE_CREATURES["Station Monitor"]
-    triggers = {ab.trigger for ab in sm.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in sm.triggered_abilities}
     assert "second_spell_each_turn" in triggers

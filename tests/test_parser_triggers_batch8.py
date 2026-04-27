@@ -37,9 +37,20 @@ from mtg_bot.cards.base import (
     TriggeredAbility,
 )
 from mtg_bot.cards.parser.triggers import (
+    _parse_predicate_trigger_phrase,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    IsArtifact,
+    IsSelf,
+)
+
+
+_ARTIFACT_ENTERS_PRED = IsArtifact() & Controlled(YOU) & ~IsSelf()
 
 
 # ---------- this creature becomes tapped ----------
@@ -153,19 +164,21 @@ def test_parse_trigger_phrase_recognizes_an_artifact_you_control_enters():
     # Mm'menon, Uthros Exile uses ``an artifact you control enters``.
     # The engine's ``_fire_artifact_enters_triggers`` excludes the
     # source object from the firing loop, so ``an`` and ``another``
-    # are semantically equivalent and both map to the same key.
-    assert _parse_trigger_phrase(
+    # are semantically equivalent and both map to the same predicate
+    # — phase 2 collapses both phrases to the same predicate-style
+    # ``(Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf())``.
+    assert _parse_predicate_trigger_phrase(
         "an artifact you control enters"
-    ) == "artifact_enters_you_control"
+    ) == (Event.ENTERS, _ARTIFACT_ENTERS_PRED)
 
 
 def test_parse_trigger_phrase_recognizes_another_artifact_you_control_enters():
     # Mechan Assembler and Oreplate Pangolin use
-    # ``another artifact you control enters``. Same engine key as
-    # the ``an`` variant — the distinction is collapsed engine-side.
-    assert _parse_trigger_phrase(
+    # ``another artifact you control enters``. Same predicate as the
+    # ``an`` variant — the distinction is collapsed engine-side.
+    assert _parse_predicate_trigger_phrase(
         "another artifact you control enters"
-    ) == "artifact_enters_you_control"
+    ) == (Event.ENTERS, _ARTIFACT_ENTERS_PRED)
 
 
 def test_an_artifact_you_control_enters_end_to_end():
@@ -177,7 +190,7 @@ def test_an_artifact_you_control_enters_end_to_end():
         "put a +1/+1 counter on target creature."
     )
     assert parsed == TriggeredAbility(
-        trigger="artifact_enters_you_control",
+        event=Event.ENTERS, predicate=_ARTIFACT_ENTERS_PRED,
         effect=PutPlusOneCounterOnTargetCreature(amount=1),
     )
 
@@ -192,7 +205,7 @@ def test_another_artifact_you_control_enters_end_to_end():
         "put a +1/+1 counter on this creature."
     )
     assert parsed == TriggeredAbility(
-        trigger="artifact_enters_you_control",
+        event=Event.ENTERS, predicate=_ARTIFACT_ENTERS_PRED,
         effect=PutPlusOneCounterOnSelf(amount=1),
     )
 
@@ -238,7 +251,7 @@ def test_mmmenon_uthros_exile_is_claimed_with_artifact_enters_trigger():
     assert parsed == static["Mm'menon, Uthros Exile"]
     assert parsed.triggered_abilities == (
         TriggeredAbility(
-            trigger="artifact_enters_you_control",
+            event=Event.ENTERS, predicate=_ARTIFACT_ENTERS_PRED,
             effect=PutPlusOneCounterOnTargetCreature(amount=1),
         ),
     )

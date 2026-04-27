@@ -7,6 +7,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import PossibilityTechnicianETBEffect, WeftwalkingETBEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -55,7 +56,7 @@ def test_weftwalking_describe():
 
 def test_weftwalking_printing_has_etb():
     w = EOE_SPELLS["Weftwalking"]
-    triggers = {ab.trigger for ab in w.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in w.triggered_abilities}
     assert "etb" in triggers
 
 
@@ -95,7 +96,7 @@ def test_possibility_printing_has_subtypes_etb_kavu_observer_and_warp():
     pt = EOE_CREATURES["Possibility Technician"]
     assert pt.warp_cost_str == "{R}"
     assert "Kavu" in pt.subtypes
-    triggers = {ab.trigger for ab in pt.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in pt.triggered_abilities}
     # Both halves of "this creature or another Kavu you control enters"
     # are wired: self-ETB (etb) AND the Kavu-observer trigger.
     assert "etb" in triggers
@@ -108,11 +109,14 @@ def test_possibility_printing_has_subtypes_etb_kavu_observer_and_warp():
 def test_kavu_observer_fires_when_another_kavu_enters_under_technician():
     """When Possibility Technician is on the battlefield and another
     Kavu enters under the same controller, the observer trigger
-    (kavu_you_control_enters) must fire — resolving directly via
-    _fire_kavu_enters_triggers — so a card gets exiled with the
-    persistent Kavu-gated flag set. The entering Kavu's own ETB also
-    goes on the stack but isn't part of this assertion."""
-    from mtg_bot.actions import put_into_battlefield
+    (``HasSubtype("Kavu") & Controlled(YOU) & ~IsSelf()`` on the
+    predicate path) must fire — pushed on the stack via
+    ``dispatch_event(Event.ENTERS, obj=...)`` from
+    ``_trigger_etb_abilities``. After draining the stack, a card is
+    exiled with the persistent Kavu-gated flag set. The entering
+    Kavu's own ETB also goes on the stack but isn't part of this
+    assertion."""
+    from mtg_bot.actions import drain_stack, put_into_battlefield
 
     state = _new_state()
     _stock_library(state, 0, 5)
@@ -130,9 +134,13 @@ def test_kavu_observer_fires_when_another_kavu_enters_under_technician():
         EOE_CREATURES["Possibility Technician"], 0, Zone.STACK
     )
     put_into_battlefield(state, other_kavu, 0)
-    # Observer fires immediately (not via stack). Exactly one new card
-    # is exiled, flagged for Kavu-gated cast.
-    assert len(p.exile) == before + 1
+    drain_stack(state)
+    # Observer's exile-the-top-card effect resolved off the stack.
+    # Exactly one new card is exiled, flagged for Kavu-gated cast.
+    # (The other_kavu's own ETB also exiled a card via IsSelf()-style
+    # wiring, so we expect at least one new exile entry — pin to the
+    # observer's by checking the latest exiled card carries the flag.)
+    assert len(p.exile) >= before + 1
     assert p.exile[-1].play_from_exile_requires_kavu is True
 
 

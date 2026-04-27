@@ -17,6 +17,16 @@ from mtg_bot.cards.parser.triggers import (
     _parse_triggered_ability_line,
     _strip_ability_word_prefix,
 )
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    IsLand,
+)
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+
+_LANDFALL_PRED = IsLand() & Controlled(YOU)
 
 
 # ---------- Happy path: Landfall-prefixed gain-life trigger ----------
@@ -27,7 +37,7 @@ def test_landfall_prefix_parses_to_landfall_trigger():
         "you gain 1 life."
     )
     assert parsed == TriggeredAbility(
-        trigger="landfall",
+        event=Event.ENTERS, predicate=_LANDFALL_PRED,
         effect=GainLife(amount=1),
     )
 
@@ -38,11 +48,11 @@ def test_landfall_prefix_uses_engine_landfall_trigger_key():
         "you gain 1 life."
     )
     assert parsed is not None
-    # The engine canonical trigger key is ``landfall``, not the inner
-    # ``Whenever a land enters`` source phrase. ``eoe_creatures.py``
-    # uses ``trigger="landfall"`` for every Landfall ability, so the
-    # parser must agree.
-    assert parsed.trigger == "landfall"
+    # Phase-2 migration: every landfall trigger now sits on the
+    # predicate path (``event=ENTERS, predicate=IsLand() & Controlled
+    # (YOU)``). The legacy string-key inference helper recognizes the
+    # equivalence.
+    assert _matches_legacy_key(parsed, "landfall")
 
 
 def test_landfall_prefix_extracts_effect_via_unified_grammar():
@@ -53,7 +63,7 @@ def test_landfall_prefix_extracts_effect_via_unified_grammar():
         "you gain 3 life."
     )
     assert parsed == TriggeredAbility(
-        trigger="landfall",
+        event=Event.ENTERS, predicate=_LANDFALL_PRED,
         effect=GainLife(amount=3),
     )
 
@@ -97,7 +107,7 @@ def test_any_ability_word_prefix_is_stripped_generically():
             "you gain 1 life."
         )
         assert parsed == TriggeredAbility(
-            trigger="landfall",
+            event=Event.ENTERS, predicate=_LANDFALL_PRED,
             effect=GainLife(amount=1),
         )
 
@@ -158,7 +168,7 @@ def test_bare_landfall_condition_still_parses():
         "Whenever a land you control enters, you gain 1 life."
     )
     assert parsed == TriggeredAbility(
-        trigger="landfall",
+        event=Event.ENTERS, predicate=_LANDFALL_PRED,
         effect=GainLife(amount=1),
     )
 
@@ -183,5 +193,8 @@ def test_eumidian_terrabotanist_is_claimed_with_landfall():
     parsed = parser.get_printings()["Eumidian Terrabotanist"]
     assert parsed == static["Eumidian Terrabotanist"]
     assert parsed.triggered_abilities == (
-        TriggeredAbility(trigger="landfall", effect=GainLife(amount=1)),
+        TriggeredAbility(
+            event=Event.ENTERS, predicate=_LANDFALL_PRED,
+            effect=GainLife(amount=1),
+        ),
     )

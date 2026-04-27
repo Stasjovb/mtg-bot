@@ -8,6 +8,7 @@ from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREA
 from mtg_bot.effects import RovingActuatorETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -133,7 +134,7 @@ def test_roving_actuator_etb_fires_with_void_active():
 def test_roving_actuator_printing_has_void_gated_etb():
     ra = EOE_CREATURES["Roving Actuator"]
     assert ra.warp_cost_str == "{1}{R}"
-    etb_abilities = [a for a in ra.triggered_abilities if a.trigger == "etb"]
+    etb_abilities = [a for a in ra.triggered_abilities if _matches_legacy_key(a, "etb")]
     assert len(etb_abilities) == 1
     assert etb_abilities[0].requires_void is True
 

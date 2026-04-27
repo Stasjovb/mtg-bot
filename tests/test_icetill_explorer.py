@@ -7,6 +7,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -77,7 +78,7 @@ def test_icetill_printing_metadata():
     i = EOE_CREATURES["Icetill Explorer"]
     assert i.grants_additional_land_per_turn == 1
     assert i.grants_play_lands_from_graveyard is True
-    triggers = {ab.trigger for ab in i.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in i.triggered_abilities}
     assert "landfall" in triggers
 
 

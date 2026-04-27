@@ -60,13 +60,15 @@ def test_parse_clause_strips_surrounding_whitespace():
 
 
 def test_parse_clause_recognizes_etb_damage_to_any_target():
+    from mtg_bot.effects.predicates import Event, IsSelf
     parsed = _parse_clause(
         "When this creature enters, it deals 3 damage to any target."
     )
     assert parsed is not None
     assert parsed.keyword is None
     assert parsed.trigger == TriggeredAbility(
-        trigger="etb", effect=DealDamageAnyTarget(amount=3)
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=DealDamageAnyTarget(amount=3),
     )
 
 
@@ -284,7 +286,16 @@ def test_build_creature_printing_handles_each_evergreen_standalone():
 # ---------- compositional triggered-ability parsing ----------
 
 def test_parse_trigger_phrase_recognizes_etb():
-    assert _parse_trigger_phrase("this creature enters") == "etb"
+    # Phase-2 migration: ``this creature enters`` is now claimed by
+    # the predicate-style table (``Event.ENTERS, IsSelf()``) rather
+    # than the legacy string-key dict. The string-key lookup returns
+    # ``None`` for migrated phrases.
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.predicates import Event, IsSelf
+    assert _parse_trigger_phrase("this creature enters") is None
+    assert _parse_predicate_trigger_phrase(
+        "this creature enters"
+    ) == (Event.ENTERS, IsSelf())
 
 
 def test_parse_trigger_phrase_recognizes_dies():
@@ -296,7 +307,14 @@ def test_parse_trigger_phrase_recognizes_attacks():
 
 
 def test_parse_trigger_phrase_strips_whitespace():
-    assert _parse_trigger_phrase("  this creature enters  ") == "etb"
+    # The whitespace-stripping behavior applies to both the legacy
+    # and the predicate-style lookups; here we exercise the predicate
+    # path because ``this creature enters`` migrated.
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.predicates import Event, IsSelf
+    assert _parse_predicate_trigger_phrase(
+        "  this creature enters  "
+    ) == (Event.ENTERS, IsSelf())
 
 
 def test_parse_trigger_phrase_returns_none_for_unknown():
@@ -344,11 +362,13 @@ def test_parse_effect_phrase_returns_none_for_unknown():
 
 
 def test_parse_triggered_ability_line_full_etb_damage():
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "When this creature enters, it deals 5 damage to any target."
     )
     assert result == TriggeredAbility(
-        trigger="etb", effect=DealDamageAnyTarget(amount=5)
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=DealDamageAnyTarget(amount=5),
     )
 
 
@@ -396,20 +416,24 @@ def test_parse_triggered_ability_line_rejects_unknown_effect():
 
 
 def test_parse_triggered_ability_line_full_etb_draw_a_card():
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "When this creature enters, draw a card."
     )
     assert result == TriggeredAbility(
-        trigger="etb", effect=DrawCards(amount=1)
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=DrawCards(amount=1),
     )
 
 
 def test_parse_triggered_ability_line_full_etb_gain_life():
+    from mtg_bot.effects.predicates import Event, IsSelf
     result = _parse_triggered_ability_line(
         "When this creature enters, you gain 2 life."
     )
     assert result == TriggeredAbility(
-        trigger="etb", effect=GainLife(amount=2)
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=GainLife(amount=2),
     )
 
 
@@ -476,6 +500,7 @@ _NEBULA_DRAGON_CARD = {
 
 
 def test_build_creature_printing_handles_nebula_dragon():
+    from mtg_bot.effects.predicates import Event, IsSelf
     printing = _build_creature_printing(_NEBULA_DRAGON_CARD)
     assert printing is not None
     assert printing.name == "Nebula Dragon"
@@ -485,7 +510,8 @@ def test_build_creature_printing_handles_nebula_dragon():
     assert printing.keywords == frozenset({"flying"})
     assert printing.triggered_abilities == (
         TriggeredAbility(
-            trigger="etb", effect=DealDamageAnyTarget(amount=3)
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=DealDamageAnyTarget(amount=3),
         ),
     )
 

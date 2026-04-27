@@ -17,6 +17,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import MonoistCircuitFeederETBEffect
 from mtg_bot.game import GameState, Player, Zone
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 class _PickFirstAgent(Agent):
@@ -178,5 +179,5 @@ def test_monoist_printing_has_flying_and_etb():
     m = EOE_CREATURES["Monoist Circuit-Feeder"]
     assert "flying" in m.keywords
     assert m.is_artifact
-    triggers = {ab.trigger for ab in m.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers

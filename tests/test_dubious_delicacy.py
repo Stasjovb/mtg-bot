@@ -32,6 +32,7 @@ from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
 
 from tests._rules_helpers import _arena
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def test_dubious_delicacy_has_flash():
@@ -55,7 +56,7 @@ def test_dubious_delicacy_etb_minus_three_kills_target_creature():
     state.battlefield.append(dd)
 
     etb = next(
-        ab for ab in dd.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in dd.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     state.resolving_source = dd
     etb.effect.resolve(state, 0, (("creature", victim.id),))
@@ -73,7 +74,7 @@ def test_dubious_delicacy_etb_optional_no_target_no_fizzle():
     state.battlefield.append(dd)
 
     etb = next(
-        ab for ab in dd.printing.triggered_abilities if ab.trigger == "etb"
+        ab for ab in dd.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
     # Confirm the effect is wired as optional ("up to one").
     assert etb.effect.requires_target() is False

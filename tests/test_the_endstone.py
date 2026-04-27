@@ -16,6 +16,7 @@ from mtg_bot.cards import (
 from mtg_bot.effects import SetLifeToHalfStartingRoundedUp
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_end_step_triggers
+from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
 def _new_state():
@@ -130,7 +131,7 @@ def test_endstone_doesnt_trigger_for_opponent_land_play():
 
 def test_endstone_card_printing_has_both_abilities():
     p = EOE_SPELLS["The Endstone"]
-    triggers = {ab.trigger for ab in p.triggered_abilities}
+    triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "cast_spell_or_play_land" in triggers
     assert "beginning_of_end_step" in triggers
 
