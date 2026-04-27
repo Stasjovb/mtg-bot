@@ -32,6 +32,13 @@ Currently recognized:
   tapped=True)``.
 
 Cards whose oracle text uses only those clauses get claimed.
+
+Spell support (instants and sorceries) is a separate small grammar:
+each supported shape is a narrow regex that templates the card's own
+name into a single sentence — e.g. ``"<Name> deals N damage to any
+target."`` → ``DealDamageAnyTarget(amount=N)`` and ``"<Name> deals N
+damage to target creature."`` → ``DealDamageToTargetCreature(amount=N)``.
+Multi-sentence spells return ``None`` and are skipped.
 """
 
 from __future__ import annotations
@@ -45,9 +52,12 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CreateToken,
     DealDamageAnyTarget,
+    DealDamageToTargetCreature,
     Effect,
     TriggeredAbility,
     make_creature,
+    make_instant,
+    make_sorcery,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
@@ -221,6 +231,67 @@ def _parse_clause(line: str) -> _ParsedClause | None:
     return None
 
 
+# Spell-effect parsing. Spells use full sentences (period included) with
+# the card's own name as the subject — "<Name> deals N damage to <thing>."
+# — instead of the creature parser's "it deals N damage..." (where "it"
+# refers to the source permanent). Each supported shape is its own narrow
+# regex; we'll grow the grammar one card at a time. The card's name is
+# substituted into the pattern at parse time so the regex doesn't have
+# to model "<Name>" as a free-form token.
+_SPELL_DEAL_DAMAGE_ANY_TARGET = (
+    r"^{name} deals (\d+) damage to any target\.$"
+)
+_SPELL_DEAL_DAMAGE_TARGET_CREATURE = (
+    r"^{name} deals (\d+) damage to target creature\.$"
+)
+
+
+def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
+    """Parse a spell's full-sentence effect text.
+
+    ``phrase`` is one sentence (period included) of oracle text. ``name``
+    is the card's own name and is substituted into each shape's regex
+    so we match the printed self-reference exactly. Returns ``None``
+    when no supported shape matches — the caller skips the spell.
+    """
+    phrase = phrase.strip()
+    name_re = re.escape(name)
+    m = re.match(_SPELL_DEAL_DAMAGE_ANY_TARGET.format(name=name_re), phrase)
+    if m is not None:
+        return DealDamageAnyTarget(amount=int(m.group(1)))
+    m = re.match(
+        _SPELL_DEAL_DAMAGE_TARGET_CREATURE.format(name=name_re), phrase
+    )
+    if m is not None:
+        return DealDamageToTargetCreature(amount=int(m.group(1)))
+    return None
+
+
+def _build_spell_printing(card: dict) -> CardPrinting | None:
+    """Try to produce a ``CardPrinting`` for an instant or sorcery
+    ``card`` (a Scryfall record). Returns ``None`` if the card is
+    neither an instant nor a sorcery, or if its oracle text isn't a
+    single sentence the spell-effect grammar recognizes.
+    """
+    supertypes, card_types, subtypes = _parse_type_line(
+        card.get("type_line", "")
+    )
+    if "Instant" not in card_types and "Sorcery" not in card_types:
+        return None
+    text = card.get("oracle_text", "").strip()
+    if not text or "\n" in text:
+        return None
+    effect = _parse_spell_effect_phrase(text, card["name"])
+    if effect is None:
+        return None
+    factory = make_instant if "Instant" in card_types else make_sorcery
+    return factory(
+        name=card["name"],
+        cost=card["mana_cost"],
+        effect=effect,
+    )
+
+
 def _build_creature_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for ``card`` (a Scryfall
     record). Returns ``None`` if the card is not a creature, has
@@ -274,6 +345,8 @@ class OracleParserCardSource:
         printings: dict[str, CardPrinting] = {}
         for card in _load_scryfall_data():
             built = _build_creature_printing(card)
+            if built is None:
+                built = _build_spell_printing(card)
             if built is not None:
                 printings[card["name"]] = built
         self._printings = printings

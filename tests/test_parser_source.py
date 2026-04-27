@@ -7,14 +7,17 @@ import pytest
 from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
+    DealDamageToTargetCreature,
     TriggeredAbility,
 )
 from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
+    _build_spell_printing,
     _parse_clause,
     _parse_effect_phrase,
     _parse_keyword_line,
+    _parse_spell_effect_phrase,
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
     _parse_type_line,
@@ -399,3 +402,139 @@ def test_source_get_printings_returns_only_claimed():
 def test_source_build_mono_color_deck_raises():
     with pytest.raises(NotImplementedError):
         OracleParserCardSource().build_mono_color_deck("R", seed=0)
+
+
+# ---------- _parse_spell_effect_phrase ----------
+
+def test_parse_spell_effect_phrase_recognizes_deal_damage_any_target():
+    assert _parse_spell_effect_phrase(
+        "Plasma Bolt deals 2 damage to any target.", "Plasma Bolt"
+    ) == DealDamageAnyTarget(amount=2)
+
+
+def test_parse_spell_effect_phrase_recognizes_deal_damage_target_creature():
+    assert _parse_spell_effect_phrase(
+        "Bombard deals 4 damage to target creature.", "Bombard"
+    ) == DealDamageToTargetCreature(amount=4)
+
+
+def test_parse_spell_effect_phrase_strips_whitespace():
+    assert _parse_spell_effect_phrase(
+        "  Bombard deals 4 damage to target creature.  ", "Bombard"
+    ) == DealDamageToTargetCreature(amount=4)
+
+
+def test_parse_spell_effect_phrase_returns_none_for_creature_style_it_text():
+    """Creature-style 'it deals N damage to any target' has no card-name
+    subject, so the spell parser must reject it. Spells use their own
+    name as the subject; 'it' belongs to the creature parser."""
+    assert _parse_spell_effect_phrase(
+        "it deals 3 damage to any target.", "Bombard"
+    ) is None
+
+
+def test_parse_spell_effect_phrase_returns_none_for_unknown_text():
+    assert _parse_spell_effect_phrase(
+        "Bombard counters target spell.", "Bombard"
+    ) is None
+    assert _parse_spell_effect_phrase("", "Bombard") is None
+
+
+def test_parse_spell_effect_phrase_requires_trailing_period():
+    """Sentence shape: a missing period means the line isn't a complete
+    spell-effect sentence and must be skipped."""
+    assert _parse_spell_effect_phrase(
+        "Bombard deals 4 damage to target creature", "Bombard"
+    ) is None
+
+
+def test_parse_spell_effect_phrase_name_substituted_exactly():
+    """The card-name token in the regex is the actual card's name —
+    a different name in the sentence body must not match."""
+    assert _parse_spell_effect_phrase(
+        "Bombard deals 4 damage to target creature.", "Plasma Bolt"
+    ) is None
+
+
+# ---------- _build_spell_printing ----------
+
+_BOMBARD_CARD = {
+    "name": "Bombard",
+    "mana_cost": "{2}{R}",
+    "type_line": "Instant",
+    "oracle_text": "Bombard deals 4 damage to target creature.",
+}
+
+
+def test_build_spell_printing_handles_bombard():
+    printing = _build_spell_printing(_BOMBARD_CARD)
+    assert printing is not None
+    assert printing.name == "Bombard"
+    assert printing.is_instant
+    assert printing.spell_effect == DealDamageToTargetCreature(amount=4)
+
+
+def test_build_spell_printing_handles_sorcery_any_target():
+    """Synthetic single-line sorcery — exercises the make_sorcery branch
+    and the any-target damage shape together."""
+    card = {
+        "name": "Test Bolt",
+        "mana_cost": "{R}",
+        "type_line": "Sorcery",
+        "oracle_text": "Test Bolt deals 3 damage to any target.",
+    }
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.is_sorcery
+    assert printing.spell_effect == DealDamageAnyTarget(amount=3)
+
+
+def test_build_spell_printing_skips_creatures():
+    creature = {
+        "name": "Nebula Dragon",
+        "mana_cost": "{6}{R}",
+        "type_line": "Creature — Dragon",
+        "power": "4",
+        "toughness": "4",
+        "oracle_text": "Flying",
+    }
+    assert _build_spell_printing(creature) is None
+
+
+def test_build_spell_printing_skips_unsupported_effect_text():
+    card = dict(_BOMBARD_CARD, oracle_text="Counter target spell.")
+    assert _build_spell_printing(card) is None
+
+
+def test_build_spell_printing_skips_multi_line_oracle_text():
+    """Plasma Bolt has a Void rider on a second line — outside slice
+    grammar, so the whole spell is skipped."""
+    card = dict(
+        _BOMBARD_CARD,
+        name="Plasma Bolt",
+        type_line="Sorcery",
+        oracle_text=(
+            "Plasma Bolt deals 2 damage to any target.\n"
+            "Void — Plasma Bolt deals 3 damage instead."
+        ),
+    )
+    assert _build_spell_printing(card) is None
+
+
+def test_build_spell_printing_skips_empty_oracle_text():
+    card = dict(_BOMBARD_CARD, oracle_text="")
+    assert _build_spell_printing(card) is None
+
+
+# ---------- OracleParserCardSource (spells) ----------
+
+def test_source_claims_bombard():
+    source = OracleParserCardSource()
+    assert "Bombard" in source.claimed_names
+    assert "Bombard" in source.get_printings()
+
+
+def test_source_does_not_claim_plasma_bolt():
+    """Plasma Bolt has a Void rider — outside slice-1 spell grammar."""
+    source = OracleParserCardSource()
+    assert "Plasma Bolt" not in source.claimed_names
