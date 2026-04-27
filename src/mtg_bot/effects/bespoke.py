@@ -1955,15 +1955,29 @@ class MutinousMassacreEffect(Effect):
             )
             destroy(state, v)
         # Gain control of all surviving creatures UEOT, untap, haste.
+        src = state.resolving_source
+        spell_id = src.id if src is not None else -1
         for o in state.battlefield:
             if not o.printing.is_creature:
                 continue
             if o.controller_id != controller_id:
-                if o.temp_original_controller_id is None:
-                    o.temp_original_controller_id = o.controller_id
-                o.controller_id = controller_id
+                state.grant_control_change_ueot(
+                    source_id=spell_id,
+                    target_id=o.id,
+                    new_controller_id=controller_id,
+                    description=(
+                        f"Mutinous Massacre: P{controller_id} controls "
+                        f"{o.printing.name} UEOT"
+                    ),
+                )
             o.tapped = False
-            o.temp_keywords = o.temp_keywords | frozenset({"haste"})
+            state.grant_keywords_ueot(
+                source_id=spell_id,
+                target_id=o.id,
+                keywords=frozenset({"haste"}),
+                log_source_name="Mutinous Massacre",
+                log_target_name=o.printing.name,
+            )
             state.log.append(
                 f"P{controller_id} takes control of {o.printing.name} "
                 f"UEOT; untaps + gains haste"
@@ -2017,14 +2031,29 @@ class SystemsOverrideEffect(Effect):
         )
         if obj is None:
             return
-        # Gain control UEOT. If we already stole it this turn, keep the
-        # original controller (don't overwrite with the current — rare
-        # but preserves correct reversion).
-        if obj.temp_original_controller_id is None:
-            obj.temp_original_controller_id = obj.controller_id
-        obj.controller_id = controller_id
+        # Gain control UEOT via the layer-2 control_change registry
+        # entry; haste via grant_keywords_ueot. Both expire at
+        # cleanup, with controller refresh handled in
+        # ``run_cleanup_step``.
+        src = state.resolving_source
+        spell_id = src.id if src is not None else obj.id
+        state.grant_control_change_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            new_controller_id=controller_id,
+            description=(
+                f"Systems Override: P{controller_id} controls "
+                f"{obj.printing.name} UEOT"
+            ),
+        )
         obj.tapped = False
-        obj.temp_keywords = obj.temp_keywords | frozenset({"haste"})
+        state.grant_keywords_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            keywords=frozenset({"haste"}),
+            log_source_name="Systems Override",
+            log_target_name=obj.printing.name,
+        )
         state.log.append(
             f"P{controller_id} takes control of {obj.printing.name} "
             f"UEOT; untaps + gains haste"

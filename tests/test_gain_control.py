@@ -3,7 +3,7 @@
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SystemsOverrideEffect
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_cleanup_step, run_delayed_end_step_triggers
 
 
@@ -25,9 +25,9 @@ def test_systems_override_gain_control_untap_haste():
     effect = SystemsOverrideEffect()
     effect.resolve(state, 0, (("permanent", bear.id),))
     assert bear.controller_id == 0
-    assert bear.temp_original_controller_id == 1
+    assert bear.controller_id_before_any_aura_swap == 1
     assert not bear.tapped
-    assert "haste" in bear.temp_keywords
+    assert "haste" in effective_keywords(state, bear)
 
 
 def test_systems_override_reverts_on_cleanup():
@@ -41,9 +41,9 @@ def test_systems_override_reverts_on_cleanup():
     assert bear.controller_id == 0
     run_cleanup_step(state)
     assert bear.controller_id == 1
-    assert bear.temp_original_controller_id is None
-    # Haste temp keyword also cleared.
-    assert "haste" not in bear.temp_keywords
+    assert bear.controller_id_before_any_aura_swap is None
+    # Haste registry grant also cleared.
+    assert "haste" not in effective_keywords(state, bear)
 
 
 def test_systems_override_spacecraft_charge_counters():
@@ -115,9 +115,12 @@ def test_systems_override_legal_targets_include_all_artifacts_and_creatures():
 
 
 def test_systems_override_already_stolen_keeps_original_controller():
-    """If the target already has a temp_original_controller_id (stolen
-    earlier this turn), another Systems Override doesn't overwrite it
-    — we still revert to the true original owner on cleanup."""
+    """If the target already has a captured baseline (stolen
+    earlier this turn), another Systems Override doesn't overwrite
+    the baseline — we still revert to the true original owner on
+    cleanup. Within layer 2 the most-recent control_change wins,
+    so the second steal flips control to the new controller while
+    the baseline stays at the original owner."""
     state = _new_state()
     bear = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
@@ -125,12 +128,12 @@ def test_systems_override_already_stolen_keeps_original_controller():
     state.battlefield.append(bear)
     # First steal by P0 from P1.
     SystemsOverrideEffect().resolve(state, 0, (("permanent", bear.id),))
-    assert bear.temp_original_controller_id == 1
+    assert bear.controller_id_before_any_aura_swap == 1
     # Add P2.
     state.players.append(Player(id=2, agent=RandomAgent()))
-    # Second steal by P2 — original should stay 1, not become 0.
+    # Second steal by P2 — baseline should stay 1, not become 0.
     SystemsOverrideEffect().resolve(state, 2, (("permanent", bear.id),))
-    assert bear.temp_original_controller_id == 1
+    assert bear.controller_id_before_any_aura_swap == 1
     assert bear.controller_id == 2
 
 
