@@ -524,6 +524,23 @@ class TriggeredAbility:
                 "beginning_of_end_step": (
                     "At the beginning of your end step"
                 ),
+                # Phase 9 added these. The DEALS_COMBAT_DAMAGE prefix
+                # uses the broad self-form ("Whenever ~ deals combat
+                # damage to a player") to match Illvoi Infiltrator's
+                # printed text — the broader observer variants
+                # (Starwinder's "a creature you control deals…",
+                # Contested War Zone's "a creature deals combat damage
+                # to you") are structurally distinct on the predicate
+                # but indistinguishable here without source context, so
+                # the self-form is the default and per-card describe
+                # rides on the printed oracle text rather than this
+                # prefix. Same trade-off as the PLAYS_LAND prefix above.
+                "deals_combat_damage": (
+                    "Whenever ~ deals combat damage to a player"
+                ),
+                "blocks": (
+                    "Whenever ~ blocks a creature with flying"
+                ),
             }
             # IS_CAST + IsArtifact("spell") → "Whenever you cast an
             # artifact spell" (Pinnacle Emissary). IS_CAST +

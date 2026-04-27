@@ -213,10 +213,18 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
 
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
-    """``assignments`` maps blocker id → attacker id."""
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    """``assignments`` maps blocker id → attacker id.
+
+    Phase-9 commit 3 collapsed the legacy
+    ``trigger="blocks_creature_with_flying"`` walk (which used to
+    push Skystinger's pump on the blocker) — every static site for
+    that key was migrated to predicate-style ``event=Event.BLOCKS,
+    predicate=IsSelf(subject="blocker") & HasKeyword("flying",
+    subject="attacker")`` in commit 2, so the dispatcher's
+    ``Event.BLOCKS`` sweep below is the single fire path.
+    """
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
-    from mtg_bot.game import effective_keywords
 
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
@@ -239,35 +247,16 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
         blocker.blocking = attacker_id
         attacker.blocked_by.append(blocker_id)
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")
-        # Predicate-style ``Event.BLOCKS`` dispatch (phase 9). Subjects
-        # are the blocker and the attacker it blocked. Skystinger's
+        # Predicate-style ``Event.BLOCKS`` dispatch. Subjects are the
+        # blocker and the attacker it blocked. Skystinger's
         # ``IsSelf(subject="blocker") & HasKeyword("flying", subject=
         # "attacker")`` is the one in-scope predicate today; future
         # block-filter triggers compose more keyword/type clauses on
-        # the same event. Predicate-style abilities don't set
-        # ``ability.trigger`` so the legacy walk below skips them — no
-        # double-fire. Phase-9 commit 3 collapses the legacy walk once
-        # the static site migrates.
+        # the same event.
         dispatch_event(
             state, Event.BLOCKS, label="blocks",
             blocker=blocker, attacker=attacker,
         )
-        # Fire "whenever ~ blocks a creature with flying" triggers on
-        # the blocker (Skystinger). Extend with more filters as needed.
-        attacker_kws = effective_keywords(state, attacker)
-        for i, ability in enumerate(blocker.printing.triggered_abilities):
-            if ability.trigger != "blocks_creature_with_flying":
-                continue
-            if "flying" not in attacker_kws:
-                continue
-            push_triggered_ability(
-                state,
-                source=blocker,
-                ability=ability,
-                ability_index=i,
-                controller_id=blocker.controller_id,
-                label="blocks-flying",
-            )
 
 
 def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
@@ -551,66 +540,48 @@ def _fire_enchanted_dealt_damage_triggers(
 def _fire_combat_damage_to_player_triggers(
     state: GameState, sources_hit_player: list[tuple[int, int, int]]
 ) -> None:
-    """For each (source_id, target_player_id, amount) triple, fire:
-    - the source's own ``combat_damage_to_player`` triggers (via the
-      stack — opponents get a chance to respond at instant speed),
-    - observer triggers on other permanents whose controllers see one
-      of their own (nontoken artifact) creatures dealing combat damage
-      (Virulent Silencer), and
-    - "whenever a creature you control deals combat damage to a player"
-      observer triggers (Starwinder's draw-that-many).
+    """For each (source_id, target_player_id, amount) triple, fire
+    every triggered ability that listens for combat damage to a
+    player.
 
-    After the per-source pass, an aggregated observer pass fires the
-    ``your_counter_creature_combat_damage_to_player_aggregated``
-    trigger ONCE per (controller, target_player) pair where at least
-    one source carrying a +1/+1 counter (controlled by ``controller``)
-    hit ``target_player`` — Haliya, Ascendant Cadet's draw-a-card.
-
-    The source's-own trigger goes on the stack as a StackItem with the
-    damage amount stashed in ``combat_damage_amount`` so the effect can
-    still read "that many" when it eventually resolves. Targets are
-    picked at trigger time, matching the ETB-trigger flow.
-
-    Observer triggers (artifact-creature-damage, your-creature-damage,
-    creature-deals-combat-damage-to-you) currently still resolve
-    immediately; reaching for the stack on those is a separate concern.
-    During those immediate resolutions,
-    ``state.resolving_combat_damage_amount`` carries the damage amount.
-
-    Phase-9 commit 1 layers a parallel ``dispatch_event(state,
-    Event.DEALS_COMBAT_DAMAGE, source=…, target=…)`` call alongside
-    the legacy per-source walks below. The dispatcher fires every
-    predicate-style trigger whose ``event`` is ``DEALS_COMBAT_DAMAGE``
-    and whose predicate evaluates true against the
-    ``(source, target)`` subject mapping — covering Illvoi
-    Infiltrator's ``IsSelf(subject="source") & IsPlayer(subject="target")``,
-    Starwinder's ``IsCreature(subject="source") & Controlled(YOU,
-    subject="source") & IsPlayer(subject="target")``, and Contested War
-    Zone's ``IsCreature(subject="source") & Controlled(YOU,
-    subject="target")`` (where ``"target"`` is the damaged player and
-    ``Controlled(YOU)`` against a player subject reads as "the damaged
-    player IS me, the observer's controller"). Predicate-style
-    abilities don't set ``ability.trigger`` so the legacy walks below
-    skip them — no double-fire. Phase-9 commit 3 collapses the legacy
-    walks once all static sites migrate.
-
-    The dispatch threads the attacker's controller through
+    The single-source / your-creature / creature-deals-to-you families
+    (Illvoi Infiltrator, Starwinder, Contested War Zone) flow through
+    the predicate-trigger dispatcher (phase 9); see the
+    ``Event.DEALS_COMBAT_DAMAGE`` dispatch below. The dispatcher
+    walks every battlefield permanent, evaluates each one's
+    predicate against the ``(source, target)`` subject mapping, and
+    pushes a StackItem when the predicate matches. The attacker's
+    controller is threaded via
     ``combat_damage_source_controller_id`` (mirrored to
     ``state.resolving_combat_damage_source_controller_id`` at resolve
-    time), NOT through ``fixed_targets``. Contested War Zone's
-    ``ChangeControllerToCombatDamageSource`` effect reads the new
-    controller from that state slot; Illvoi/Starwinder/Skystinger's
-    effects (``DrawCards``, ``DrawCardsEqualToResolvingCombatDamage``,
-    ``PumpSelfUntilEOT``) ignore both ``targets`` and the slot. The
-    legacy ``creature_deals_combat_damage_to_you`` walk below keeps
-    its original ``fixed_targets=(("player", attacker_controller_id),)``
-    shape for the still-string-key observers (Virulent Silencer,
-    Haliya's aggregated, etc.) that aren't part of this phase's
-    migration.
+    time) so observer effects like Contested War Zone's
+    ``ChangeControllerToCombatDamageSource`` can read the new
+    controller without having to thread it through ``fixed_targets``.
+
+    Two specialty observer keys remain on the legacy string-key path
+    because their semantics don't fit the per-event predicate model
+    cleanly:
+
+    - ``your_nontoken_artifact_creature_combat_damage_to_player``
+      (Virulent Silencer): the source-side qualifier filters on the
+      attacker being a nontoken artifact creature, but the
+      registration also targets the damaged player as a fixed target
+      slot — encoding "fire as observer on permanents controlled by
+      the attacker's controller" with the predicate vocabulary would
+      need an OBSERVER_CONTROLLED-style predicate that we haven't
+      added yet.
+    - ``your_counter_creature_combat_damage_to_player_aggregated``
+      (Haliya, Ascendant Cadet): fires ONCE per (controller,
+      target_player) pair regardless of how many qualifying sources
+      damaged the player. The deduplication is fundamentally
+      cross-event aggregation, not a per-event predicate.
+
+    Both stay as legacy walks below; they have their own dedicated
+    fire paths and are not migrated by phase 9.
     """
     from mtg_bot.actions import dispatch_event, push_triggered_ability
-    from mtg_bot.effects.predicates import Event
     from mtg_bot.turn import should_fire_trigger
+    from mtg_bot.effects.predicates import Event
 
     for source_id, target_player, amount in sources_hit_player:
         source = next(
@@ -618,12 +589,13 @@ def _fire_combat_damage_to_player_triggers(
         )
         if source is None:
             continue  # source died from simultaneous damage
-        # Predicate-style ``Event.DEALS_COMBAT_DAMAGE`` dispatch (phase 9).
-        # The ``source`` and ``target`` kwargs land in ``**subjects`` on
-        # the dispatcher; the dispatcher's local ``source`` variable
-        # (the firing observer permanent) is unrelated. Per (source,
-        # target) pair so the dispatcher fires once per damage event,
-        # mirroring the per-pair semantics of the legacy walks below.
+        # Predicate-style ``Event.DEALS_COMBAT_DAMAGE`` dispatch.
+        # Subsumes Illvoi Infiltrator
+        # (``IsSelf(subject="source") & IsPlayer(subject="target")``),
+        # Starwinder (``IsCreature(subject="source") & Controlled(YOU,
+        # subject="source") & IsPlayer(subject="target")``), and
+        # Contested War Zone (``IsCreature(subject="source") &
+        # Controlled(YOU, subject="target")``).
         target_player_obj = state.player_by_id(target_player)
         attacker_controller_id = source.controller_id
         dispatch_event(
@@ -634,23 +606,10 @@ def _fire_combat_damage_to_player_triggers(
             source=source,
             target=target_player_obj,
         )
-        # Source's own triggers — go on the stack so opponents get a
-        # window to respond at instant speed before the ability resolves.
-        for i, ability in enumerate(source.printing.triggered_abilities):
-            if ability.trigger != "combat_damage_to_player":
-                continue
-            push_triggered_ability(
-                state,
-                source=source,
-                ability=ability,
-                ability_index=i,
-                controller_id=source.controller_id,
-                label="combat-damage-to-player",
-                combat_damage_amount=amount,
-            )
 
         # Observer: "whenever a nontoken artifact creature you control
-        # deals combat damage to a player".
+        # deals combat damage to a player" — Virulent Silencer.
+        # Stays on the legacy string-key path; see docstring above.
         if (
             source.printing.is_artifact
             and source.printing.is_creature
@@ -676,52 +635,6 @@ def _fire_combat_damage_to_player_triggers(
                         fixed_targets=(("player", target_player),),
                     )
 
-        # Observer: "whenever a creature you control deals combat
-        # damage to a player" — Starwinder.
-        for obs in list(state.battlefield):
-            if obs.controller_id != source.controller_id:
-                continue
-            for i, ability in enumerate(obs.printing.triggered_abilities):
-                if ability.trigger != (
-                    "your_creature_combat_damage_to_player"
-                ):
-                    continue
-                push_triggered_ability(
-                    state,
-                    source=obs,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=obs.controller_id,
-                    label="creature-damage-to-player",
-                    combat_damage_amount=amount,
-                    fixed_targets=(("player", target_player),),
-                )
-
-        # Observer: "whenever a creature deals combat damage to you" —
-        # fires on permanents the hit player controls. Used by Contested
-        # War Zone's "that creature's controller gains control of this
-        # land". This observer needs the attacker's *controller* exposed
-        # at resolution, which we plumb via the StackItem's targets:
-        # convention is fixed_targets=(("player", source_controller),)
-        # so the effect can read the new controller id from item.targets.
-        attacker_controller_id = source.controller_id
-        for obs in list(state.battlefield):
-            if obs.controller_id != target_player:
-                continue
-            for i, ability in enumerate(obs.printing.triggered_abilities):
-                if ability.trigger != "creature_deals_combat_damage_to_you":
-                    continue
-                push_triggered_ability(
-                    state,
-                    source=obs,
-                    ability=ability,
-                    ability_index=i,
-                    controller_id=obs.controller_id,
-                    label="combat-damage-to-you",
-                    combat_damage_amount=amount,
-                    fixed_targets=(("player", attacker_controller_id),),
-                )
-
     # Aggregated observer: "whenever one or more creatures you control
     # with +1/+1 counters on them deal combat damage to a player"
     # (Haliya, Ascendant Cadet). Build the set of (controller,
@@ -731,6 +644,7 @@ def _fire_combat_damage_to_player_triggers(
     # many qualifying sources damaged the player). Source-with-counter
     # state is snapshotted at lookup time from the live battlefield
     # entry, matching how the per-source observers above resolve.
+    # Stays on the legacy string-key path; see docstring above.
     aggregated_pairs: set[tuple[int, int]] = set()
     for source_id, target_player, _amount in sources_hit_player:
         source = next(
