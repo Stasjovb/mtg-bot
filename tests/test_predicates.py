@@ -18,6 +18,7 @@ from mtg_bot.effects.predicates import (
     And,
     Controlled,
     Event,
+    HasCounter,
     HasSubtype,
     IsArtifact,
     IsCreature,
@@ -47,6 +48,10 @@ class FakeObject:
     id: int = 0
     controller_id: int = 0
     printing: FakePrinting = field(default_factory=FakePrinting)
+    plus_one_counters: int = 0
+    charge_counters: int = 0
+    stun_counters: int = 0
+    loyalty_counters: int = 0
 
 
 @dataclass
@@ -221,6 +226,67 @@ def test_has_subtype_matches_within_multi_subtype_printing():
 
 def test_has_subtype_false_when_subject_missing():
     assert HasSubtype("Kavu").matches(FakeState(), {}, _src()) is False
+
+
+# ---------- HasCounter ----------
+
+def test_has_counter_plus_one_matches_creature_with_counter():
+    """A creature with at least one +1/+1 counter passes
+    ``HasCounter("+1/+1")``."""
+    src = _src()
+    obj = FakeObject(plus_one_counters=1)
+    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is True
+
+
+def test_has_counter_plus_one_rejects_creature_without_counter():
+    src = _src()
+    obj = FakeObject(plus_one_counters=0)
+    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is False
+
+
+def test_has_counter_plus_one_matches_creature_with_many_counters():
+    """The check is ``> 0`` — any positive count matches."""
+    src = _src()
+    obj = FakeObject(plus_one_counters=7)
+    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is True
+
+
+def test_has_counter_supports_other_counter_kinds():
+    """The kind→attribute mapping covers charge / stun / loyalty too."""
+    src = _src()
+    charged = FakeObject(charge_counters=2)
+    stunned = FakeObject(stun_counters=1)
+    walker = FakeObject(loyalty_counters=4)
+    assert HasCounter("charge").matches(
+        FakeState(), {"obj": charged}, src
+    ) is True
+    assert HasCounter("stun").matches(
+        FakeState(), {"obj": stunned}, src
+    ) is True
+    assert HasCounter("loyalty").matches(
+        FakeState(), {"obj": walker}, src
+    ) is True
+
+
+def test_has_counter_kinds_are_independent():
+    """A creature with charge counters but no +1/+1 counters does NOT
+    pass ``HasCounter("+1/+1")``."""
+    src = _src()
+    obj = FakeObject(plus_one_counters=0, charge_counters=3)
+    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is False
+
+
+def test_has_counter_false_when_subject_missing():
+    assert HasCounter("+1/+1").matches(FakeState(), {}, _src()) is False
+
+
+def test_has_counter_unknown_kind_raises():
+    """Typos surface as ``KeyError`` at evaluation time rather than
+    silently never-matching."""
+    src = _src()
+    obj = FakeObject(plus_one_counters=5)
+    with pytest.raises(KeyError):
+        HasCounter("+2/+2").matches(FakeState(), {"obj": obj}, src)
 
 
 # ---------- combinators ----------

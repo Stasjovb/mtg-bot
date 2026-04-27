@@ -307,3 +307,45 @@ class HasSubtype(Predicate):
         if obj is None:
             return False
         return self.name in obj.printing.subtypes
+
+
+# Map a counter "kind" string to the ``GameObject`` attribute that
+# holds its current count. Engine stores counters as separate scalar
+# fields on ``GameObject`` (not a single dict) — the predicate maps
+# the canonical printed names (``"+1/+1"``, ``"charge"``, ``"stun"``,
+# ``"loyalty"``) onto those fields. New counter kinds must extend
+# this table when they get added engine-side.
+_COUNTER_ATTRS: dict[str, str] = {
+    "+1/+1": "plus_one_counters",
+    "charge": "charge_counters",
+    "stun": "stun_counters",
+    "loyalty": "loyalty_counters",
+}
+
+
+@dataclass(frozen=True)
+class HasCounter(Predicate):
+    """The named subject has at least one counter of ``kind`` on it.
+
+    Models the "with a +1/+1 counter on it" qualifier in triggers like
+    ``"Whenever a creature you control with a +1/+1 counter on it
+    dies"`` (Meltstrider Eulogist) and ``"Whenever a nontoken creature
+    you control with a +1/+1 counter on it dies"`` (Rayblade Trooper).
+
+    ``kind`` is the printed counter name (``"+1/+1"``, ``"charge"``,
+    ``"stun"``, ``"loyalty"``) — the predicate looks up the
+    corresponding scalar field on ``GameObject`` via ``_COUNTER_ATTRS``
+    and tests for ``> 0``. Unknown counter kinds raise ``KeyError`` at
+    evaluation time so a typo surfaces immediately rather than
+    silently never matching.
+    """
+
+    kind: str
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        attr = _COUNTER_ATTRS[self.kind]
+        return getattr(obj, attr, 0) > 0
