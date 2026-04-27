@@ -8,12 +8,18 @@ An activated-ability line of the form ``{cost}: <effect>.`` where
   * ``{T}`` — pure tap cost (no mana).
   * ``{T}, {mana}`` — tap plus a mana cost. The two pieces are
     comma-separated.
+  * ``Sacrifice this creature`` — pure sacrifice-self cost.
+  * ``{T}, Sacrifice this creature`` (or reversed) — tap plus
+    sacrifice-self.
+  * ``{mana}, Sacrifice this creature`` (or reversed) — mana plus
+    sacrifice-self.
 
 ``<effect>`` is a single sentence parsed via the unified
 ``_parse_effect`` after lowercase + period stripping. Other cost
-shapes (sacrifice, pay-life, counter-removal, "tap another permanent",
-…) are out of scope this slice — the line falls through and causes
-the card to be skipped.
+shapes (pay-life, counter-removal, "tap another permanent",
+multi-comma costs like tap + mana + sacrifice, …) are out of scope
+this slice — the line falls through and causes the card to be
+skipped.
 
 The ``Activate only as a sorcery.`` rider has two surface shapes:
 
@@ -48,6 +54,10 @@ _ACTIVATED_ABILITY_LINE = re.compile(
 # A bare mana cost is one or more brace-wrapped mana symbols, no commas.
 _MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
 
+# Pure sacrifice-self cost piece. The oracle text always says
+# "Sacrifice this creature" for a creature's own activated ability.
+_SACRIFICE_SELF_PIECE = "Sacrifice this creature"
+
 
 def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     """Parse the cost segment of an activated-ability line into an
@@ -57,19 +67,36 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     * Tap-only: ``{T}`` → ``ActivationCost(tap_self=True)``.
     * Tap + mana (in either order): ``{T}, {1}{R}`` or ``{1}{R}, {T}``
       → ``ActivationCost(mana=…, mana_str=…, tap_self=True)``.
+    * Pure sacrifice-self: ``Sacrifice this creature``
+      → ``ActivationCost(sacrifice_self=True)``.
+    * Tap + sacrifice-self (either order): ``{T}, Sacrifice this creature``
+      or ``Sacrifice this creature, {T}``
+      → ``ActivationCost(tap_self=True, sacrifice_self=True)``.
+    * Mana + sacrifice-self (either order): ``{1}{R}, Sacrifice this
+      creature`` or ``Sacrifice this creature, {1}{R}``
+      → ``ActivationCost(mana=…, mana_str=…, sacrifice_self=True)``.
 
-    Anything else (sacrifice, pay-life, counter removal, multi-comma
-    costs, etc.) returns ``None`` so the caller can skip the card.
+    Anything else (pay-life, counter removal, three-piece costs like
+    tap + mana + sacrifice, etc.) returns ``None`` so the caller can
+    skip the card.
     """
     cost_str = cost_str.strip()
     # Pure tap.
     if cost_str == "{T}":
         return ActivationCost(tap_self=True)
-    # Tap + mana (or mana + tap), comma-separated, exactly two pieces.
+    # Pure sacrifice-self.
+    if cost_str == _SACRIFICE_SELF_PIECE:
+        return ActivationCost(sacrifice_self=True)
+    # Two-piece comma-separated costs: tap + mana, tap + sacrifice,
+    # or mana + sacrifice (in either order for each pair).
     if "," in cost_str:
         pieces = [p.strip() for p in cost_str.split(",")]
         if len(pieces) != 2:
             return None
+        # Tap + sacrifice-self (no mana).
+        if "{T}" in pieces and _SACRIFICE_SELF_PIECE in pieces:
+            return ActivationCost(tap_self=True, sacrifice_self=True)
+        # Tap + mana.
         if "{T}" in pieces:
             other = pieces[0] if pieces[1] == "{T}" else pieces[1]
             if _MANA_COST_ONLY.match(other) is None:
@@ -80,6 +107,22 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
                 return None
             return ActivationCost(
                 mana=mana, mana_str=other, tap_self=True
+            )
+        # Mana + sacrifice-self.
+        if _SACRIFICE_SELF_PIECE in pieces:
+            other = (
+                pieces[0]
+                if pieces[1] == _SACRIFICE_SELF_PIECE
+                else pieces[1]
+            )
+            if _MANA_COST_ONLY.match(other) is None:
+                return None
+            try:
+                mana = parse_mana_cost(other)
+            except ValueError:
+                return None
+            return ActivationCost(
+                mana=mana, mana_str=other, sacrifice_self=True
             )
         return None
     # Pure mana — everything else with no comma must be a pure brace

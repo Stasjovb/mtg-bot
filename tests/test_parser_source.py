@@ -1613,12 +1613,22 @@ def test_parse_activated_ability_line_accepts_tap_plus_mana_either_order():
     assert a.cost.mana_str == "{1}{R}"
 
 
-def test_parse_activated_ability_line_rejects_multi_cost_with_sacrifice():
-    """``{2}, Sacrifice this creature: ...`` is multi-cost, out of
-    scope."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_accepts_mana_plus_sacrifice():
+    """``{2}, Sacrifice this creature: ...`` — mana plus sacrifice-self.
+    Now supported (Illvoi Galeblade's activation shape). The new tests
+    in ``test_parser_activated_sacrifice.py`` cover this branch in
+    depth; this case stays here as a smoke test alongside the other
+    cost shapes."""
+    ab = _parse_activated_ability_line(
         "{2}, Sacrifice this creature: Draw a card."
-    ) is None
+    )
+    assert ab is not None
+    assert ab.cost == ActivationCost(
+        mana=parse_mana_cost("{2}"),
+        mana_str="{2}",
+        sacrifice_self=True,
+    )
+    assert ab.effect == DrawCards(amount=1)
 
 
 def test_parse_activated_ability_line_rejects_unknown_effect():
@@ -1780,11 +1790,10 @@ def test_build_creature_printing_attaches_sorcery_rider():
     )
 
 
-def test_build_creature_printing_skips_multi_cost_activated_ability():
-    """A creature whose activated ability has an additional cost
-    (e.g. ``{2}, Sacrifice this creature``) doesn't match the
-    supported pure-mana / tap / tap+mana cost grammar — the line
-    fails to parse and the card is silently skipped."""
+def test_build_creature_printing_accepts_mana_plus_sacrifice_activated_ability():
+    """A creature whose activated ability is ``{mana}, Sacrifice this
+    creature: <effect>.`` is now claimable end-to-end through the
+    creature builder — mana+sacrifice-self is a supported cost shape."""
     card = {
         "name": "Test Multi-Cost",
         "mana_cost": "{U}",
@@ -1793,7 +1802,13 @@ def test_build_creature_printing_skips_multi_cost_activated_ability():
         "toughness": "1",
         "oracle_text": "{2}, Sacrifice this creature: Draw a card.",
     }
-    assert _build_creature_printing(card) is None
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert len(printing.activated_abilities) == 1
+    cost = printing.activated_abilities[0].cost
+    assert cost.mana_str == "{2}"
+    assert cost.sacrifice_self is True
+    assert cost.tap_self is False
 
 
 # ---------- tap costs and sorcery riders ----------
@@ -1845,12 +1860,15 @@ def test_parse_activated_ability_line_rejects_three_piece_cost():
     ) is None
 
 
-def test_parse_activated_ability_line_rejects_tap_plus_sacrifice():
-    """``{T}, Sacrifice this creature: ...`` — tap plus a non-mana
-    additional cost. Out of scope; must not match."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_accepts_tap_plus_sacrifice():
+    """``{T}, Sacrifice this creature: ...`` — tap plus sacrifice-self.
+    Now supported alongside the existing tap+mana shape."""
+    ab = _parse_activated_ability_line(
         "{T}, Sacrifice this creature: Draw a card."
-    ) is None
+    )
+    assert ab is not None
+    assert ab.cost == ActivationCost(tap_self=True, sacrifice_self=True)
+    assert ab.effect == DrawCards(amount=1)
 
 
 def test_parse_activated_ability_line_rejects_pay_life_cost():
@@ -2072,9 +2090,10 @@ def test_parse_activated_ability_line_rejects_tap_plus_tap_cost():
     assert _parse_activated_ability_line("{T}, {T}: Draw a card.") is None
 
 
-def test_build_creature_printing_skips_sacrifice_cost_activated_ability():
-    """Sacrifice costs are explicitly out of scope. The whole card
-    must be skipped, even if the effect itself would parse."""
+def test_build_creature_printing_accepts_pure_sacrifice_cost_activated_ability():
+    """Pure sacrifice-self costs are now supported. A creature whose
+    only activated ability is ``Sacrifice this creature: <effect>.``
+    is claimed end-to-end."""
     card = {
         "name": "Test Sac-Cost",
         "mana_cost": "{B}",
@@ -2083,7 +2102,14 @@ def test_build_creature_printing_skips_sacrifice_cost_activated_ability():
         "toughness": "2",
         "oracle_text": "Sacrifice this creature: Draw a card.",
     }
-    assert _build_creature_printing(card) is None
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert len(printing.activated_abilities) == 1
+    cost = printing.activated_abilities[0].cost
+    assert cost.sacrifice_self is True
+    assert cost.tap_self is False
+    assert cost.mana is None
+    assert cost.mana_str == ""
 
 
 # ---------- static abilities ----------
