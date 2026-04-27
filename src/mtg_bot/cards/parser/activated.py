@@ -24,6 +24,12 @@ like tap + mana + sacrifice or tap + pay-life + sacrifice, …) are
 out of scope this slice — the line falls through and causes the
 card to be skipped.
 
+After a successful parse, the resulting ``ActivatedAbility`` is
+inspected: if its effect is a mana ability (e.g. ``AddManaToPool``
+producing mana with no targets), the ability is rebuilt with
+``is_mana_ability=True`` so the engine bypasses the stack at
+activation time per CR 605.
+
 The ``Activate only as a sorcery.`` rider has two surface shapes:
 
   * **Inline** — ``{cost}: <effect>. Activate only as a sorcery.`` is a
@@ -41,10 +47,12 @@ The ``Activate only as a sorcery.`` rider has two surface shapes:
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    AddManaToPool,
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
@@ -202,6 +210,33 @@ def _normalize_activated_effect_phrase(phrase: str) -> str:
 _INLINE_SORCERY_RIDER_SUFFIX = " Activate only as a sorcery."
 
 
+def _is_mana_ability_effect(effect) -> bool:
+    """Return True iff ``effect`` is a mana ability for the purposes of
+    CR 605: it produces mana and does not target.
+
+    Today the only effect class that satisfies both is ``AddManaToPool``
+    — it mints coins straight into the controller's mana pool with no
+    target selection. ``AddNManaOfChosenColor`` and the various
+    "permanent-color" / "land-could-produce" mana effects also belong
+    here in principle but require an at-resolution choice and aren't
+    yet emitted by the activated-ability grammar (no EoE single-line
+    ``Add one mana of any color`` activated ability is parser-claimed
+    today; when one becomes claimable, extend this predicate).
+
+    Effects that would be excluded if they ever appeared (defense in
+    depth): anything reporting ``requires_target() == True`` is not a
+    mana ability per the rules — even if it adds mana, the targeting
+    forces the ability to use the stack. Today no ``AddManaToPool``
+    instance targets, but the explicit guard keeps future grammar
+    additions honest.
+    """
+    if not isinstance(effect, AddManaToPool):
+        return False
+    if effect.requires_target():
+        return False
+    return True
+
+
 def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     """Return an ``ActivatedAbility`` for a ``{cost}: <effect>.`` line,
     or ``None`` if the line shape doesn't match, the cost shape isn't
@@ -212,6 +247,11 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     ``{cost}: <effect>. Activate only as a sorcery.`` — the trailing
     rider is stripped, the remainder is parsed as a normal activation,
     and the resulting ability is marked ``sorcery_speed=True``.
+
+    If the parsed effect is a mana ability (see
+    ``_is_mana_ability_effect``), the returned ``ActivatedAbility`` is
+    marked ``is_mana_ability=True`` so the engine bypasses the stack
+    on activation per CR 605.
     """
     stripped = line.strip()
     sorcery_speed = False
@@ -229,7 +269,12 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
     if effect is None:
         return None
-    return ActivatedAbility(cost=cost, effect=effect, sorcery_speed=sorcery_speed)
+    ability = ActivatedAbility(
+        cost=cost, effect=effect, sorcery_speed=sorcery_speed
+    )
+    if _is_mana_ability_effect(effect):
+        ability = replace(ability, is_mana_ability=True)
+    return ability
 
 
 # A standalone ``Activate only as a sorcery.`` clause attaches to the
