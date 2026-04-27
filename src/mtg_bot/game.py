@@ -299,55 +299,28 @@ def is_creature_now(obj: GameObject) -> bool:
     )
 
 
-def _source_abilities_suppressed(
-    state: "GameState", source: "GameObject"
-) -> bool:
-    """True if ``source`` currently has its abilities wiped by a
-    layer-6 ``"lose_all_abilities"`` effect (Lignify, Humility,
-    Turn to Frog). When True, the source's printed static
-    abilities — Sliver lord anthems, Magus's "nonbasic lands are
-    Mountains", Dryad's "lands are every basic land type", etc. —
-    do NOT contribute. Per CR 613.7 dependency, layer 6's wipe
-    applies before downstream layers consume the source's
-    statics.
-
-    Simplification: any lose_all_abilities entry on the source
-    suffices, regardless of timestamp ordering vs other layer-6
-    entries on the source itself. Sufficient until we have a card
-    that re-grants printed statics after a wipe (none in scope).
-    """
-    return any(
-        ce.layer == 6
-        and ce.kind == "lose_all_abilities"
-        and ce.target_id == source.id
-        for ce in state.continuous_effects
-    )
-
-
 def _static_bonuses(
     state: GameState, obj: GameObject
 ) -> tuple[int, int, frozenset[str]]:
     """Walk the battlefield for static abilities that buff ``obj``.
 
-    Returns (power_bonus, toughness_bonus, granted_keywords). Used by the
-    effective_* helpers below.
+    Returns (power_bonus, toughness_bonus, granted_keywords). Used by
+    the effective_* helpers below. Also folds in bonuses from any
+    Equipment attached to ``obj``.
 
-    Also folds in bonuses from any Equipment attached to ``obj``.
-
-    Skips static contributions from any source whose abilities are
-    suppressed by a layer-6 ``lose_all_abilities`` effect (Lignify
-    on a Sliver lord turns the lord's anthem off). Equipment
-    bonuses still apply when the equipment itself is Lignified —
-    those are written into ``equipment_bonuses`` on the printing,
-    not as a static ability — so the suppression check is scoped
-    to the static-abilities walk.
+    A Lignified / Humility'd source still contributes its static
+    bonuses here: per CR 613.7 (within-layer dependency) and CR
+    613.1 (strict cross-layer order), the source's static-anthem
+    layer-6 keyword grant and layer-7c P/T bonus apply via
+    dependency before the source's own layer-6 wipe takes effect
+    on those granted modifications. The wipe targets THE SOURCE,
+    not the recipients of its grants — so the recipients keep what
+    they were granted.
     """
     power_bonus = 0
     toughness_bonus = 0
     granted: set[str] = set()
     for source in state.battlefield:
-        if _source_abilities_suppressed(state, source):
-            continue
         for ability in source.printing.static_abilities:
             if ability.applies_to(source, obj, state):
                 power_bonus += ability.power_bonus
@@ -390,6 +363,11 @@ def effective_controller(state: GameState, obj: GameObject) -> int:
     existing reads of ``obj.controller_id`` continue to return the
     right value.
     """
+    # Layer 2 runs before layer 6 in CR 613.1 strict layer order, so
+    # a Humility / Lignify wipe of the source (layer 6) does NOT
+    # retroactively undo this layer-2 control grant: the layer-2
+    # effect was already applied. We do NOT skip on
+    # _source_abilities_suppressed here.
     latest: int | None = None
     latest_ts: int = -1
     for ce in state.continuous_effects:
@@ -604,10 +582,12 @@ def effective_subtypes(
                 continue
             if o.controller_id != obj.controller_id:
                 continue
-            if (
-                o.printing.grants_food_to_your_artifacts
-                and not _source_abilities_suppressed(state, o)
-            ):
+            # Ragost's "artifacts you control are Foods" is a layer-4
+            # type-changing effect. Layer 4 runs before layer 6 (CR
+            # 613.1), so a Lignified Ragost still contributes the
+            # Food subtype add — strict layer order, no source-
+            # suppression check here.
+            if o.printing.grants_food_to_your_artifacts:
                 if "Food" not in subtypes:
                     subtypes.append("Food")
                 break
@@ -633,15 +613,17 @@ def effective_subtypes(
     ]
     # Synthesize Magus-of-the-Moon / Blood Moon entries: nonbasic
     # lands get a layer-4 set_basic_land_subtype("Mountain") effect
-    # sourced by each Magus permanent on the battlefield. A source
-    # whose abilities are wiped (Lignify / Humility on Magus) drops
-    # out — its static no longer contributes per CR 613.7 dependency.
+    # sourced by each Magus permanent on the battlefield.
+    #
+    # Strict layer order (CR 613.1): layer 4 runs before layer 6, so
+    # a Lignified / Humility'd Magus STILL contributes its layer-4
+    # type-changing effect — layer 6 hasn't run yet to wipe its
+    # ability. The famous Dryad + Humility ruling: lands keep the
+    # basic land types Dryad granted, even after Humility removes
+    # Dryad's ability, because layer 4 already applied.
     if obj.printing.is_land and not obj.printing.is_basic_land:
         for src in state.battlefield:
-            if (
-                src.printing.nonbasic_lands_are_mountains
-                and not _source_abilities_suppressed(state, src)
-            ):
+            if src.printing.nonbasic_lands_are_mountains:
                 layer4.append(ContinuousEffect(
                     source_id=src.id, layer=4,
                     timestamp=src.etb_timestamp,
@@ -655,13 +637,13 @@ def effective_subtypes(
     # Synthesize Dryad-of-the-Ilysian-Grove entries: any land its
     # controller controls gets layer-4 add_subtype effects for all
     # five basic land types, sourced by Dryad with its etb_timestamp.
-    # A Lignified Dryad stops contributing.
+    # Same strict-layer-order reasoning — a Lignified Dryad still
+    # contributes (layer 4 < layer 6).
     if obj.printing.is_land:
         for src in state.battlefield:
             if (
                 src.printing.grants_all_basic_land_types_to_lands_you_control
                 and src.controller_id == obj.controller_id
-                and not _source_abilities_suppressed(state, src)
             ):
                 for basic in (
                     "Plains", "Island", "Swamp", "Mountain", "Forest"
@@ -747,19 +729,20 @@ def effective_protection_from_colors(
 
 def magus_of_the_moon_active(state: "GameState") -> bool:
     """True when any permanent on the battlefield has the
-    ``nonbasic_lands_are_mountains`` flag AND its abilities are
-    not currently wiped by a layer-6 ``lose_all_abilities``
-    effect. Used by ``effective_activated_abilities`` to suppress
-    nonbasic lands' activated abilities. (``effective_land_produces``
-    routes through ``effective_subtypes`` instead and gets the
-    same suppression for free via the Magus synthesis there.)
+    ``nonbasic_lands_are_mountains`` flag. Used by
+    ``effective_activated_abilities`` to suppress nonbasic lands'
+    activated abilities — modeled here as a side-effect of Magus's
+    layer-4 type change (CR 305.6: when a land's basic land type
+    is changed, it loses its other land-type-derived abilities).
 
-    A Lignified Magus stops applying.
+    Strict layer order (CR 613.1) puts layer 4 before layer 6, so
+    a Lignified / Humility'd Magus STILL applies its layer-4
+    nonbasic-lands-are-Mountains effect — its abilities haven't
+    been wiped yet at layer 4 walking time. No source-suppression
+    check here.
     """
     return any(
-        o.printing.nonbasic_lands_are_mountains
-        and not _source_abilities_suppressed(state, o)
-        for o in state.battlefield
+        o.printing.nonbasic_lands_are_mountains for o in state.battlefield
     )
 
 
@@ -835,8 +818,11 @@ def effective_activated_abilities(
                 continue
             if o.controller_id != obj.controller_id:
                 continue
-            if _source_abilities_suppressed(state, o):
-                continue
+            # Static-driven artifact-ability grants from sources like
+            # Ragost / Mm'menon are layer-6 effects; per CR 613.7
+            # within-layer dependency, they apply even when their
+            # source has been Humility'd / Lignified — the wipe
+            # targets the source, not the recipients of the grant.
             if (
                 not seen_ragost
                 and o.printing.grants_food_ability_to_your_artifacts
@@ -851,12 +837,12 @@ def effective_activated_abilities(
                 seen_mmnemon = True
             if seen_ragost and seen_mmnemon:
                 break
-    # Equipment-granted abilities: walk attached equipment.
-    # Lignified equipment doesn't grant — its abilities are wiped.
+    # Equipment-granted abilities: walk attached equipment. The
+    # equipment-keyword grant is layer 6 just like the static
+    # anthem grants above — it survives a Lignify on the equipment
+    # itself by the same dependency logic.
     for o in state.battlefield:
         if o.attached_to != obj.id:
-            continue
-        if _source_abilities_suppressed(state, o):
             continue
         if o.printing.grants_control_opponent_ability_when_equipped:
             base.append(DOMINION_BRACELET_GRANTED_ABILITY)

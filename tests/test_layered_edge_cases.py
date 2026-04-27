@@ -434,35 +434,212 @@ def test_dryad_older_then_magus_newer_lands_become_just_mountains():
     assert effective_land_produces(state, land) == frozenset({"R"})
 
 
-def test_lignified_dryad_stops_granting_basic_land_types():
-    """A Lignified Dryad has its abilities wiped (layer 6
-    lose_all_abilities) — its "lands are every basic land type"
-    static is suppressed via the CR 613.7 dependency rule. Lands
-    revert to printed subtypes.
+def test_tractor_beam_on_dryad_layer2_then_layer4_dependency():
+    """Tractor Beam swaps Dryad's controller (layer 2). Dryad's
+    "lands YOU CONTROL" static (synthesized at layer 4) then keys
+    off the NEW controller — its layer-4 effect now applies to the
+    new controller's lands, not the old controller's. Tests the
+    layer-2 → layer-4 dependency: layer 2 must be resolved before
+    layer 4 reads it.
+    """
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _new_state()
+    # P0 has a Forest. P1 has a Forest. Dryad starts under P1's control.
+    p0_forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    p0_forest.etb_timestamp = 1
+    p1_forest = _put(state, make_basic_land("Forest", "G"), owner_id=1)
+    p1_forest.controller_id = 1
+    p1_forest.etb_timestamp = 2
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=1)
+    dryad.controller_id = 1
+    dryad.etb_timestamp = 5
+
+    # Pre-swap: Dryad's effect applies to P1's Forest, not P0's.
+    assert "Plains" in effective_subtypes(state, p1_forest)
+    assert "Plains" not in effective_subtypes(state, p0_forest)
+
+    # P0 attaches a Tractor Beam to Dryad — P0 now controls Dryad.
+    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    _attach(state, aura, dryad)
+    assert dryad.controller_id == 0
+
+    # Now Dryad's "lands you control" follows the new controller.
+    assert "Plains" in effective_subtypes(state, p0_forest)
+    assert "Plains" not in effective_subtypes(state, p1_forest)
+
+
+def test_lignified_tractor_beam_keeps_control_grant():
+    """A Tractor Beam that gets Humility'd / Lignified AFTER
+    attaching keeps its layer-2 control grant on the enchanted
+    permanent. Per CR 613.1 strict layer order, layer 2 runs before
+    layer 6 — the control grant is already applied by the time the
+    layer-6 wipe happens, and the wipe does not retroactively undo
+    layers below it.
+    """
+    from mtg_bot.cards import EOE_SPELLS
+    from mtg_bot.game import effective_controller
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
+    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    _attach(state, aura, bear)
+    assert effective_controller(state, bear) == 0
+
+    state.add_continuous_effect(
+        source_id=aura.id, layer=6, kind="lose_all_abilities",
+        target_id=aura.id, params=(),
+        description="(test) Tractor Beam loses all abilities",
+    )
+
+    # Layer 2 already applied; layer 6 wipe doesn't undo it.
+    assert effective_controller(state, bear) == 0
+
+
+def test_two_lignified_magi_still_collapse_lands():
+    """Two Magus-like sources on the battlefield, both Lignified.
+    Per CR strict layer order, their layer-4 type-changing effects
+    still apply — nonbasic lands are STILL Mountains. The layer-6
+    wipes only target the Magi themselves; the lands are not
+    Lignified.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual", mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(), card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    magus_a = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus_a)
+    magus_a.etb_timestamp = 5
+    magus_b = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus_b)
+    magus_b.etb_timestamp = 6
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+    # Lignify both Magi.
+    state.add_continuous_effect(
+        source_id=99, layer=6, kind="lose_all_abilities",
+        target_id=magus_a.id, params=(),
+        description="(test) Lignify on magus_a",
+    )
+    state.add_continuous_effect(
+        source_id=98, layer=6, kind="lose_all_abilities",
+        target_id=magus_b.id, params=(),
+        description="(test) Lignify on magus_b",
+    )
+
+    # Layer 4 still applies — dual is still Mountain.
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+
+def test_two_dryads_idempotent_subtype_add():
+    """Two Dryads on the battlefield don't double-add subtypes.
+    Lands have each basic type once — not five copies."""
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    d1 = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    d1.etb_timestamp = 5
+    d2 = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    d2.etb_timestamp = 6
+
+    subs = effective_subtypes(state, forest)
+    assert subs.count("Plains") == 1
+    assert subs.count("Island") == 1
+    # Forest appears once (printed) — Dryad's add_subtype suppresses
+    # duplicates.
+    assert subs.count("Forest") == 1
+
+
+def test_magus_leaves_play_lands_revert_to_printed():
+    """When Magus leaves the battlefield, the synthesized layer-4
+    set_basic_land_subtype effect stops contributing, and lands
+    revert to their printed subtypes / produces.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual", mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(), card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 5
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+    destroy(state, magus)
+
+    # Land's effective subtypes derive purely from the printing.
+    subs = effective_subtypes(state, land)
+    assert subs == ("Forest", "Mountain")
+    assert effective_land_produces(state, land) == frozenset({"R", "G"})
+
+
+def test_lignified_dryad_still_grants_basic_land_types_per_cr():
+    """The famous Dryad of the Ilysian Grove + Humility ruling:
+    "Under Humility, Dryad becomes a 1/1 creature with no
+    abilities. However, because the Dryad's ability to make lands
+    all basic land types applies in Layer 4 (type-changing) and
+    Humility applies in Layer 6 (ability-removing), lands STILL
+    retain all basic land types and the ability to tap for any
+    color." (Layer 4 runs before layer 6 in CR 613.1, so Dryad's
+    layer-4 contribution is already in effect by the time the
+    layer-6 wipe of Dryad's abilities happens.)
     """
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
     forest.etb_timestamp = 1
     dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
     dryad.etb_timestamp = 5
-    # Pre-Lignify: all 5 colors.
     assert effective_land_produces(state, forest) == frozenset(
         {"W", "U", "B", "R", "G"}
     )
 
-    # Now Lignify the Dryad.
+    # Lignify the Dryad — wipes its abilities at layer 6.
     aura = _put(state, LIGNIFY, owner_id=0)
     _attach(state, aura, dryad)
 
-    # Dryad's static is gone — lands are back to printed subtypes.
+    # Dryad's layer-4 effect still applies. Lands keep all 5 types.
     subs = effective_subtypes(state, forest)
-    assert subs == ("Forest",)
-    assert effective_land_produces(state, forest) == frozenset({"G"})
+    assert "Plains" in subs
+    assert "Island" in subs
+    assert "Swamp" in subs
+    assert "Mountain" in subs
+    assert "Forest" in subs
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
 
 
-def test_lignified_magus_stops_collapsing_nonbasic_lands():
-    """A Lignified Magus of the Moon has its static wiped — nonbasic
-    lands revert to their printed subtypes.
+def test_lignified_magus_still_collapses_nonbasic_lands_per_cr():
+    """Magus of the Moon's "nonbasic lands are Mountains" is layer 4.
+    A Lignified Magus still applies its layer-4 type-changing
+    effect — strict layer order says layer 4 runs before layer 6.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
@@ -486,25 +663,26 @@ def test_lignified_magus_stops_collapsing_nonbasic_lands():
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 5
-
-    # Magus active: dual is just Mountain.
     assert effective_land_produces(state, land) == frozenset({"R"})
 
     # Lignify the Magus.
     aura = _put(state, LIGNIFY, owner_id=0)
     _attach(state, aura, magus)
 
-    # Magus's static suppressed: dual reverts to Forest+Mountain.
+    # Layer-4 type-change still applies — dual is still Mountain.
     subs = effective_subtypes(state, land)
-    assert "Forest" in subs
     assert "Mountain" in subs
-    assert effective_land_produces(state, land) == frozenset({"G", "R"})
+    assert "Forest" not in subs
+    assert effective_land_produces(state, land) == frozenset({"R"})
 
 
-def test_lignified_sliver_lord_stops_granting_anthem_keywords():
-    """Thrumming Hivepool grants double-strike + haste to Slivers.
-    Lignifying the Hivepool wipes its static — Slivers no longer
-    get the anthem.
+def test_lignified_sliver_lord_still_grants_anthem_keywords_per_dependency():
+    """Thrumming Hivepool's anthem ("Slivers you control have
+    double strike and haste") is a layer-6 keyword grant. Per CR
+    613.7 within-layer dependency, the lord's anthem still applies
+    to Slivers even when the lord itself is Lignified — the wipe
+    targets the LORD, not the Slivers, and the dependency rule
+    orders the lord's anthem before the wipe.
     """
     from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
@@ -516,30 +694,101 @@ def test_lignified_sliver_lord_stops_granting_anthem_keywords():
         description="(test) Bear is a Sliver",
     )
     hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
-    # Pre-Lignify: anthem grants haste + double-strike.
     kws = effective_keywords(state, bear)
     assert "haste" in kws
     assert "double strike" in kws
 
-    # Lignify the Hivepool.
-    aura = _put(state, LIGNIFY, owner_id=0)
-    # Hivepool isn't normally a creature — but Thrumming Hivepool is
-    # an Artifact, and Lignify only enchants creatures. Use the test
-    # path of writing the registry entry directly so we exercise the
-    # _source_abilities_suppressed gate without arguing about target
-    # legality (the engine question is "does the static skip when
-    # the source is Lignified", not "can Lignify legally attach to
-    # an artifact").
+    # Lignify the Hivepool synthetically (Thrumming Hivepool is an
+    # Artifact and Lignify only enchants creatures, so we write the
+    # lose_all_abilities registry entry directly to exercise the
+    # post-wipe behavior without arguing about target legality).
     state.add_continuous_effect(
-        source_id=aura.id, layer=6, kind="lose_all_abilities",
+        source_id=999, layer=6, kind="lose_all_abilities",
         target_id=hivepool.id, params=(),
         description="(test) Hivepool loses all abilities",
     )
 
-    # Hivepool's static is suppressed — anthem keywords gone.
+    # Hivepool wiped, but its anthem keywords still apply to Slivers
+    # via the dependency rule. The wipe targets the lord; the
+    # granted keywords on the Slivers are unaffected.
     kws = effective_keywords(state, bear)
-    assert "haste" not in kws
-    assert "double strike" not in kws
+    assert "haste" in kws
+    assert "double strike" in kws
+
+
+def test_magus_and_dryad_both_lignified_lands_keep_all_basic_types():
+    """Both Magus and Dryad on the battlefield, both Lignified.
+    Per CR 613.1 strict layer order, layer 4 runs before layer 6 —
+    Magus's set-to-Mountain and Dryad's add-all-five basic types
+    BOTH apply at layer 4 regardless of any layer-6 wipe on either
+    source. Lands have all five basic land types and tap for any
+    color (Magus older + Dryad newer ordering: Magus sets to
+    Mountain, Dryad adds the other four).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual", mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(), card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 5
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 10
+
+    # Lignify both.
+    aura1 = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura1, magus)
+    aura2 = _put(state, LIGNIFY, owner_id=0)
+    _attach(state, aura2, dryad)
+
+    # Both layer-4 statics still contribute — lands have all 5
+    # basic types and produce all 5 colors.
+    assert effective_land_produces(state, land) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+
+def test_lignified_dominion_bracelet_keeps_granted_activated_ability():
+    """The Dominion Bracelet's "equipped creature has [activated
+    ability]" is a layer-6 keyword/ability grant. Per CR 613.7
+    within-layer dependency, a Lignified Bracelet still grants the
+    ability — the wipe targets the Bracelet, not the equipped
+    creature.
+    """
+    from mtg_bot.cards import EOE_SPELLS
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    bracelet = _put(
+        state, EOE_SPELLS["The Dominion Bracelet"], owner_id=0,
+    )
+    bracelet.attached_to = bear.id
+    abilities = effective_activated_abilities(state, bear)
+    assert len(abilities) == 1
+
+    state.add_continuous_effect(
+        source_id=bracelet.id, layer=6, kind="lose_all_abilities",
+        target_id=bracelet.id, params=(),
+        description="(test) Bracelet loses all abilities",
+    )
+
+    # Per CR dependency, the granted ability still applies on the
+    # equipped creature.
+    abilities = effective_activated_abilities(state, bear)
+    assert len(abilities) == 1
 
 
 def test_clone_of_dryad_grants_basic_land_types_too():
