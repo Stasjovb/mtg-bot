@@ -173,22 +173,25 @@ def test_build_spacecraft_printing_skips_missing_power_toughness():
     assert _build_spacecraft_printing(card) is None
 
 
-def test_build_spacecraft_printing_skips_etb_trigger():
-    """A Spacecraft with an ETB trigger (like Wurmwall Sweeper's
-    ``"When this Spacecraft enters, surveil 2."``) carries ability
-    text outside this builder's grammar - skip the whole card."""
+def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
+    """A Spacecraft with an ETB trigger whose effect phrase isn't in
+    the unified effect grammar (e.g. Susurian Dirgecraft's ``"each
+    opponent sacrifices a nontoken creature of their choice"``) falls
+    through ``_parse_clause`` and the whole card skips - we never
+    half-claim a Spacecraft by silently dropping its ETB."""
     card = {
-        "name": "Hand-Crafted Spacecraft With ETB",
-        "mana_cost": "{2}",
+        "name": "Hand-Crafted Spacecraft With Unparseable ETB",
+        "mana_cost": "{4}{B}",
         "type_line": "Artifact — Spacecraft",
-        "power": "2",
-        "toughness": "2",
+        "power": "4",
+        "toughness": "3",
         "oracle_text": (
-            "When this Spacecraft enters, surveil 2.\n"
+            "When this Spacecraft enters, each opponent sacrifices a "
+            "nontoken creature of their choice.\n"
             "Station (Tap another creature you control: Put charge "
             "counters equal to its power on this Spacecraft. Station "
-            "only as a sorcery. It's an artifact creature at 4+.)\n"
-            "4+ | Flying"
+            "only as a sorcery. It's an artifact creature at 7+.)\n"
+            "7+ | Flying"
         ),
     }
     assert _build_spacecraft_printing(card) is None
