@@ -694,6 +694,18 @@ class CardPrinting:
     # hooked (those aren't hit by any currently-modeled card that
     # targets Nexus / GSZ specifically).
     shuffles_into_library_instead_of_graveyard: bool = False
+    # Convoke (CR 702.51): "Your creatures can help cast this spell.
+    # Each creature you tap while casting this spell pays for {1} or
+    # one mana of that creature's color." Wires the per-cast prompt
+    # in ``_cast_spell``: after cost determination (601.2f) and
+    # before paying the remaining cost from the mana pool / lands,
+    # the controller's agent picks creatures to tap. Each tapped
+    # creature pays {1} (or one of its colors) toward the cost. A
+    # tapped creature can't separately activate its own
+    # ``{T}, sacrifice: Add ...`` mana ability for the same cast,
+    # so Convoke and a sac-for-mana ability on the same source are
+    # mutually exclusive — matches CR.
+    has_convoke: bool = False
     # Draw replacement: while any permanent with this flag is on the
     # battlefield under the drawing player's control AND that player
     # has one or fewer cards in hand, every "draw one or more cards"
@@ -952,6 +964,7 @@ def make_instant(
     kicker: str | None = None,
     additional_cost_choose_your_creature: bool = False,
     shuffles_into_library_instead_of_graveyard: bool = False,
+    has_convoke: bool = False,
 ) -> CardPrinting:
     type_line = "Instant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -973,6 +986,7 @@ def make_instant(
         shuffles_into_library_instead_of_graveyard=(
             shuffles_into_library_instead_of_graveyard
         ),
+        has_convoke=has_convoke,
     )
 
 
@@ -981,6 +995,7 @@ def make_sorcery(
     cost_reductions: tuple[CostReduction, ...] = (),
     additional_cost_sacrifice_creature_or_artifact: bool = False,
     shuffles_into_library_instead_of_graveyard: bool = False,
+    has_convoke: bool = False,
 ) -> CardPrinting:
     type_line = "Sorcery"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -1000,6 +1015,7 @@ def make_sorcery(
         shuffles_into_library_instead_of_graveyard=(
             shuffles_into_library_instead_of_graveyard
         ),
+        has_convoke=has_convoke,
     )
 
 

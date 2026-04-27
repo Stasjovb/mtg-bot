@@ -191,6 +191,40 @@ class Agent:
         tests to exercise the no-branch."""
         return True
 
+    def choose_convoke_creatures(
+        self,
+        state: "GameState",
+        player_id: int,
+        candidates: list[int],
+        remaining_generic: int,
+        remaining_colored: list[tuple[str, int]],
+    ) -> list[int]:
+        """Convoke (CR 702.51) cost-payment helper. The caster picks
+        which of their own untapped creatures to tap toward the
+        spell's cost. Each creature pays {1} or one mana of its
+        color (engine picks the better assignment per remaining
+        cost).
+
+        ``candidates`` is the list of legal creature object ids
+        (untapped, controlled by ``player_id``,
+        ``is_creature_now``). ``remaining_generic`` and
+        ``remaining_colored`` describe the post-cost-reduction
+        cost yet to be paid AFTER any pool / land contribution
+        already accounted for. Caller assigns each tapped
+        creature to a slot greedily.
+
+        Return a list of object ids to tap, in order. Returning
+        more than needed is harmless — extras are ignored. Return
+        an empty list to skip convoke.
+
+        Default: convoke ALL candidates, capped at the number
+        actually needed by the cost (caller bounds-checks).
+        Concrete agents can override for smarter selection (e.g.,
+        prefer creatures with no abilities, or summoning-sick
+        creatures since convoke doesn't require haste).
+        """
+        return list(candidates)
+
     def choose_legend_keep(
         self,
         state: "GameState",

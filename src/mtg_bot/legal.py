@@ -159,9 +159,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if not instant_speed:
             continue
         spell_kinds = _spell_kinds_for_card(card)
+        convoke = card.printing.has_convoke
         if can_pay_cost(
             state, player_id, _effective_cost(card, card.printing.mana_cost),
-            spell_kind=spell_kinds,
+            spell_kind=spell_kinds, convoke=convoke,
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
             # Kicked variant: can_pay the combined cost.
@@ -170,7 +171,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 _cost_plus_kicker(
                     card, _effective_cost(card, card.printing.mana_cost)
                 ),
-                spell_kind=spell_kinds,
+                spell_kind=spell_kinds, convoke=convoke,
             ):
                 actions.append(CastSpell(card.id, kicked=True))
         if (
@@ -178,7 +179,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
-                spell_kind=spell_kinds,
+                spell_kind=spell_kinds, convoke=convoke,
             )
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
@@ -239,10 +240,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             continue
         if _is_sorcery_speed_spell(card):
             spell_kinds = _spell_kinds_for_card(card)
+            convoke = card.printing.has_convoke
             if can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.mana_cost),
-                spell_kind=spell_kinds,
+                spell_kind=spell_kinds, convoke=convoke,
             ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
                 actions.append(CastSpell(card.id))
                 if card.printing.kicker_cost is not None and can_pay_cost(
@@ -252,7 +254,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                             card, card.printing.mana_cost
                         ),
                     ),
-                    spell_kind=spell_kinds,
+                    spell_kind=spell_kinds, convoke=convoke,
                 ):
                     actions.append(CastSpell(card.id, kicked=True))
             if (
@@ -260,6 +262,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and can_pay_cost(
                     state, player_id,
                     _effective_cost(card, card.printing.warp_cost),
+                    convoke=convoke,
                 )
                 and _targets_are_satisfiable(state, player_id, card)
                 and _additional_costs_payable(state, player_id, card)
@@ -291,6 +294,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 state, player_id,
                 _effective_cost(card, card.printing.warp_cost),
                 spell_kind=_spell_kinds_for_card(card),
+                convoke=card.printing.has_convoke,
             )
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
@@ -317,6 +321,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             state, player_id,
             _effective_cost(card, card.printing.mana_cost),
             spell_kind=_spell_kinds_for_card(card),
+            convoke=card.printing.has_convoke,
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
@@ -351,12 +356,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 actions.append(PlayLand(card.id))
             continue
         spell_kinds = _spell_kinds_for_card(card)
+        convoke = card.printing.has_convoke
         if card.printing.is_instant:
             # Instant speed — always castable if cost payable.
             if can_pay_cost(
                 state, player_id,
                 _effective_cost(card, card.printing.mana_cost),
-                spell_kind=spell_kinds,
+                spell_kind=spell_kinds, convoke=convoke,
             ) and _targets_are_satisfiable(state, player_id, card):
                 actions.append(CastSpell(card.id))
             continue
@@ -366,7 +372,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if can_pay_cost(
             state, player_id,
             _effective_cost(card, card.printing.mana_cost),
-            spell_kind=spell_kinds,
+            spell_kind=spell_kinds, convoke=convoke,
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
@@ -387,6 +393,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 state, player_id,
                 _effective_cost(top, top.printing.mana_cost),
                 spell_kind="artifact_spell",
+                convoke=top.printing.has_convoke,
             ) and _targets_are_satisfiable(state, player_id, top):
                 actions.append(CastSpell(top.id))
         elif top.printing.is_artifact and top.printing.is_creature:
@@ -394,6 +401,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 state, player_id,
                 _effective_cost(top, top.printing.mana_cost),
                 spell_kind="artifact_spell",
+                convoke=top.printing.has_convoke,
             ) and _targets_are_satisfiable(state, player_id, top):
                 actions.append(CastSpell(top.id))
 

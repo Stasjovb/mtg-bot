@@ -117,3 +117,11 @@ class DefaultTacticalAgent(Agent):
         # Deterministic for search; tactical policy can override to
         # pick the strongest one.
         return legend_object_ids[0]
+
+    def choose_convoke_creatures(
+        self, state, player_id, candidates,
+        remaining_generic, remaining_colored,
+    ):
+        # Convoke: tap as many candidates as the cost needs. The
+        # caller bounds-checks. Deterministic ordering for search.
+        return list(candidates)

@@ -69,18 +69,17 @@ _SPELL_VOID_DAMAGE_REPLACEMENT = (
 
 
 # Spell-only keyword preamble: a leading clause that's just a static
-# keyword (no implementation in the engine yet) followed by its
-# parenthesized reminder text. The keyword line itself contributes no
-# Effect — the engine treats the spell as if the keyword weren't there
-# (e.g. Vote Out's Convoke is dropped on the static side). Stripping
-# this preamble lets the remaining clauses parse as a single-effect or
-# Sequence spell exactly as if the preamble weren't printed.
+# keyword followed by its parenthesized reminder text. The keyword
+# line itself contributes no ``Effect`` — its behavior is wired via
+# a flag on ``CardPrinting`` (e.g. Convoke → ``has_convoke=True``).
+# Stripping this preamble lets the remaining clauses parse as a
+# single-effect or Sequence spell.
 #
-# Names listed here MUST be keywords the engine intentionally ignores
-# on the static side; otherwise dropping the preamble would silently
-# diverge from the static implementation. Add a name only after
-# confirming the matching ``cards/eoe_spells.py`` entry omits the
-# keyword's behavior.
+# Some keywords here may be intentionally unimplemented (the engine
+# treats the spell as if the keyword weren't there). Add a name only
+# after confirming the matching ``cards/eoe_spells.py`` entry sets
+# the corresponding printing flag — otherwise dropping the preamble
+# would silently diverge from the static implementation.
 _SPELL_PREAMBLE_KEYWORDS = ("Convoke",)
 _SPELL_KEYWORD_PREAMBLE_RE = re.compile(
     r"^(?:" + "|".join(re.escape(k) for k in _SPELL_PREAMBLE_KEYWORDS)
@@ -217,6 +216,21 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     return Sequence(effects=tuple(parsed))
 
 
+def _detect_preamble_flags(text: str) -> dict:
+    """Scan ``text``'s leading keyword-preamble clauses and return a
+    dict of ``CardPrinting`` flags they imply (e.g.
+    ``{"has_convoke": True}`` when "Convoke (...)" leads the oracle
+    text). Mirrors the preamble-stripping in
+    ``_parse_spell_oracle_text``."""
+    flags: dict = {}
+    for clause in [c.strip() for c in text.split("\n") if c.strip()]:
+        if not _is_spell_keyword_preamble(clause):
+            break
+        if clause.startswith("Convoke"):
+            flags["has_convoke"] = True
+    return flags
+
+
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
@@ -239,4 +253,5 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         name=card["name"],
         cost=card["mana_cost"],
         effect=effect,
+        **_detect_preamble_flags(text),
     )
