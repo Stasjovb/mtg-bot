@@ -1,17 +1,37 @@
-"""Run pytest with a retry when Python 3.13 + coverage hits its known crash.
+"""Run pytest in parallel via pytest-xdist with a retry on transient
+crashes.
 
-There is an intermittent bug where Python 3.13 + coverage.py corrupt state
-during the simulation sweep tests. It manifests as any of:
+Two responsibilities:
 
-    - Access violation (process segfaults, exit code 139 or 3221225477)
-    - Pytest INTERNALERROR (tb_lineno is None after trace corruption)
-    - A sweep-test assertion failure (game state went wrong under tracing,
-      but the same test passes without coverage)
+1. **Default to parallel** (``-n 8``). On a typical multi-core
+   machine that's a ~3-4x speedup vs sequential, with stable
+   coverage. ``-n auto`` (= one worker per logical CPU, often
+   32 on a developer box) was unstable here — coverage tracing
+   plus high worker count crashed individual workers (xdist
+   ``KeyError: <WorkerController gw3>``). Eight is the sweet
+   spot: max speedup before flakes.
 
-All three are non-deterministic and not reproducible in isolation with a
-minimal tracer. A single rerun almost always succeeds. Real test failures
-fail consistently, so one retry is enough to distinguish transient-crash
-from real-failure without hiding bugs.
+   Override with ``MTG_BOT_PYTEST_WORKERS=N`` (any value
+   accepted by ``-n``, including ``auto`` or ``0``). ``0``
+   means run sequentially (no ``-n`` flag).
+
+   Override with explicit ``-n`` in argv to win over both.
+
+2. **Retry on transient crash.** Python 3.13 + coverage.py
+   intermittently corrupt state during the simulation sweep
+   tests. Retried once on:
+       - Access violation (process segfaults, exit code 139 or
+         3221225477)
+       - Pytest INTERNALERROR (tb_lineno is None after trace
+         corruption)
+       - A sweep-test assertion failure (game state went wrong
+         under tracing, but the same test passes without
+         coverage)
+
+   None reproducible in isolation. A single rerun almost
+   always succeeds. Real test failures fail consistently, so
+   one retry distinguishes transient-crash from real-failure
+   without hiding bugs.
 
 Usage:
     .venv/Scripts/python.exe scripts/run_tests.py [pytest-args...]
@@ -19,6 +39,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -52,8 +73,34 @@ def _is_transient(code: int, output: str) -> bool:
     return any(m in output for m in _TRANSIENT_MARKERS)
 
 
+_DEFAULT_WORKERS = "8"
+
+
+def _resolve_workers(argv: list[str]) -> str | None:
+    """Return the worker count to use, or None for sequential.
+
+    Precedence:
+    1. Explicit ``-n`` in argv: respected as-is (caller wins).
+    2. ``MTG_BOT_PYTEST_WORKERS`` env var: ``"0"`` for sequential,
+       any other string passed through to ``-n``.
+    3. Default: ``-n 8``.
+    """
+    if any(a == "-n" or a.startswith("-n") for a in argv):
+        return None
+    override = os.environ.get("MTG_BOT_PYTEST_WORKERS")
+    if override is not None:
+        if override == "0":
+            return None
+        return override
+    return _DEFAULT_WORKERS
+
+
 def main(argv: list[str]) -> int:
-    cmd = [sys.executable, "-m", "pytest", *argv]
+    workers = _resolve_workers(argv)
+    extra: list[str] = []
+    if workers is not None:
+        extra = ["-n", workers]
+    cmd = [sys.executable, "-m", "pytest", *extra, *argv]
     last_output = ""
     for attempt in range(2):
         result = subprocess.run(cmd, capture_output=True, text=True)
