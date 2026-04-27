@@ -988,7 +988,30 @@ def run_cleanup_step(state: GameState) -> None:
 
 
 def state_based_actions(state: GameState) -> bool:
-    """Apply state-based actions. Returns True if any changes were made."""
+    """Apply state-based actions until quiescent (CR 704.3 — SBAs are
+    checked continuously and applied repeatedly until none apply).
+    Returns True if any pass made changes.
+
+    Internally calls ``_state_based_actions_pass`` in a loop. The
+    iteration cap (``_SBA_MAX_PASSES``) defends against pathological
+    cycles — none should occur with the rules we model, but the
+    cap converts a runaway into an early bailout instead of a hang.
+    """
+    any_changed = False
+    for _ in range(_SBA_MAX_PASSES):
+        if not _state_based_actions_pass(state):
+            break
+        any_changed = True
+    return any_changed
+
+
+_SBA_MAX_PASSES = 50
+
+
+def _state_based_actions_pass(state: GameState) -> bool:
+    """Single SBA application pass. Returns True if any changes were
+    made. Public callers should use ``state_based_actions``, which
+    loops this until quiescent."""
     changed = False
 
     for p in state.players:

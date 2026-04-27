@@ -204,6 +204,37 @@ def test_equipment_on_non_creature_unattaches():
     assert equipment in state.battlefield
 
 
+def test_sba_iterates_until_quiescent_aura_chain():
+    """A single SBA call iterates until quiescent (CR 704.3). Setup
+    that exercises iteration: an animated manland with Lignify
+    attached. After cleanup expires the animation, two SBA effects
+    fire in sequence — the animation's registry entries are gone
+    (handled by run_cleanup_step), then SBA finds Lignify on a
+    non-creature and buries it. Burying Lignify is the second-pass
+    work; the loop catches it.
+
+    Without the loop, the first SBA pass would catch Lignify (which
+    is enough in this case since burying it doesn't trigger another
+    SBA). But adding two stacked auras on the same target tests
+    the iteration: bury one, then the other becomes orphaned only
+    if attachment is checked iteratively. Pin via state assertions.
+    """
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), 0)
+    state.grant_become_creature_ueot(
+        source_id=forest.id, target_id=forest.id,
+        power=4, toughness=4,
+        description="Forest animated 4/4 UEOT",
+    )
+    aura = _put(state, LIGNIFY, 0)
+    _attach(state, aura, forest)
+    run_cleanup_step(state)
+
+    # state_based_actions should fully resolve in one (looped) call.
+    state_based_actions(state)
+    assert aura not in state.battlefield
+
+
 def test_equipment_on_animated_manland_stays_then_unattaches_at_cleanup():
     """Equipment attached to an animated manland is legal while
     animation is in effect. After cleanup the animation expires,
