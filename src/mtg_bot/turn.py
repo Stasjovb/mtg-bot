@@ -699,71 +699,47 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
 
 def run_beginning_of_upkeep_triggers(state: GameState) -> None:
     """Push "At the beginning of your upkeep" triggered abilities onto
-    the stack for permanents the active player controls."""
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    the stack for permanents the active player controls.
+
+    Phase-6 commit 2 migrated every static
+    ``trigger="beginning_of_upkeep"`` site to predicate-style
+    ``event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU)``,
+    so the legacy walk over ``obj.printing.triggered_abilities`` here
+    has no live entries left. The function is now a thin
+    ``dispatch_event`` forwarder — ``Controlled(YOU)`` against the
+    active-player subject filters to permanents the active player
+    controls (the legacy ``obj.controller_id != ap_id`` skip), and
+    the dispatcher's ``source.controller_id`` push matches the
+    legacy ``controller_id=ap_id`` resolution because the predicate
+    already gates ``source.controller_id == ap_id``.
+    """
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
-    ap = state.active_player()
-    ap_id = ap.id
-
-    # Predicate-style ``Event.BEGINNING_OF_UPKEEP`` dispatch (phase 6).
-    # Runs in parallel with the legacy ``trigger="beginning_of_upkeep"``
-    # loop below until every static card is migrated, at which point the
-    # legacy loop collapses into this dispatcher call. The subject is
-    # the active player; ``Controlled(YOU)`` resolves to "this is MY
-    # upkeep" via the player-subject branch added in the same phase.
     dispatch_event(
         state, Event.BEGINNING_OF_UPKEEP,
-        label="beginning-of-upkeep", player=ap,
+        label="beginning-of-upkeep", player=state.active_player(),
     )
-
-    for obj in list(state.battlefield):
-        if obj.controller_id != ap_id:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "beginning_of_upkeep":
-                continue
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=ap_id,
-                label="beginning-of-upkeep",
-            )
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:
-    """Push "At the beginning of combat on your turn" triggered abilities
-    onto the stack for permanents the active player controls."""
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    """Push "At the beginning of combat on your turn" triggered
+    abilities onto the stack for permanents the active player
+    controls.
+
+    Phase-6 commit 2 migrated every static
+    ``trigger="beginning_of_combat"`` site to predicate-style
+    ``event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU)``;
+    the legacy walk is gone. See ``run_beginning_of_upkeep_triggers``
+    for the controller/predicate equivalence rationale.
+    """
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
-    ap = state.active_player()
-    ap_id = ap.id
-
-    # Predicate-style ``Event.BEGINNING_OF_COMBAT`` dispatch (phase 6).
-    # Runs in parallel with the legacy loop below until every static
-    # card is migrated.
     dispatch_event(
         state, Event.BEGINNING_OF_COMBAT,
-        label="beginning-of-combat", player=ap,
+        label="beginning-of-combat", player=state.active_player(),
     )
-
-    for obj in list(state.battlefield):
-        if obj.controller_id != ap_id:
-            continue
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            if ability.trigger != "beginning_of_combat":
-                continue
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=ap_id,
-                label="beginning-of-combat",
-            )
 
 
 def run_delayed_end_step_triggers(state: GameState) -> None:
@@ -851,59 +827,34 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
     """Push end-step triggers for the current end step onto the stack.
 
-    Handles two trigger types:
-    - ``beginning_of_end_step`` — fires only on the active player's
-      end step for permanents they control (standard oracle "At the
-      beginning of your end step").
-    - ``beginning_of_each_end_step`` — fires on every player's end
-      step regardless of which player controls the source (Ragost's
-      "At the beginning of each end step, if you gained life this
-      turn, untap Ragost").
+    Handles two predicate shapes that share ``Event.BEGINNING_OF_END_STEP``:
+
+    - ``predicate=Controlled(YOU)`` — fires only on the active
+      player's end step for permanents they control (standard oracle
+      "At the beginning of your end step").
+    - ``predicate=Always()`` — fires on every player's end step
+      regardless of which player controls the source (Ragost's "At
+      the beginning of each end step, if you gained life this turn,
+      untap Ragost").
+
+    Phase-6 commit 2 migrated every static
+    ``trigger="beginning_of_end_step"`` and
+    ``trigger="beginning_of_each_end_step"`` site to one of the two
+    predicate shapes above; the legacy ``trigger`` walk is gone. The
+    dispatcher's ``source.controller_id`` push matches the legacy
+    resolver for BOTH variants — for the "your" variant the predicate
+    already gates ``source.controller_id == ap_id``, and for the
+    each-end-step variant the legacy code already resolved under
+    ``source.controller_id`` (not the active player), so collapsing
+    onto the dispatcher preserves both behaviors verbatim.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
-    ap = state.active_player()
-    ap_id = ap.id
-
-    # Predicate-style ``Event.BEGINNING_OF_END_STEP`` dispatch (phase 6).
-    # Runs in parallel with the legacy loop below. Both end-step
-    # variants collapse onto the same event — the predicate
-    # disambiguates: ``Controlled(YOU)`` filters to the active player's
-    # own end step (the standard oracle reading), and ``Always()``
-    # fires on every player's end step (Ragost's "each end step").
-    # The dispatcher pushes under ``source.controller_id``, which
-    # matches the legacy resolver for both variants — for the standard
-    # case the predicate already gates ``source.controller_id == ap_id``,
-    # and for the each-end-step case the SOURCE's controller is the
-    # correct resolver per the legacy code path.
     dispatch_event(
         state, Event.BEGINNING_OF_END_STEP,
-        label="end-step", player=ap,
+        label="end-step", player=state.active_player(),
     )
-
-    candidates = list(state.battlefield)
-    for obj in candidates:
-        for i, ability in enumerate(obj.printing.triggered_abilities):
-            is_each = ability.trigger == "beginning_of_each_end_step"
-            is_yours = (
-                ability.trigger == "beginning_of_end_step"
-                and obj.controller_id == ap_id
-            )
-            if not (is_each or is_yours):
-                continue
-            # Each-end-step triggers resolve under the SOURCE's
-            # controller, not the active player. Standard end-step
-            # triggers resolve under the active player.
-            ctrl_id = obj.controller_id if is_each else ap_id
-            push_triggered_ability(
-                state,
-                source=obj,
-                ability=ability,
-                ability_index=i,
-                controller_id=ctrl_id,
-                label="end-step",
-            )
 
 
 def run_end_step_warp_exile(state: GameState) -> None:
