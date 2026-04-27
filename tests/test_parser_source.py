@@ -1568,19 +1568,39 @@ def test_parse_activated_ability_line_strips_whitespace():
     ) == _parse_activated_ability_line("{2}: Draw a card.")
 
 
-def test_parse_activated_ability_line_rejects_tap_cost():
-    """``{T}`` is a tap symbol, not a mana symbol — outside this
-    slice's pure-mana-cost grammar. Must return ``None`` rather than
-    blow up on the unknown mana symbol."""
-    assert _parse_activated_ability_line("{T}: Draw a card.") is None
+def test_parse_activated_ability_line_accepts_tap_only_cost():
+    """``{T}: <effect>`` is the pure tap-cost shape — sets
+    ``tap_self`` on the ``ActivationCost`` with no mana piece."""
+    result = _parse_activated_ability_line("{T}: Draw a card.")
+    assert result == ActivatedAbility(
+        cost=ActivationCost(tap_self=True),
+        effect=DrawCards(amount=1),
+    )
 
 
-def test_parse_activated_ability_line_rejects_multi_cost_with_tap():
-    """``{2}, {T}: ...`` has an additional tap-cost piece beyond the
-    bare mana cost — out of scope, must return ``None``."""
-    assert _parse_activated_ability_line(
-        "{2}, {T}: Draw a card."
-    ) is None
+def test_parse_activated_ability_line_accepts_tap_plus_mana_cost():
+    """``{T}, {mana}: <effect>`` is the tap+mana shape — sets both
+    ``tap_self`` and the mana cost on the ``ActivationCost``."""
+    result = _parse_activated_ability_line("{2}, {T}: Draw a card.")
+    assert result == ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{2}"),
+            mana_str="{2}",
+            tap_self=True,
+        ),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_parse_activated_ability_line_accepts_tap_plus_mana_either_order():
+    """``{T}, {mana}`` and ``{mana}, {T}`` produce the same cost — the
+    parser is order-insensitive for the tap+mana shape."""
+    a = _parse_activated_ability_line("{T}, {1}{R}: Deals 2 damage to any target.")
+    b = _parse_activated_ability_line("{1}{R}, {T}: Deals 2 damage to any target.")
+    assert a is not None
+    assert a == b
+    assert a.cost.tap_self is True
+    assert a.cost.mana_str == "{1}{R}"
 
 
 def test_parse_activated_ability_line_rejects_multi_cost_with_sacrifice():
@@ -1717,11 +1737,11 @@ def test_build_creature_printing_handles_multiple_activated_abilities():
     )
 
 
-def test_build_creature_printing_skips_sorcery_rider():
+def test_build_creature_printing_attaches_sorcery_rider():
     """A creature whose activated ability has the
     ``Activate only as a sorcery.`` rider on a separate line — the
-    rider line doesn't match any clause parser, so the whole card is
-    silently skipped (per design)."""
+    rider attaches to the immediately preceding activated ability and
+    sets ``sorcery_speed=True`` on it."""
     card = {
         "name": "Test Sorcery-Rider",
         "mana_cost": "{1}{G}",
@@ -1733,14 +1753,22 @@ def test_build_creature_printing_skips_sorcery_rider():
             "Activate only as a sorcery."
         ),
     }
-    assert _build_creature_printing(card) is None
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{3}"), mana_str="{3}"),
+            effect=PutPlusOneCounterOnTargetCreature(amount=1),
+            sorcery_speed=True,
+        ),
+    )
 
 
 def test_build_creature_printing_skips_multi_cost_activated_ability():
     """A creature whose activated ability has an additional cost
-    (e.g. ``{2}, Sacrifice this creature``) doesn't match the pure
-    mana-cost grammar — the line fails to parse and the card is
-    silently skipped."""
+    (e.g. ``{2}, Sacrifice this creature``) doesn't match the
+    supported pure-mana / tap / tap+mana cost grammar — the line
+    fails to parse and the card is silently skipped."""
     card = {
         "name": "Test Multi-Cost",
         "mana_cost": "{U}",
@@ -1748,5 +1776,295 @@ def test_build_creature_printing_skips_multi_cost_activated_ability():
         "power": "1",
         "toughness": "1",
         "oracle_text": "{2}, Sacrifice this creature: Draw a card.",
+    }
+    assert _build_creature_printing(card) is None
+
+
+# ---------- tap costs and sorcery riders ----------
+
+
+def test_parse_activated_ability_line_tap_only_draw():
+    """``{T}: Draw a card.`` — pure tap-cost ability with no mana piece.
+    The resulting ``ActivationCost`` has ``tap_self=True`` and a
+    default-empty mana cost."""
+    result = _parse_activated_ability_line("{T}: Draw a card.")
+    assert result is not None
+    assert result.cost.tap_self is True
+    assert result.cost.mana is None
+    assert result.cost.mana_str == ""
+    assert result.effect == DrawCards(amount=1)
+    # Sorcery-speed defaults to False — only the rider line flips it.
+    assert result.sorcery_speed is False
+
+
+def test_parse_activated_ability_line_tap_only_gain_life():
+    result = _parse_activated_ability_line("{T}: You gain 1 life.")
+    assert result == ActivatedAbility(
+        cost=ActivationCost(tap_self=True),
+        effect=GainLife(amount=1),
+    )
+
+
+def test_parse_activated_ability_line_tap_plus_mana_damage():
+    """``{T}, {1}{R}: Deals 2 damage to any target.`` exercises the
+    tap+mana shape with a non-trivial mana cost."""
+    result = _parse_activated_ability_line(
+        "{T}, {1}{R}: Deals 2 damage to any target."
+    )
+    assert result == ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{1}{R}"),
+            mana_str="{1}{R}",
+            tap_self=True,
+        ),
+        effect=DealDamageAnyTarget(amount=2),
+    )
+
+
+def test_parse_activated_ability_line_rejects_three_piece_cost():
+    """``{T}, {1}, Sacrifice ...`` has three comma-separated pieces —
+    out of scope this slice."""
+    assert _parse_activated_ability_line(
+        "{T}, {1}, Sacrifice this creature: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_tap_plus_sacrifice():
+    """``{T}, Sacrifice this creature: ...`` — tap plus a non-mana
+    additional cost. Out of scope; must not match."""
+    assert _parse_activated_ability_line(
+        "{T}, Sacrifice this creature: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_pay_life_cost():
+    """``Pay 2 life: ...`` — non-mana, non-tap cost. Must not match."""
+    assert _parse_activated_ability_line(
+        "Pay 2 life: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_tap_plus_pay_life():
+    """``{T}, Pay 2 life: ...`` — tap plus a non-mana additional cost
+    that's not in our supported tap+mana shape. Must not match."""
+    assert _parse_activated_ability_line(
+        "{T}, Pay 2 life: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_rejects_tap_plus_remove_counter():
+    """``{T}, Remove a +1/+1 counter from this creature: ...`` —
+    tap plus a counter-removal cost. Out of scope; must not match."""
+    assert _parse_activated_ability_line(
+        "{T}, Remove a +1/+1 counter from this creature: Draw a card."
+    ) is None
+
+
+def test_parse_activated_ability_line_tap_only_strips_whitespace():
+    assert _parse_activated_ability_line(
+        "  {T}: Draw a card.  "
+    ) == _parse_activated_ability_line("{T}: Draw a card.")
+
+
+def test_parse_clause_recognizes_tap_only_activated_ability():
+    """A pure tap line goes through ``_parse_clause`` and produces a
+    ``_ParsedClause`` with the activated ability populated."""
+    parsed = _parse_clause("{T}: Draw a card.")
+    assert parsed is not None
+    assert parsed.activated == ActivatedAbility(
+        cost=ActivationCost(tap_self=True),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_parse_clause_recognizes_tap_plus_mana_activated_ability():
+    parsed = _parse_clause("{T}, {2}: Draw a card.")
+    assert parsed is not None
+    assert parsed.activated == ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{2}"),
+            mana_str="{2}",
+            tap_self=True,
+        ),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_build_creature_printing_handles_tap_only_activated_ability():
+    """Synthetic creature with a single ``{T}: <effect>.`` line — the
+    ability lands in ``activated_abilities`` with ``tap_self=True``."""
+    card = {
+        "name": "Test Tapper",
+        "mana_cost": "{1}{U}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "{T}: Draw a card.",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(tap_self=True),
+            effect=DrawCards(amount=1),
+        ),
+    )
+
+
+def test_build_creature_printing_handles_tap_plus_mana_activated_ability():
+    """Synthetic creature whose activated ability has a tap+mana cost."""
+    card = {
+        "name": "Test TapMana",
+        "mana_cost": "{1}{R}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "{T}, {1}{R}: Deals 2 damage to any target.",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost("{1}{R}"),
+                mana_str="{1}{R}",
+                tap_self=True,
+            ),
+            effect=DealDamageAnyTarget(amount=2),
+        ),
+    )
+
+
+def test_build_creature_printing_attaches_sorcery_rider_to_tap_only():
+    """Tap-only activation followed by a separate-line sorcery rider
+    flips ``sorcery_speed`` on the tap-only ability."""
+    card = {
+        "name": "Test Sorcery-Tap",
+        "mana_cost": "{2}{B}",
+        "type_line": "Creature — Wizard",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "{T}: Draw a card.\n"
+            "Activate only as a sorcery."
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(tap_self=True),
+            effect=DrawCards(amount=1),
+            sorcery_speed=True,
+        ),
+    )
+
+
+def test_build_creature_printing_sorcery_rider_attaches_to_last_only():
+    """When a creature has several activated abilities and a single
+    rider line, the rider attaches only to the most recently parsed
+    (immediately preceding) ability — the earlier ones stay
+    instant-speed."""
+    card = {
+        "name": "Test Multi-Activated",
+        "mana_cost": "{2}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": (
+            "{1}: You gain 1 life.\n"
+            "{2}: Draw a card.\n"
+            "Activate only as a sorcery."
+        ),
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.activated_abilities == (
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{1}"), mana_str="{1}"),
+            effect=GainLife(amount=1),
+        ),
+        ActivatedAbility(
+            cost=ActivationCost(mana=parse_mana_cost("{2}"), mana_str="{2}"),
+            effect=DrawCards(amount=1),
+            sorcery_speed=True,
+        ),
+    )
+
+
+def test_build_creature_printing_rejects_orphan_sorcery_rider():
+    """A sorcery-rider line with no preceding activated ability on the
+    card is malformed oracle text — there's nothing to mark
+    sorcery-speed. Skip the card silently."""
+    card = {
+        "name": "Test Orphan Rider",
+        "mana_cost": "{2}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": (
+            "Flying\n"
+            "Activate only as a sorcery."
+        ),
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_build_creature_printing_rejects_sorcery_rider_before_ability():
+    """The rider attaches to the immediately PRECEDING activated
+    ability — a rider that appears before any activated ability is an
+    orphan and the card is skipped."""
+    card = {
+        "name": "Test Premature Rider",
+        "mana_cost": "{2}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": (
+            "Activate only as a sorcery.\n"
+            "{2}: Draw a card."
+        ),
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_build_creature_printing_skips_tap_with_unsupported_effect():
+    """A tap-only activation whose effect isn't in our grammar must not
+    be partially claimed — the line fails and the card is skipped."""
+    card = {
+        "name": "Test Unsupported Tap",
+        "mana_cost": "{1}{U}",
+        "type_line": "Creature — Wizard",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "{T}: Scry 1.",
+    }
+    assert _build_creature_printing(card) is None
+
+
+def test_parse_activated_ability_line_rejects_double_tap_cost():
+    """``{T}{T}: ...`` is brace-only so passes the brace shape check but
+    blows up in ``parse_mana_cost`` (``{T}`` is not a mana symbol).
+    Defensive ``ValueError`` handling returns None."""
+    assert _parse_activated_ability_line("{T}{T}: Draw a card.") is None
+
+
+def test_parse_activated_ability_line_rejects_tap_plus_tap_cost():
+    """``{T}, {T}: ...`` — comma-separated, both pieces are ``{T}``.
+    The pieces-includes-{T} branch picks the OTHER piece (also ``{T}``)
+    as the mana, which fails ``parse_mana_cost``."""
+    assert _parse_activated_ability_line("{T}, {T}: Draw a card.") is None
+
+
+def test_build_creature_printing_skips_sacrifice_cost_activated_ability():
+    """Sacrifice costs are explicitly out of scope. The whole card
+    must be skipped, even if the effect itself would parse."""
+    card = {
+        "name": "Test Sac-Cost",
+        "mana_cost": "{B}",
+        "type_line": "Creature — Zombie",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": "Sacrifice this creature: Draw a card.",
     }
     assert _build_creature_printing(card) is None

@@ -21,11 +21,23 @@ Slice 1's grammar:
   Adding a new condition or effect grows its respective grammar
   without touching the line-level pattern.
 - An activated-ability line of the form ``{cost}: <effect>.`` where
-  ``cost`` is one or more brace-wrapped mana symbols becomes a
-  single-mana-cost ``ActivatedAbility``. The effect is parsed via
-  the unified ``_parse_effect`` after lowercase + period stripping.
-  Riders (``Activate only as a sorcery.`` on a separate line) are
-  out of scope and cause the card to be skipped.
+  ``cost`` is one of the supported cost shapes:
+
+  * One or more brace-wrapped mana symbols (``{2}``, ``{1}{R}``, …) —
+    pure mana cost.
+  * ``{T}`` — pure tap cost (sets ``ActivationCost.tap_self``).
+  * ``{T}, {mana}`` — tap plus a mana cost (both flags set).
+
+  The effect is parsed via the unified ``_parse_effect`` after
+  lowercase + period stripping. Other cost shapes (sacrifice,
+  pay-life, counter-removal, "tap an untapped permanent you control",
+  etc.) are out of scope this slice and cause the card to be skipped.
+
+- A sorcery-speed rider line — exactly ``Activate only as a
+  sorcery.`` on its own line — attaches to the immediately preceding
+  activated ability and sets its ``sorcery_speed=True``. If a rider
+  appears with no preceding activated ability on the same card the
+  whole card is skipped.
 
 Currently recognized:
 
@@ -110,7 +122,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from mtg_bot.cards.base import (
@@ -313,16 +325,74 @@ def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     return TriggeredAbility(trigger=trigger, effect=effect)
 
 
-# Activated-ability parsing handles the simple shape ``{cost}: <effect>.``
-# where ``cost`` is one or more brace-wrapped mana symbols (no ``{T}``,
-# no comma-separated additional costs like sacrifice or counter removal)
-# and ``<effect>`` is a single sentence parsed via the unified
-# ``_parse_effect`` after lowercase + period stripping. Riders like
-# ``Activate only as a sorcery.`` on a separate line are out of scope —
-# they fall through ``_parse_clause`` and cause the card to be skipped.
+# Activated-ability parsing handles the shape ``{cost}: <effect>.``
+# where ``cost`` is one of:
+#
+#   * One or more brace-wrapped mana symbols (``{1}{R}``, ``{2}``, …) —
+#     pure mana cost.
+#   * ``{T}`` — pure tap cost (no mana).
+#   * ``{T}, {mana}`` — tap plus a mana cost. The two pieces are
+#     comma-separated.
+#
+# ``<effect>`` is a single sentence parsed via the unified ``_parse_effect``
+# after lowercase + period stripping. Other cost shapes (sacrifice,
+# pay-life, counter-removal, "tap another permanent", …) are out of scope
+# this slice — the line falls through and causes the card to be skipped.
+#
+# The line-level regex captures the whole cost group and the effect
+# separately; the cost group is then handed to ``_parse_activation_cost``
+# which understands the three cost shapes above.
 _ACTIVATED_ABILITY_LINE = re.compile(
-    r"^(\{[^}]+\}(?:\{[^}]+\})*): (.+\.)$"
+    r"^([^:]+): (.+\.)$"
 )
+
+# A bare mana cost is one or more brace-wrapped mana symbols, no commas.
+_MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
+
+
+def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
+    """Parse the cost segment of an activated-ability line into an
+    ``ActivationCost``. Recognized shapes:
+
+    * Pure mana: ``{1}{R}`` etc. → ``ActivationCost(mana=…, mana_str=…)``.
+    * Tap-only: ``{T}`` → ``ActivationCost(tap_self=True)``.
+    * Tap + mana (in either order): ``{T}, {1}{R}`` or ``{1}{R}, {T}``
+      → ``ActivationCost(mana=…, mana_str=…, tap_self=True)``.
+
+    Anything else (sacrifice, pay-life, counter removal, multi-comma
+    costs, etc.) returns ``None`` so the caller can skip the card.
+    """
+    cost_str = cost_str.strip()
+    # Pure tap.
+    if cost_str == "{T}":
+        return ActivationCost(tap_self=True)
+    # Tap + mana (or mana + tap), comma-separated, exactly two pieces.
+    if "," in cost_str:
+        pieces = [p.strip() for p in cost_str.split(",")]
+        if len(pieces) != 2:
+            return None
+        if "{T}" in pieces:
+            other = pieces[0] if pieces[1] == "{T}" else pieces[1]
+            if _MANA_COST_ONLY.match(other) is None:
+                return None
+            try:
+                mana = parse_mana_cost(other)
+            except ValueError:
+                return None
+            return ActivationCost(
+                mana=mana, mana_str=other, tap_self=True
+            )
+        return None
+    # Pure mana — everything else with no comma must be a pure brace
+    # sequence. ``{T}`` was handled above; anything containing ``{T}``
+    # but no comma (e.g. ``{T}{T}``) is malformed/out-of-scope.
+    if _MANA_COST_ONLY.match(cost_str) is None:
+        return None
+    try:
+        mana = parse_mana_cost(cost_str)
+    except ValueError:
+        return None
+    return ActivationCost(mana=mana, mana_str=cost_str)
 
 
 def _normalize_activated_effect_phrase(phrase: str) -> str:
@@ -338,28 +408,34 @@ def _normalize_activated_effect_phrase(phrase: str) -> str:
 
 
 def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
-    """Return an ``ActivatedAbility`` for a simple ``{cost}: <effect>.``
-    line, or ``None`` if the line shape doesn't match, the cost contains
-    a non-mana symbol (e.g. ``{T}``), or the effect doesn't parse via
-    the unified grammar.
+    """Return an ``ActivatedAbility`` for a ``{cost}: <effect>.`` line,
+    or ``None`` if the line shape doesn't match, the cost shape isn't
+    one of the supported pure-mana / tap / tap+mana forms, or the
+    effect doesn't parse via the unified grammar.
     """
     m = _ACTIVATED_ABILITY_LINE.match(line.strip())
     if m is None:
         return None
-    cost_str = m.group(1)
-    try:
-        mana = parse_mana_cost(cost_str)
-    except ValueError:
-        # ``{T}`` and other non-mana symbols are not valid as the entire
-        # cost of a simple activated ability in this slice.
+    cost = _parse_activation_cost(m.group(1))
+    if cost is None:
         return None
     effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
     if effect is None:
         return None
-    return ActivatedAbility(
-        cost=ActivationCost(mana=mana, mana_str=cost_str),
-        effect=effect,
-    )
+    return ActivatedAbility(cost=cost, effect=effect)
+
+
+# A standalone ``Activate only as a sorcery.`` clause attaches to the
+# immediately preceding activated ability on the same card and marks
+# it sorcery-speed. The exact-match recognizer is intentionally narrow:
+# any other rider phrasing falls through and causes the card to skip.
+_SORCERY_RIDER_LINE = "Activate only as a sorcery."
+
+
+def _is_sorcery_rider_line(line: str) -> bool:
+    """Return True iff ``line`` is the standalone sorcery-speed rider
+    ``Activate only as a sorcery.`` (whitespace-stripped, exact match)."""
+    return line.strip() == _SORCERY_RIDER_LINE
 
 _SUPERTYPES = frozenset({"Basic", "Legendary", "Snow", "World", "Ongoing"})
 
@@ -622,6 +698,15 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             ward = ward_cost
+            continue
+        if _is_sorcery_rider_line(line):
+            # The rider attaches to the immediately preceding activated
+            # ability on the same card. With no preceding ability there's
+            # nothing to mark sorcery-speed and the card is skipped — a
+            # bare rider line on its own is malformed oracle text.
+            if not activated:
+                return None
+            activated[-1] = replace(activated[-1], sorcery_speed=True)
             continue
         parsed = _parse_clause(line)
         if parsed is None:
