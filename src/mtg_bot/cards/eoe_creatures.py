@@ -68,6 +68,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     effect=Surveil(amount=1),
                 ),
             ),
+            subtypes=("Human", "Pilot"),
         ),
         # Honored Knight-Captain: ETB creates a 1/1 Human Soldier token.
         # Activated ability ``{4}{W}{W}, Sacrifice this creature: Search
@@ -338,6 +339,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
             warp="{1}{U}",
+            subtypes=("Whale",),
         ),
         # Red
         make_creature(
