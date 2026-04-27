@@ -890,6 +890,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # spell each turn, put a +1/+1 counter on this creature.
         make_creature(
             "Illvoi Operative", "{1}{U}", 2, 1,
+            subtypes=("Jellyfish", "Rogue"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="second_spell_each_turn",
@@ -2028,6 +2029,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # creature or artifact, put a +1/+1 counter on this creature.
         make_creature(
             "Lightless Evangel", "{1}{B}", 2, 2,
+            subtypes=("Vampire", "Cleric"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="sacrifice_creature_or_artifact",
@@ -2391,6 +2393,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # control with a +1/+1 counter on it dies, draw a card.
         make_creature(
             "Meltstrider Eulogist", "{2}{G}", 3, 3,
+            subtypes=("Insect", "Soldier"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="creature_you_control_with_counter_dies",
