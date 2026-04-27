@@ -25,6 +25,9 @@ from mtg_bot.cards.parser.clause import (  # noqa: F401
 from mtg_bot.cards.parser.creature_builder import (  # noqa: F401
     _build_creature_printing,
 )
+from mtg_bot.cards.parser.equipment_builder import (  # noqa: F401
+    _build_equipment_printing,
+)
 from mtg_bot.cards.parser.effects import (  # noqa: F401
     _normalize_creature_effect_phrase,
     _normalize_spell_effect_phrase,
