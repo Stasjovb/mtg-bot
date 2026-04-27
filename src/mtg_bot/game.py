@@ -1488,6 +1488,14 @@ class StackItem:
     # resolution so effects like Terrasymbiosis ("draw that many cards")
     # can read the count even though the ability resolves later.
     counter_amount: int = 0
+    # Modal-spell mode picks chosen at cast time (CR 601.2e: modes
+    # are picked BEFORE total cost is determined at 601.2f). For a
+    # plain "Choose one" this is a 1-tuple; for "Choose one or both"
+    # it's a 1- or 2-tuple in resolution order. Empty for non-modal
+    # spells. Mirrored to state.resolving_modes during resolution so
+    # ModalChooseOne.resolve can read the pre-picked choice instead
+    # of prompting the agent again at resolve time.
+    chosen_modes: tuple[int, ...] = ()
 
 
 @dataclass
@@ -1760,6 +1768,11 @@ class GameState:
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
     resolving_kicked: bool = False
+    # Mirrors StackItem.chosen_modes during resolution so a modal
+    # spell's resolve() reads the cast-time pick (CR 601.2e) rather
+    # than prompting the agent again at resolve time. Empty tuple
+    # outside modal-spell resolution.
+    resolving_modes: tuple[int, ...] = ()
     # Mirrors StackItem.additional_cost_choice_id during resolution so
     # effects (e.g. Close Encounter) can read the creature the caster
     # designated as an additional cost. None outside resolution.
@@ -2341,6 +2354,7 @@ class GameState:
             resolving_source=new_resolving_source,
             resolving_x_value=self.resolving_x_value,
             resolving_kicked=self.resolving_kicked,
+            resolving_modes=self.resolving_modes,
             resolving_additional_cost_choice_id=(
                 self.resolving_additional_cost_choice_id
             ),
