@@ -23,13 +23,19 @@ An activated-ability line of the form ``{cost}: <effect>.`` where
     sacrifice-another-creature-or-artifact cost. Matches Umbral
     Collar Zealot's ``Sacrifice another creature or artifact:
     Surveil 1.`` activated ability.
+  * ``Remove a +1/+1 counter from a creature you control`` — pure
+    counter-removal cost (Sunstar Chaplain pays this with mana
+    today; the standalone form is accepted for symmetry with the
+    other atoms). Maps to
+    ``ActivationCost.remove_plus_one_counter_from_your_creature``.
   * Three-piece comma-separated combinations, order-insensitive.
     Each piece must classify as one of the recognized atoms (mana,
     tap, sacrifice-self, sacrifice-another-creature-or-artifact,
     sacrifice-another-artifact-or-land, sacrifice-a-food,
-    sacrifice-a-land, pay-life). At most one mana piece, one tap,
-    one sacrifice-flavor, and one pay-life — anything else
-    (duplicates, unknown atoms, 4+ pieces) returns ``None``.
+    sacrifice-a-land, pay-life, remove-+1/+1-counter). At most one
+    mana piece, one tap, one sacrifice-flavor, one pay-life, and one
+    counter-removal — anything else (duplicates, unknown atoms,
+    4+ pieces) returns ``None``.
     Naturally observed three-piece shapes in EoE are
     ``{N}, {T}, Sacrifice this artifact`` (Nutrient Block,
     Dubious Delicacy, All-Fates Scroll, Thaumaton Torpedo),
@@ -40,9 +46,13 @@ An activated-ability line of the form ``{cost}: <effect>.`` where
 
 ``<effect>`` is a single sentence parsed via the unified
 ``_parse_effect`` after lowercase + period stripping. Cost shapes
-not on the supported list (counter-removal, "tap another permanent",
-4+ comma pieces, exile-from-graveyard, tap-X-other, etc.) cause the
-line to fall through and the card to be skipped.
+not on the supported list ("tap another permanent", 4+ comma
+pieces, exile-from-graveyard, tap-X-other, etc.) cause the line to
+fall through and the card to be skipped. The
+"Remove a +1/+1 counter from a creature you control" cost atom IS
+supported via the bag-merge classifier; multi-target counter-removal
+("remove N counters from <subset>") and counter-removal phrases
+that target the source itself are still out of scope.
 
 After a successful parse, the resulting ``ActivatedAbility`` is
 inspected: if its effect is a mana ability (e.g. ``AddManaToPool``
@@ -127,6 +137,19 @@ _NAMED_SACRIFICE_PIECES: dict[str, str] = {
 # integer is captured into the ``pay_life`` field on ActivationCost.
 _PAY_LIFE_PIECE = re.compile(r"^Pay (\d+) life$")
 
+# "Remove a +1/+1 counter from a creature you control" cost piece —
+# Sunstar Chaplain's activated ability prints exactly this literal as
+# the second of two cost atoms (``{2}, Remove a +1/+1 counter from a
+# creature you control: Tap target artifact or creature.``). Stored
+# as a single literal because Scryfall always prints this exact
+# wording and the engine has a dedicated boolean field
+# ``ActivationCost.remove_plus_one_counter_from_your_creature`` for
+# it (validated at activation time by ``legal_actions``: gates on at
+# least one of the controller's creatures having a +1/+1 counter).
+_REMOVE_PLUS_ONE_COUNTER_PIECE = (
+    "Remove a +1/+1 counter from a creature you control"
+)
+
 
 @dataclass(frozen=True)
 class _CostPiece:
@@ -136,9 +159,10 @@ class _CostPiece:
     which: ``"mana"`` → ``mana_str`` set; ``"tap"`` → no payload;
     ``"sacrifice_self"`` → no payload; ``"pay_life"`` → ``amount``
     set; ``"named_sac"`` → ``field`` set to the ``ActivationCost``
-    attribute name. The classifier returns ``None`` for any piece
-    that doesn't match a recognized atom; the caller treats that as
-    a hard skip.
+    attribute name; ``"remove_plus_one_counter"`` → no payload (sets
+    the ``remove_plus_one_counter_from_your_creature`` flag at build
+    time). The classifier returns ``None`` for any piece that doesn't
+    match a recognized atom; the caller treats that as a hard skip.
     """
 
     kind: str
@@ -164,6 +188,8 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(
             kind="named_sac", field=_NAMED_SACRIFICE_PIECES[piece]
         )
+    if piece == _REMOVE_PLUS_ONE_COUNTER_PIECE:
+        return _CostPiece(kind="remove_plus_one_counter")
     pay_life_match = _PAY_LIFE_PIECE.match(piece)
     if pay_life_match is not None:
         return _CostPiece(
@@ -191,7 +217,12 @@ def _build_cost_from_pieces(
     nonsensical and returns ``None``. Sacrifice-self and
     named-sacrifice are treated as members of the same
     "sacrifice-flavor" exclusion group, since a single activation
-    cost can only spell out one sacrifice clause.
+    cost can only spell out one sacrifice clause. The
+    "remove a +1/+1 counter from a creature you control" piece is
+    its own exclusion group — distinct from sacrifice (it doesn't
+    move a permanent to the graveyard) and distinct from pay-life,
+    so a single cost may pair it with mana / tap / sacrifice / etc.
+    but not list it twice.
     """
     mana_str: str | None = None
     tap_self = False
@@ -199,6 +230,7 @@ def _build_cost_from_pieces(
     pay_life = 0
     named_sac_field: str | None = None
     sacrifice_seen = False
+    remove_plus_one_counter = False
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -222,6 +254,10 @@ def _build_cost_from_pieces(
             if pay_life:
                 return None
             pay_life = p.amount
+        elif p.kind == "remove_plus_one_counter":
+            if remove_plus_one_counter:
+                return None
+            remove_plus_one_counter = True
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -236,6 +272,8 @@ def _build_cost_from_pieces(
         kwargs["pay_life"] = pay_life
     if named_sac_field is not None:
         kwargs[named_sac_field] = True
+    if remove_plus_one_counter:
+        kwargs["remove_plus_one_counter_from_your_creature"] = True
     return ActivationCost(**kwargs)
 
 
@@ -258,8 +296,9 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     Multi-piece (comma-separated) shapes — order-insensitive: each
     piece is independently classified by ``_classify_cost_piece`` and
     the bag is merged via ``_build_cost_from_pieces``. Recognized
-    atoms are mana / tap / sacrifice-self / pay-life / one of the
-    named-sacrifice flavors (``Sacrifice another artifact or land``,
+    atoms are mana / tap / sacrifice-self / pay-life /
+    remove-+1/+1-counter / one of the named-sacrifice flavors
+    (``Sacrifice another artifact or land``,
     ``Sacrifice another artifact``, ``Sacrifice a Food``,
     ``Sacrifice a land``, ``Sacrifice a Desert``,
     ``Sacrifice another creature or artifact``).
