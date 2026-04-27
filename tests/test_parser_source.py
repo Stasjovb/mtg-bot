@@ -8,6 +8,8 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
+    DrawCards,
+    GainLife,
     TriggeredAbility,
 )
 from mtg_bot.cards.parser_source import (
@@ -226,8 +228,26 @@ def test_parse_effect_phrase_recognizes_create_tapped_robot_token():
     )
 
 
+def test_parse_effect_phrase_recognizes_draw_a_card():
+    assert _parse_effect_phrase("draw a card") == DrawCards(amount=1)
+
+
+def test_parse_effect_phrase_recognizes_draw_n_cards_plural():
+    assert _parse_effect_phrase("draw 2 cards") == DrawCards(amount=2)
+    assert _parse_effect_phrase("draw 5 cards") == DrawCards(amount=5)
+
+
+def test_parse_effect_phrase_recognizes_you_gain_n_life():
+    assert _parse_effect_phrase("you gain 2 life") == GainLife(amount=2)
+    assert _parse_effect_phrase("you gain 1 life") == GainLife(amount=1)
+
+
 def test_parse_effect_phrase_returns_none_for_unknown():
-    assert _parse_effect_phrase("you gain 2 life") is None
+    # Unknown shapes that should NOT be confused with the supported
+    # singular/plural draw forms or the gain-life form.
+    assert _parse_effect_phrase("draw cards") is None
+    assert _parse_effect_phrase("you gain life") is None
+    assert _parse_effect_phrase("scry 1") is None
     assert _parse_effect_phrase("") is None
 
 
@@ -279,8 +299,45 @@ def test_parse_triggered_ability_line_rejects_unknown_effect():
     """Trigger condition parses, effect doesn't → line as a whole
     fails (no fallback)."""
     assert _parse_triggered_ability_line(
-        "When this creature enters, you gain 2 life."
+        "When this creature enters, scry 1."
     ) is None
+
+
+def test_parse_triggered_ability_line_full_etb_draw_a_card():
+    result = _parse_triggered_ability_line(
+        "When this creature enters, draw a card."
+    )
+    assert result == TriggeredAbility(
+        trigger="etb", effect=DrawCards(amount=1)
+    )
+
+
+def test_parse_triggered_ability_line_full_etb_gain_life():
+    result = _parse_triggered_ability_line(
+        "When this creature enters, you gain 2 life."
+    )
+    assert result == TriggeredAbility(
+        trigger="etb", effect=GainLife(amount=2)
+    )
+
+
+def test_parse_triggered_ability_line_full_attacks_deals_damage():
+    result = _parse_triggered_ability_line(
+        "Whenever this creature attacks, "
+        "it deals 1 damage to any target."
+    )
+    assert result == TriggeredAbility(
+        trigger="attacks", effect=DealDamageAnyTarget(amount=1)
+    )
+
+
+def test_parse_triggered_ability_line_full_dies_draw_cards_plural():
+    result = _parse_triggered_ability_line(
+        "When this creature dies, draw 2 cards."
+    )
+    assert result == TriggeredAbility(
+        trigger="dies", effect=DrawCards(amount=2)
+    )
 
 
 # ---------- _parse_type_line ----------

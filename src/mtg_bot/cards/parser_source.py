@@ -30,7 +30,9 @@ Currently recognized:
   ``DealDamageAnyTarget(amount=N)``;
   ``create a tapped 2/2 colorless Robot artifact creature token``
   → ``CreateToken(token_printing=TOKEN_PRINTINGS["Robot"], count=1,
-  tapped=True)``.
+  tapped=True)``; ``draw a card`` → ``DrawCards(amount=1)``;
+  ``draw N cards`` → ``DrawCards(amount=N)``;
+  ``you gain N life`` → ``GainLife(amount=N)``.
 
 Cards whose oracle text uses only those clauses get claimed.
 
@@ -54,7 +56,9 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
+    DrawCards,
     Effect,
+    GainLife,
     TriggeredAbility,
     make_creature,
     make_instant,
@@ -150,6 +154,19 @@ _CREATE_TAPPED_2_2_ROBOT = re.compile(
 )
 
 
+# Card-draw effects. Singular ``draw a card`` is the common shape on
+# EoE creature triggers; the plural ``draw N cards`` form covers
+# instant/sorcery and rarer trigger payloads.
+_DRAW_A_CARD = re.compile(r"^draw a card$")
+_DRAW_N_CARDS = re.compile(r"^draw (\d+) cards$")
+
+
+# Life-gain effect. ``you gain N life`` covers both N=1 and N>1
+# without a separate singular form (oracle text always uses the
+# numeric form for life gain).
+_YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
+
+
 def _parse_effect_phrase(phrase: str) -> Effect | None:
     phrase = phrase.strip()
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
@@ -161,6 +178,14 @@ def _parse_effect_phrase(phrase: str) -> Effect | None:
             count=1,
             tapped=True,
         )
+    if _DRAW_A_CARD.match(phrase) is not None:
+        return DrawCards(amount=1)
+    m = _DRAW_N_CARDS.match(phrase)
+    if m is not None:
+        return DrawCards(amount=int(m.group(1)))
+    m = _YOU_GAIN_N_LIFE.match(phrase)
+    if m is not None:
+        return GainLife(amount=int(m.group(1)))
     return None
 
 
