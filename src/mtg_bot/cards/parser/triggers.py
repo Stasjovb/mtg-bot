@@ -67,6 +67,7 @@ from mtg_bot.effects.predicates import (
     IsArtifact,
     IsCreature,
     IsLand,
+    IsNontoken,
     IsPlayer,
     IsSelf,
     Predicate,
@@ -224,6 +225,83 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "this creature blocks a creature with flying": (
         Event.BLOCKS,
         IsSelf(subject="blocker") & HasKeyword("flying", subject="attacker"),
+    ),
+    # ``Whenever a creature you control dies`` (Sothera, the
+    # Supervoid). Batch 9. Broader than the existing
+    # ``a creature you control with a +1/+1 counter on it dies``
+    # phrase — no counter qualifier, fires on every death of a
+    # creature you control. The static-card registry does NOT layer
+    # ``~IsSelf()`` on Sothera's printed text, so the source itself
+    # dying still triggers (a creature you control includes itself
+    # while it's still on the battlefield at the moment its death
+    # event resolves through the dispatcher's ``extra_observers``
+    # path).
+    "a creature you control dies": (
+        Event.DIES, IsCreature() & Controlled(YOU),
+    ),
+    # ``Whenever you sacrifice an artifact`` (Biotech Specialist).
+    # Batch 9. Distinct from the existing
+    # ``you sacrifice another creature or artifact`` (Lightless
+    # Evangel) phrase — narrower type filter (artifact only) and the
+    # ``an``-vs-``another`` surface distinction. The static registry
+    # for Biotech layers ``~IsSelf()`` for symmetry with the
+    # ``another`` family even though Biotech itself is a non-artifact
+    # creature (so the source can never be the sacrificed artifact);
+    # mirroring that here keeps parser/static parity exact and
+    # leaves room for a future artifact-source card to print the
+    # same phrase without re-introducing self-fire.
+    "you sacrifice an artifact": (
+        Event.IS_SACRIFICED,
+        IsArtifact() & Controlled(YOU) & ~IsSelf(),
+    ),
+    # ``Whenever a creature you control deals combat damage to a
+    # player`` (Starwinder). Batch 9. Broader than the existing
+    # ``this creature deals combat damage to a player`` phrase
+    # (Illvoi Infiltrator) — fires for any creature you control,
+    # not just the source. ``Event.DEALS_COMBAT_DAMAGE`` carries
+    # subjects ``("source", "target")``;
+    # ``IsCreature(subject="source") & Controlled(YOU,
+    # subject="source")`` gates "a creature you control" on the
+    # damage dealer; ``IsPlayer(subject="target")`` gates "to a
+    # player" vs "to a creature". Mirrors the static registry's
+    # Starwinder predicate exactly. The aggregated "one or more
+    # creatures you control" variant (Elegy Acolyte) is intentionally
+    # NOT mapped here — it has different fire semantics (once per
+    # combat regardless of how many sources connect) that don't fit
+    # the per-event predicate model.
+    "a creature you control deals combat damage to a player": (
+        Event.DEALS_COMBAT_DAMAGE,
+        IsCreature(subject="source")
+        & Controlled(YOU, subject="source")
+        & IsPlayer(subject="target"),
+    ),
+    # ``Whenever a nontoken creature you control with a +1/+1
+    # counter on it dies`` (Rayblade Trooper). Batch 9. Stricter
+    # variant of the existing ``a creature you control with a
+    # +1/+1 counter on it dies`` (Meltstrider Eulogist) — adds
+    # ``IsNontoken()`` so token creatures dying don't satisfy the
+    # trigger. Mirrors the static registry's Rayblade predicate
+    # exactly.
+    "a nontoken creature you control with a +1/+1 counter on it dies": (
+        Event.DIES,
+        IsCreature()
+        & Controlled(YOU)
+        & IsNontoken()
+        & HasCounter("+1/+1"),
+    ),
+    # ``Whenever another creature or artifact you control enters``
+    # (Weftstalker Ardent). Batch 9. Compound type qualifier — the
+    # entering object can be either a creature OR an artifact under
+    # your control, with the source itself excluded via ``~IsSelf()``
+    # (the ``another`` qualifier). Mirrors the static registry's
+    # Weftstalker predicate exactly. The ``a creature or artifact you
+    # control enters`` (no ``another``) variant is not in the EoE
+    # pool so it isn't added here — would be the same predicate
+    # following the ``an artifact you control enters`` collapse
+    # precedent if it ever ships.
+    "another creature or artifact you control enters": (
+        Event.ENTERS,
+        (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
 }
 
