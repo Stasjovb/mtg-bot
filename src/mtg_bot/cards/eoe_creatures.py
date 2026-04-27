@@ -301,6 +301,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Red
         make_creature(
             "Nebula Dragon", "{6}{R}", 4, 4,
+            subtypes=("Dragon",),
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(

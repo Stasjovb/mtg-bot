@@ -9,6 +9,7 @@ from mtg_bot.cards.parser_source import (
     OracleParserCardSource,
     _build_creature_printing,
     _parse_clause,
+    _parse_type_line,
 )
 
 
@@ -51,6 +52,34 @@ def test_parse_clause_returns_none_for_unknown_line():
     assert _parse_clause("") is None
 
 
+# ---------- _parse_type_line ----------
+
+def test_parse_type_line_simple_creature():
+    assert _parse_type_line("Creature — Dragon") == (
+        (), ("Creature",), ("Dragon",)
+    )
+
+
+def test_parse_type_line_legendary_multi_subtype():
+    assert _parse_type_line("Legendary Creature — Human Soldier") == (
+        ("Legendary",), ("Creature",), ("Human", "Soldier")
+    )
+
+
+def test_parse_type_line_no_subtypes():
+    assert _parse_type_line("Sorcery") == ((), ("Sorcery",), ())
+
+
+def test_parse_type_line_multi_card_type():
+    assert _parse_type_line("Artifact Creature — Robot") == (
+        (), ("Artifact", "Creature"), ("Robot",)
+    )
+
+
+def test_parse_type_line_empty():
+    assert _parse_type_line("") == ((), (), ())
+
+
 # ---------- _build_creature_printing ----------
 
 _NEBULA_DRAGON_CARD = {
@@ -72,6 +101,7 @@ def test_build_creature_printing_handles_nebula_dragon():
     assert printing.name == "Nebula Dragon"
     assert printing.power == 4
     assert printing.toughness == 4
+    assert printing.subtypes == ("Dragon",)
     assert printing.keywords == frozenset({"flying"})
     assert printing.triggered_abilities == (
         TriggeredAbility(

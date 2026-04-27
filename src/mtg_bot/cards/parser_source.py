@@ -55,6 +55,33 @@ _ETB_DAMAGE_TO_ANY_TARGET = re.compile(
     r"^When this creature enters, it deals (\d+) damage to any target\.$"
 )
 
+_SUPERTYPES = frozenset({"Basic", "Legendary", "Snow", "World", "Ongoing"})
+
+_TYPE_LINE_SEPARATOR = "—"  # em-dash, used by Scryfall
+
+
+def _parse_type_line(
+    text: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Split a Scryfall type line into ``(supertypes, card_types,
+    subtypes)``. Empty tuple for any section not present.
+
+    Examples: ``"Creature — Dragon"`` →
+    ``((), ("Creature",), ("Dragon",))``;
+    ``"Legendary Creature — Human Soldier"`` →
+    ``(("Legendary",), ("Creature",), ("Human", "Soldier"))``;
+    ``"Sorcery"`` → ``((), ("Sorcery",), ())``.
+    """
+    if _TYPE_LINE_SEPARATOR in text:
+        left, right = text.split(_TYPE_LINE_SEPARATOR, 1)
+    else:
+        left, right = text, ""
+    left_words = left.split()
+    supertypes = tuple(w for w in left_words if w in _SUPERTYPES)
+    card_types = tuple(w for w in left_words if w not in _SUPERTYPES)
+    subtypes = tuple(right.split())
+    return supertypes, card_types, subtypes
+
 
 def _parse_clause(line: str) -> _ParsedClause | None:
     """Return a ``_ParsedClause`` for a recognized line, or ``None``
@@ -79,7 +106,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     record). Returns ``None`` if the card is not a creature, has
     non-integer power/toughness (e.g. ``*``), or contains any
     oracle-text clause the slice doesn't yet support."""
-    if not card.get("type_line", "").startswith("Creature"):
+    supertypes, card_types, subtypes = _parse_type_line(
+        card.get("type_line", "")
+    )
+    if "Creature" not in card_types:
         return None
     try:
         power = int(card["power"])
@@ -109,6 +139,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         toughness=toughness,
         keywords=keywords,
         triggered_abilities=tuple(triggers),
+        subtypes=subtypes,
+        legendary="Legendary" in supertypes,
     )
 
 
