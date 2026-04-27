@@ -2315,6 +2315,7 @@ def dispatch_event(
     event,
     *,
     label: str | None = None,
+    extra_observers: "list | None" = None,
     **subjects,
 ) -> None:
     """Centralized predicate-trigger dispatcher.
@@ -2331,6 +2332,14 @@ def dispatch_event(
     stack item (defaults to the event's value, e.g. ``"enters"``).
     ``subjects`` is the named subject mapping for the event — see
     ``EVENT_SUBJECTS`` in ``effects/predicates.py``.
+
+    ``extra_observers`` is an additional list of ``GameObject`` whose
+    triggered abilities should be checked alongside the battlefield.
+    Used by DIES / LEAVES_BATTLEFIELD dispatch to include the dearly-
+    departed (already moved off the battlefield by the caller) as a
+    candidate observer for its own self-triggers (``IsSelf()`` against
+    the dying object). Permanents on the battlefield that ALSO appear
+    in ``extra_observers`` are not double-counted.
 
     For ``Event.ENTERS`` the per-source firings are multiplied by
     ``etb_trigger_multiplier`` (Starfield Vocalist's "triggers an
@@ -2349,6 +2358,12 @@ def dispatch_event(
     # dispatch must not themselves see those new permanents on the
     # original event's pass.
     permanents = list(state.battlefield)
+    if extra_observers:
+        seen_ids = {p.id for p in permanents}
+        for extra in extra_observers:
+            if extra.id not in seen_ids:
+                permanents.append(extra)
+                seen_ids.add(extra.id)
     for source in permanents:
         for ability_index, ability in enumerate(
             source.printing.triggered_abilities
