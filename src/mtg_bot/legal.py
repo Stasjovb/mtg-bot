@@ -57,13 +57,39 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
 def _targets_are_satisfiable(
     state: GameState, player_id: int, card: GameObject
 ) -> bool:
-    """For spells with targeted spell_effects, check at least one legal target
-    exists. Non-targeting spells and creatures without spell_effect trivially
-    satisfy this."""
+    """For spells with targeted spell_effects, check that at least
+    ``min_t`` legal targets exist (CR 601.2c — a spell with N
+    required targets needs N legal targets to be cast at all). When
+    ``target_slot_kinds`` is set, each kind's slot count must be
+    backed by enough legal entries of that kind, since duplicates
+    can't be picked across slots (CR 115.1b "different targets" rule).
+
+    Non-targeting spells and creatures without spell_effect trivially
+    satisfy this.
+    """
     effect = card.printing.spell_effect
     if effect is None or not effect.requires_target():
         return True
-    return bool(effect.legal_targets(state, player_id))
+    legal = effect.legal_targets(state, player_id)
+    if not legal:
+        return False
+    min_t, _max_t = effect.target_count_range()
+    if min_t <= 1:
+        return True
+    slot_kinds = effect.target_slot_kinds()
+    if slot_kinds:
+        # Per-slot kind enforcement: each unique kind needs as many
+        # legal entries as it has slots.
+        from collections import Counter
+        slot_counts = Counter(slot_kinds[:min_t])
+        legal_counts = Counter(t[0] for t in legal)
+        for kind, needed in slot_counts.items():
+            if legal_counts.get(kind, 0) < needed:
+                return False
+        return True
+    # No per-slot kind enforcement: just ensure at least min_t
+    # distinct legal targets exist (different-targets rule).
+    return len(legal) >= min_t
 
 
 def _additional_costs_payable(
