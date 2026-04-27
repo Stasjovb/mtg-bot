@@ -114,7 +114,11 @@ def test_parse_effect_returns_none_for_malformed_each_opponent_loses():
     assert _parse_effect("each opponent loses life") is None
     assert _parse_effect("each opponent loses two life") is None
     assert _parse_effect("each opponent loses 2") is None
-    assert _parse_effect("target opponent loses 2 life") is None
+    # Note: ``target opponent loses N life`` was a malformed variant for
+    # this effect when batch 7 landed, but batch 9 added it as its own
+    # supported effect (TargetOpponentLosesLife). It's exercised in
+    # tests/test_parser_effects_batch9.py and is no longer a negative
+    # case here.
 
 
 def test_parse_spell_effect_phrase_returns_none_for_malformed_phrase():
