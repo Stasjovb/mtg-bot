@@ -284,6 +284,26 @@ def move_off_battlefield(
     # or exiled itself.
     _release_exiled_until_leaves(state, obj.id)
 
+    # When an object leaves the battlefield, every continuous
+    # effect that targets it ceases to apply (CR 400.7 — it's a
+    # new object once it changes zones). Drop registry entries
+    # where ``target_id == obj.id``. Done AFTER dies-trigger
+    # firing so granted-trigger entries (Perigee Beckoner's
+    # self-granted dies-rider) are still readable when the
+    # trigger machinery walks them. Layer-1 copy entries from
+    # sorceries (Cytoshape) get cleaned up here since their
+    # source spell never goes through ``move_off_battlefield``.
+    state.continuous_effects = [
+        ce for ce in state.continuous_effects
+        if ce.target_id != obj.id
+    ]
+    # Layer-1 copy revert: if the leaving object was a copy
+    # (Clone, Cytoshape, Mirage Mirror), restore the printing
+    # from the captured ``original_printing`` snapshot so a
+    # future reanimation enters as the printed object.
+    from mtg_bot.game import revert_printing_if_no_layer1_copies
+    revert_printing_if_no_layer1_copies(state, obj)
+
 
 def _fire_your_creature_or_artifact_dies_triggers(
     state: GameState, dead: "GameObject"
@@ -954,6 +974,14 @@ def run_cleanup_step(state: GameState) -> None:
     # bespoke ``temp_*`` fields are cleared in the per-object loop
     # below; both code paths run together until full migration.
     state.expire_continuous_effects("cleanup")
+    # UEOT layer-1 copy effects (Cytoshape, Mirage Mirror): when
+    # the layer-1 entry expired above, the affected object's
+    # ``printing`` mutation needs to revert. Walk the battlefield
+    # and revert any object that has ``original_printing`` set
+    # but no remaining layer-1 ``is_copy`` entries.
+    from mtg_bot.game import revert_printing_if_no_layer1_copies
+    for obj in state.battlefield:
+        revert_printing_if_no_layer1_copies(state, obj)
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False

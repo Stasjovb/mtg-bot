@@ -43,6 +43,7 @@ from mtg_bot.effects.generic import (
     CreateTokenCopyOfTargetCreatureYouControl,
     CreateTokenPerMulticoloredPermanent,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+    CytoshapeBecomeCopyUEOT,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageToControllerAndAddMana,
