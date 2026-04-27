@@ -815,6 +815,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Brightspear Zealot", "{2}{W}", 2, 4,
             keywords={"vigilance"},
+            subtypes=("Human", "Soldier"),
             static_abilities=(
                 StaticAbility(
                     scope=StaticScope.SELF,
