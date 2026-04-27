@@ -15,6 +15,13 @@ side ships these spells without modeling the keyword, so the
 parser must do the same to stay in parity. See
 ``_SPELL_KEYWORD_PREAMBLE_RE`` for the exact recognized shapes.
 
+Cost-reduction rider clauses (``This spell costs {N} less to cast
+if <condition>.``) are likewise stripped from the effect-clause
+stream and surfaced separately on the ``CardPrinting`` via the
+``cost_reductions`` kwarg. The ``_detect_cost_reductions`` helper
+scans the original text for those rules; ``_parse_spell_oracle_
+text`` drops the matching clauses before combinator dispatch.
+
 The modal branch handles only the simplest Scryfall printed shape:
 a header line of exactly ``Choose one —`` followed by two or
 more mode lines that each begin with ``• `` (bullet + space)
@@ -32,6 +39,7 @@ import re
 from mtg_bot.cards.base import (
     CardPrinting,
     ConditionalIfVoid,
+    CostReduction,
     DealDamageAnyTarget,
     Effect,
     ModalChooseOne,
@@ -39,6 +47,7 @@ from mtg_bot.cards.base import (
     make_instant,
     make_sorcery,
 )
+from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
@@ -174,8 +183,12 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     ``Sequence`` (every clause is a plain spell-effect sentence).
     Leading clauses that are unimplemented spell-keyword preambles
     (e.g. Vote Out's Convoke) are dropped before combinator dispatch
-    so they don't fail the per-clause parse. Returns ``None`` if any
-    surviving clause fails to parse.
+    so they don't fail the per-clause parse. ``This spell costs {N}
+    less to cast if <condition>.`` cost-reduction riders are likewise
+    dropped here — the rule is captured separately by
+    ``_detect_cost_reductions`` and threaded onto the resulting
+    ``CardPrinting`` via the ``cost_reductions`` kwarg. Returns
+    ``None`` if any surviving clause fails to parse.
     """
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
@@ -190,6 +203,14 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         stripped
         for stripped in (_strip_reminder_text(c) for c in clauses)
         if stripped
+    ]
+    # Drop recognized cost-reduction rider clauses — they don't
+    # contribute an ``Effect`` (the engine consumes them at cast time
+    # via ``CostReduction`` rules on the printing). ``_build_spell_
+    # printing`` calls ``_detect_cost_reductions`` separately to thread
+    # those rules onto the resulting ``CardPrinting``.
+    clauses = [
+        c for c in clauses if _parse_cost_reduction_line(c) is None
     ]
     if not clauses:
         return None
@@ -239,6 +260,28 @@ def _detect_preamble_flags(text: str) -> dict:
     return flags
 
 
+def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
+    """Return every cost-reduction rule implied by ``text``'s recognized
+    ``This spell costs {N} less to cast if <condition>.`` clauses, in
+    the order they appear. Reminder text is stripped per clause
+    before recognition, so a rider buried after a parenthesized
+    flavor still matches.
+
+    Mirrors the rider-dropping pass in ``_parse_spell_oracle_text``;
+    callers pass the result via the ``cost_reductions`` kwarg on
+    ``make_instant`` / ``make_sorcery``.
+    """
+    rules: list[CostReduction] = []
+    for raw in text.split("\n"):
+        clause = _strip_reminder_text(raw)
+        if not clause:
+            continue
+        rule = _parse_cost_reduction_line(clause)
+        if rule is not None:
+            rules.append(rule)
+    return tuple(rules)
+
+
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
@@ -261,5 +304,6 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         name=card["name"],
         cost=card["mana_cost"],
         effect=effect,
+        cost_reductions=_detect_cost_reductions(text),
         **_detect_preamble_flags(text),
     )

@@ -1,9 +1,10 @@
 """Creature ``CardPrinting`` builder.
 
 Walks each line of the oracle text in order. Pre-clause checks
-(Warp, Ward, sorcery-speed rider) consume the line directly; everything
-else goes through ``_parse_clause`` which dispatches to per-clause-type
-parsers. Any unrecognized line skips the whole card (returns ``None``).
+(Warp, Ward, Devour, cost-reduction rider, sorcery-speed rider)
+consume the line directly; everything else goes through
+``_parse_clause`` which dispatches to per-clause-type parsers. Any
+unrecognized line skips the whole card (returns ``None``).
 """
 
 from __future__ import annotations
@@ -13,12 +14,14 @@ from dataclasses import replace
 from mtg_bot.cards.base import (
     ActivatedAbility,
     CardPrinting,
+    CostReduction,
     StaticAbility,
     TriggeredAbility,
     make_creature,
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
     _parse_ward_line,
@@ -48,6 +51,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     triggers: list[TriggeredAbility] = []
     activated: list[ActivatedAbility] = []
     statics: list[StaticAbility] = []
+    cost_reductions: list[CostReduction] = []
     warp: str | None = None
     ward: str | None = None
     devour: int = 0
@@ -82,6 +86,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # against the static registry will catch any drift.
             devour = devour_n
             continue
+        cost_reduction = _parse_cost_reduction_line(line)
+        if cost_reduction is not None:
+            # ``This spell costs {N} less to cast if <condition>.``
+            # rider — accumulate; multiple riders on the same card are
+            # legal in principle (no EoE printing has more than one
+            # today, but the engine handles a tuple).
+            cost_reductions.append(cost_reduction)
+            continue
         if _is_sorcery_rider_line(line):
             # The rider attaches to the immediately preceding activated
             # ability on the same card. With no preceding ability there's
@@ -111,6 +123,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         triggered_abilities=tuple(triggers),
         activated_abilities=tuple(activated),
         static_abilities=tuple(statics),
+        cost_reductions=tuple(cost_reductions),
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
