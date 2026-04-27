@@ -47,10 +47,13 @@ class DefaultTacticalAgent(Agent):
         return legal[0] if legal else PassPriority()
 
     # --- Combat declarations -----------------------------------------
-    # Ship V1 with "attack with everything, block with nothing". This
-    # is aggressive and wrong in lots of positions, but it's
-    # deterministic and makes games terminate. Wave 2 of the adapter
-    # will expose combat declarations as search decisions.
+    # "Attack with everything, block with nothing" — aggressive and
+    # wrong in lots of positions, but deterministic and makes games
+    # terminate. Combat is exposed as search decisions by default
+    # (``MtgGameStateAdapter(..., expose_combat_decisions=True)``)
+    # so MCTS branches per-creature on attack/block; these methods
+    # only fire on the auto-resolve path (callers that opt out of
+    # combat exposure) and during rollouts past the search depth.
     def declare_attackers(self, state, player_id, eligible):
         return [o.id for o in eligible]
 

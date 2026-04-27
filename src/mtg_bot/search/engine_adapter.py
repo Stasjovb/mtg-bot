@@ -133,7 +133,7 @@ class MtgGameStateAdapter:
         self,
         engine_state: EngineGameState,
         tactical_agent: Optional[Agent] = None,
-        expose_combat_decisions: bool = False,
+        expose_combat_decisions: bool = True,
         expose_resolution_decisions: bool = False,
     ) -> None:
         self._state = engine_state
@@ -162,7 +162,13 @@ class MtgGameStateAdapter:
         # True once ``_enter_step`` has been invoked for the current
         # step; flipped back to False by ``_advance_to_next_step``.
         self._step_entered = False
-        # Factored-combat opt-in flag and per-phase state.
+        # Factored-combat exposure flag and per-phase state. Default
+        # is True: search sees AttackerDecision / BlockerDecision
+        # nodes (one branch per creature) at combat steps instead of
+        # the adapter auto-resolving via DefaultTacticalAgent's
+        # "attack-everything, block-nothing" policy. Pass False to
+        # restore the auto-resolve path (used by a handful of tests
+        # that drive non-combat behavior and want the simpler flow).
         self._expose_combat = expose_combat_decisions
         self._combat_phase: Optional[str] = _COMBAT_NONE
         # Order matters — search will see the next-pending creature
