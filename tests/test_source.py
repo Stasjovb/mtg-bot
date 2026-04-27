@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mtg_bot.cards.parser_source import StubParserCardSource
+from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.cards.registry import all_printings, build_mono_color_deck
 from mtg_bot.cards.source import (
     CardSource,
@@ -78,8 +78,10 @@ def test_card_source_from_env_default_is_static():
     assert isinstance(card_source_from_env("STATIC"), StaticCardSource)
 
 
-def test_card_source_from_env_parser_returns_stub():
-    assert isinstance(card_source_from_env("parser"), StubParserCardSource)
+def test_card_source_from_env_parser_returns_oracle_parser():
+    assert isinstance(
+        card_source_from_env("parser"), OracleParserCardSource
+    )
 
 
 def test_card_source_from_env_unknown_value_raises():

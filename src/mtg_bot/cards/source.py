@@ -87,9 +87,9 @@ def card_source_from_env(value: str | None) -> CardSource:
     if normalized == "static":
         return StaticCardSource()
     if normalized == "parser":
-        from mtg_bot.cards.parser_source import StubParserCardSource
+        from mtg_bot.cards.parser_source import OracleParserCardSource
 
-        return StubParserCardSource()
+        return OracleParserCardSource()
     raise ValueError(
         f"unknown MTG_BOT_CARD_SOURCE value: {value!r} "
         f"(expected 'static' or 'parser')"

@@ -1,42 +1,142 @@
 """Oracle-text parser card source.
 
-Today this is a stub: it claims a small set of vanilla creatures and
-returns their ``CardPrinting``s by passthrough from the static
-registry. Trivial structural parity. The stub exists so the parity
-harness has something concrete to exercise; it will be replaced by a
-real text-driven parser that produces ``CardPrinting``s by reading
-Scryfall ``oracle_text``.
+Reads Scryfall JSON, decomposes each creature's oracle text into
+recognized clauses, and produces a ``CardPrinting`` matching what
+the hand-coded registry produces for the same card. Cards with any
+unrecognized clause are silently skipped — only fully-parsed cards
+appear in ``claimed_names`` and gate against the static registry
+in ``tests/test_parser_parity.py``.
 
-Once the real parser is in place, ``claimed_names`` grows as new
-templates come online. The structural parity test in
-``tests/test_parser_parity.py`` is parametrized over
-``claimed_names``, so each newly-claimed card immediately gates on
-matching the static registry's printing.
+Slice 1 supports two clause forms:
+
+- ``Flying`` (a keyword line) → contributes ``keywords={"flying"}``.
+- ``When this creature enters, it deals N damage to any target.`` →
+  contributes a single ETB-triggered ``DealDamageAnyTarget`` ability.
+
+Cards whose oracle text uses only those clauses get claimed. Today
+that is exactly one EoE card: Nebula Dragon.
 """
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import CardPrinting
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from mtg_bot.cards.base import (
+    CardPrinting,
+    DealDamageAnyTarget,
+    TriggeredAbility,
+    make_creature,
+)
 
 
-class StubParserCardSource:
-    claimed_names: tuple[str, ...] = (
-        "Battlefield Recruit",
-        "Wild Bear",
-        "Raging Goblin",
+_DATA_PATH = (
+    Path(__file__).resolve().parents[3] / "data" / "edge_of_eternities.json"
+)
+
+
+@dataclass(frozen=True)
+class _ParsedClause:
+    """One oracle-text clause that successfully parsed.
+
+    Fields are mutually exclusive — a clause contributes either a
+    keyword string or a triggered ability, never both.
+    """
+
+    keyword: str | None = None
+    trigger: TriggeredAbility | None = None
+
+
+_KEYWORD_LINES: dict[str, str] = {"Flying": "flying"}
+
+_ETB_DAMAGE_TO_ANY_TARGET = re.compile(
+    r"^When this creature enters, it deals (\d+) damage to any target\.$"
+)
+
+
+def _parse_clause(line: str) -> _ParsedClause | None:
+    """Return a ``_ParsedClause`` for a recognized line, or ``None``
+    if the parser doesn't know how to handle it. ``None`` causes the
+    enclosing card to be skipped."""
+    line = line.strip()
+    if line in _KEYWORD_LINES:
+        return _ParsedClause(keyword=_KEYWORD_LINES[line])
+    m = _ETB_DAMAGE_TO_ANY_TARGET.match(line)
+    if m is not None:
+        return _ParsedClause(
+            trigger=TriggeredAbility(
+                trigger="etb",
+                effect=DealDamageAnyTarget(amount=int(m.group(1))),
+            )
+        )
+    return None
+
+
+def _build_creature_printing(card: dict) -> CardPrinting | None:
+    """Try to produce a ``CardPrinting`` for ``card`` (a Scryfall
+    record). Returns ``None`` if the card is not a creature, has
+    non-integer power/toughness (e.g. ``*``), or contains any
+    oracle-text clause the slice doesn't yet support."""
+    if not card.get("type_line", "").startswith("Creature"):
+        return None
+    try:
+        power = int(card["power"])
+        toughness = int(card["toughness"])
+    except (KeyError, ValueError):
+        return None
+
+    keywords: set[str] = set()
+    triggers: list[TriggeredAbility] = []
+    text = card.get("oracle_text", "")
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parsed = _parse_clause(line)
+        if parsed is None:
+            return None
+        if parsed.keyword is not None:
+            keywords.add(parsed.keyword)
+        if parsed.trigger is not None:
+            triggers.append(parsed.trigger)
+
+    return make_creature(
+        name=card["name"],
+        cost=card["mana_cost"],
+        power=power,
+        toughness=toughness,
+        keywords=keywords,
+        triggered_abilities=tuple(triggers),
     )
 
-    def get_printings(self) -> dict[str, CardPrinting]:
-        from mtg_bot.cards.registry import all_printings
 
-        all_p = all_printings()
-        return {name: all_p[name] for name in self.claimed_names}
+def _load_scryfall_data() -> list[dict]:
+    with _DATA_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+class OracleParserCardSource:
+    def __init__(self) -> None:
+        printings: dict[str, CardPrinting] = {}
+        for card in _load_scryfall_data():
+            built = _build_creature_printing(card)
+            if built is not None:
+                printings[card["name"]] = built
+        self._printings = printings
+
+    @property
+    def claimed_names(self) -> tuple[str, ...]:
+        return tuple(self._printings)
+
+    def get_printings(self) -> dict[str, CardPrinting]:
+        return dict(self._printings)
 
     def build_mono_color_deck(
         self, color: str, seed: int | None = None
     ) -> list[str]:
         raise NotImplementedError(
-            "stub parser source does not build decks. Once the real "
-            "parser claims a deckable pool, implement this against the "
-            "parser's own printings."
+            "parser source does not yet implement deck building; "
+            "implement once it claims a deckable pool"
         )
