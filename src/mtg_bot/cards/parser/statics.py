@@ -21,11 +21,16 @@ Recognized conditions today:
 * ``you've cast two or more spells this turn`` →
   ``requires_spells_cast_this_turn=2`` (Brightspear Zealot, via the
   trailing shape).
+* ``it's your turn`` → ``active_turn_only=True``. Forward-looking
+  grammar coverage; no EoE card prints in the leading/trailing static
+  shape with this condition today (Memorial Team Leader uses the
+  separate ``During your turn`` rider on an anthem scope, which a
+  different builder handles), but the engine field exists and the
+  surface phrase is unambiguous.
 
 Other "As long as" conditions (entered-this-turn, void, you-control-a-
-creature, ``it's your turn``, etc.) either have no matching engine
-gate or are pinned as out-of-scope by an existing parser-source test;
-they intentionally don't match and the card falls through.
+creature, etc.) have no matching engine gate; they intentionally don't
+match and the card falls through.
 """
 
 from __future__ import annotations
@@ -65,6 +70,7 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     "you've cast two or more spells this turn": {
         "requires_spells_cast_this_turn": 2
     },
+    "it's your turn": {"active_turn_only": True},
 }
 
 

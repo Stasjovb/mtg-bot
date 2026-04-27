@@ -136,13 +136,28 @@ def test_leading_and_trailing_shapes_are_equivalent(leading, trailing):
 # ---------- Trailing-shape negatives ----------
 
 
+def test_trailing_shape_active_turn_parses_to_static():
+    # ``it's your turn`` maps to ``active_turn_only=True`` and rides
+    # through the trailing shape the same way it rides through the
+    # leading shape — both surface forms are semantically identical.
+    parsed = _parse_static_ability_line(
+        "This creature gets +1/+1 as long as it's your turn."
+    )
+    assert parsed == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=1,
+        toughness_bonus=1,
+        active_turn_only=True,
+    )
+
+
 def test_trailing_shape_unknown_condition_returns_none():
-    # ``it's your turn`` has no matching ``StaticAbility`` gate in the
-    # phrasebook (it's intentionally pinned out-of-scope), so the
-    # parse must fall through even when the surface shape matches.
+    # Conditions with no matching ``StaticAbility`` gate field must
+    # fall through even when the surface shape matches — better to
+    # skip the card than silently mis-model it as always-on.
     assert (
         _parse_static_ability_line(
-            "This creature gets +1/+1 as long as it's your turn."
+            "This creature gets +1/+1 as long as you control a creature."
         )
         is None
     )

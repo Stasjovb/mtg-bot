@@ -2236,14 +2236,29 @@ def test_parse_static_ability_line_strips_whitespace():
 
 
 def test_parse_static_ability_line_rejects_unknown_condition():
-    """Conditions other than ``you control an artifact`` are out of
-    scope this batch — the line must not match."""
+    """Conditions with no matching ``StaticAbility`` gate field must
+    fall through — better to skip the card than silently mis-model it.
+    ``you control a creature`` has no engine field, so it stays out of
+    scope here."""
     assert _parse_static_ability_line(
         "As long as you control a creature, this creature gets +1/+0."
     ) is None
+
+
+def test_parse_static_ability_line_recognizes_active_turn_condition():
+    """``As long as it's your turn`` maps to ``active_turn_only=True``
+    on the produced ``StaticAbility``. Forward-looking grammar
+    coverage: the engine gate already exists and the surface phrase is
+    unambiguous, so the parser surfaces a ``StaticAbility`` rather than
+    falling through."""
     assert _parse_static_ability_line(
         "As long as it's your turn, this creature gets +2/+0."
-    ) is None
+    ) == StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=2,
+        toughness_bonus=0,
+        active_turn_only=True,
+    )
 
 
 def test_parse_static_ability_line_rejects_unknown_keyword():

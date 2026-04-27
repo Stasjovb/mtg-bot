@@ -23,10 +23,8 @@ extended.
 
 Other candidate conditions:
 
-* ``it's your turn`` (would map to ``active_turn_only=True``) —
-  intentionally **not** added: the existing
-  ``test_parse_static_ability_line_rejects_unknown_condition`` test in
-  ``test_parser_source.py`` pins this surface form as out-of-scope.
+* ``it's your turn`` → ``active_turn_only=True``. Added in batch 10.
+  See ``test_parser_statics_batch10.py`` for the dedicated coverage.
 * ``you have void`` — has no matching ``StaticAbility`` gate field
   (only ``TriggeredAbility.requires_void`` exists), so the parser
   must fall through.
