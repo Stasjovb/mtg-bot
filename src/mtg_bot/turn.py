@@ -1113,7 +1113,28 @@ def _state_based_actions_pass(state: GameState) -> bool:
         move_off_battlefield(state, obj, destination="graveyard")
         changed = True
 
-    # Aura attachment legality (CR 704.5n): an Aura attached to an
+    # +1/+1 vs -1/-1 counter cancellation (CR 704.5r in current CR;
+    # labelled 704.5n in this codebase's audit). When a permanent
+    # has both kinds, N pairs are removed where N is the smaller
+    # count. Cancellation can drive toughness back above 0 / below
+    # 0 → run BEFORE the destroyed-creature pass above? No, after,
+    # because cancellation is a separate SBA pass. The
+    # state_based_actions LOOP handles cascading: after this
+    # cancellation, the next pass re-evaluates 704.5f/g.
+    for obj in state.battlefield:
+        if obj.plus_one_counters > 0 and obj.minus_one_counters > 0:
+            n = min(obj.plus_one_counters, obj.minus_one_counters)
+            obj.plus_one_counters -= n
+            obj.minus_one_counters -= n
+            state.log.append(
+                f"{obj.printing.name}: {n} +1/+1 and {n} -1/-1 "
+                f"counters cancel"
+            )
+            changed = True
+
+    # Aura attachment legality (CR 704.5q in current CR; this
+    # codebase historically labelled it 704.5n): an Aura attached to
+    # an
     # illegal target (or unattached) goes to its owner's graveyard.
     # The target is illegal if it's no longer on the battlefield, or
     # no longer satisfies the Aura's printed enchant restriction
