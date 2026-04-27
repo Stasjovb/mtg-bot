@@ -30,7 +30,8 @@ from mtg_bot.agents import Agent
 from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.cards.base import CardPrinting, ManaCost, make_basic_land
 from mtg_bot.cards.demo_layers import (
-    CLONE, LIGNIFY, MAGICAL_HACK, SCUTTLEMUTT, WHITE_KNIGHT,
+    CLONE, DRYAD_OF_THE_ILYSIAN_GROVE, LIGNIFY, MAGICAL_HACK,
+    SCUTTLEMUTT, WHITE_KNIGHT,
 )
 from mtg_bot.effects.generic import (
     MagicalHackTextChangeEffect, ScuttlemuttColorChangeUEOT,
@@ -268,6 +269,187 @@ def test_lignify_attached_to_clone_after_copy_works():
 # =====================================================================
 # D. Layer 4 (type) flowing into other layers
 # =====================================================================
+
+
+def test_magus_alone_makes_nonbasic_land_a_mountain():
+    """Magus of the Moon: a nonbasic land's effective subtypes are
+    set to ``("Mountain",)`` and it produces {R}."""
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    # Build a synthetic nonbasic land — a Forest+Mountain dual.
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    dual = CardPrinting(
+        name="Stomping Dual",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(),  # NOT basic
+        card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    # Magus of the Moon enters at a later timestamp.
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 10
+
+    subs = effective_subtypes(state, land)
+    # Magus replaces the basic-land-type subtypes with Mountain.
+    assert "Mountain" in subs
+    assert "Forest" not in subs
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+
+def test_dryad_alone_lands_become_every_basic_type():
+    """Dryad of the Ilysian Grove: each land you control gains all
+    five basic land types, so it taps for any color."""
+    state = _new_state()
+    forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    forest.etb_timestamp = 1
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 10
+
+    subs = effective_subtypes(state, forest)
+    assert "Forest" in subs  # printed type still present
+    assert "Plains" in subs
+    assert "Island" in subs
+    assert "Swamp" in subs
+    assert "Mountain" in subs
+    assert effective_land_produces(state, forest) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+
+def test_magus_older_then_dryad_newer_lands_have_all_basic_types():
+    """The famous interaction. Magus enters first (older timestamp),
+    Dryad enters second (newer timestamp). Per CR 613.4 layer-4
+    timestamp ordering:
+
+      T1 (Magus): set basic-land-type subtypes to ("Mountain",) on
+        every nonbasic land.
+      T2 (Dryad): add all five basic land types to every land its
+        controller controls — appends to whatever the post-Magus
+        subtype list is.
+
+    Result: nonbasic lands have Mountain (from Magus, surviving as
+    one of the basics) plus Plains, Island, Swamp, Forest (added
+    by Dryad). All five colors producible.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    # Nonbasic Forest+Mountain dual on the battlefield.
+    dual = CardPrinting(
+        name="Stomping Dual",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    # T2: Magus of the Moon (older effect on the battlefield).
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 5
+    # T3: Dryad (newer effect).
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 20
+
+    subs = effective_subtypes(state, land)
+    # Mountain survives (Magus set, Dryad re-adds it as one of five).
+    assert "Mountain" in subs
+    # Forest is gone after Magus, but ADDED back by Dryad.
+    assert "Forest" in subs
+    assert "Plains" in subs
+    assert "Island" in subs
+    assert "Swamp" in subs
+    assert effective_land_produces(state, land) == frozenset(
+        {"W", "U", "B", "R", "G"}
+    )
+
+
+def test_dryad_older_then_magus_newer_lands_become_just_mountains():
+    """Reverse timestamps: Dryad enters first, Magus enters later.
+
+      T1 (Dryad): add all five basic land types to every land you
+        control — Forest dual gets Plains/Island/Swamp/Forest (Mountain
+        already there).
+      T2 (Magus): set basic-land-type subtypes to ("Mountain",) on
+        every nonbasic land — drops the four other basics.
+
+    Result: nonbasic land has just Mountain. Tap for {R} only.
+    This is the famous "Blood Moon beats Dryad" outcome when the
+    Magus/Blood Moon comes down second.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+    state = _new_state()
+    dual = CardPrinting(
+        name="Stomping Dual",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Land — Forest Mountain",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=("Forest", "Mountain"),
+        produces=frozenset({"R", "G"}),
+    )
+    land = state.new_object(dual, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(land)
+    land.etb_timestamp = 1
+    # T2: Dryad first.
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 5
+    # T3: Magus later (newer).
+    magus = state.new_object(
+        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(magus)
+    magus.etb_timestamp = 20
+
+    subs = effective_subtypes(state, land)
+    # Magus's set replaces all basic-land-type subtypes with just
+    # Mountain — Dryad's earlier adds are wiped because layer 4
+    # timestamps run T2 (Dryad add) -> T3 (Magus set).
+    assert "Mountain" in subs
+    assert "Forest" not in subs
+    assert "Plains" not in subs
+    assert "Island" not in subs
+    assert "Swamp" not in subs
+    assert effective_land_produces(state, land) == frozenset({"R"})
+
+
+def test_dryad_does_not_affect_opponents_lands():
+    """Dryad's "lands you control" filter keeps it scoped to its
+    controller. An opponent's basic Forest is unaffected."""
+    state = _new_state()
+    p0_forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
+    p0_forest.etb_timestamp = 1
+    p1_forest = _put(state, make_basic_land("Forest", "G"), owner_id=1)
+    p1_forest.controller_id = 1
+    p1_forest.etb_timestamp = 2
+    dryad = _put(state, DRYAD_OF_THE_ILYSIAN_GROVE, owner_id=0)
+    dryad.etb_timestamp = 10
+
+    p0_subs = effective_subtypes(state, p0_forest)
+    p1_subs = effective_subtypes(state, p1_forest)
+    assert "Plains" in p0_subs  # Dryad applies to your land
+    assert "Plains" not in p1_subs  # not to opponent's
 
 
 def test_synthetic_added_subtype_picked_up_by_subtype_keyed_anthem():

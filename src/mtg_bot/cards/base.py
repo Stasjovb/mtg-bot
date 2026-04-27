@@ -595,6 +595,15 @@ class CardPrinting:
     # aren't rewritten, and already-animated manlands keep their
     # temp_is_creature state (no layers yet).
     nonbasic_lands_are_mountains: bool = False
+    # Dryad of the Ilysian Grove: "Lands you control are every basic
+    # land type in addition to their other types." A printing with
+    # this flag, while on the battlefield, contributes synthetic
+    # layer-4 ``"add_subtype"`` entries (one per basic land type) to
+    # ``effective_subtypes`` for every land its controller controls.
+    # Synthesizing on-the-fly avoids ETB/leave plumbing; the
+    # source's ``etb_timestamp`` is used so within-layer timestamp
+    # order vs Blood Moon / Magus of the Moon matches CR 613.4.
+    grants_all_basic_land_types_to_lands_you_control: bool = False
     # Conditional unblockable: "This creature can't be blocked if you've
     # cast two or more spells this turn." (Illvoi Infiltrator). When True
     # and the controller's Player.spells_cast_this_turn >= 2, combat.can_block
@@ -752,6 +761,7 @@ def make_creature(
     is_token_doubler: bool = False,
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
+    grants_all_basic_land_types_to_lands_you_control: bool = False,
     replaces_draw_with_extra_when_hand_at_most_one: bool = False,
     warp_additional_life_cost: int = 0,
     warp_castable_from_graveyard: bool = False,
@@ -806,6 +816,9 @@ def make_creature(
         is_token_doubler=is_token_doubler,
         devour_land_multiplier=devour_land_multiplier,
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        grants_all_basic_land_types_to_lands_you_control=(
+            grants_all_basic_land_types_to_lands_you_control
+        ),
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
         ),

@@ -32,6 +32,15 @@ Currently:
   ``{T}: Target creature becomes the color or colors of your choice
   until end of turn.`` Layer 5 color-changing effect that writes a
   ``"set_colors"`` registry entry with ``expires_at="cleanup"``.
+- ``DRYAD_OF_THE_ILYSIAN_GROVE`` (Theros Beyond Death) — 1/5 Dryad
+  with "Lands you control are every basic land type in addition
+  to their other types." Layer 4 add_subtype contribution
+  synthesized in ``effective_subtypes`` so it interacts correctly
+  by timestamp with Magus of the Moon / Blood Moon's "set basic
+  land subtype to Mountain" layer-4 effect. Magus of the Moon
+  already lives in the EoE Special Guests pool, so the famous
+  Dryad-vs-Blood-Moon timestamp interaction can be tested by
+  pairing this Dryad with the existing Magus printing.
 """
 
 from __future__ import annotations
@@ -81,4 +90,11 @@ SCUTTLEMUTT: CardPrinting = make_creature(
             effect=ScuttlemuttColorChangeUEOT(),
         ),
     ),
+)
+
+
+DRYAD_OF_THE_ILYSIAN_GROVE: CardPrinting = make_creature(
+    "Dryad of the Ilysian Grove", "{2}{G}", 1, 5,
+    subtypes=("Nymph", "Dryad"),
+    grants_all_basic_land_types_to_lands_you_control=True,
 )

@@ -2072,6 +2072,9 @@ def put_into_battlefield(
     obj.controller_id = controller_id
     obj.tapped = False
     obj.summoning_sick = True
+    # Snapshot the moment of ETB for static-effect timestamp use
+    # (Magus / Dryad layer-4 synthesizing in effective_subtypes).
+    obj.etb_timestamp = state.next_timestamp
     # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's
