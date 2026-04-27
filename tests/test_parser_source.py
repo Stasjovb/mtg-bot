@@ -1633,15 +1633,21 @@ def test_parse_activated_ability_line_rejects_missing_period():
     assert _parse_activated_ability_line("{2}: Draw a card") is None
 
 
-def test_parse_activated_ability_line_rejects_sorcery_rider_inline():
-    """A sorcery rider on the same line as the effect doesn't parse —
-    the effect text including the rider isn't in our grammar. (The
-    out-of-scope case where the rider is on its own separate line is
-    covered by ``test_build_creature_printing_skips_sorcery_rider``.)"""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_accepts_sorcery_rider_inline():
+    """The inline ``Activate only as a sorcery.`` rider is the shape EoE
+    actually uses — it's stripped from the end of the line, the rest is
+    parsed as a normal activation, and the resulting ability is marked
+    ``sorcery_speed=True``. The standalone-line rider variant is still
+    handled separately by the creature builder."""
+    ab = _parse_activated_ability_line(
         "{3}: Put a +1/+1 counter on target creature. "
         "Activate only as a sorcery."
-    ) is None
+    )
+    assert ab == ActivatedAbility(
+        cost=ActivationCost(mana=parse_mana_cost("{3}"), mana_str="{3}"),
+        effect=PutPlusOneCounterOnTargetCreature(amount=1),
+        sorcery_speed=True,
+    )
 
 
 def test_parse_clause_recognizes_activated_ability():

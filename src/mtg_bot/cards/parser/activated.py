@@ -15,9 +15,18 @@ shapes (sacrifice, pay-life, counter-removal, "tap another permanent",
 …) are out of scope this slice — the line falls through and causes
 the card to be skipped.
 
-A standalone ``Activate only as a sorcery.`` clause attaches to the
-immediately preceding activated ability on the same card and marks
-it sorcery-speed (handled by the creature builder, not here).
+The ``Activate only as a sorcery.`` rider has two surface shapes:
+
+  * **Inline** — ``{cost}: <effect>. Activate only as a sorcery.`` is a
+    single oracle line ending in the rider. ``_parse_activated_ability_line``
+    strips the trailing rider and parses the remainder as a normal
+    activation, returning an ``ActivatedAbility(..., sorcery_speed=True)``.
+    This is the only shape EoE actually uses.
+  * **Standalone** — a separate ``Activate only as a sorcery.`` line that
+    attaches to the immediately preceding activated ability on the same
+    card. Recognized by ``_is_sorcery_rider_line`` and handled by the
+    creature builder, not here. Currently unused by EoE but kept for
+    completeness.
 """
 
 from __future__ import annotations
@@ -97,13 +106,33 @@ def _normalize_activated_effect_phrase(phrase: str) -> str:
     return phrase
 
 
+# Inline sorcery-speed rider: ``Activate only as a sorcery.`` glued to
+# the end of the same line as the activation, with a single space
+# separator after the effect's terminating period. This is the only
+# shape EoE actually uses (e.g. Intrepid Tenderfoot's
+# ``{3}: Put a +1/+1 counter on this creature. Activate only as a sorcery.``).
+_INLINE_SORCERY_RIDER_SUFFIX = " Activate only as a sorcery."
+
+
 def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     """Return an ``ActivatedAbility`` for a ``{cost}: <effect>.`` line,
     or ``None`` if the line shape doesn't match, the cost shape isn't
     one of the supported pure-mana / tap / tap+mana forms, or the
     effect doesn't parse via the unified grammar.
+
+    Also accepts the inline sorcery-speed rider variant
+    ``{cost}: <effect>. Activate only as a sorcery.`` — the trailing
+    rider is stripped, the remainder is parsed as a normal activation,
+    and the resulting ability is marked ``sorcery_speed=True``.
     """
-    m = _ACTIVATED_ABILITY_LINE.match(line.strip())
+    stripped = line.strip()
+    sorcery_speed = False
+    if stripped.endswith(_INLINE_SORCERY_RIDER_SUFFIX):
+        # Drop the rider but keep the effect's terminating period so
+        # the standard ``{cost}: <effect>.`` shape still matches.
+        stripped = stripped[: -len(_INLINE_SORCERY_RIDER_SUFFIX)]
+        sorcery_speed = True
+    m = _ACTIVATED_ABILITY_LINE.match(stripped)
     if m is None:
         return None
     cost = _parse_activation_cost(m.group(1))
@@ -112,13 +141,16 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
     if effect is None:
         return None
-    return ActivatedAbility(cost=cost, effect=effect)
+    return ActivatedAbility(cost=cost, effect=effect, sorcery_speed=sorcery_speed)
 
 
 # A standalone ``Activate only as a sorcery.`` clause attaches to the
 # immediately preceding activated ability on the same card and marks
 # it sorcery-speed. The exact-match recognizer is intentionally narrow:
 # any other rider phrasing falls through and causes the card to skip.
+# EoE doesn't actually use this shape (the rider is always inline — see
+# ``_INLINE_SORCERY_RIDER_SUFFIX`` above), but the standalone recognizer
+# is kept in place as a harmless safety net for any future printings.
 _SORCERY_RIDER_LINE = "Activate only as a sorcery."
 
 
