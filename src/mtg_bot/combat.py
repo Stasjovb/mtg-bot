@@ -214,7 +214,8 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
 
 def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     """``assignments`` maps blocker id → attacker id."""
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
     from mtg_bot.game import effective_keywords
 
     for blocker_id, attacker_id in assignments.items():
@@ -238,6 +239,19 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
         blocker.blocking = attacker_id
         attacker.blocked_by.append(blocker_id)
         state.log.append(f"{blocker.printing.name} blocks {attacker.printing.name}")
+        # Predicate-style ``Event.BLOCKS`` dispatch (phase 9). Subjects
+        # are the blocker and the attacker it blocked. Skystinger's
+        # ``IsSelf(subject="blocker") & HasKeyword("flying", subject=
+        # "attacker")`` is the one in-scope predicate today; future
+        # block-filter triggers compose more keyword/type clauses on
+        # the same event. Predicate-style abilities don't set
+        # ``ability.trigger`` so the legacy walk below skips them — no
+        # double-fire. Phase-9 commit 3 collapses the legacy walk once
+        # the static site migrates.
+        dispatch_event(
+            state, Event.BLOCKS, label="blocks",
+            blocker=blocker, attacker=attacker,
+        )
         # Fire "whenever ~ blocks a creature with flying" triggers on
         # the blocker (Skystinger). Extend with more filters as needed.
         attacker_kws = effective_keywords(state, attacker)
@@ -562,8 +576,41 @@ def _fire_combat_damage_to_player_triggers(
     immediately; reaching for the stack on those is a separate concern.
     During those immediate resolutions,
     ``state.resolving_combat_damage_amount`` carries the damage amount.
+
+    Phase-9 commit 1 layers a parallel ``dispatch_event(state,
+    Event.DEALS_COMBAT_DAMAGE, source=…, target=…)`` call alongside
+    the legacy per-source walks below. The dispatcher fires every
+    predicate-style trigger whose ``event`` is ``DEALS_COMBAT_DAMAGE``
+    and whose predicate evaluates true against the
+    ``(source, target)`` subject mapping — covering Illvoi
+    Infiltrator's ``IsSelf(subject="source") & IsPlayer(subject="target")``,
+    Starwinder's ``IsCreature(subject="source") & Controlled(YOU,
+    subject="source") & IsPlayer(subject="target")``, and Contested War
+    Zone's ``IsCreature(subject="source") & Controlled(YOU,
+    subject="target")`` (where ``"target"`` is the damaged player and
+    ``Controlled(YOU)`` against a player subject reads as "the damaged
+    player IS me, the observer's controller"). Predicate-style
+    abilities don't set ``ability.trigger`` so the legacy walks below
+    skip them — no double-fire. Phase-9 commit 3 collapses the legacy
+    walks once all static sites migrate.
+
+    ``fixed_targets`` for the predicate dispatch exposes the
+    attacker's controller as ``("player", attacker_controller_id)``.
+    This matches Contested War Zone's
+    ``ChangeControllerToCombatDamageSource`` effect (which reads
+    ``targets[0]`` to learn who the new controller is); the other
+    migrated effects (Illvoi's ``DrawCards``, Starwinder's
+    ``DrawCardsEqualToResolvingCombatDamage``, Skystinger's
+    ``PumpSelfUntilEOT``) ignore ``targets`` so the threaded value
+    is a no-op for them. The legacy ``your_creature_combat_damage_
+    to_player`` / ``creature_deals_combat_damage_to_you`` walks below
+    keep their original ``fixed_targets`` shapes (target_player vs
+    attacker_controller_id) for the still-string-key observers
+    (Virulent Silencer, Haliya's aggregated, etc.) that aren't part
+    of this phase's migration.
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
     from mtg_bot.turn import should_fire_trigger
 
     for source_id, target_player, amount in sources_hit_player:
@@ -572,6 +619,22 @@ def _fire_combat_damage_to_player_triggers(
         )
         if source is None:
             continue  # source died from simultaneous damage
+        # Predicate-style ``Event.DEALS_COMBAT_DAMAGE`` dispatch (phase 9).
+        # The ``source`` and ``target`` kwargs land in ``**subjects`` on
+        # the dispatcher; the dispatcher's local ``source`` variable
+        # (the firing observer permanent) is unrelated. Per (source,
+        # target) pair so the dispatcher fires once per damage event,
+        # mirroring the per-pair semantics of the legacy walks below.
+        target_player_obj = state.player_by_id(target_player)
+        attacker_controller_id = source.controller_id
+        dispatch_event(
+            state, Event.DEALS_COMBAT_DAMAGE,
+            label="deals-combat-damage",
+            combat_damage_amount=amount,
+            fixed_targets=(("player", attacker_controller_id),),
+            source=source,
+            target=target_player_obj,
+        )
         # Source's own triggers — go on the stack so opponents get a
         # window to respond at instant speed before the ability resolves.
         for i, ability in enumerate(source.printing.triggered_abilities):

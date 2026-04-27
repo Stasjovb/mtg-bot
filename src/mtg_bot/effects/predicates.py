@@ -344,6 +344,36 @@ class IsArtifact(Predicate):
 
 
 @dataclass(frozen=True)
+class IsPlayer(Predicate):
+    """The named subject is a Player (not a permanent).
+
+    Distinguishes the player vs. permanent target slot in multi-subject
+    events like ``DEALS_COMBAT_DAMAGE`` whose ``"target"`` slot can be
+    either a creature or a player. Models the "deals combat damage to a
+    player" qualifier in triggers like Illvoi Infiltrator's
+    ``IsSelf(subject="source") & IsPlayer(subject="target")`` and
+    Starwinder's ``IsCreature(subject="source") & Controlled(YOU,
+    subject="source") & IsPlayer(subject="target")``.
+
+    Detection mirrors ``Controlled``'s permanent-vs-player branch:
+    Players expose ``id`` but lack ``controller_id`` and ``printing``,
+    while ``GameObject`` exposes both ``controller_id`` and
+    ``printing``. Checking for the absence of ``printing`` is the
+    cheapest reliable distinguisher and avoids the import cycle into
+    ``mtg_bot.game`` for an isinstance check.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        # Players have ``id`` but no ``printing``; permanents have both.
+        return not hasattr(obj, "printing")
+
+
+@dataclass(frozen=True)
 class Controlled(Predicate):
     """The named subject is controlled by the indicated player.
 
@@ -441,6 +471,41 @@ class HasSubtype(Predicate):
         if obj is None:
             return False
         return self.name in obj.printing.subtypes
+
+
+@dataclass(frozen=True)
+class HasKeyword(Predicate):
+    """The named subject currently has the given keyword.
+
+    Models the keyword-qualifier check used by triggers that gate on a
+    runtime keyword presence on the firing subject — Skystinger's
+    ``HasKeyword("flying", subject="attacker")`` for "Whenever this
+    creature blocks a creature with flying" matches when the BLOCKS
+    event's ``"attacker"`` subject has flying right now (printed
+    keyword, granted keyword via aura/equipment, or temp keyword via
+    UEOT pump).
+
+    Reads through ``effective_keywords(state, obj)`` rather than the
+    raw ``obj.printing.keywords`` set — the legacy
+    ``_fire_blocks_creature_with_flying`` walk in ``combat.py`` keys
+    off ``effective_keywords`` so a creature granted flying by an aura
+    qualifies; preserving that behavior in the predicate path keeps
+    parity with the legacy fire path.
+    """
+
+    name: str
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        if not hasattr(obj, "printing"):
+            # Players don't have keywords.
+            return False
+        from mtg_bot.game import effective_keywords
+
+        return self.name in effective_keywords(state, obj)
 
 
 # Map a counter "kind" string to the ``GameObject`` attribute that

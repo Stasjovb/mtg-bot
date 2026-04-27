@@ -19,12 +19,14 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     HasCounter,
+    HasKeyword,
     HasSubtype,
     IsArtifact,
     IsCreature,
     IsHost,
     IsLand,
     IsNontoken,
+    IsPlayer,
     IsSelf,
     Never,
     Not,
@@ -241,6 +243,45 @@ def test_controlled_false_when_subject_missing():
     assert Controlled().matches(FakeState(), {}, _src()) is False
 
 
+# ---------- IsPlayer ----------
+
+@dataclass
+class FakePlayer:
+    id: int = 0
+
+
+def test_is_player_matches_player_subject():
+    """A subject without ``printing`` is a Player and matches IsPlayer."""
+    src = _src()
+    player = FakePlayer(id=1)
+    assert IsPlayer().matches(FakeState(), {"target": player}, src) is True
+
+
+def test_is_player_rejects_permanent_subject():
+    """A subject with ``printing`` is a permanent and doesn't match."""
+    src = _src()
+    permanent = FakeObject(printing=FakePrinting(card_types=("Creature",)))
+    assert IsPlayer().matches(FakeState(), {"target": permanent}, src) is False
+
+
+def test_is_player_resolves_named_subject_slot():
+    """``IsPlayer(subject=name)`` reads the named slot."""
+    src = _src()
+    player = FakePlayer(id=2)
+    perm = FakeObject(printing=FakePrinting(card_types=("Creature",)))
+    pred = IsPlayer(subject="target")
+    assert pred.matches(
+        FakeState(), {"source": perm, "target": player}, src,
+    ) is True
+    assert IsPlayer(subject="source").matches(
+        FakeState(), {"source": perm, "target": player}, src,
+    ) is False
+
+
+def test_is_player_false_when_subject_missing():
+    assert IsPlayer().matches(FakeState(), {}, _src()) is False
+
+
 # ---------- IsNontoken ----------
 
 def test_is_nontoken_true_for_real_card():
@@ -290,6 +331,108 @@ def test_has_subtype_matches_within_multi_subtype_printing():
 
 def test_has_subtype_false_when_subject_missing():
     assert HasSubtype("Kavu").matches(FakeState(), {}, _src()) is False
+
+
+# ---------- HasKeyword ----------
+#
+# ``HasKeyword`` reads ``effective_keywords(state, obj)`` rather than
+# ``obj.printing.keywords`` directly so granted/temporary keywords are
+# honored. The tests use a real ``GameState`` + ``GameObject`` because
+# ``effective_keywords`` traverses layer-6 entries that depend on the
+# object's printing and runtime grant slots.
+
+def test_has_keyword_matches_printed_keyword():
+    """A creature with a printed keyword (``flying``) matches
+    ``HasKeyword("flying")``."""
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    flier = state.new_object(
+        make_creature("Flier", "{1}{U}", 1, 1, keywords={"flying"}),
+        0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(flier)
+    src = state.new_object(
+        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    assert HasKeyword("flying").matches(
+        state, {"attacker": flier}, src,
+    ) is True
+
+
+def test_has_keyword_rejects_creature_without_keyword():
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    grounded = state.new_object(
+        make_creature("Grounded", "{1}{G}", 2, 2), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(grounded)
+    src = state.new_object(
+        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    assert HasKeyword("flying").matches(
+        state, {"attacker": grounded}, src,
+    ) is False
+
+
+def test_has_keyword_resolves_named_subject():
+    """``HasKeyword(subject="attacker")`` reads the named slot in a
+    multi-subject event mapping (BLOCKS = (blocker, attacker))."""
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.agents import RandomAgent
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    blocker = state.new_object(
+        make_creature("Blocker", "{G}", 1, 1, keywords={"reach"}),
+        0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(blocker)
+    attacker = state.new_object(
+        make_creature("Attacker", "{U}", 1, 1, keywords={"flying"}),
+        1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(attacker)
+    src = state.new_object(
+        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    pred = HasKeyword("flying", subject="attacker")
+    assert pred.matches(
+        state, {"blocker": blocker, "attacker": attacker}, src,
+    ) is True
+    # Wrong slot — blocker has reach not flying.
+    assert HasKeyword("flying", subject="blocker").matches(
+        state, {"blocker": blocker, "attacker": attacker}, src,
+    ) is False
+
+
+def test_has_keyword_false_when_subject_missing():
+    """No subject in the dispatch mapping → predicate evaluates false
+    (matches the IsSelf / IsLand / IsHost convention)."""
+    assert HasKeyword("flying").matches(FakeState(), {}, _src()) is False
+
+
+def test_has_keyword_false_for_player_subject():
+    """Players have no keywords — the predicate rejects gracefully."""
+    src = _src()
+    player = FakePlayer(id=1)
+    assert HasKeyword("flying").matches(
+        FakeState(), {"target": player}, src,
+    ) is False
 
 
 # ---------- HasCounter ----------
