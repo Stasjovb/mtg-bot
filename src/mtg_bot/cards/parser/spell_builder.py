@@ -2,8 +2,9 @@
 
 Single-line spells are parsed straight via the unified spell-effect
 phrase parser. Multi-line spells split on ``\\n`` into clauses and
-combine them via one of two combinators — ``ConditionalIfVoid`` for
-the Plasma-Bolt-shaped Void rider, otherwise ``Sequence`` if every
+combine them via one of three combinators — ``ConditionalIfVoid`` for
+the Plasma-Bolt-shaped Void rider, ``ModalChooseOne`` for Scryfall's
+``Choose one —`` modal shape, otherwise ``Sequence`` if every
 clause parses as a plain spell-effect sentence. Any unparseable
 clause skips the whole spell.
 
@@ -13,6 +14,15 @@ is dropped before the remaining clauses are parsed — the static
 side ships these spells without modeling the keyword, so the
 parser must do the same to stay in parity. See
 ``_SPELL_KEYWORD_PREAMBLE_RE`` for the exact recognized shapes.
+
+The modal branch handles only the simplest Scryfall printed shape:
+a header line of exactly ``Choose one —`` followed by two or
+more mode lines that each begin with ``• `` (bullet + space)
+and contain a single sentence parseable by the unified spell-effect
+grammar. ``Choose one or both`` (Scour for Scrap), ``Choose two``,
+multi-line modes, and ``up to two target`` mode-counts are out of
+scope; the parser declines those spells until the engine grows the
+matching machinery.
 """
 
 from __future__ import annotations
@@ -24,12 +34,26 @@ from mtg_bot.cards.base import (
     ConditionalIfVoid,
     DealDamageAnyTarget,
     Effect,
+    ModalChooseOne,
     Sequence,
     make_instant,
     make_sorcery,
 )
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
 from mtg_bot.cards.parser.type_line import _parse_type_line
+
+
+# Modal spell header: exactly ``Choose one —`` (em-dash, U+2014).
+# We deliberately do NOT accept ``Choose one or both`` here — that is a
+# different combinator (``ModalChooseOne(or_both=True)``) and the
+# only EoE printing of it (Scour for Scrap) has modes whose effects
+# the unified grammar can't parse anyway. ``Choose two`` and other
+# mode-counts are also out of scope this batch.
+_MODAL_CHOOSE_ONE_HEADER_RE = re.compile(r"^Choose one —$")
+# A mode line begins with U+2022 BULLET + a single space, then the
+# mode's effect sentence. Trailing period is preserved here and stripped
+# downstream by the spell-effect-phrase normalizer.
+_MODAL_MODE_LINE_RE = re.compile(r"^• (.+)$")
 
 
 # Plasma-Bolt-shaped Void rider: a second clause of the form
@@ -95,13 +119,58 @@ def _parse_void_damage_replacement(
     return DealDamageAnyTarget(amount=int(m.group(1)))
 
 
+def _parse_modal_choose_one(
+    clauses: list[str], name: str
+) -> Effect | None:
+    """If ``clauses`` is a ``Choose one —`` modal-spell shape, return the
+    corresponding ``ModalChooseOne`` effect; otherwise ``None``.
+
+    Recognized shape (from Scryfall printed text):
+
+      ``Choose one —``  (header — em-dash, U+2014)
+      ``• <mode 1 sentence>``
+      ``• <mode 2 sentence>``
+      ``• <mode 3 sentence>``  (optional)
+      ...
+
+    Each mode line is parsed by ``_parse_spell_effect_phrase`` after
+    stripping the leading ``• `` (bullet + space). If any mode fails
+    to parse, the whole shape is rejected (returns ``None``) — partial
+    modal effects would silently change a spell's playable behavior.
+
+    A header by itself (zero mode lines) or a header with exactly one
+    mode line is rejected — printed modal spells always have at least
+    two modes, and a single-mode "modal" spell would be indistinguishable
+    from a non-modal effect. ``Choose one or both``, ``Choose two``, and
+    other variants don't match the header regex and fall through.
+    """
+    if not clauses:
+        return None
+    if _MODAL_CHOOSE_ONE_HEADER_RE.match(clauses[0]) is None:
+        return None
+    mode_lines = clauses[1:]
+    if len(mode_lines) < 2:
+        return None
+    parsed_modes: list[Effect] = []
+    for line in mode_lines:
+        m = _MODAL_MODE_LINE_RE.match(line)
+        if m is None:
+            return None
+        eff = _parse_spell_effect_phrase(m.group(1), name)
+        if eff is None:
+            return None
+        parsed_modes.append(eff)
+    return ModalChooseOne(modes=tuple(parsed_modes))
+
+
 def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     """Parse a spell's full oracle text into a single ``Effect``.
 
     Single-line: parsed by ``_parse_spell_effect_phrase`` directly.
     Multi-line: each ``\\n``-separated clause is parsed; clauses are
     combined either via ``ConditionalIfVoid`` (when the second clause
-    is a Void replacement of the first damage effect) or via
+    is a Void replacement of the first damage effect), via
+    ``ModalChooseOne`` (Scryfall ``Choose one —`` shape), or via
     ``Sequence`` (every clause is a plain spell-effect sentence).
     Leading clauses that are unimplemented spell-keyword preambles
     (e.g. Vote Out's Convoke) are dropped before combinator dispatch
@@ -130,6 +199,14 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
                 return ConditionalIfVoid(
                     then_effect=void_then, else_effect=first
                 )
+    # Modal "Choose one —" shape (header line + ≥2 bullet mode lines).
+    # Tried before the Sequence fallback because Sequence would
+    # uselessly attempt to parse the modal header as a spell-effect
+    # sentence, fail, and return None — losing any modal spell whose
+    # modes are individually parseable.
+    modal = _parse_modal_choose_one(clauses, name)
+    if modal is not None:
+        return modal
     # Sequence shape: every clause must be a plain spell-effect sentence.
     parsed: list[Effect] = []
     for clause in clauses:

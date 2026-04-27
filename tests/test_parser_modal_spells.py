@@ -1,0 +1,294 @@
+"""Tests for the modal-spell ``Choose one —`` branch in
+``mtg_bot.cards.parser.spell_builder``.
+
+The branch recognizes Scryfall's printed shape of a modal spell:
+
+  ``Choose one —``  (em-dash, U+2014)
+  ``• <mode 1 sentence>``
+  ``• <mode 2 sentence>``
+  ``• <mode 3 sentence>``  (optional, more allowed)
+
+When every mode parses via the unified spell-effect grammar, the
+clauses combine into a ``ModalChooseOne`` effect. If any mode line
+fails to parse, the whole spell is skipped (returns ``None``) — a
+partial modal effect would silently change the spell's playable
+behavior.
+
+Coverage targets:
+  - Synthetic modal spell with two recognized modes parses to a
+    ``ModalChooseOne`` over the right ordered modes.
+  - Synthetic three-mode modal spell parses correctly (parser must
+    not be hard-coded to two modes).
+  - Synthetic modal spell with at least one unrecognized mode
+    returns ``None``.
+  - The ``Choose one or both`` shape (Scour for Scrap) is NOT claimed
+    by this branch — out of scope this batch.
+  - The ``Choose two`` shape is NOT claimed by this branch — out of
+    scope this batch.
+  - A header without bullet lines (or with only one mode) is rejected.
+  - A bullet line without a leading header is NOT silently treated as
+    a Sequence clause and parsed in isolation — the existing Sequence
+    fallback would reject it because the bullet prefix isn't a
+    recognized spell-effect surface.
+  - The end-to-end EoE pool: every real EoE ``Choose one`` modal
+    spell either parses to a ``ModalChooseOne`` matching the static
+    printing, or stays unclaimed (the unified grammar doesn't yet
+    cover its modes). Today every real EoE modal stays unclaimed;
+    this test acts as a tripwire when a future grammar expansion
+    starts claiming one of them.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from mtg_bot.cards.base import (
+    DestroyTargetCreature,
+    DrawCards,
+    ExileTargetCreature,
+    GainLife,
+    ModalChooseOne,
+    PutPlusOneCounterOnTargetCreature,
+)
+from mtg_bot.cards.parser.spell_builder import (
+    _build_spell_printing,
+    _parse_modal_choose_one,
+    _parse_spell_oracle_text,
+)
+from mtg_bot.cards.source import StaticCardSource
+
+
+_DATA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "edge_of_eternities.json"
+)
+
+
+def _eoe_card(name: str) -> dict:
+    """Look up a Scryfall record by ``name`` from the EoE data file."""
+    with _DATA_PATH.open("r", encoding="utf-8") as f:
+        for card in json.load(f):
+            if card["name"] == name:
+                return card
+    raise LookupError(f"no EoE card named {name!r}")
+
+
+# ---------- happy path: all modes parseable ----------
+
+def test_two_mode_modal_with_recognized_modes_parses_to_modal_choose_one():
+    # Synthetic two-mode modal where both modes use shapes already in
+    # the unified grammar (`destroy target creature` and
+    # `draw a card`).
+    text = (
+        "Choose one —\n"
+        "• Destroy target creature.\n"
+        "• Draw a card."
+    )
+    parsed = _parse_spell_oracle_text(text, "Bogus Modal")
+    assert parsed == ModalChooseOne(modes=(
+        DestroyTargetCreature(),
+        DrawCards(amount=1),
+    ))
+
+
+def test_three_mode_modal_with_recognized_modes_parses_to_modal_choose_one():
+    # Three modes — verifies the parser isn't hard-coded to exactly
+    # two modes. Order is preserved (the engine resolves the
+    # agent-picked index, so the tuple's positional order matters).
+    text = (
+        "Choose one —\n"
+        "• Exile target creature.\n"
+        "• Put a +1/+1 counter on target creature.\n"
+        "• You gain 3 life."
+    )
+    parsed = _parse_spell_oracle_text(text, "Bogus Trimodal")
+    assert parsed == ModalChooseOne(modes=(
+        ExileTargetCreature(),
+        PutPlusOneCounterOnTargetCreature(amount=1),
+        GainLife(amount=3),
+    ))
+
+
+def test_helper_returns_modal_choose_one_directly():
+    # Direct exercise of the helper — bypassing _parse_spell_oracle_text
+    # so the helper's contract is tested in isolation.
+    clauses = [
+        "Choose one —",
+        "• Destroy target creature.",
+        "• Draw a card.",
+    ]
+    parsed = _parse_modal_choose_one(clauses, "Bogus Modal")
+    assert parsed == ModalChooseOne(modes=(
+        DestroyTargetCreature(),
+        DrawCards(amount=1),
+    ))
+
+
+# ---------- negative: at least one mode unrecognized ----------
+
+def test_modal_with_unrecognized_mode_returns_none():
+    # First mode parses; second mode is gibberish to the grammar.
+    # The whole spell must be skipped — partial modal effects would
+    # silently change the spell's playable behavior.
+    text = (
+        "Choose one —\n"
+        "• Destroy target creature.\n"
+        "• Do something completely unsupported by the grammar."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Half-Modal") is None
+
+
+def test_modal_with_first_mode_unrecognized_returns_none():
+    # Symmetric: first mode unrecognized must also reject the whole
+    # spell (the parser must not silently drop the unrecognized mode
+    # and ship the rest).
+    text = (
+        "Choose one —\n"
+        "• Do something completely unsupported by the grammar.\n"
+        "• Draw a card."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Half-Modal 2") is None
+
+
+# ---------- shape rejections (variants out of scope) ----------
+
+def test_choose_one_or_both_header_is_not_claimed_by_this_branch():
+    # `Choose one or both` is a different combinator
+    # (`ModalChooseOne(or_both=True)`) and out of scope this batch.
+    # The shape must NOT be silently claimed as a plain modal — the
+    # spell must fall through to the Sequence path (and from there
+    # to None, since the header doesn't parse as a spell effect).
+    text = (
+        "Choose one or both —\n"
+        "• Destroy target creature.\n"
+        "• Draw a card."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Both") is None
+
+
+def test_choose_two_header_is_not_claimed_by_this_branch():
+    # `Choose two` is also out of scope — it requires the agent to
+    # pick TWO modes, not one. The parser must decline.
+    text = (
+        "Choose two —\n"
+        "• Destroy target creature.\n"
+        "• Draw a card.\n"
+        "• You gain 3 life."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Choose Two") is None
+
+
+def test_modal_header_with_no_modes_returns_none():
+    # A bare "Choose one —" with no bullet lines isn't a printed
+    # spell shape; the parser must decline it.
+    text = "Choose one —"
+    assert _parse_spell_oracle_text(text, "Bogus Empty Modal") is None
+
+
+def test_modal_header_with_single_mode_returns_none():
+    # Modal spells always have ≥2 modes printed. A single-mode
+    # "modal" wouldn't be modal at all and must not be accepted —
+    # accepting it would surface a one-mode `ModalChooseOne` whose
+    # static-side equivalent doesn't exist.
+    text = (
+        "Choose one —\n"
+        "• Destroy target creature."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus One-Mode") is None
+
+
+def test_helper_returns_none_for_empty_clauses():
+    # Defensive: the helper must tolerate an empty clause list
+    # (in practice the caller filters empty input, but the helper
+    # is a public-ish module function and shouldn't crash).
+    assert _parse_modal_choose_one([], "Bogus Empty") is None
+
+
+def test_helper_returns_none_when_first_clause_isnt_modal_header():
+    # Helper called with a non-modal first clause must decline so
+    # the dispatch in _parse_spell_oracle_text falls through to the
+    # next branch.
+    clauses = [
+        "Destroy target creature.",
+        "• Draw a card.",
+    ]
+    assert _parse_modal_choose_one(clauses, "Bogus") is None
+
+
+def test_helper_returns_none_when_a_mode_line_lacks_bullet():
+    # Bullet prefix is mandatory. A non-bulleted line after the
+    # header is malformed and the helper must decline.
+    clauses = [
+        "Choose one —",
+        "• Destroy target creature.",
+        "Draw a card.",  # no bullet
+    ]
+    assert _parse_modal_choose_one(clauses, "Bogus") is None
+
+
+def test_bare_bullet_line_doesnt_become_a_sequence_clause():
+    # A bullet line WITHOUT the leading "Choose one —" header is
+    # malformed printed text; the parser must not accept it as a
+    # Sequence (the bullet prefix isn't a recognized spell-effect
+    # surface, so the unified grammar would reject it anyway, but
+    # this test pins that down).
+    text = (
+        "• Destroy target creature.\n"
+        "• Draw a card."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Bare Bullets") is None
+
+
+# ---------- preamble interaction ----------
+
+def test_modal_after_convoke_preamble_still_parses():
+    # If a modal spell ever ships with a Convoke preamble, the
+    # preamble-strip pass must run first so the modal-detection
+    # sees the header at index 0.
+    text = (
+        "Convoke (reminder.)\n"
+        "Choose one —\n"
+        "• Destroy target creature.\n"
+        "• Draw a card."
+    )
+    assert _parse_spell_oracle_text(text, "Bogus Convoke Modal") == \
+        ModalChooseOne(modes=(
+            DestroyTargetCreature(),
+            DrawCards(amount=1),
+        ))
+
+
+# ---------- end-to-end on the EoE pool ----------
+
+# Every EoE printing whose oracle text contains "Choose one " (modal
+# trigger). Today none of them have all-grammar-recognized modes, so
+# every entry stays unclaimed by the parser. When the grammar grows
+# enough to claim one, this list becomes the tripwire: the new claim
+# is checked structurally against the static printing.
+_EOE_CHOOSE_ONE_NAMES = (
+    "Reroute Systems",
+    "Scour for Scrap",       # Choose one or both — header doesn't match
+    "Archenemy's Charm",
+    "Drill Too Deep",
+    "Ruinous Rampage",
+)
+
+
+@pytest.mark.parametrize("name", _EOE_CHOOSE_ONE_NAMES)
+def test_eoe_modal_spell_parser_status(name):
+    # Either the parser claims this card and matches the static
+    # printing exactly, OR the parser stays unclaimed (returns None).
+    # No partial / mismatched claim is allowed.
+    card = _eoe_card(name)
+    parsed = _build_spell_printing(card)
+    if parsed is None:
+        return
+    static = StaticCardSource().get_printings()[name]
+    assert parsed == static, (
+        f"parser now claims {name!r} but the printing diverges from "
+        "static — fix one side or the other"
+    )
