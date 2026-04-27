@@ -351,6 +351,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Red Tiger Mechan", "{3}{R}", 3, 3,
             keywords={"haste"},
             warp="{1}{R}",
+            artifact=True,
+            subtypes=("Robot", "Cat"),
         ),
         # Molecular Modifier: "At the beginning of combat on your turn,
         # target creature you control gets +1/+0 and gains first strike
@@ -402,6 +404,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Bygone Colossus", "{9}", 9, 9,
             warp="{3}",
+            artifact=True,
+            subtypes=("Robot", "Giant"),
         ),
         # First real Spacecraft. At 3+ charge counters it becomes an
         # artifact creature with flying + haste. Station = tap a creature
@@ -2674,6 +2678,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             triggered_abilities=(
                 TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
             ),
+            warp="{1}{G}",
+            subtypes=("Plant", "Wurm"),
         ),
         # Drix Fatemaker: {3}{G} 3/2. ETB +1/+1 counter on target
         # creature; creatures you control with a +1/+1 counter have
