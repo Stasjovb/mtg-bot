@@ -1131,8 +1131,79 @@ def _offer_echoing_deeps_copy(
     )
 
 
+def _choose_modes_at_cast(
+    state: GameState, player_id: int, card: GameObject,
+) -> tuple[int, ...]:
+    """CR 601.2e: pick mode(s) for a modal spell at cast time, before
+    total cost is determined. Returns the chosen mode indices in
+    resolution order, or ``()`` for non-modal spells.
+
+    For "Choose one" returns a 1-tuple. For "Choose one or both"
+    returns a 1- or 2-tuple. Resolution runs the chosen modes via
+    ``state.resolving_modes`` instead of prompting the agent again
+    at resolve time.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne
+    spell_effect = card.printing.spell_effect
+    if not isinstance(spell_effect, ModalChooseOne):
+        return ()
+    p = state.player_by_id(player_id)
+    if p.agent is None:
+        return (0,)
+    if spell_effect.or_both:
+        order = p.agent.choose_modes(
+            state, player_id,
+            [m.describe() for m in spell_effect.modes],
+        )
+        seen: set[int] = set()
+        clean: list[int] = []
+        for idx in order:
+            if 0 <= idx < len(spell_effect.modes) and idx not in seen:
+                clean.append(idx)
+                seen.add(idx)
+        if not clean:
+            clean = [0]
+        return tuple(clean)
+    idx = p.agent.choose_mode(
+        state, player_id,
+        [m.describe() for m in spell_effect.modes],
+    )
+    idx = max(0, min(idx, len(spell_effect.modes) - 1))
+    return (idx,)
+
+
+def _effective_spell_effect_for_targets(
+    spell_effect, mode_indices: tuple[int, ...],
+):
+    """Given a spell's printed effect and the cast-time mode picks,
+    return the effect that drives target selection.
+
+    For non-modal spells, passes through. For ``ModalChooseOne`` with
+    one mode picked, returns that mode's effect. For ``or_both`` with
+    multiple picks where at most one mode targets, returns a
+    ``Sequence`` of the chosen modes (target selection on the single
+    targeted sub-effect). When more than one chosen mode targets we
+    fall back to the printed ``ModalChooseOne`` (its union-of-modes
+    legal_targets / target_count_range), since ``Sequence`` doesn't
+    support multi-targeted sub-effects today.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne, Sequence
+    if not isinstance(spell_effect, ModalChooseOne):
+        return spell_effect
+    if not mode_indices:
+        return spell_effect
+    if len(mode_indices) == 1:
+        return spell_effect.modes[mode_indices[0]]
+    chosen = tuple(spell_effect.modes[i] for i in mode_indices)
+    targeted_count = sum(1 for m in chosen if m.requires_target())
+    if targeted_count <= 1:
+        return Sequence(effects=chosen)
+    return spell_effect
+
+
 def _select_spell_targets(
     state: GameState, player_id: int, card: GameObject,
+    mode_indices: tuple[int, ...] = (),
 ) -> tuple[tuple[str, int], ...]:
     """Pick target(s) for a spell about to be cast. Mirrors CR
     601.2c-d (mode/target choices happen BEFORE total cost is
@@ -1142,13 +1213,18 @@ def _select_spell_targets(
 
     Handles both regular ``spell_effect`` targets (single- and
     multi-target via ``Effect.target_count_range``) and aura
-    enchant-target picks. Returns an empty tuple for non-targeting
-    spells.
+    enchant-target picks. ``mode_indices`` carries the cast-time
+    modal pick so target selection runs against the chosen mode's
+    targets, not the union over all modes. Returns an empty tuple
+    for non-targeting spells.
     """
     p = state.player_by_id(player_id)
     targets: tuple[tuple[str, int], ...] = ()
     spell_effect = card.printing.spell_effect
     if spell_effect is not None:
+        spell_effect = _effective_spell_effect_for_targets(
+            spell_effect, mode_indices,
+        )
         _min_t, max_t = spell_effect.target_count_range()
         if max_t > 0:
             legal = spell_effect.legal_targets(state, player_id)
@@ -1312,6 +1388,15 @@ def _cast_spell(
                     f"card {card_id} not castable by P{player_id}"
                 )
 
+    # CR 601.2e: pick modes BEFORE 601.2f cost determination so a
+    # mode-dependent cost rider (or a target picked in the chosen
+    # mode) can feed into the discount layer. Returns () for non-modal
+    # spells. Stored on the StackItem and replayed via
+    # state.resolving_modes during resolution so the modal effect
+    # doesn't re-prompt.
+    chosen_modes: tuple[int, ...] = _choose_modes_at_cast(
+        state, player_id, card,
+    )
     # Select target(s) BEFORE applying cost reductions. CR 601.2c-f
     # orders modes/targets BEFORE total-cost determination, so any
     # "costs {N} less if it targets <X>" rider (Dark Endurance) needs
@@ -1319,7 +1404,7 @@ def _cast_spell(
     # ``targets`` tuple flows into ``apply_cost_reductions`` below and
     # later onto the StackItem unchanged.
     targets: tuple[tuple[str, int], ...] = _select_spell_targets(
-        state, player_id, card,
+        state, player_id, card, mode_indices=chosen_modes,
     )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
@@ -1476,6 +1561,7 @@ def _cast_spell(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
             additional_cost_choice_id=additional_cost_choice_id,
+            chosen_modes=chosen_modes,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -2129,6 +2215,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         )
         state.resolving_combat_damage_amount = item.combat_damage_amount
         state.resolving_counter_amount = item.counter_amount
+        state.resolving_modes = item.chosen_modes
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
@@ -2138,6 +2225,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             state.resolving_additional_cost_choice_id = None
             state.resolving_combat_damage_amount = 0
             state.resolving_counter_amount = 0
+            state.resolving_modes = ()
         return
 
     # Spell resolution
@@ -2145,6 +2233,7 @@ def resolve_top_of_stack(state: GameState) -> None:
     state.resolving_x_value = item.x_value
     state.resolving_kicked = item.kicked
     state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
+    state.resolving_modes = item.chosen_modes
     try:
         if card.printing.is_permanent and not (
             card.printing.is_instant or card.printing.is_sorcery
@@ -2217,6 +2306,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.resolving_x_value = 0
         state.resolving_kicked = False
         state.resolving_additional_cost_choice_id = None
+        state.resolving_modes = ()
 
 
 def apply_aura_static_grants_on_attach(

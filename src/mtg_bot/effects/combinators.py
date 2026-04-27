@@ -869,10 +869,22 @@ class ModalChooseOne(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         p = state.player_by_id(controller_id)
+        # CR 601.2e: modes are picked at cast time, replayed via
+        # state.resolving_modes during resolution. Fallback to a
+        # resolve-time agent prompt only when this effect is being
+        # used as a sub-effect outside the spell-cast pipeline (e.g.
+        # nested inside a triggered-ability effect that didn't carry
+        # cast-time mode picks).
+        cast_modes = state.resolving_modes
         if self.or_both:
-            self._resolve_or_both(state, controller_id, targets, p)
+            self._resolve_or_both(
+                state, controller_id, targets, p, cast_modes,
+            )
             return
-        if p.agent is None:
+        if cast_modes:
+            idx = cast_modes[0]
+            idx = max(0, min(idx, len(self.modes) - 1))
+        elif p.agent is None:
             idx = 0
         else:
             idx = p.agent.choose_mode(
@@ -905,10 +917,14 @@ class ModalChooseOne(Effect):
         controller_id: int,
         targets: tuple[Target, ...],
         p,
+        cast_modes: tuple[int, ...] = (),
     ) -> None:
         """Resolve a "Choose one or both" modal effect. Asks the agent
         for an ordered list of mode indices via ``choose_modes`` (plural)
         and resolves each in turn, dispatching legal targets per mode.
+
+        ``cast_modes`` is the cast-time pick (CR 601.2e); when present
+        we replay it instead of prompting again at resolve time.
 
         Target dispatch: for each chosen mode that requires a target,
         we consume the first remaining target whose value appears in
@@ -916,7 +932,9 @@ class ModalChooseOne(Effect):
         has no legal target available silently fizzles (logged), matching
         the single-mode fizzle path.
         """
-        if p.agent is None:
+        if cast_modes:
+            order = list(cast_modes)
+        elif p.agent is None:
             order = [0]
         else:
             order = p.agent.choose_modes(
