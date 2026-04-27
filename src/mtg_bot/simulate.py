@@ -16,7 +16,7 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import all_printings, build_mono_color_deck
+from mtg_bot.cards.source import get_active_source
 from mtg_bot.combat import (
     clear_combat_state,
     eligible_attackers,
@@ -58,7 +58,7 @@ def _build_player_from_names(
     names. Caller is responsible for shuffling — this just instantiates
     one GameObject per name in the order given."""
     p = Player(id=player_id, agent=agent)
-    printings = all_printings()
+    printings = get_active_source().get_printings()
     unknown = [name for name in deck_names if name not in printings]
     if unknown:
         raise ValueError(
@@ -79,7 +79,7 @@ def _build_player(
     """Mono-color path: build a deck via ``build_mono_color_deck`` and
     materialize. Kept around because existing tests + the default
     ``setup_game`` color path still use it."""
-    deck_names = build_mono_color_deck(color, seed=seed)
+    deck_names = get_active_source().build_mono_color_deck(color, seed=seed)
     return _build_player_from_names(state, player_id, deck_names, agent)
 
 
