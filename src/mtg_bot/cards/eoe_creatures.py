@@ -282,6 +282,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Illvoi Galeblade", "{U}", 1, 1,
             keywords={"flash", "flying"},
+            subtypes=("Jellyfish", "Warrior"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=cost(mana="{2}", sacrifice_self=True),
