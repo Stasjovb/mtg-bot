@@ -2287,6 +2287,50 @@ def push_triggered_ability(
     return True
 
 
+def dispatch_event(
+    state: GameState,
+    event,
+    *,
+    label: str | None = None,
+    **subjects,
+) -> None:
+    """Centralized predicate-trigger dispatcher.
+
+    Walks every battlefield permanent and fires any predicate-style
+    triggered ability whose ``event`` matches ``event`` and whose
+    ``predicate`` evaluates true against ``subjects`` and the source.
+    String-key (legacy) abilities are NOT fired here — they continue
+    flowing through the per-event ``_fire_*`` paths until migration
+    is complete. Both styles coexist; ``__post_init__`` on
+    ``TriggeredAbility`` enforces that no single ability sets both.
+
+    ``label`` is the human-readable string attached to the resulting
+    stack item (defaults to the event's value, e.g. ``"enters"``).
+    ``subjects`` is the named subject mapping for the event — see
+    ``EVENT_SUBJECTS`` in ``effects/predicates.py``.
+    """
+    if label is None:
+        label = event.value
+    # Snapshot the battlefield: triggers that ETB new permanents during
+    # dispatch must not themselves see those new permanents on the
+    # original event's pass.
+    permanents = list(state.battlefield)
+    for source in permanents:
+        for ability_index, ability in enumerate(
+            source.printing.triggered_abilities
+        ):
+            if not ability.matches_event(event, subjects, source, state):
+                continue
+            push_triggered_ability(
+                state,
+                source=source,
+                ability=ability,
+                ability_index=ability_index,
+                controller_id=source.controller_id,
+                label=label,
+            )
+
+
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     """Push any ETB triggers from ``creature`` onto the stack, in printing order.
 
@@ -2294,7 +2338,14 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     controller's agent picks one as the ability goes on the stack. If there
     are no legal targets, the ability fizzles (doesn't go on the stack at
     all), per the simplified Stage-3 targeting model.
+
+    After firing the legacy string-key ``"etb"`` triggers from the
+    entering permanent itself, calls ``dispatch_event(state,
+    Event.ENTERS, obj=creature)`` so any predicate-style ENTERS
+    abilities anywhere on the battlefield can also fire. Both
+    paths coexist while migration is in progress.
     """
+    from mtg_bot.effects.predicates import Event
     from mtg_bot.game import etb_trigger_multiplier
 
     for ability_index, ability in enumerate(creature.printing.triggered_abilities):
@@ -2314,3 +2365,4 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
                 controller_id=controller_id,
                 label="ETB",
             )
+    dispatch_event(state, Event.ENTERS, label="enters", obj=creature)
