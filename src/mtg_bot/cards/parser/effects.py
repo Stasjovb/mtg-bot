@@ -19,9 +19,11 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
+    DestroyTargetCreature,
     DrawCards,
     Effect,
     GainLife,
+    PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -39,6 +41,10 @@ _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on target creature$"
 )
+_PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
+    r"^put a \+1/\+1 counter on this creature$"
+)
+_DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
 # Narrow handler for Gravpack Monoist's exact token-creation payload.
 # Generalizes once another card needs a similar slice with different
 # color/power/toughness/subtype.
@@ -70,6 +76,10 @@ def _parse_effect(phrase: str) -> Effect | None:
         return GainLife(amount=int(m.group(1)))
     if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
+    if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
+        return PutPlusOneCounterOnSelf(amount=1)
+    if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
+        return DestroyTargetCreature()
     if _CREATE_TAPPED_2_2_ROBOT.match(phrase) is not None:
         return CreateToken(
             token_printing=TOKEN_PRINTINGS["Robot"],
