@@ -18,6 +18,7 @@ from mtg_bot.cards.base import CardPrinting
 from mtg_bot.cards.parser.creature_builder import _build_creature_printing
 from mtg_bot.cards.parser.equipment_builder import _build_equipment_printing
 from mtg_bot.cards.parser.land_builder import _build_land_printing
+from mtg_bot.cards.parser.spacecraft_builder import _build_spacecraft_printing
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
 
 
@@ -42,6 +43,8 @@ class OracleParserCardSource:
                 built = _build_land_printing(card)
             if built is None:
                 built = _build_equipment_printing(card)
+            if built is None:
+                built = _build_spacecraft_printing(card)
             if built is not None:
                 printings[card["name"]] = built
         self._printings = printings

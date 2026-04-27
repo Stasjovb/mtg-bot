@@ -49,6 +49,9 @@ from mtg_bot.cards.parser.printing_keywords import (  # noqa: F401
 from mtg_bot.cards.parser.source import (  # noqa: F401
     OracleParserCardSource,
 )
+from mtg_bot.cards.parser.spacecraft_builder import (  # noqa: F401
+    _build_spacecraft_printing,
+)
 from mtg_bot.cards.parser.spell_builder import (  # noqa: F401
     _build_spell_printing,
     _parse_spell_oracle_text,

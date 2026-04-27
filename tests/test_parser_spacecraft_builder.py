@@ -1,0 +1,343 @@
+"""Parser support for Artifact - Spacecraft cards.
+
+Spacecraft are Edge of Eternities-only artifact-type cards that gain
+charge counters via the printed ``Station`` ability and animate into
+artifact creatures with a printed ``power``/``toughness`` and a set
+of stationed keywords once they pass the ``station_threshold``.
+
+The first slice claimed here is the smallest end-to-end shape: a
+single Station reminder line plus a single ``"<N>+ | <evergreen-
+keyword-list>"`` tier line. Galvanizing Sawship is the only EoE
+Spacecraft that fits this shape today; every other printing carries
+either an ETB trigger, an attack trigger, a lower tier ability, or a
+printed activated ability that lives outside this builder's grammar.
+"""
+
+from __future__ import annotations
+
+from mtg_bot.cards.base import make_spacecraft
+from mtg_bot.cards.parser.spacecraft_builder import (
+    _build_spacecraft_printing,
+)
+from mtg_bot.cards.parser_source import OracleParserCardSource
+
+
+_GALVANIZING_SAWSHIP_CARD = {
+    "name": "Galvanizing Sawship",
+    "mana_cost": "{5}{R}",
+    "type_line": "Artifact — Spacecraft",
+    "power": "6",
+    "toughness": "5",
+    "oracle_text": (
+        "Station (Tap another creature you control: Put charge counters "
+        "equal to its power on this Spacecraft. Station only as a "
+        "sorcery. It's an artifact creature at 3+.)\n"
+        "3+ | Flying, haste"
+    ),
+}
+
+
+def test_build_spacecraft_printing_claims_galvanizing_sawship():
+    """The Scryfall-shaped Galvanizing Sawship record builds a red
+    Spacecraft with station_threshold=3 and stationed_keywords=
+    {flying, haste} - the same arguments the static registry passes
+    to ``make_spacecraft`` for this card."""
+    printing = _build_spacecraft_printing(_GALVANIZING_SAWSHIP_CARD)
+    assert printing is not None
+    assert printing.name == "Galvanizing Sawship"
+    assert "Spacecraft" in printing.subtypes
+    assert "Artifact" in printing.card_types
+    assert "Legendary" not in printing.supertypes
+    assert printing.power == 6
+    assert printing.toughness == 5
+    assert printing.station_threshold == 3
+    assert printing.stationed_keywords == frozenset({"flying", "haste"})
+    # No ETB trigger, no static ability, no activated ability on this
+    # printing - the only printed text past Station is the keyword
+    # tier line.
+    assert printing.triggered_abilities == ()
+    assert printing.static_abilities == ()
+    assert printing.activated_abilities == ()
+
+
+def test_build_spacecraft_printing_matches_static_make_spacecraft():
+    """The parser-built printing must equal what the static registry
+    produces via ``make_spacecraft(...)`` - required by the parity
+    gate, asserted directly here for fast feedback."""
+    parsed = _build_spacecraft_printing(_GALVANIZING_SAWSHIP_CARD)
+    expected = make_spacecraft(
+        "Galvanizing Sawship", "{5}{R}", 6, 5,
+        station_threshold=3,
+        stationed_keywords={"flying", "haste"},
+    )
+    assert parsed == expected
+
+
+def test_build_spacecraft_printing_supports_single_keyword_tier():
+    """A tier line with a single evergreen keyword (no comma) is
+    still claimed - the keyword body parser handles a one-element
+    list cleanly."""
+    card = {
+        "name": "Hand-Crafted Lone-Keyword Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 4
+    assert printing.stationed_keywords == frozenset({"flying"})
+
+
+def test_build_spacecraft_printing_skips_non_artifact():
+    """A non-artifact card (e.g. a creature whose subtype list happens
+    to include ``Spacecraft``) must not match - the type-line check
+    requires ``Artifact`` in card_types."""
+    card = {
+        "name": "Hand-Crafted Creature Sub-Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Creature — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": "3+ | Flying",
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_non_spacecraft_artifact():
+    """A plain ``Artifact`` (no ``Spacecraft`` subtype) must not match
+    even if it happens to have a Station-shaped line in its oracle
+    text. The subtype check guards Equipment / Vehicles / plain
+    artifacts from this builder's grammar."""
+    card = {
+        "name": "Hand-Crafted Artifact-Not-Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_legendary_spacecraft():
+    """Legendary Spacecraft (The Seriema, Dawnsire, Infinite Guideline
+    Station, The Eternity Elevator) all carry abilities outside this
+    slice's grammar. Skip defensively rather than risk building a
+    printing that silently drops the ``Legendary`` supertype."""
+    card = {
+        "name": "Hand-Crafted Legendary Spacecraft",
+        "mana_cost": "{1}{W}{W}",
+        "type_line": "Legendary Artifact — Spacecraft",
+        "power": "5",
+        "toughness": "5",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 7+.)\n"
+            "7+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_missing_power_toughness():
+    """A Spacecraft with no printed P/T (like The Eternity Elevator,
+    which doesn't animate) is outside this slice - the engine still
+    needs ``power``/``toughness`` for ``make_spacecraft`` to populate
+    the stationed-creature P/T."""
+    card = {
+        "name": "Hand-Crafted PT-less Spacecraft",
+        "mana_cost": "{5}",
+        "type_line": "Artifact — Spacecraft",
+        # power/toughness intentionally omitted
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_etb_trigger():
+    """A Spacecraft with an ETB trigger (like Wurmwall Sweeper's
+    ``"When this Spacecraft enters, surveil 2."``) carries ability
+    text outside this builder's grammar - skip the whole card."""
+    card = {
+        "name": "Hand-Crafted Spacecraft With ETB",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "When this Spacecraft enters, surveil 2.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_multi_tier_card():
+    """A Spacecraft with more than one tier line (like Lumen-Class
+    Frigate, with both ``2+ | <anthem>`` and ``12+ | Flying, lifelink``)
+    is out of scope - claiming only the highest tier would silently
+    drop the lower-tier ability from the printing."""
+    card = {
+        "name": "Hand-Crafted Multi-Tier Spacecraft",
+        "mana_cost": "{1}{W}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "3",
+        "toughness": "5",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 12+.)\n"
+            "2+ | Flying\n"
+            "12+ | Flying, lifelink"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_unknown_keyword_in_tier():
+    """A tier-line keyword that isn't in the evergreen whitelist
+    (``_KEYWORD_LINES``) skips the whole card - we must never grant
+    a stationed keyword the engine doesn't model."""
+    card = {
+        "name": "Hand-Crafted Unknown-Keyword Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | fakeword"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_tier_with_ability_body():
+    """A tier line whose body isn't a pure evergreen keyword list
+    (e.g. ``"2+ | Other creatures you control get +1/+1."``) is a
+    static/trigger/activated ability that this slice doesn't claim -
+    skip the whole card."""
+    card = {
+        "name": "Hand-Crafted Anthem-Tier Spacecraft",
+        "mana_cost": "{1}{W}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "3",
+        "toughness": "5",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Other creatures you control get +1/+1."
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_missing_station_line():
+    """A Spacecraft with a tier-keyword line but no Station reminder
+    line is malformed for this grammar - bail rather than synthesize
+    a station_threshold from the tier line alone."""
+    card = {
+        "name": "Hand-Crafted Stationless Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": "4+ | Flying",
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_missing_tier_line():
+    """A Spacecraft with a Station line but no tier-keyword line
+    never animates via ``stationed_keywords``. Skip it - the engine
+    requires both to model a Spacecraft that becomes a creature."""
+    card = {
+        "name": "Hand-Crafted Tierless Spacecraft",
+        "mana_cost": "{5}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "0",
+        "toughness": "0",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_double_station_line():
+    """Defensive: a card with two Station lines is malformed oracle
+    text - bail rather than silently overwrite the threshold."""
+    card = {
+        "name": "Hand-Crafted Double-Station Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "4+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_skips_threshold_drift():
+    """Defensive: if the Station reminder threshold disagrees with
+    the tier-line threshold, treat the printing as a shape outside
+    this grammar and bail. No real EoE printing has this drift, so
+    the parser shouldn't silently pick one number over the other."""
+    card = {
+        "name": "Hand-Crafted Drifted-Threshold Spacecraft",
+        "mana_cost": "{2}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "2",
+        "toughness": "2",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 4+.)\n"
+            "5+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_source_claims_galvanizing_sawship():
+    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
+    Scryfall data and ends up claiming Galvanizing Sawship via the
+    new spacecraft-builder dispatch arm."""
+    source = OracleParserCardSource()
+    assert "Galvanizing Sawship" in source.claimed_names
+    assert "Galvanizing Sawship" in source.get_printings()
