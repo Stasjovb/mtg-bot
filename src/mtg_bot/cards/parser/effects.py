@@ -20,7 +20,10 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
+    DestroyTargetArtifact,
     DestroyTargetCreature,
+    DestroyTargetLand,
+    DestroyTargetNoncreaturePermanent,
     DrawCards,
     EachOpponentLosesLife,
     Effect,
@@ -28,8 +31,30 @@ from mtg_bot.cards.base import (
     GainLife,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    SelfMill,
+    Surveil,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+
+
+# Spelled-out small-cardinal lookup for oracle phrasings like
+# ``mill three cards``. Scryfall consistently spells out 1–10 as words
+# in mill-style effects (e.g. "mill three cards" on Lithic Hierograph).
+# Larger amounts use digits, so the table tops out at ten — extend if a
+# future card ships an oracle line with "mill twelve cards".
+_SMALL_CARDINAL_WORDS: dict[str, int] = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+_SMALL_CARDINAL_PATTERN = "|".join(_SMALL_CARDINAL_WORDS)
 
 
 _DEAL_DAMAGE_ANY_TARGET = re.compile(
@@ -59,6 +84,29 @@ _EACH_OPPONENT_LOSES_N_LIFE = re.compile(
 _CREATE_TAPPED_2_2_ROBOT = re.compile(
     r"^create a tapped 2/2 colorless Robot artifact creature token$"
 )
+_SURVEIL_N = re.compile(r"^surveil (\d+)$")
+# Mill is "mill <amount> cards" where the amount is either a digit or
+# one of the spelled-out small cardinals (Scryfall printing convention).
+# Singular "mill 1 card" / "mill one card" is intentionally unsupported
+# — no EoE card prints that surface form. Add it the day one ships.
+_MILL_N_CARDS = re.compile(
+    rf"^mill (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
+)
+_DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
+_DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
+_DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
+    r"^destroy target noncreature permanent$"
+)
+
+
+def _parse_amount(token: str) -> int:
+    """Convert a Scryfall amount token (digit or spelled-out small
+    cardinal) into the integer N. Assumes the token already passed a
+    regex that matched either ``\\d+`` or one of
+    ``_SMALL_CARDINAL_WORDS``."""
+    if token.isdigit():
+        return int(token)
+    return _SMALL_CARDINAL_WORDS[token]
 
 
 def _parse_effect(phrase: str) -> Effect | None:
@@ -101,6 +149,18 @@ def _parse_effect(phrase: str) -> Effect | None:
             count=1,
             tapped=True,
         )
+    m = _SURVEIL_N.match(phrase)
+    if m is not None:
+        return Surveil(amount=int(m.group(1)))
+    m = _MILL_N_CARDS.match(phrase)
+    if m is not None:
+        return SelfMill(amount=_parse_amount(m.group(1)))
+    if _DESTROY_TARGET_ARTIFACT.match(phrase) is not None:
+        return DestroyTargetArtifact()
+    if _DESTROY_TARGET_LAND.match(phrase) is not None:
+        return DestroyTargetLand()
+    if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
+        return DestroyTargetNoncreaturePermanent()
     return None
 
 

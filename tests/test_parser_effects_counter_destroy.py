@@ -82,9 +82,14 @@ def test_parse_effect_returns_none_for_malformed_counter_phrase():
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_phrase():
+    # ``destroy target artifact`` was unsupported when this batch landed
+    # but is recognized as of parser-effects-batch8 (extends ``destroy
+    # target <type>`` to artifacts/lands/noncreature permanents). The
+    # malformed-phrase shapes here keep the negative-case coverage
+    # without overlapping the new grammar.
     assert _parse_effect("destroy target") is None
-    assert _parse_effect("destroy target artifact") is None
     assert _parse_effect("destroy target creature you control") is None
+    assert _parse_effect("destroy target artifact creature") is None
 
 
 def test_parse_effect_phrase_returns_none_for_malformed_phrase():
