@@ -1,6 +1,6 @@
 """Land ``CardPrinting`` builder.
 
-Currently supports two land kinds:
+Currently supports three land kinds:
 
 - **Basic lands** (``Basic`` supertype + ``Land`` card type), whose
   oracle text is the single reminder line ``"({T}: Add {<color>}.)"``.
@@ -10,10 +10,19 @@ Currently supports two land kinds:
   ``"As this land enters, you may pay 2 life. If you don't, it
   enters tapped."`` rider. Both colors come from the reminder line and
   the subtype string off the type line; both feed ``make_shock_land``.
+- **Colorless utility lands** (plain ``Land`` type line, no subtypes,
+  no supertypes) whose first oracle line is exactly
+  ``"{T}: Add {C}."``. The remaining lines (typically tier-gated
+  activated abilities like Secluded Starforge's tap-X-artifacts and
+  Robot-token activations) are intentionally dropped — they mirror
+  the static-side ``make_colorless_land`` simplification, which also
+  ignores those abilities. The land taps for generic via the
+  auto-tap-for-cost generic-mana fallback.
 
-Other non-basic shapes (Planet lands, utility lands) require Station,
-sac-self triggers, or tier-gated activated abilities that the parser
-doesn't yet model — silent skip, same pattern as creature/spell.
+Other non-basic shapes (Planet lands, Command Bridge-style sac-self
+utility lands) require Station, sac-self triggers, or any-color mana
+abilities that the parser doesn't yet wire end-to-end — silent skip,
+same pattern as creature/spell.
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ import re
 from mtg_bot.cards.base import (
     CardPrinting,
     make_basic_land,
+    make_colorless_land,
     make_shock_land,
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
@@ -56,6 +66,14 @@ _SHOCK_LAND_LIFE_RIDER = (
 )
 
 
+# Colorless utility-land "base" line: ``"{T}: Add {C}."``. When this is
+# the first line of a plain ``Land`` (no subtypes, no supertypes) we
+# build a colorless utility land, dropping any further activated-ability
+# lines. Mirrors the static-side ``make_colorless_land`` simplification
+# used for Secluded Starforge.
+_COLORLESS_TAP_LINE = "{T}: Add {C}."
+
+
 def _build_land_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a land ``card`` (a Scryfall
     record). Returns ``None`` if the card is not a land or if its shape
@@ -76,6 +94,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:
         return shock
+    colorless = _try_build_colorless_utility_land(
+        card, text, supertypes, subtypes,
+    )
+    if colorless is not None:
+        return colorless
     return None
 
 
@@ -105,3 +128,39 @@ def _try_build_shock_land(
         colors=colors,
         subtypes_str=" ".join(subtypes),
     )
+
+
+def _try_build_colorless_utility_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a colorless-utility-land ``CardPrinting`` if ``card`` has
+    a plain ``Land`` type line (no supertypes, no subtypes) and its
+    oracle text starts with ``"{T}: Add {C}."``, else ``None``.
+
+    Matches the simplified Secluded Starforge shape: tap-for-{C} plus
+    additional activated abilities the parser doesn't model. The extra
+    abilities are intentionally dropped, mirroring the static-side
+    ``make_colorless_land`` simplification — the land still works as a
+    generic-mana source via the engine's auto-tap-for-cost fallback.
+
+    Defensive: requires ``produced_mana`` (when present on the Scryfall
+    record) to contain only colorless. This blocks accidentally
+    matching a hypothetical colored-utility land whose first line
+    happens to be ``{T}: Add {C}.``.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return None
+    if lines[0] != _COLORLESS_TAP_LINE:
+        return None
+    produced = card.get("produced_mana")
+    if produced is not None and set(produced) - {"C"}:
+        return None
+    return make_colorless_land(name=card["name"])

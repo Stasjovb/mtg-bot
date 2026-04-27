@@ -940,12 +940,11 @@ def test_source_claims_each_shock_land(name):
     assert name in source.get_printings()
 
 
-def test_source_does_not_claim_utility_land():
-    """Utility lands (Command Bridge, Secluded Starforge) need ETB
-    sac-self triggers / activated abilities the parser doesn't model."""
+def test_source_does_not_claim_command_bridge():
+    """Command Bridge needs an ETB sac-self trigger and an any-color
+    mana ability that the parser doesn't yet wire end-to-end."""
     source = OracleParserCardSource()
     assert "Command Bridge" not in source.claimed_names
-    assert "Secluded Starforge" not in source.claimed_names
 
 
 # ---------- Warp ----------
