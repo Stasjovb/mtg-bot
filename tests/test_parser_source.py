@@ -1871,19 +1871,30 @@ def test_parse_activated_ability_line_accepts_tap_plus_sacrifice():
     assert ab.effect == DrawCards(amount=1)
 
 
-def test_parse_activated_ability_line_rejects_pay_life_cost():
-    """``Pay 2 life: ...`` — non-mana, non-tap cost. Must not match."""
-    assert _parse_activated_ability_line(
-        "Pay 2 life: Draw a card."
-    ) is None
+def test_parse_activated_ability_line_accepts_pay_life_cost():
+    """``Pay N life: ...`` — pure pay-life is now a supported cost
+    shape. Detailed coverage lives in ``test_parser_pay_life.py``;
+    keep a smoke check here so the dispatcher branch is exercised
+    from the public entry point too."""
+    ab = _parse_activated_ability_line("Pay 2 life: Draw a card.")
+    assert ab is not None
+    assert ab.cost.pay_life == 2
+    assert ab.cost.tap_self is False
+    assert ab.cost.mana is None
 
 
-def test_parse_activated_ability_line_rejects_tap_plus_pay_life():
-    """``{T}, Pay 2 life: ...`` — tap plus a non-mana additional cost
-    that's not in our supported tap+mana shape. Must not match."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_accepts_tap_plus_pay_life():
+    """``{T}, Pay N life: ...`` — tap plus pay-life is now a
+    supported cost shape. Detailed coverage lives in
+    ``test_parser_pay_life.py``; keep a smoke check here so the
+    dispatcher branch is exercised from the public entry point too."""
+    ab = _parse_activated_ability_line(
         "{T}, Pay 2 life: Draw a card."
-    ) is None
+    )
+    assert ab is not None
+    assert ab.cost.pay_life == 2
+    assert ab.cost.tap_self is True
+    assert ab.cost.mana is None
 
 
 def test_parse_activated_ability_line_rejects_tap_plus_remove_counter():
