@@ -362,43 +362,49 @@ def effective_controller(state: GameState, obj: GameObject) -> int:
 
 
 def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
-    """Keywords in effect right now — printing + stationed_keywords +
-    keywords granted by static abilities on other permanents + UEOT
-    keyword grants from pump effects + layer-6 ``"grant_keyword"``
-    registry entries.
+    """Keywords in effect right now, computed in CR-613 layer-6 order.
 
-    Phase 2 of the layered-effects refactor migrates per-effect UEOT
-    keyword grants into ``state.continuous_effects`` (layer 6,
-    ``kind == "grant_keyword"``, ``params == (keyword,)``,
-    ``expires_at == "cleanup"``). Effects that haven't been migrated
-    yet still write to ``obj.temp_keywords`` directly; the union
-    ensures both code paths combine correctly so the migration can
-    proceed effect-by-effect without breaking existing behavior.
+    Base set: printing.keywords + stationed_keywords (when stationed)
+    + static-anthem grants + legacy ``temp_keywords`` /
+    ``extended_temp_keywords`` (effects that haven't been migrated
+    to the registry yet). The base set is treated as if it applies
+    BEFORE any layer-6 registry entries — pragmatic since legacy
+    fields don't carry timestamps.
 
-    Lignify-style "lose all abilities" (layer 6) wipes printed AND
-    granted keywords — returns the empty frozenset in that case.
-    Granted keywords from REGISTRY entries are also suppressed
-    because Lignify's effect lives at the same layer as the grants."""
-    if _has_lose_all_abilities(state, obj):
-        return frozenset()
-    kws = obj.printing.keywords
+    Then layer-6 registry entries on this target are walked in
+    timestamp order:
+
+    - ``kind == "lose_all_abilities"`` clears the keyword set
+      entirely (Humility, Lignify).
+    - ``kind == "grant_keyword"`` adds ``params[0]`` (a single
+      keyword string).
+
+    The timestamp walk gets Humility-vs-newer-anthem right: an
+    older lose_all_abilities clears the printed/legacy base, then
+    a NEWER grant_keyword re-adds the granted keyword. A newer
+    lose_all_abilities wipes everything that came before within
+    layer 6.
+    """
+    kws: set[str] = set(obj.printing.keywords)
     if is_stationed(obj):
-        kws = kws | obj.printing.stationed_keywords
+        kws |= set(obj.printing.stationed_keywords)
     _, _, granted = _static_bonuses(state, obj)
-    # Layer-6 grant_keyword registry entries targeting this object.
-    registry_kws: set[str] = set()
-    for ce in state.continuous_effects:
-        if (
-            ce.layer == 6
-            and ce.kind == "grant_keyword"
-            and ce.target_id == obj.id
-            and ce.params
-        ):
-            registry_kws.add(ce.params[0])
-    return (
-        kws | granted | obj.temp_keywords | obj.extended_temp_keywords
-        | frozenset(registry_kws)
+    kws |= set(granted)
+    kws |= set(obj.temp_keywords)
+    kws |= set(obj.extended_temp_keywords)
+    layer6 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 6 and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
     )
+    for ce in layer6:
+        if ce.kind == "lose_all_abilities":
+            kws.clear()
+        elif ce.kind == "grant_keyword" and ce.params:
+            kws.add(ce.params[0])
+    return frozenset(kws)
 
 
 def effective_ward_cost(
@@ -665,21 +671,6 @@ def effective_land_produces(
     return land_obj.printing.produces
 
 
-def _has_lose_all_abilities(state: "GameState", obj: "GameObject") -> bool:
-    """True if a layer-6 ``"lose_all_abilities"`` registry entry
-    targets ``obj`` (Lignify, Humility, Turn to Frog). Suppresses
-    every printed and granted ability the object would otherwise
-    have."""
-    for ce in state.continuous_effects:
-        if (
-            ce.layer == 6
-            and ce.kind == "lose_all_abilities"
-            and ce.target_id == obj.id
-        ):
-            return True
-    return False
-
-
 def effective_activated_abilities(
     state: "GameState", obj: "GameObject"
 ) -> tuple:
@@ -696,19 +687,17 @@ def effective_activated_abilities(
     entirely (their {T}: Add {R} tap is handled via
     ``effective_land_produces``, not as an activated ability).
 
-    Lignify-style "lose all abilities" (layer 6) takes precedence
-    over both printed AND granted abilities — returns the empty
-    tuple if any ``"lose_all_abilities"`` registry entry targets
-    this object.
+    Lignify-style "lose all abilities" (layer 6) is processed in
+    CR-613 timestamp order alongside ``grant_activated_ability``
+    entries: an older lose-all-abilities followed by a newer grant
+    re-adds the granted ability; a newer lose-all-abilities wipes
+    everything that came before within layer 6.
     """
     from mtg_bot.cards import (
         DOMINION_BRACELET_GRANTED_ABILITY,
         MMNEMON_BLUE_MANA_GRANTED_ABILITY,
         RAGOST_FOOD_GRANTED_ABILITY,
     )
-
-    if _has_lose_all_abilities(state, obj):
-        return ()
 
     # Magus: nonbasic land abilities suppressed while in play.
     if (
@@ -746,21 +735,22 @@ def effective_activated_abilities(
             continue
         if o.printing.grants_control_opponent_ability_when_equipped:
             base.append(DOMINION_BRACELET_GRANTED_ABILITY)
-    # UEOT-granted activated abilities (manland animations: Lavaclaw
-    # Reaches' X-pump, Wandering Fumarole's P/T swap). Appended at the
-    # end so printed-ability indices stay stable.
+    # UEOT-granted activated abilities (manland animations).
     if obj.temp_activated_abilities:
         base.extend(obj.temp_activated_abilities)
-    # Layer-6 ``"grant_activated_ability"`` registry entries targeting
-    # this object (Phase 2 migration of UEOT activated-ability
-    # grants — currently empty for unmigrated callers).
-    for ce in state.continuous_effects:
-        if (
-            ce.layer == 6
-            and ce.kind == "grant_activated_ability"
-            and ce.target_id == obj.id
-            and ce.params
-        ):
+    # Walk layer-6 entries in timestamp order, applying
+    # lose_all_abilities (clears) and grant_activated_ability (adds).
+    layer6 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 6 and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for ce in layer6:
+        if ce.kind == "lose_all_abilities":
+            base.clear()
+        elif ce.kind == "grant_activated_ability" and ce.params:
             base.append(ce.params[0])
     return tuple(base)
 
@@ -780,21 +770,26 @@ def effective_triggered_abilities(
     then ``temp_*`` field grants (legacy path), then registry
     grants.
 
-    Lignify-style "lose all abilities" suppresses every trigger
-    (printed and granted) — returns the empty tuple in that case.
+    Lignify-style "lose all abilities" (layer 6) is processed in
+    CR-613 timestamp order alongside grant_triggered_ability
+    entries: an older lose-all-abilities followed by a newer grant
+    re-adds the granted trigger; a newer lose-all-abilities wipes
+    everything that came before within layer 6.
     """
-    if _has_lose_all_abilities(state, obj):
-        return ()
     base = list(obj.printing.triggered_abilities)
     if obj.temp_triggered_abilities:
         base.extend(obj.temp_triggered_abilities)
-    for ce in state.continuous_effects:
-        if (
-            ce.layer == 6
-            and ce.kind == "grant_triggered_ability"
-            and ce.target_id == obj.id
-            and ce.params
-        ):
+    layer6 = sorted(
+        (
+            ce for ce in state.continuous_effects
+            if ce.layer == 6 and ce.target_id == obj.id
+        ),
+        key=lambda ce: ce.timestamp,
+    )
+    for ce in layer6:
+        if ce.kind == "lose_all_abilities":
+            base.clear()
+        elif ce.kind == "grant_triggered_ability" and ce.params:
             base.append(ce.params[0])
     return tuple(base)
 
