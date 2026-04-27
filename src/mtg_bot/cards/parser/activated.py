@@ -16,6 +16,10 @@ An activated-ability line of the form ``{cost}: <effect>.`` where
   * ``Pay N life`` — pure pay-life cost. Mana Confluence-style.
   * ``{T}, Pay N life`` (or reversed) — tap plus pay-life.
   * ``{mana}, Pay N life`` (or reversed) — mana plus pay-life.
+  * ``Sacrifice another creature or artifact`` — pure
+    sacrifice-another-creature-or-artifact cost. Matches Umbral
+    Collar Zealot's ``Sacrifice another creature or artifact:
+    Surveil 1.`` activated ability.
 
 ``<effect>`` is a single sentence parsed via the unified
 ``_parse_effect`` after lowercase + period stripping. Other cost
@@ -69,6 +73,20 @@ _MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
 # "Sacrifice this creature" for a creature's own activated ability.
 _SACRIFICE_SELF_PIECE = "Sacrifice this creature"
 
+# Pure sacrifice-another-creature-or-artifact cost piece. The exact
+# literal phrase from Umbral Collar Zealot's
+# ``Sacrifice another creature or artifact: Surveil 1.`` Stored as a
+# single literal because (a) Scryfall always prints this exact
+# wording and (b) the engine has a dedicated cost field
+# ``ActivationCost.sacrifice_another_creature_or_artifact`` for it.
+# Other "sacrifice another …" filters (artifact-only,
+# artifact-or-land, land-only, Food, Desert) have their own engine
+# fields too but no EoE card prints them as a single-piece cost
+# today, so only this one phrase is wired here.
+_SACRIFICE_ANOTHER_CREATURE_OR_ARTIFACT_PIECE = (
+    "Sacrifice another creature or artifact"
+)
+
 # Pay-life cost piece. ``Pay 1 life``, ``Pay 2 life``, etc. The
 # integer is captured into the ``pay_life`` field on ActivationCost.
 _PAY_LIFE_PIECE = re.compile(r"^Pay (\d+) life$")
@@ -95,6 +113,9 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
       ``Pay 1 life, {T}`` → ``ActivationCost(tap_self=True, pay_life=1)``.
     * Mana + pay-life (either order): ``{1}, Pay 2 life`` or
       ``Pay 2 life, {1}`` → ``ActivationCost(mana=…, mana_str=…, pay_life=2)``.
+    * Pure sacrifice-another-creature-or-artifact: ``Sacrifice another
+      creature or artifact`` → ``ActivationCost(
+      sacrifice_another_creature_or_artifact=True)``.
 
     Anything else (counter removal, three-piece costs like
     tap + mana + sacrifice or tap + pay-life + sacrifice, etc.)
@@ -107,6 +128,13 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     # Pure sacrifice-self.
     if cost_str == _SACRIFICE_SELF_PIECE:
         return ActivationCost(sacrifice_self=True)
+    # Pure sacrifice-another-creature-or-artifact. Strict literal
+    # match — variant phrasings ("a creature or artifact",
+    # "another nonland permanent", etc.) fall through. The
+    # corresponding ``ActivationCost`` field gates legality on the
+    # controller having at least one OTHER creature/artifact to sac.
+    if cost_str == _SACRIFICE_ANOTHER_CREATURE_OR_ARTIFACT_PIECE:
+        return ActivationCost(sacrifice_another_creature_or_artifact=True)
     # Pure pay-life.
     pay_life_match = _PAY_LIFE_PIECE.match(cost_str)
     if pay_life_match is not None:

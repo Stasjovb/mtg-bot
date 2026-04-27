@@ -2133,10 +2133,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Umbral Collar Zealot: {1}{B} 3/2. Activated ability:
+        # Umbral Collar Zealot: {1}{B} 3/2 Human Cleric. Activated ability:
         # "Sacrifice another creature or artifact: Surveil 1."
         make_creature(
             "Umbral Collar Zealot", "{1}{B}", 3, 2,
+            subtypes=("Human", "Cleric"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
