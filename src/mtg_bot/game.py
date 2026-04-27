@@ -907,6 +907,60 @@ class LogBuffer(list[str]):
         list.append(self, msg)
 
 
+@dataclass(frozen=True)
+class ContinuousEffect:
+    """A continuous effect record in the layered-effects registry.
+
+    Models CR 613's "active continuous effects." Effects are stored
+    as data (not closures) so the registry survives ``GameState.clone``
+    and pickling for MCTS spawn. The layer-walker (Phase 2+)
+    dispatches on ``kind`` to compute characteristics.
+
+    Fields:
+
+    - ``source_id``: the GameObject that produced this effect (the
+      aura, the static-ability source, the spell that resolved it).
+      When the source leaves play (or for one-shots that complete,
+      when explicitly removed), the entry is dropped from the
+      registry.
+    - ``layer``: 1–7 per CR 613.1. 1=copy, 2=control, 3=text,
+      4=type, 5=color, 6=ability, 6.5=ability-modifying-PT (aka
+      part of layer 7 but historically grouped), 7=P/T.
+    - ``sublayer``: 0 by default. For layer 7 the spec defines
+      a–d (we use 0–3): 0 = base P/T set, 1 = base P/T modified
+      by counters/effects, 2 = +N/+N modifications, 3 = switch
+      P/T. Within the same (layer, sublayer), ties resolve by
+      ``timestamp``.
+    - ``timestamp``: monotonically increasing per ``GameState``;
+      lower = older = applied first within a layer.
+    - ``kind``: dispatch key, e.g. ``"control_change"``,
+      ``"grant_keyword"``, ``"set_base_pt"``, ``"pump_pt"``,
+      ``"add_subtype"``. Layer-2 control-change is the first kind
+      that will get migrated in Phase 2.
+    - ``target_filter``: predicate name describing which permanents
+      this effect applies to. Empty means ``params`` carries an
+      explicit ``target_id``. Examples:
+      ``"self"`` (the source), ``"attached_to_source"`` (the
+      permanent the source is attached to — auras),
+      ``"creatures_you_control"``, ``"all_artifacts_you_control"``.
+    - ``params``: tuple of kind-specific values. For
+      ``"control_change"`` the tuple is ``(new_controller_id,)``.
+      For ``"grant_keyword"`` it's ``(keyword_str,)``. Etc.
+    - ``description``: human-readable summary for log lines and
+      debugging.
+    """
+
+    source_id: int
+    layer: int
+    timestamp: int
+    kind: str
+    sublayer: int = 0
+    target_filter: str = ""
+    target_id: Optional[int] = None
+    params: tuple = ()
+    description: str = ""
+
+
 @dataclass
 class GameState:
     players: list[Player] = field(default_factory=list)
@@ -917,6 +971,18 @@ class GameState:
     turn_number: int = 1
     step: Optional["Step"] = None
     next_object_id: int = 0
+    # Layered-effects registry (CR 613). Phase 1 introduces it as
+    # additive scaffolding — the list is empty by default and no
+    # current code consults it. Phase 2 will start migrating
+    # field-mutation-based continuous effects (aura control swaps,
+    # anthem statics, manland animation, granted abilities, etc.)
+    # to live as ``ContinuousEffect`` records here, with
+    # ``effective_*`` helpers walking the registry in layer +
+    # timestamp order. ``next_timestamp`` is the monotonic counter
+    # allocated by ``add_continuous_effect``; lower = older = applied
+    # first within a layer.
+    continuous_effects: list[ContinuousEffect] = field(default_factory=list)
+    next_timestamp: int = 0
     log: LogBuffer = field(default_factory=LogBuffer)
     # Canonical game-wide RNG. Engine sites that need randomness (library
     # shuffles from Nexus, tutor shuffles, ward random-discard, etc.) pull
@@ -1031,6 +1097,56 @@ class GameState:
 
     def is_over(self) -> bool:
         return self.winner_id is not None or self.is_draw
+
+    def add_continuous_effect(
+        self,
+        *,
+        source_id: int,
+        layer: int,
+        kind: str,
+        sublayer: int = 0,
+        target_filter: str = "",
+        target_id: Optional[int] = None,
+        params: tuple = (),
+        description: str = "",
+    ) -> ContinuousEffect:
+        """Allocate a fresh timestamp and append a continuous-effect
+        record to the registry. Returns the appended record so callers
+        can hold onto it (e.g., to reference its source_id later).
+        """
+        ts = self.next_timestamp
+        self.next_timestamp += 1
+        effect = ContinuousEffect(
+            source_id=source_id,
+            layer=layer,
+            timestamp=ts,
+            kind=kind,
+            sublayer=sublayer,
+            target_filter=target_filter,
+            target_id=target_id,
+            params=params,
+            description=description,
+        )
+        self.continuous_effects.append(effect)
+        return effect
+
+    def remove_continuous_effects_from_source(
+        self, source_id: int
+    ) -> list[ContinuousEffect]:
+        """Drop every registry entry produced by ``source_id`` (called
+        when that source leaves the battlefield, or when a one-shot
+        effect's window closes). Returns the dropped entries — useful
+        for log/debug and for tests that want to assert which effects
+        were torn down."""
+        kept: list[ContinuousEffect] = []
+        dropped: list[ContinuousEffect] = []
+        for ce in self.continuous_effects:
+            if ce.source_id == source_id:
+                dropped.append(ce)
+            else:
+                kept.append(ce)
+        self.continuous_effects = kept
+        return dropped
 
     def creatures_controlled_by(self, player_id: int) -> list[GameObject]:
         return [
@@ -1156,6 +1272,8 @@ class GameState:
             turn_number=self.turn_number,
             step=self.step,
             next_object_id=self.next_object_id,
+            continuous_effects=list(self.continuous_effects),
+            next_timestamp=self.next_timestamp,
             log=new_log,
             rng=new_rng,
             winner_id=self.winner_id,
