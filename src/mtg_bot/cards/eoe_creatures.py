@@ -132,8 +132,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Flying + dies trigger to create a tapped 2/2 Robot.
+        # Card itself is a Human Scout per Scryfall (type line
+        # "Creature — Human Scout"); subtype was previously omitted
+        # — surfaced by the parser-source structural parity gate.
         make_creature(
             "Gravpack Monoist", "{2}{B}", 2, 1,
+            subtypes=("Human", "Scout"),
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
