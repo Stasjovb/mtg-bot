@@ -1890,28 +1890,53 @@ def apply_aura_static_grants_on_attach(
     before any ETB triggers go on the stack.
 
     Currently models Tractor Beam's "you control enchanted permanent"
-    via the ``attached_grants_control`` printing flag. Pushes
-    ``(aura.id, controller_id)`` onto the target's
-    ``aura_control_grants`` stack and updates ``controller_id``. The
-    first time the stack goes from empty to non-empty, the prior
-    controller is captured in ``controller_id_before_any_aura_swap``
-    so reversion can restore it once all grants leave. Subsequent
-    grants stack additively — most-recent grant wins, matching MTG
-    continuous-effect timestamp ordering. ``move_off_battlefield``
-    removes the leaving aura's entry and updates the controller from
-    the new top-of-stack (or the saved prior when the stack empties).
+    via the ``attached_grants_control`` printing flag. Writes a
+    layer-2 ``"control_change"`` entry to ``state.continuous_effects``
+    with ``source_id=aura.id`` and ``params=(controller_id,)``. The
+    most-recent (highest-timestamp) entry wins — matching MTG's
+    continuous-effect timestamp ordering — so a second control-grant
+    aura attaching after this one overrides.
+    ``move_off_battlefield`` drops the entry when the source aura
+    leaves play, at which point ``effective_controller`` falls back
+    to the next-most-recent entry or the captured baseline.
+
+    The first time a control-grant entry targets this permanent,
+    captures the prior ``controller_id`` in
+    ``controller_id_before_any_aura_swap`` as the baseline for
+    reversion. The stored ``target.controller_id`` field is updated
+    as a write-through cache of ``effective_controller`` so existing
+    sites that read the field still see the right value.
 
     Skips when the target is already self-controlled by the same
-    player (no redundant chain entry).
+    player (no redundant entry).
     """
+    from mtg_bot.game import effective_controller
+
     if not aura.printing.attached_grants_control:
         return
-    if target.controller_id == controller_id:
+    if effective_controller(state, target) == controller_id:
         return
-    if not target.aura_control_grants:
+    # First control-grant on this target: capture the baseline.
+    has_prior_grant = any(
+        ce.layer == 2
+        and ce.kind == "control_change"
+        and ce.target_id == target.id
+        for ce in state.continuous_effects
+    )
+    if not has_prior_grant:
         target.controller_id_before_any_aura_swap = target.controller_id
-    target.aura_control_grants.append((aura.id, controller_id))
-    target.controller_id = controller_id
+    state.add_continuous_effect(
+        source_id=aura.id,
+        layer=2,
+        kind="control_change",
+        target_id=target.id,
+        params=(controller_id,),
+        description=(
+            f"{aura.printing.name} grants P{controller_id} control of "
+            f"{target.printing.name}"
+        ),
+    )
+    target.controller_id = effective_controller(state, target)
     state.log.append(
         f"P{controller_id} gains control of "
         f"{target.printing.name} via {aura.printing.name}"

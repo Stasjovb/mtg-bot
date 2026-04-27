@@ -4,12 +4,14 @@ Audit-found bug: pre-fix Tractor Beam wired the ETB tap and the
 don't-untap rider but silently dropped the "You control enchanted
 permanent" clause — so even with Tractor Beam attached to an
 opponent's creature, the opponent still controlled the creature.
-Now wired via a stack of aura-control grants on the target
-(``aura_control_grants`` + ``controller_id_before_any_aura_swap``)
-and a reversion hook in ``move_off_battlefield`` that pops the
-leaving aura's entry and restores the prior controller (handles
-nested swaps in LIFO order — see
-``test_nested_tractor_beams_revert_in_lifo_order``).
+Now wired via the layered-effects registry: each control-grant
+attaches a layer-2 ``"control_change"`` entry to
+``state.continuous_effects``, and ``effective_controller`` derives
+the target's controller from those entries (most-recent wins).
+``move_off_battlefield`` drops the leaving aura's entries and
+recomputes the cached ``controller_id`` field. Handles nested
+swaps in CR-613 timestamp order — see
+``test_nested_tractor_beams_revert_in_lifo_order``.
 """
 
 from mtg_bot.actions import (
@@ -74,7 +76,14 @@ def test_etb_grants_control_of_enchanted_creature():
     _attach_and_etb(state, aura, bear)
 
     assert bear.controller_id == 0
-    assert bear.aura_control_grants == [(aura.id, 0)]
+    # Registry now has a layer-2 control_change entry sourced by the aura.
+    control_entries = [
+        ce for ce in state.continuous_effects
+        if ce.layer == 2 and ce.kind == "control_change"
+        and ce.target_id == bear.id and ce.source_id == aura.id
+    ]
+    assert len(control_entries) == 1
+    assert control_entries[0].params == (0,)
     assert bear.controller_id_before_any_aura_swap == 1
     # ETB tap fired too.
     assert bear.tapped is True
@@ -91,7 +100,7 @@ def test_etb_no_swap_when_already_self_controlled():
     _attach_and_etb(state, aura, bear)
 
     assert bear.controller_id == 0
-    assert bear.aura_control_grants == []
+    assert state.continuous_effects == []
     assert bear.controller_id_before_any_aura_swap is None
     assert bear.tapped is True
 
@@ -111,7 +120,12 @@ def test_aura_destroyed_reverts_controller():
     destroy(state, aura)
 
     assert bear.controller_id == 1
-    assert bear.aura_control_grants == []
+    # Registry has no remaining control_change entries for the bear.
+    assert not any(
+        ce.layer == 2 and ce.kind == "control_change"
+        and ce.target_id == bear.id
+        for ce in state.continuous_effects
+    )
     assert bear.controller_id_before_any_aura_swap is None
 
 
@@ -282,7 +296,13 @@ def test_control_swap_applies_before_etb_tap_resolves():
         "static control swap must apply before ETB tap resolves"
     )
     assert bear.controller_id_before_any_aura_swap == 1
-    assert bear.aura_control_grants == [(aura.id, 0)]
+    control_entries = [
+        ce for ce in state.continuous_effects
+        if ce.layer == 2 and ce.kind == "control_change"
+        and ce.target_id == bear.id and ce.source_id == aura.id
+    ]
+    assert len(control_entries) == 1
+    assert control_entries[0].params == (0,)
     # ETB tap is on the stack but bear is still UNTAPPED.
     assert any(
         item.ability is not None and item.source.id == aura.id

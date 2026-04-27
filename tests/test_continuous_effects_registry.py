@@ -154,3 +154,90 @@ def test_clone_then_remove_does_not_affect_original():
     assert len(state.continuous_effects) == 1, (
         "Original registry must be unaffected by clone's mutation"
     )
+
+
+# -----------------------
+# effective_controller (Phase 2 layer 2 entry point)
+# -----------------------
+
+
+def test_effective_controller_no_entries_returns_baseline():
+    """When no control_change entries target an object,
+    effective_controller returns the stored controller_id."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import Player, Zone, effective_controller
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    assert effective_controller(state, bear) == 1
+
+
+def test_effective_controller_uses_latest_timestamp_entry():
+    """When multiple control_change entries target the same object,
+    the highest-timestamp entry wins (CR 613.7)."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import Player, Zone, effective_controller
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    # Two entries targeting bear: P0 first (older), P1 second (newer).
+    state.add_continuous_effect(
+        source_id=100, layer=2, kind="control_change",
+        target_id=bear.id, params=(0,),
+    )
+    state.add_continuous_effect(
+        source_id=200, layer=2, kind="control_change",
+        target_id=bear.id, params=(1,),
+    )
+    assert effective_controller(state, bear) == 1
+
+
+def test_effective_controller_falls_back_to_baseline_after_removal():
+    """Once all control_change entries for a target are removed, the
+    stored ``controller_id_before_any_aura_swap`` (when set) is what
+    gets returned."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import Player, Zone, effective_controller
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    bear.controller_id_before_any_aura_swap = 1
+    bear.controller_id = 0  # simulating cache mid-swap
+    state.battlefield.append(bear)
+    # No entries → returns baseline (1), not the stale cache (0).
+    assert effective_controller(state, bear) == 1
+
+
+def test_effective_controller_ignores_other_layers():
+    """A non-layer-2 entry must NOT affect the controller derivation,
+    even if it shares the source/target/kind by accident."""
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import Player, Zone, effective_controller
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    # Layer-7 entry — should not affect controller.
+    state.add_continuous_effect(
+        source_id=100, layer=7, kind="control_change",
+        target_id=bear.id, params=(0,),
+    )
+    assert effective_controller(state, bear) == 1

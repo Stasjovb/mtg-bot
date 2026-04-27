@@ -404,15 +404,15 @@ class CardPrinting:
     attached_prevents_untap: bool = False
     # "You control enchanted permanent." Tractor Beam's static
     # control-grant clause. When True on an aura, the moment it
-    # enters the battlefield attached to a target, the target's
-    # controller is swapped to the aura's controller — applied
-    # BEFORE any ETB triggers go on the stack, since static abilities
-    # are continuous (not stack-based). The swap is recorded on the
-    # target via the ``aura_control_grants`` stack +
-    # ``controller_id_before_any_aura_swap`` and reverted in
-    # ``move_off_battlefield`` when the aura leaves play.
-    # Supports nested swaps (multiple control-grant auras stacked on
-    # the same permanent) in LIFO order.
+    # enters the battlefield attached to a target,
+    # ``apply_aura_static_grants_on_attach`` writes a layer-2
+    # ``"control_change"`` entry to ``state.continuous_effects`` —
+    # applied BEFORE any ETB triggers go on the stack, since static
+    # abilities are continuous (not stack-based).
+    # ``effective_controller`` derives the target's controller from
+    # the registry (most-recent timestamp wins), and
+    # ``move_off_battlefield`` drops the entry when the aura leaves
+    # play. Supports nested swaps in CR-613 timestamp order.
     attached_grants_control: bool = False
     # "The first time you would create one or more tokens each turn,
     # you may instead create that many tokens that are copies of

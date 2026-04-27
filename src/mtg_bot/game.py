@@ -142,24 +142,16 @@ class GameObject:
     # controller it came from. run_cleanup_step swaps ``controller_id``
     # back and clears this field. None = no temporary-control effect.
     temp_original_controller_id: Optional[int] = None
-    # Aura-granted "you control enchanted permanent" tracking. Each
-    # aura with the static control-grant attaches via
-    # ``apply_aura_static_grants_on_attach`` and pushes
-    # ``(aura_id, granted_controller_id)`` onto ``aura_control_grants``
-    # in arrival order. The effective controller is always the LAST
-    # entry's granted_controller_id (most-recent grant wins, matching
-    # MTG's continuous-effect timestamp ordering). When an aura
-    # leaves play, ``move_off_battlefield`` removes its entry from
-    # the list; controller reverts to the new last entry's
-    # granted_controller_id, or to ``controller_id_before_any_aura_swap``
-    # (the original controller, captured the first time the list
-    # transitions from empty to non-empty) when the list goes empty.
-    # Supports nested swaps: P0's TB1 + P1's TB2 stacked on the
-    # same creature reverts in LIFO order as each aura leaves.
-    # Distinct from the UEOT temp_original_controller_id mechanism —
-    # this swap persists for the lifetime of the aura attachment,
-    # not just until cleanup. Tractor Beam.
-    aura_control_grants: list[tuple[int, int]] = field(default_factory=list)
+    # Baseline controller captured the first time a layer-2
+    # control-change continuous effect targets this permanent
+    # (Tractor Beam attaching). When the registry has no
+    # ``"control_change"`` entries for this object,
+    # ``effective_controller`` falls back to this value. Cleared by
+    # ``move_off_battlefield``'s revert path when the last
+    # control-grant entry is removed. Distinct from the UEOT
+    # ``temp_original_controller_id`` mechanism — this baseline is
+    # specifically the "controller before any aura-grant continuous
+    # effect" and outlives end-of-turn cleanup.
     controller_id_before_any_aura_swap: Optional[int] = None
     # Planeswalker loyalty counters. Initialized to printing.loyalty
     # when a planeswalker enters the battlefield. State-based actions
@@ -326,6 +318,47 @@ def _static_bonuses(
         toughness_bonus += et
         granted |= ek
     return power_bonus, toughness_bonus, frozenset(granted)
+
+
+def effective_controller(state: GameState, obj: GameObject) -> int:
+    """Return the controller id of ``obj`` after applying CR 613
+    layer 2 (control-changing effects).
+
+    Walks ``state.continuous_effects`` for entries with
+    ``layer == 2`` and ``kind == "control_change"`` whose
+    ``target_id`` matches ``obj.id``; the latest-timestamp entry
+    wins (most recently created control-grant). When no entries
+    apply, returns ``obj.controller_id_before_any_aura_swap`` if set
+    (the captured-baseline controller from the first time a control
+    grant was applied), else ``obj.controller_id`` (the printed
+    baseline).
+
+    Phase 2 of the layered-effects refactor: this replaces the
+    bespoke ``aura_control_grants`` LIFO stack on GameObject. The
+    stored ``obj.controller_id`` field is now a write-through cache
+    of this function's value — every registry-mutating site
+    (``apply_aura_static_grants_on_attach``,
+    ``move_off_battlefield``'s revert path) calls
+    ``_recompute_obj_controller`` to keep the cache in sync, so
+    existing reads of ``obj.controller_id`` continue to return the
+    right value.
+    """
+    latest: int | None = None
+    latest_ts: int = -1
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 2
+            and ce.kind == "control_change"
+            and ce.target_id == obj.id
+            and ce.timestamp > latest_ts
+        ):
+            latest_ts = ce.timestamp
+            latest = ce.params[0]
+    if latest is not None:
+        return latest
+    if obj.controller_id_before_any_aura_swap is not None:
+        return obj.controller_id_before_any_aura_swap
+    return obj.controller_id
 
 
 def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
@@ -1217,10 +1250,6 @@ class GameState:
             new = GameObject.__new__(GameObject)
             new.__dict__ = o.__dict__.copy()
             new.blocked_by = list(o.blocked_by)
-            # Aura-control-grant stack is mutable (push on attach,
-            # pop on aura-leaves) — duplicate so MCTS branches don't
-            # share state.
-            new.aura_control_grants = list(o.aura_control_grants)
             id_map[o.id] = new
             return new
 

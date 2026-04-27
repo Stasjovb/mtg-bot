@@ -162,37 +162,46 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
-    # Aura-granted "you control enchanted permanent" reversion: if
-    # any permanent on the battlefield has THIS aura's id in its
-    # ``aura_control_grants`` stack, remove that entry. The new
-    # effective controller is the new top-of-stack's
-    # granted_controller_id; if the stack empties, restore the
-    # original (pre-first-aura) controller from
-    # ``controller_id_before_any_aura_swap``. Doing this BEFORE the
-    # cascading aura-detach + bury logic keeps any downstream
-    # observers (e.g., the buried-aura's own subsequent
-    # move_off_battlefield) reading the correct controller.
-    for other in state.battlefield:
-        match_idx = next(
-            (
-                i for i, (aid, _) in enumerate(other.aura_control_grants)
-                if aid == obj.id
-            ),
-            None,
+    # Layer-2 control-grant reversion: drop every continuous-effect
+    # entry sourced by THIS leaving object, then refresh the
+    # ``controller_id`` cache on each affected target via
+    # ``effective_controller``. When a target's last control_change
+    # entry goes away, also clear its baseline-snapshot
+    # ``controller_id_before_any_aura_swap`` so a future aura grant
+    # captures a fresh baseline. Doing this BEFORE the cascading
+    # aura-detach + bury logic keeps any downstream observers
+    # reading the post-revert controller.
+    from mtg_bot.game import effective_controller
+
+    dropped = state.remove_continuous_effects_from_source(obj.id)
+    revert_targets: set[int] = {
+        ce.target_id for ce in dropped
+        if ce.layer == 2
+        and ce.kind == "control_change"
+        and ce.target_id is not None
+    }
+    for tid in revert_targets:
+        target = next(
+            (o for o in state.battlefield if o.id == tid), None
         )
-        if match_idx is None:
+        if target is None:
             continue
-        del other.aura_control_grants[match_idx]
-        if other.aura_control_grants:
-            new_controller = other.aura_control_grants[-1][1]
-        else:
-            assert other.controller_id_before_any_aura_swap is not None
-            new_controller = other.controller_id_before_any_aura_swap
-            other.controller_id_before_any_aura_swap = None
-        if new_controller != other.controller_id:
-            other.controller_id = new_controller
+        new_controller = effective_controller(state, target)
+        # If no more control_change entries remain for this target,
+        # clear the captured baseline so a future aura grant starts
+        # fresh.
+        any_remaining = any(
+            ce.layer == 2
+            and ce.kind == "control_change"
+            and ce.target_id == target.id
+            for ce in state.continuous_effects
+        )
+        if not any_remaining:
+            target.controller_id_before_any_aura_swap = None
+        if new_controller != target.controller_id:
+            target.controller_id = new_controller
             state.log.append(
-                f"{other.printing.name} reverts to P{new_controller} "
+                f"{target.printing.name} reverts to P{new_controller} "
                 f"(no longer enchanted by {obj.printing.name})"
             )
     # Any attachment on this object: Equipment falls off (stays on

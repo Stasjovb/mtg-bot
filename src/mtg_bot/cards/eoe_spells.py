@@ -415,10 +415,11 @@ EOE_SPELLS: dict[str, CardPrinting] = {
         # + don't-untap rider (``attached_prevents_untap``) +
         # continuous-while-attached control swap
         # (``attached_grants_control``; the swap is applied at attach
-        # time via ``apply_aura_static_grants_on_attach``, pushed onto
-        # the target's ``aura_control_grants`` stack, and reverted
-        # when the aura leaves play). No P/T bonus — real card
-        # grants none.
+        # time via ``apply_aura_static_grants_on_attach``, which
+        # writes a layer-2 control-change entry to the continuous-
+        # effects registry — see ``effective_controller``). The
+        # entry is dropped by ``move_off_battlefield`` when the aura
+        # leaves play. No P/T bonus — real card grants none.
         make_aura(
             "Tractor Beam", "{2}{U}{U}",
             attached_prevents_untap=True,
