@@ -236,12 +236,17 @@ class ManaCost:
 
     def reduced(self, amount: int) -> "ManaCost":
         """Return a new ManaCost with ``amount`` generic mana removed
-        (minimum 0; colored costs unchanged — MTG rule 601.2f)."""
+        (minimum 0; colored costs unchanged — MTG rule 601.2f). The
+        ``x_pips`` template is preserved: cost reductions only touch
+        the generic side, so an X-spell stays an X-spell after a
+        discount (CR 601.2f reduces generic mana, leaving {X} symbols
+        intact for the controller to choose later)."""
         if amount <= 0:
             return self
         return ManaCost(
             generic=max(0, self.generic - amount),
             colored=self.colored,
+            x_pips=self.x_pips,
         )
 
 
