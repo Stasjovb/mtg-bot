@@ -38,7 +38,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf
 
 
 # Edge of Eternities Special Guests (10 cards, Scryfall ``set:spg
@@ -156,7 +156,8 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         "Burgeoning", "{G}",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="opponent_plays_land",
+                event=Event.PLAYS_LAND,
+                predicate=Controlled(by=OPPONENT, subject="controller"),
                 effect=OptionalPutLandFromHandOntoBattlefield(),
             ),
         ),

@@ -837,21 +837,15 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     _trigger_etb_abilities(state, card)
     # "Whenever an opponent plays a land" triggers (Burgeoning) —
     # specifically the land-drop action, not any ETB. Fires under each
-    # opposing permanent-controller.
+    # opposing permanent-controller. The same call also dispatches the
+    # phase-8 ``Event.PLAYS_LAND`` event so The Endstone's land half
+    # (predicate-style ``Controlled(YOU, subject="controller")``) fires
+    # via the dispatcher's same-controller branch.
     from mtg_bot.turn import fire_opponent_plays_land_triggers
-    fire_opponent_plays_land_triggers(state, player_id)
+    fire_opponent_plays_land_triggers(state, player_id, land=card)
     # Fire "whenever you play a land or cast a spell" triggers (The
     # Endstone). The spell-cast path fires the same from _cast_spell.
     _fire_cast_or_play_triggers(state, player_id)
-    # Phase-8 predicate-style dispatch: fire the PLAYS_LAND event for
-    # every land-drop. Predicate-migrated triggers
-    # (``opponent_plays_land`` and ``cast_spell_or_play_land``'s land
-    # half) ride this dispatch alongside the legacy fire paths above.
-    from mtg_bot.effects.predicates import Event as _Event
-    dispatch_event(
-        state, _Event.PLAYS_LAND, label="plays-land",
-        land=card, controller=p,
-    )
 
 
 def _offer_echoing_deeps_copy(

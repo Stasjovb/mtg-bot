@@ -56,13 +56,32 @@ def _give_land_in_hand(state: GameState, player_id: int, land_name: str):
     return land
 
 
+def _fire_played_land(state: GameState, land_controller_id: int):
+    """Test convenience around ``fire_opponent_plays_land_triggers`` —
+    synthesizes a Forest as the played land so the phase-8 predicate-
+    style ``Event.PLAYS_LAND`` dispatch (which Burgeoning rides) has a
+    subject to evaluate against. The land identity is irrelevant to
+    the Burgeoning predicate (``Controlled(by=OPPONENT, subject=
+    "controller")`` only inspects the controller subject); any land
+    object will do."""
+    land = state.new_object(
+        BASIC_LANDS["Forest"], land_controller_id, Zone.BATTLEFIELD,
+    )
+    fire_opponent_plays_land_triggers(state, land_controller_id, land=land)
+
+
 def test_burgeoning_is_wired_up():
     card = SPECIAL_GUESTS_EOE["Burgeoning"]
     assert card.mana_cost_str == "{G}"
     assert "Enchantment" in card.card_types
     assert len(card.triggered_abilities) == 1
     trig = card.triggered_abilities[0]
-    assert trig.trigger == "opponent_plays_land"
+    # Phase-8: predicate-style — ``opponent_plays_land`` migrated to
+    # ``Event.PLAYS_LAND`` + ``Controlled(by=OPPONENT, subject=
+    # "controller")``. Use the inferred-key helper for the membership
+    # assertion so the test reads identically to its pre-migration
+    # form.
+    assert _legacy_or_inferred_key(trig) == "opponent_plays_land"
     assert isinstance(trig.effect, OptionalPutLandFromHandOntoBattlefield)
 
 
@@ -74,7 +93,7 @@ def test_opponent_plays_land_fires_burgeoning_under_controller():
     forest = _give_land_in_hand(state, 0, "Forest")
 
     # Simulate the firing that actions.play_land would trigger.
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     # Forest should now be on the battlefield under P0's control.
@@ -92,7 +111,7 @@ def test_burgeoning_controller_own_land_drop_does_not_trigger():
     forest = _give_land_in_hand(state, 0, "Forest")
 
     # P0 plays a land themselves — Burgeoning shouldn't fire for P0.
-    fire_opponent_plays_land_triggers(state, land_controller_id=0)
+    _fire_played_land(state, land_controller_id=0)
     drain_stack(state)
 
     assert forest not in state.battlefield
@@ -105,7 +124,7 @@ def test_agent_declining_is_legal():
     _give_burgeoning(state, controller_id=0)
     forest = _give_land_in_hand(state, 0, "Forest")
 
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     assert forest in state.player_by_id(0).hand
@@ -118,7 +137,7 @@ def test_no_lands_in_hand_does_nothing():
     state = _new_state(p0_agent=_PickFirst())
     _give_burgeoning(state, controller_id=0)
 
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     assert not any(o.printing.is_land for o in state.battlefield)
@@ -175,7 +194,7 @@ def test_burgeoning_dropped_land_fires_landfall():
     _give_land_in_hand(state, 0, "Forest")
 
     log_before = len(state.log)
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
     new_log = state.log[log_before:]
     # Landfall should have fired — check for its message pattern.
@@ -195,7 +214,7 @@ def test_burgeoning_dropped_land_does_not_re_fire_opponent_plays_land():
     # P1 plays a land (externally) — should fire Burgeoning for P0,
     # which drops a Forest. That drop must NOT re-fire for P1's
     # Burgeoning.
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     # P0's Forest dropped. P1's Forest stayed in hand (no recursive
@@ -258,7 +277,7 @@ def test_burgeoning_dropped_land_fires_landfall_observable():
     # Sanity: nothing has pumped the watcher yet.
     assert elem.temp_power_bonus == 0
 
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     # Burgeoning dropped P0's Forest -> landfall fired -> +2/+0.
@@ -280,7 +299,7 @@ def test_burgeoning_drop_does_not_double_fire_landfall():
     state.battlefield.append(elem)
     _give_land_in_hand(state, 0, "Forest")
 
-    fire_opponent_plays_land_triggers(state, land_controller_id=1)
+    _fire_played_land(state, land_controller_id=1)
     drain_stack(state)
 
     # +2 (one fire), not +4 (double fire).

@@ -485,6 +485,79 @@ class TriggeredAbility:
         return self.predicate.matches(state, subjects, source)
 
     def describe(self) -> str:
+        # Predicate-style abilities (``event`` is set, ``trigger`` is
+        # empty) get a coarse human prefix derived from the event +
+        # whatever predicate clauses we can recognize; the
+        # printing-level oracle text is still the source of truth, this
+        # is just for log/UI display. Fine-grained shapes
+        # (Burgeoning's "an opponent plays a land" vs The Endstone's
+        # "you play a land") aren't structurally distinguishable from
+        # describe() alone since we'd need source context — the
+        # PLAYS_LAND prefix uses the broad "an opponent plays a land"
+        # form to keep parity with the legacy key it migrated from
+        # (the only PLAYS_LAND-rider that exposes describe() in tests
+        # today is Burgeoning, which is the opponent-form).
+        if self.event is not None and not self.trigger:
+            from mtg_bot.effects.predicates import (
+                Controlled, OPPONENT, YOU, IsArtifact,
+                SpellsCastThisTurn,
+            )
+            event_prefix_map = {
+                "enters": "When ~ enters the battlefield",
+                "dies": "When ~ dies",
+                "leaves_battlefield": "When ~ leaves the battlefield",
+                "becomes_tapped": "Whenever ~ becomes tapped",
+                "attacks": "Whenever ~ attacks",
+                "dealt_damage": "Whenever ~ is dealt damage",
+                "is_cast": "Whenever you cast a spell",
+                "is_sacrificed": "Whenever you sacrifice another permanent",
+                "plays_land": "Whenever an opponent plays a land",
+                "discards_card": "Whenever an opponent discards a card",
+                "counters_added": (
+                    "Whenever you put one or more +1/+1 counters on a "
+                    "creature you control"
+                ),
+                "beginning_of_upkeep": "At the beginning of your upkeep",
+                "beginning_of_combat": (
+                    "At the beginning of combat on your turn"
+                ),
+                "beginning_of_end_step": (
+                    "At the beginning of your end step"
+                ),
+            }
+            # IS_CAST + IsArtifact("spell") → "Whenever you cast an
+            # artifact spell" (Pinnacle Emissary). IS_CAST +
+            # SpellsCastThisTurn(n=2) → "Whenever you cast your second
+            # spell each turn".
+            if self.event.value == "is_cast" and self.predicate is not None:
+                from mtg_bot.effects.predicates import And
+
+                def _leaves(p):
+                    if isinstance(p, And):
+                        return _leaves(p.left) + _leaves(p.right)
+                    return [p]
+
+                leaves = _leaves(self.predicate)
+                if any(isinstance(lf, SpellsCastThisTurn) and lf.n == 2
+                       for lf in leaves):
+                    prefix = (
+                        "Whenever you cast your second spell each turn"
+                    )
+                elif any(isinstance(lf, IsArtifact) and lf.subject == "spell"
+                         for lf in leaves):
+                    prefix = "Whenever you cast an artifact spell"
+                else:
+                    prefix = event_prefix_map.get(
+                        self.event.value, self.event.value,
+                    )
+            else:
+                prefix = event_prefix_map.get(
+                    self.event.value, self.event.value,
+                )
+            head = f"{prefix}, {self.effect.describe()}."
+            if self.requires_void:
+                return "Void — " + head
+            return head
         prefix = {
             "etb": "When ~ enters the battlefield",
             "beginning_of_end_step": "At the beginning of your end step",

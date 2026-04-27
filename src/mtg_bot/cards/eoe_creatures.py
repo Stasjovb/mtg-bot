@@ -9,6 +9,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import *  # noqa: F401,F403
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.predicates import (
+    OPPONENT,
     YOU,
     Always,
     Controlled,
@@ -21,6 +22,7 @@ from mtg_bot.effects.predicates import (
     IsLand,
     IsNontoken,
     IsSelf,
+    SpellsCastThisTurn,
 )
 
 
@@ -690,7 +692,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "deathtouch"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="opponent_discards_a_card",
+                    event=Event.DISCARDS_CARD,
+                    predicate=Controlled(by=OPPONENT),
                     effect=TargetPlayerLosesLife(amount=3),
                     tier_threshold=1,
                 ),
@@ -793,7 +796,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="sacrifice_artifact",
+                    event=Event.IS_SACRIFICED,
+                    predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
                     effect=DealDamageToTargetOpponent(amount=2),
                 ),
             ),
@@ -867,7 +871,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Cosmogrand Zenith", "{2}{W}", 2, 4,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="second_spell_each_turn",
+                    event=Event.IS_CAST,
+                    predicate=(
+                        Controlled(YOU, subject="controller")
+                        & SpellsCastThisTurn(n=2)
+                    ),
                     effect=ModalChooseOne(modes=(
                         CreateToken(
                             token_printing=TOKEN_PRINTINGS["Human Soldier"],
@@ -916,7 +924,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Jellyfish", "Rogue"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="second_spell_each_turn",
+                    event=Event.IS_CAST,
+                    predicate=(
+                        Controlled(YOU, subject="controller")
+                        & SpellsCastThisTurn(n=2)
+                    ),
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
             ),
@@ -928,7 +940,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Sunstar Lightsmith", "{3}{W}", 3, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="second_spell_each_turn",
+                    event=Event.IS_CAST,
+                    predicate=(
+                        Controlled(YOU, subject="controller")
+                        & SpellsCastThisTurn(n=2)
+                    ),
                     effect=Sequence(effects=(
                         PutPlusOneCounterOnSelf(amount=1),
                         DrawCards(amount=1),
@@ -1341,7 +1357,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{U}{R}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="cast_artifact_spell",
+                    event=Event.IS_CAST,
+                    predicate=(
+                        IsArtifact(subject="spell")
+                        & Controlled(YOU, subject="controller")
+                    ),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Drone"], count=1,
                     ),
@@ -1411,7 +1431,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Station Monitor", "{W}{U}", 2, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="second_spell_each_turn",
+                    event=Event.IS_CAST,
+                    predicate=(
+                        Controlled(YOU, subject="controller")
+                        & SpellsCastThisTurn(n=2)
+                    ),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Drone"], count=1,
                     ),
@@ -2068,7 +2092,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Vampire", "Cleric"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="sacrifice_creature_or_artifact",
+                    event=Event.IS_SACRIFICED,
+                    predicate=(
+                        (IsCreature() | IsArtifact())
+                        & Controlled(YOU)
+                        & ~IsSelf()
+                    ),
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
             ),

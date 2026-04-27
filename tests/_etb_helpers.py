@@ -38,6 +38,8 @@ to, and otherwise return the literal ``ability.trigger`` field.
 from __future__ import annotations
 
 from mtg_bot.effects.predicates import (
+    OPPONENT,
+    YOU,
     Always,
     And,
     Controlled,
@@ -52,6 +54,7 @@ from mtg_bot.effects.predicates import (
     IsSelf,
     Not,
     Or,
+    SpellsCastThisTurn,
 )
 
 
@@ -227,6 +230,124 @@ def _legacy_key_for_dealt_damage(ability) -> str | None:
     return None
 
 
+def _legacy_key_for_is_cast(ability) -> str | None:
+    """Map a predicate-style IS_CAST ability back to its legacy key.
+
+    Three shapes recognized in this batch:
+      - ``Controlled(YOU, "controller")`` alone → spell half of
+        ``cast_spell_or_play_land``.
+      - ``IsArtifact("spell") & Controlled(YOU, "controller")`` →
+        ``cast_artifact_spell``.
+      - ``Controlled(YOU, "controller") & SpellsCastThisTurn(n=2)`` →
+        ``second_spell_each_turn``.
+    """
+    leaves = _flatten_and(ability.predicate)
+    has_artifact_spell = any(
+        isinstance(leaf, IsArtifact) and leaf.subject == "spell"
+        for leaf in leaves
+    )
+    has_controlled_you_controller = any(
+        isinstance(leaf, Controlled)
+        and leaf.by == YOU
+        and leaf.subject == "controller"
+        for leaf in leaves
+    )
+    has_second_spell = any(
+        isinstance(leaf, SpellsCastThisTurn) and leaf.n == 2
+        for leaf in leaves
+    )
+    if has_second_spell and has_controlled_you_controller:
+        return "second_spell_each_turn"
+    if has_artifact_spell and has_controlled_you_controller:
+        return "cast_artifact_spell"
+    if (
+        has_controlled_you_controller
+        and len(leaves) == 1
+    ):
+        return "cast_spell_or_play_land"
+    return None
+
+
+def _legacy_key_for_plays_land(ability) -> str | None:
+    """Map a predicate-style PLAYS_LAND ability back to its legacy key.
+
+    Two shapes:
+      - ``Controlled(by=OPPONENT, subject="controller")`` →
+        ``opponent_plays_land`` (Burgeoning).
+      - ``Controlled(YOU, subject="controller")`` → land half of
+        ``cast_spell_or_play_land`` (The Endstone).
+    """
+    leaves = _flatten_and(ability.predicate)
+    if (
+        len(leaves) == 1
+        and isinstance(leaves[0], Controlled)
+        and leaves[0].subject == "controller"
+    ):
+        if leaves[0].by == OPPONENT:
+            return "opponent_plays_land"
+        if leaves[0].by == YOU:
+            return "cast_spell_or_play_land"
+    return None
+
+
+def _legacy_key_for_discards_card(ability) -> str | None:
+    """Map a predicate-style DISCARDS_CARD ability back to its legacy
+    key. Only shape today is ``Controlled(by=OPPONENT)`` on the
+    discarding-player subject (Entropic Battlecruiser)."""
+    leaves = _flatten_and(ability.predicate)
+    if (
+        len(leaves) == 1
+        and isinstance(leaves[0], Controlled)
+        and leaves[0].by == OPPONENT
+    ):
+        return "opponent_discards_a_card"
+    return None
+
+
+def _legacy_key_for_counters_added(ability) -> str | None:
+    """Map a predicate-style COUNTERS_ADDED ability back to its legacy
+    key. Only shape today is ``IsCreature() & Controlled(YOU)`` on the
+    receiving creature (Terrasymbiosis)."""
+    leaves = _flatten_and(ability.predicate)
+    types = {type(leaf) for leaf in leaves}
+    if (
+        IsCreature in types
+        and Controlled in types
+        and len(leaves) == 2
+    ):
+        return "counters_added_to_your_creature"
+    return None
+
+
+def _legacy_key_for_is_sacrificed(ability) -> str | None:
+    """Map a predicate-style IS_SACRIFICED ability back to its legacy
+    key.
+
+    Two shapes:
+      - ``IsArtifact() & Controlled(YOU) & ~IsSelf()`` (Biotech
+        Specialist) → ``sacrifice_artifact``.
+      - ``(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()``
+        (Lightless Evangel) → ``sacrifice_creature_or_artifact``.
+    """
+    leaves = _flatten_and(ability.predicate)
+    has_or_creature_artifact = any(
+        isinstance(leaf, Or)
+        and {type(leaf.left), type(leaf.right)} == {IsCreature, IsArtifact}
+        for leaf in leaves
+    )
+    has_artifact = any(isinstance(leaf, IsArtifact) for leaf in leaves)
+    has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
+    has_not_self = any(
+        isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
+        for leaf in leaves
+    )
+    if has_or_creature_artifact and has_controlled and has_not_self:
+        return "sacrifice_creature_or_artifact"
+    if has_artifact and has_controlled and has_not_self:
+        return "sacrifice_artifact"
+    return None
+
+
 def _legacy_key_for_player_phase(ability, your_key: str) -> str | None:
     """Map a predicate-style turn-structure ability back to its legacy
     string key. Used by all three of BEGINNING_OF_UPKEEP /
@@ -285,6 +406,16 @@ def _legacy_key_for_predicate(ability, source_printing=None) -> str | None:
         return _legacy_key_for_becomes_tapped(ability)
     if ability.event is Event.DEALT_DAMAGE:
         return _legacy_key_for_dealt_damage(ability)
+    if ability.event is Event.IS_CAST:
+        return _legacy_key_for_is_cast(ability)
+    if ability.event is Event.IS_SACRIFICED:
+        return _legacy_key_for_is_sacrificed(ability)
+    if ability.event is Event.PLAYS_LAND:
+        return _legacy_key_for_plays_land(ability)
+    if ability.event is Event.DISCARDS_CARD:
+        return _legacy_key_for_discards_card(ability)
+    if ability.event is Event.COUNTERS_ADDED:
+        return _legacy_key_for_counters_added(ability)
     if ability.event is Event.BEGINNING_OF_UPKEEP:
         return _legacy_key_for_player_phase(ability, "beginning_of_upkeep")
     if ability.event is Event.BEGINNING_OF_COMBAT:

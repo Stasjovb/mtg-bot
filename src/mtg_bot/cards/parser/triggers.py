@@ -68,6 +68,7 @@ from mtg_bot.effects.predicates import (
     IsLand,
     IsSelf,
     Predicate,
+    SpellsCastThisTurn,
 )
 
 
@@ -82,24 +83,6 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # ``_PREDICATE_TRIGGER_PHRASES`` below. The remaining entries here
 # stay on the string-key path until later phases migrate them.
 _TRIGGER_PHRASES: dict[str, str] = {
-    # Spell-cast triggers. The verbatim phrase
-    # ``you cast your second spell each turn`` maps to the engine's
-    # canonical ``second_spell_each_turn`` key (see Illvoi Operative,
-    # Sunstar Lightsmith, Station Monitor, etc. in
-    # ``eoe_creatures.py``). The "second-ness" lives in the engine's
-    # turn counter, not in this phrase's parameters — the only thing
-    # the parser has to do is map the literal English clause to the
-    # right key.
-    "you cast your second spell each turn": "second_spell_each_turn",
-    # Sacrifice trigger. ``Whenever you sacrifice another creature or
-    # artifact`` is the simplest-and-most-common form on EoE
-    # creatures (Lightless Evangel). The engine key is
-    # ``sacrifice_creature_or_artifact``; the ``another``-vs-``a``
-    # distinction is handled engine-side (the trigger naturally
-    # ignores self-sacrifice firings since the source must still be
-    # on the battlefield to trigger).
-    "you sacrifice another creature or artifact":
-        "sacrifice_creature_or_artifact",
     # Combat-damage-to-player trigger. ``Whenever this creature deals
     # combat damage to a player`` (Illvoi Infiltrator) is the simplest
     # form on EoE and maps to the engine's ``combat_damage_to_player``
@@ -192,6 +175,32 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "a creature you control with a +1/+1 counter on it dies": (
         Event.DIES,
         IsCreature() & Controlled(YOU) & HasCounter("+1/+1"),
+    ),
+    # ``Whenever you cast your second spell each turn`` — phase 8
+    # migrated from ``trigger="second_spell_each_turn"`` to the
+    # predicate path. ``Event.IS_CAST`` carries subjects ``("spell",
+    # "controller")``; the ``Controlled(YOU, subject="controller")``
+    # half gates "you cast" (vs an opponent), and
+    # ``SpellsCastThisTurn(n=2)`` latches the moment the controller's
+    # running total flips to 2 — mirroring the legacy
+    # ``p.spells_cast_this_turn == 2`` gate at the
+    # ``actions._fire_second_spell_triggers`` call site. Used by
+    # Illvoi Operative, Sunstar Lightsmith, Cosmogrand Zenith,
+    # Station Monitor.
+    "you cast your second spell each turn": (
+        Event.IS_CAST,
+        Controlled(YOU, subject="controller") & SpellsCastThisTurn(n=2),
+    ),
+    # ``Whenever you sacrifice another creature or artifact`` — phase
+    # 8 migrated from ``trigger="sacrifice_creature_or_artifact"``.
+    # ``Event.IS_SACRIFICED`` carries the sacrificed permanent as
+    # ``"obj"``; the predicate filters to creature-or-artifact subjects
+    # under your control, and ``~IsSelf()`` excludes the source's own
+    # sacrifice (matching the legacy ``other.id == obj.id: continue``
+    # skip in ``turn.sacrifice``). Used by Lightless Evangel.
+    "you sacrifice another creature or artifact": (
+        Event.IS_SACRIFICED,
+        (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
 }
 

@@ -34,38 +34,50 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     HasCounter,
+    IsArtifact,
     IsCreature,
+    IsSelf,
+    SpellsCastThisTurn,
 )
 
 
 _COUNTER_DIES_PRED = IsCreature() & Controlled(YOU) & HasCounter("+1/+1")
+_SECOND_SPELL_PRED = (
+    Controlled(YOU, subject="controller") & SpellsCastThisTurn(n=2)
+)
+_SAC_CREATURE_OR_ARTIFACT_PRED = (
+    (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()
+)
 
 
 # ---------- you cast your second spell each turn ----------
 
 def test_parse_trigger_phrase_recognizes_second_spell_each_turn():
-    # The verbatim oracle clause ``you cast your second spell each
-    # turn`` is the literal lookup key that maps to the engine's
-    # canonical ``second_spell_each_turn`` trigger. Other parameters
-    # (e.g. "your *third* spell") aren't in scope for the simple
-    # phrase-lookup mechanism — only this exact phrase resolves.
+    # Phase 8 migrated the ``you cast your second spell each turn``
+    # phrase to the predicate-style path: ``(Event.IS_CAST,
+    # Controlled(YOU, subject="controller") & SpellsCastThisTurn(n=
+    # 2))``. The legacy lookup must therefore return ``None``.
     assert _parse_trigger_phrase(
         "you cast your second spell each turn"
-    ) == "second_spell_each_turn"
+    ) is None
+    assert _parse_predicate_trigger_phrase(
+        "you cast your second spell each turn"
+    ) == (Event.IS_CAST, _SECOND_SPELL_PRED)
 
 
 def test_second_spell_each_turn_end_to_end():
     # End-to-end Illvoi Operative oracle text — entirely one line of
     # the form ``Whenever <condition>, <effect>.``. The condition
-    # resolves to ``second_spell_each_turn``; the effect resolves
-    # via the existing unified effect grammar's
+    # resolves to predicate-style ``Event.IS_CAST`` +
+    # ``Controlled(YOU, "controller") & SpellsCastThisTurn(n=2)``;
+    # the effect resolves via the existing unified effect grammar's
     # ``put a +1/+1 counter on this creature`` rule.
     parsed = _parse_triggered_ability_line(
         "Whenever you cast your second spell each turn, "
         "put a +1/+1 counter on this creature."
     )
     assert parsed == TriggeredAbility(
-        trigger="second_spell_each_turn",
+        event=Event.IS_CAST, predicate=_SECOND_SPELL_PRED,
         effect=PutPlusOneCounterOnSelf(amount=1),
     )
 
@@ -73,14 +85,20 @@ def test_second_spell_each_turn_end_to_end():
 # ---------- you sacrifice another creature or artifact ----------
 
 def test_parse_trigger_phrase_recognizes_sacrifice_creature_or_artifact():
-    # Lightless Evangel's oracle uses the verbatim phrase
-    # ``you sacrifice another creature or artifact``. The engine key
-    # is ``sacrifice_creature_or_artifact`` (the ``another`` vs ``a``
-    # distinction collapses engine-side because the source must
-    # still be on the battlefield to trigger).
+    # Phase 8 migrated the ``you sacrifice another creature or
+    # artifact`` phrase to the predicate-style path: ``(Event.
+    # IS_SACRIFICED, (IsCreature() | IsArtifact()) & Controlled(YOU)
+    # & ~IsSelf())``. The legacy lookup must therefore return
+    # ``None``. The ``~IsSelf()`` clause carries the ``another`` vs
+    # ``a`` distinction explicitly in the predicate (rather than
+    # implicitly via the source-still-on-battlefield gate the legacy
+    # walk used).
     assert _parse_trigger_phrase(
         "you sacrifice another creature or artifact"
-    ) == "sacrifice_creature_or_artifact"
+    ) is None
+    assert _parse_predicate_trigger_phrase(
+        "you sacrifice another creature or artifact"
+    ) == (Event.IS_SACRIFICED, _SAC_CREATURE_OR_ARTIFACT_PRED)
 
 
 def test_sacrifice_creature_or_artifact_end_to_end():
@@ -90,7 +108,8 @@ def test_sacrifice_creature_or_artifact_end_to_end():
         "put a +1/+1 counter on this creature."
     )
     assert parsed == TriggeredAbility(
-        trigger="sacrifice_creature_or_artifact",
+        event=Event.IS_SACRIFICED,
+        predicate=_SAC_CREATURE_OR_ARTIFACT_PRED,
         effect=PutPlusOneCounterOnSelf(amount=1),
     )
 
@@ -147,9 +166,10 @@ def test_unknown_trigger_phrase_in_line_returns_none():
 
 def test_illvoi_operative_is_claimed_with_second_spell_trigger():
     """Illvoi Operative's oracle text is exactly one triggered ability
-    using the new ``second_spell_each_turn`` condition phrase. With
-    the phrase mapped, the parser must claim the card end-to-end and
-    produce a printing identical to the static registry's.
+    using the migrated predicate-style ``second_spell_each_turn``
+    shape. With the phrase mapped, the parser must claim the card
+    end-to-end and produce a printing identical to the static
+    registry's.
     """
     from mtg_bot.cards.parser_source import OracleParserCardSource
     from mtg_bot.cards.source import StaticCardSource
@@ -162,7 +182,7 @@ def test_illvoi_operative_is_claimed_with_second_spell_trigger():
     assert parsed == static["Illvoi Operative"]
     assert parsed.triggered_abilities == (
         TriggeredAbility(
-            trigger="second_spell_each_turn",
+            event=Event.IS_CAST, predicate=_SECOND_SPELL_PRED,
             effect=PutPlusOneCounterOnSelf(amount=1),
         ),
     )
@@ -170,7 +190,8 @@ def test_illvoi_operative_is_claimed_with_second_spell_trigger():
 
 def test_lightless_evangel_is_claimed_with_sacrifice_trigger():
     """Lightless Evangel's oracle text is one triggered ability using
-    the new ``sacrifice_creature_or_artifact`` condition phrase.
+    the migrated predicate-style ``sacrifice_creature_or_artifact``
+    shape.
     """
     from mtg_bot.cards.parser_source import OracleParserCardSource
     from mtg_bot.cards.source import StaticCardSource
@@ -183,7 +204,8 @@ def test_lightless_evangel_is_claimed_with_sacrifice_trigger():
     assert parsed == static["Lightless Evangel"]
     assert parsed.triggered_abilities == (
         TriggeredAbility(
-            trigger="sacrifice_creature_or_artifact",
+            event=Event.IS_SACRIFICED,
+            predicate=_SAC_CREATURE_OR_ARTIFACT_PRED,
             effect=PutPlusOneCounterOnSelf(amount=1),
         ),
     )

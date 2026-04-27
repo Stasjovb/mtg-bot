@@ -577,8 +577,22 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "The Endstone", "{7}",
             legendary=True,
             triggered_abilities=(
+                # Spell half: ``Whenever you cast a spell, draw a card``.
+                # The legacy ``cast_spell_or_play_land`` key fused both
+                # halves into a single trigger key — predicate
+                # migration splits it into two abilities (one per
+                # primitive event), each fires once for its own event.
+                # Composite events aren't introduced; the predicate
+                # vocabulary stays primitive.
                 TriggeredAbility(
-                    trigger="cast_spell_or_play_land",
+                    event=Event.IS_CAST,
+                    predicate=Controlled(YOU, subject="controller"),
+                    effect=DrawCards(amount=1),
+                ),
+                # Land half: ``Whenever you play a land, draw a card``.
+                TriggeredAbility(
+                    event=Event.PLAYS_LAND,
+                    predicate=Controlled(YOU, subject="controller"),
                     effect=DrawCards(amount=1),
                 ),
                 TriggeredAbility(
@@ -755,7 +769,8 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Terrasymbiosis", "{2}{G}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="counters_added_to_your_creature",
+                    event=Event.COUNTERS_ADDED,
+                    predicate=IsCreature() & Controlled(YOU),
                     effect=DrawCardsEqualToResolvingCounterAmount(),
                     once_per_turn=True,
                 ),

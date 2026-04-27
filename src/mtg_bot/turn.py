@@ -650,10 +650,12 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
 
 
 def fire_opponent_plays_land_triggers(
-    state: GameState, land_controller_id: int,
+    state: GameState, land_controller_id: int, land=None,
 ) -> None:
     """Fire "Whenever an opponent plays a land" triggers on every
-    non-controller's permanents.
+    non-controller's permanents AND dispatch the phase-8 predicate-
+    style ``Event.PLAYS_LAND`` event so any predicate-migrated
+    land-play observers (Burgeoning, The Endstone's land half) fire.
 
     Called from ``actions.play_land`` only (NOT from effects that
     merely put a land onto the battlefield — "plays a land" is the
@@ -662,8 +664,12 @@ def fire_opponent_plays_land_triggers(
     under that opponent's control (so Burgeoning's "you may put a land
     from your hand onto the battlefield" resolves under the enchantment's
     controller).
+
+    ``land`` is the land permanent that was played (used for the
+    predicate-style dispatch); legacy callers may omit it and only the
+    legacy fire path runs.
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
 
     for p in state.players:
         if p.id == land_controller_id:
@@ -682,6 +688,13 @@ def fire_opponent_plays_land_triggers(
                     controller_id=p.id,
                     label="opponent-plays-land",
                 )
+    if land is not None:
+        from mtg_bot.effects.predicates import Event as _Event
+        land_controller = state.player_by_id(land_controller_id)
+        dispatch_event(
+            state, _Event.PLAYS_LAND, label="plays-land",
+            land=land, controller=land_controller,
+        )
 
 
 def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
