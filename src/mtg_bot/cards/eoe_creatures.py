@@ -111,6 +111,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Knight Luminary", "{3}{W}", 3, 2,
             warp="{1}{W}",
+            subtypes=("Human", "Knight"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
@@ -195,6 +196,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Beamsaw Prospector: "When this creature dies, create a Lander token."
         make_creature(
             "Beamsaw Prospector", "{1}{B}", 2, 1,
+            subtypes=("Human", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.DIES, predicate=IsSelf(),
@@ -208,6 +210,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Galactic Wayfarer: "When this creature enters, create a Lander token."
         make_creature(
             "Galactic Wayfarer", "{2}{G}", 3, 3,
+            subtypes=("Human", "Scout"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
@@ -2430,6 +2433,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Oreplate Pangolin", "{1}{R}", 2, 2,
             artifact=True,
+            subtypes=("Robot", "Pangolin"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
@@ -2701,6 +2705,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # on this creature.
         make_creature(
             "Seedship Agrarian", "{3}{G}", 3, 3,
+            subtypes=("Insect", "Scientist"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BECOMES_TAPPED, predicate=IsSelf(),
