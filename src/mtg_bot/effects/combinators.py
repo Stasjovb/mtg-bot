@@ -208,6 +208,9 @@ class OptionalPutLandFromHandOntoBattlefield(Effect):
             f"P{controller_id} puts {card.printing.name} from hand "
             f"onto the battlefield"
         )
+        # ``fire_landfall_triggers`` walks the legacy string-key
+        # ``"landfall"`` abilities AND dispatches the predicate-style
+        # ENTERS event, so every migrated landfall ability fires.
         fire_landfall_triggers(state, card)
 
     def describe(self) -> str:

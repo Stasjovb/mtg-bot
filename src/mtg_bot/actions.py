@@ -635,8 +635,6 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
 
 
 def _play_land(state: GameState, player_id: int, card_id: int) -> None:
-    from mtg_bot.turn import fire_landfall_triggers
-
     p = state.player_by_id(player_id)
     # Source may be hand (normal play), exile (impulse-cast lands), or
     # graveyard (Icetill Explorer's "you may play lands from your
@@ -695,8 +693,13 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     # other ETB. Mirrors put_into_battlefield's call site for
     # creatures/artifacts. Lands go through _play_land, not
     # put_into_battlefield, so we have to call this here.
+    # ``_trigger_etb_abilities`` itself dispatches ``Event.ENTERS``,
+    # which fires every predicate-style landfall trigger
+    # (``IsLand() & Controlled(YOU)``); we no longer need to call
+    # ``fire_landfall_triggers`` here as well — that was the
+    # legacy-only landfall path and the dispatcher handles the
+    # migrated abilities.
     _trigger_etb_abilities(state, card)
-    fire_landfall_triggers(state, card)
     # "Whenever an opponent plays a land" triggers (Burgeoning) —
     # specifically the land-drop action, not any ETB. Fires under each
     # opposing permanent-controller.
@@ -2444,7 +2447,18 @@ def dispatch_event(
     stack item (defaults to the event's value, e.g. ``"enters"``).
     ``subjects`` is the named subject mapping for the event — see
     ``EVENT_SUBJECTS`` in ``effects/predicates.py``.
+
+    For ``Event.ENTERS`` the per-source firings are multiplied by
+    ``etb_trigger_multiplier`` (Starfield Vocalist's "triggers an
+    additional time" replacement). The legacy ``_fire_*`` paths apply
+    the same multiplier — keeping the dispatcher consistent means a
+    landfall trigger migrated to the predicate path keeps doubling
+    under Starfield, the same way the ``etb`` self-trigger path does
+    in ``_trigger_etb_abilities``.
     """
+    from mtg_bot.effects.predicates import Event as _Event
+    from mtg_bot.game import etb_trigger_multiplier
+
     if label is None:
         label = event.value
     # Snapshot the battlefield: triggers that ETB new permanents during
@@ -2457,14 +2471,19 @@ def dispatch_event(
         ):
             if not ability.matches_event(event, subjects, source, state):
                 continue
-            push_triggered_ability(
-                state,
-                source=source,
-                ability=ability,
-                ability_index=ability_index,
-                controller_id=source.controller_id,
-                label=label,
+            firings = (
+                etb_trigger_multiplier(state, source.controller_id)
+                if event is _Event.ENTERS else 1
             )
+            for _ in range(firings):
+                push_triggered_ability(
+                    state,
+                    source=source,
+                    ability=ability,
+                    ability_index=ability_index,
+                    controller_id=source.controller_id,
+                    label=label,
+                )
 
 
 def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:

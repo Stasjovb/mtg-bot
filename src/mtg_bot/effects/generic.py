@@ -3494,6 +3494,8 @@ class SearchLibraryForBasicLandTapped(Effect):
                 f"P{controller_id} puts {land.printing.name} onto the "
                 f"battlefield tapped"
             )
+            # ``fire_landfall_triggers`` covers both the legacy
+            # string-key path and the predicate-style ENTERS dispatch.
             fire_landfall_triggers(state, land)
 
     def describe(self) -> str:
@@ -4724,6 +4726,8 @@ class PutBasicLandFromHandOntoBattlefieldTapped(Effect):
             f"P{controller_id} puts {basic.printing.name} onto the "
             f"battlefield tapped (Terrain Generator)"
         )
+        # ``fire_landfall_triggers`` covers both the legacy
+        # string-key path and the predicate-style ENTERS dispatch.
         fire_landfall_triggers(state, basic)
 
     def describe(self) -> str:

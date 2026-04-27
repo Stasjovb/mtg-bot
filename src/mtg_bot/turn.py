@@ -595,14 +595,28 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
-    """Push "Landfall — whenever a land you control enters" triggers onto
-    the stack for permanents the new land's controller controls.
+    """Push landfall triggers onto the stack for permanents the new
+    land's controller controls.
 
-    Called from every code path that puts a land onto the battlefield
-    (PlayLand, SearchLibraryForBasicLandTapped, etc.). Honors
-    etb_trigger_multiplier by pushing N times.
+    Called from bespoke effects that put a land onto the battlefield
+    OUTSIDE of the standard ``_play_land`` / ``_trigger_etb_abilities``
+    pipeline (Burgeoning's "put a land card from your hand",
+    fetchland-style "search your library for a basic land", and so
+    on). The standard ``_play_land`` path drives landfall through
+    ``_trigger_etb_abilities`` instead — calling this on top of that
+    would double-fire.
+
+    Fires both legacy ``trigger="landfall"`` string-key abilities
+    (dead after the phase-2 migration but kept here in step with the
+    rest of the ``_fire_*`` family — phase 3 sweeps the legacy
+    branch) and predicate-style ``event=Event.ENTERS,
+    predicate=IsLand() & Controlled(YOU)`` abilities via
+    ``dispatch_event``. The dispatcher itself applies
+    ``etb_trigger_multiplier`` for ENTERS, so the legacy loop here
+    multiplies its own firings independently.
     """
-    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.effects.predicates import Event
     from mtg_bot.game import etb_trigger_multiplier
 
     controller = new_land.controller_id
@@ -623,6 +637,9 @@ def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
                     controller_id=controller,
                     label="landfall",
                 )
+    # Dispatch the predicate-style ENTERS event so phase-2-migrated
+    # landfall abilities fire from this code path as well.
+    dispatch_event(state, Event.ENTERS, label="landfall", obj=new_land)
 
 
 def fire_opponent_plays_land_triggers(

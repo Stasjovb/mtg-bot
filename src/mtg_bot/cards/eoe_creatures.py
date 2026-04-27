@@ -8,6 +8,17 @@ from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    HasSubtype,
+    IsArtifact,
+    IsCreature,
+    IsLand,
+    IsNontoken,
+    IsSelf,
+)
 
 
 EOE_CREATURES: dict[str, CardPrinting] = {
@@ -23,7 +34,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                 ),
                 TriggeredAbility(
@@ -53,7 +64,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Honored Knight-Captain", "{1}{W}", 1, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Human Soldier"],
                         count=1,
@@ -88,7 +99,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Human Soldier"],
                         count=1,
@@ -113,7 +124,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Virus Beetle", "{1}{B}", 1, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb", effect=EachOpponentDiscards(count=1)
+                    event=Event.ENTERS, predicate=IsSelf(), effect=EachOpponentDiscards(count=1)
                 ),
             ),
         ),
@@ -185,7 +196,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Galactic Wayfarer", "{2}{G}", 3, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -199,7 +210,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Insect", "Druid"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=GainLife(amount=1),
                 ),
             ),
@@ -221,7 +232,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Thawbringer", "{2}{G}", 4, 2,
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=Surveil(amount=1)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=Surveil(amount=1)),
                 TriggeredAbility(trigger="dies", effect=Surveil(amount=1)),
             ),
         ),
@@ -231,7 +242,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Dauntless Scrapbot", "{3}", 3, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         ExileEachOpponentsGraveyard(),
                         CreateToken(
@@ -249,14 +260,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"trample"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=PumpCreaturesYouControlUntilEOT(
                         power_bonus=1, toughness_bonus=1,
                         granted_keywords=frozenset({"vigilance", "haste"}),
@@ -274,7 +285,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{U}",
             replaces_draw_with_extra_when_hand_at_most_one=True,
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1)),
             ),
         ),
         # Illvoi Galeblade: Flash + Flying + "{2}, Sacrifice this creature:
@@ -309,7 +320,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Surveil(amount=2),
                 ),
             ),
@@ -322,7 +333,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb", effect=DealDamageAnyTarget(amount=3)
+                    event=Event.ENTERS, predicate=IsSelf(), effect=DealDamageAnyTarget(amount=3)
                 ),
             ),
         ),
@@ -331,7 +342,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying", "haste"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=DealDamageToOpponentCreature(amount=1),
                 ),
             ),
@@ -441,7 +452,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "first strike"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
@@ -457,7 +468,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=DealDamageAnyTarget(amount=3),
                 ),
             ),
@@ -476,7 +487,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "trample"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
                 ),
             ),
@@ -488,7 +499,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         DrawCards(amount=2),
                         DiscardSelf(amount=1),
@@ -508,7 +519,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnUpToNTargetCreaturesToOwnersHands(
                         max_n=2, exclude_spacecraft=True,
                     ),
@@ -528,7 +539,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
                 ),
             ),
@@ -541,7 +552,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Surveil(amount=2),
                 ),
             ),
@@ -555,7 +566,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=EachOpponentSacrificesCreature(),
                 ),
             ),
@@ -568,7 +579,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=DealDamageToOpponentCreatureByArtifactCount(),
                 ),
             ),
@@ -581,7 +592,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=DealDamageToTargetCreature(amount=10, optional=True),
                 ),
             ),
@@ -594,7 +605,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Drix", "Assassin"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ExileTargetCreatureUntilSourceLeaves(
                         excluded_subtypes=frozenset({"Assassin"}),
                     ),
@@ -614,7 +625,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=SearchLibraryForCard(
                         filter_name="legendary_creature",
                         may_fail=False,
@@ -644,7 +655,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ModalChooseOne(modes=(
                         SearchLibraryForCard(
                             filter_name="creature_small",
@@ -731,7 +742,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         SelfMill(amount=3),
                         ReturnCreatureFromYourGraveyardToHand(),
@@ -748,7 +759,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToHand(),
                 ),
                 TriggeredAbility(
@@ -766,7 +777,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Biotech Specialist", "{R}{G}", 1, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -786,7 +797,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"menace"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateLanderAndScheduleSacrifice(),
                 ),
             ),
@@ -835,7 +846,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Jellyfish", "Advisor"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
                     effect=PutPlusOneCounterOnTargetCreature(amount=1),
                 ),
             ),
@@ -866,7 +877,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
@@ -990,7 +1001,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{B}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ModalChooseOne(modes=(
                         PutPlusOneCounterOnSelf(amount=2),
                         OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(),
@@ -1009,7 +1020,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=MonoistCircuitFeederETBEffect(),
                 ),
             ),
@@ -1030,7 +1041,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{B}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=2, toughness_bonus=0,
                         you_control_only=True,
@@ -1093,11 +1104,11 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Kavu", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PossibilityTechnicianETBEffect(),
                 ),
                 TriggeredAbility(
-                    trigger="kavu_you_control_enters",
+                    event=Event.ENTERS, predicate=HasSubtype("Kavu") & Controlled(YOU) & ~IsSelf(),
                     effect=PossibilityTechnicianETBEffect(),
                 ),
             ),
@@ -1114,7 +1125,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{R}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=RovingActuatorETBEffect(),
                     requires_void=True,
                 ),
@@ -1128,7 +1139,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Terrapact Intimidator", "{1}{R}", 2, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=TerrapactIntimidatorETBEffect(),
                 ),
             ),
@@ -1142,7 +1153,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=TerritorialBruntarLandfallEffect(),
                 ),
             ),
@@ -1200,7 +1211,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             grants_play_lands_from_graveyard=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=SelfMill(amount=1),
                 ),
             ),
@@ -1214,7 +1225,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{G}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=DoubleTargetCreaturesPowerUEOT(),
                 ),
             ),
@@ -1250,7 +1261,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         DrawCards(amount=2),
                         AlpharaelDreamingAcolyteDiscardEffect(),
@@ -1284,7 +1295,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
                 ),
                 TriggeredAbility(
@@ -1430,7 +1441,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"deathtouch", "lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpCreaturesYouControlUntilEOT(
                         power_bonus=1, toughness_bonus=0,
                         granted_keywords=frozenset({"deathtouch"}),
@@ -1457,7 +1468,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=TannukEnsignLandfallEffect(),
                 ),
             ),
@@ -1516,7 +1527,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AstelliReclaimerETBEffect(),
                 ),
             ),
@@ -1541,7 +1552,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             subtypes=("Human", "Pilot"),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=LookAtTopNRevealOrCounter(
                         n=5, filter_name="spacecraft",
                     ),
@@ -1576,7 +1587,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnEachOfUpToNTargetCreatures(
                         max_n=2,
                     ),
@@ -1602,7 +1613,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{U}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=TapTargetOpponentPermanentAndStunIt(),
                 ),
             ),
@@ -1618,7 +1629,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=SelfcraftMechanETBEffect(),
                 ),
             ),
@@ -1631,7 +1642,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{U}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=-3, toughness_bonus=0,
                         opponents_only=True,
@@ -1788,7 +1799,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ward="{2}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpCreaturesOpponentsControlUntilEOT(
                         power_bonus=-3,
                         toughness_bonus=0,
@@ -1804,7 +1815,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{2}{U}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=LookAtTopTwoSplitHandGraveyard(),
                 ),
             ),
@@ -1843,7 +1854,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Luxknight Breacher", "{3}{W}", 2, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(),
                 ),
             ),
@@ -1857,7 +1868,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnTargetPermanentYouControlToOwnersHand(
                         optional=True, exclude_self=True,
                     ),
@@ -1871,7 +1882,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Sunstar Expansionist", "{1}{W}", 2, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ConditionalIfOpponentHasMoreLands(
                         effect=CreateToken(
                             token_printing=TOKEN_PRINTINGS["Lander"],
@@ -1880,7 +1891,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=PumpSelfUntilEOT(power_bonus=1),
                 ),
             ),
@@ -1895,7 +1906,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
                 TriggeredAbility(
@@ -1991,7 +2002,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Faller's Faithful", "{2}{B}", 3, 1,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=DestroyTargetCreature(
                         draw_if_undamaged_amount=2,
                         optional=True,
@@ -2094,7 +2105,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             granted_keywords=frozenset({"flying"}),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateTokenAndAttachSelf(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                     ),
@@ -2125,7 +2136,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             granted_keywords=frozenset({"reach"}),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
@@ -2140,7 +2151,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flash"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AttachToTargetCreatureYouControl(
                         granted_keywords_ueot=frozenset({"first strike"}),
                     ),
@@ -2158,7 +2169,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flash"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AttachToTargetCreatureYouControl(
                         granted_keywords_ueot=frozenset({"hexproof"}),
                     ),
@@ -2197,7 +2208,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_artifact(
             "Cryogen Relic", "{1}{U}",
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1)),
                 TriggeredAbility(
                     trigger="leaves_battlefield",
                     effect=DrawCards(amount=1),
@@ -2232,7 +2243,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"flash"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=-3, toughness_bonus=-3,
                         optional=True,
@@ -2268,7 +2279,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Melded Moxite", "{1}{R}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=OptionalDiscardCardThenDrawN(amount=2),
                 ),
             ),
@@ -2352,7 +2363,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
                     effect=OptionalManaCostThenEffect(
                         cost_str="{1}",
                         inner_effect=PutPlusOneCounterOnSelf(amount=1),
@@ -2411,7 +2422,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Weftstalker Ardent", "{2}{R}", 3, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="creature_or_artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
                     effect=DealDamageEachOpponent(amount=1),
                 ),
             ),
@@ -2427,7 +2438,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="creature_or_artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
                     effect=GainLife(amount=1),
                 ),
                 TriggeredAbility(
@@ -2458,7 +2469,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=PumpSelfUntilEOT(power_bonus=2),
                 ),
             ),
@@ -2469,7 +2480,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"trample"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=PumpSelfUntilEOT(power_bonus=1),
                 ),
             ),
@@ -2510,7 +2521,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             granted_keywords=frozenset({"menace"}),
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=EnchantedCreatureFightsTargetEffect(),
                 ),
             ),
@@ -2522,7 +2533,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Banishing Light", "{2}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ExileOpponentsNonlandPermanentUntilLeaves(),
                 ),
             ),
@@ -2533,7 +2544,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Seam Rip", "{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ExileOpponentsNonlandPermanentUntilLeaves(
                         max_mv=2,
                     ),
@@ -2548,7 +2559,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Weapons Manufacturing", "{1}{R}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="nontoken_artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=IsArtifact() & IsNontoken() & Controlled(YOU) & ~IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Munitions"],
                         count=1,
@@ -2568,7 +2579,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Bioengineered Future", "{1}{G}{G}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -2584,7 +2595,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{G}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
@@ -2602,7 +2613,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             keywords={"deathtouch"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=0, toughness_bonus=0,
                         granted_keywords=frozenset({"deathtouch"}),
@@ -2625,7 +2636,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                     ),
                 ),
                 TriggeredAbility(
-                    trigger="landfall",
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
                     effect=PutPlusOneCounterOnSelf(amount=1),
                 ),
             ),
@@ -2638,7 +2649,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Seedship Broodtender", "{B}{G}", 2, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=SelfMill(amount=3),
                 ),
             ),
@@ -2660,7 +2671,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             "Biomechan Engineer", "{G}{U}", 2, 2,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Lander"],
                         count=1,
@@ -2686,7 +2697,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Germinating Wurm", "{4}{G}", 5, 5,
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=GainLife(amount=2)),
             ),
             warp="{1}{G}",
             subtypes=("Plant", "Wurm"),
@@ -2699,7 +2710,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             warp="{1}{G}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PutPlusOneCounterOnTargetCreature(amount=1),
                 ),
             ),

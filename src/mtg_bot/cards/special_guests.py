@@ -38,6 +38,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 # Edge of Eternities Special Guests (10 cards, Scryfall ``set:spg
@@ -88,7 +89,7 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
         power_bonus=0, toughness_bonus=3,
         triggered_abilities=(
             TriggeredAbility(
-                trigger="etb",
+                event=Event.ENTERS, predicate=IsSelf(),
                 effect=AttachToTargetCreatureYouControl(),
             ),
         ),

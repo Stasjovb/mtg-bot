@@ -8,6 +8,7 @@ relative to oracle text.
 from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 # Edge of Eternities: Stellar Sights (Scryfall set `eos`). Bonus-sheet
@@ -37,7 +38,7 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         "Blast Zone",
         triggered_abilities=(
             TriggeredAbility(
-                trigger="etb",
+                event=Event.ENTERS, predicate=IsSelf(),
                 effect=PutChargeCountersOnSelf(amount=1),
             ),
         ),
@@ -518,7 +519,7 @@ STELLAR_SIGHTS_LANDS: dict[str, CardPrinting] = {
         enters_tapped=True,
         triggered_abilities=(
             TriggeredAbility(
-                trigger="etb",
+                event=Event.ENTERS, predicate=IsSelf(),
                 effect=SacrificeNLandsYouControl(count=2),
             ),
         ),

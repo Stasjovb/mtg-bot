@@ -8,6 +8,7 @@ builder (and by some tests that want vanilla stats).
 from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
@@ -24,7 +25,7 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Healing Wisp", "{W}", 1, 1,
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=GainLife(amount=2)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=GainLife(amount=2)),
             ),
         ),
         # Blue
@@ -35,14 +36,14 @@ SYNTHETIC_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Inquisitive Scholar", "{2}{U}", 2, 2,
             triggered_abilities=(
-                TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+                TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=DrawCards(amount=1)),
             ),
         ),
         make_creature(
             "Court Archivist", "{3}{U}", 2, 3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb", effect=EachPlayerDraws(amount=1)
+                    event=Event.ENTERS, predicate=IsSelf(), effect=EachPlayerDraws(amount=1)
                 ),
             ),
         ),

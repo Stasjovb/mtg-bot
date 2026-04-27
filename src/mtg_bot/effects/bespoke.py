@@ -130,6 +130,8 @@ class FamishedWorldsireETBEffect(Effect):
                 f"P{controller_id} puts {land.printing.name} onto the "
                 f"battlefield tapped (Famished Worldsire)"
             )
+            # ``fire_landfall_triggers`` covers both the legacy
+            # string-key path and the predicate-style ENTERS dispatch.
             fire_landfall_triggers(state, land)
         # Shuffle what's left (rest goes back where it was, then the
         # whole library is shuffled per oracle).

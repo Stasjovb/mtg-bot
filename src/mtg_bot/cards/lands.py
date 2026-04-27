@@ -14,6 +14,7 @@ from mtg_bot.cards.base import (
     CardPrinting, make_basic_land, make_colorless_land, make_planet_land,
     make_shock_land, make_utility_land,
 )
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 BASIC_LANDS: dict[str, CardPrinting] = {
@@ -64,7 +65,7 @@ UTILITY_LANDS: dict[str, CardPrinting] = {
         enters_tapped=True,
         triggered_abilities=(
             TriggeredAbility(
-                trigger="etb", effect=SacrificeSelfUnlessTapPermanent(),
+                event=Event.ENTERS, predicate=IsSelf(), effect=SacrificeSelfUnlessTapPermanent(),
             ),
         ),
         activated_abilities=(

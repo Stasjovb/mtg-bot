@@ -4,9 +4,23 @@ A triggered-ability line of the form ``When/Whenever <condition>,
 <effect>.`` decomposes into a condition phrase and an effect phrase.
 Each is handled by its own parser — the condition by
 ``_parse_trigger_phrase`` (a literal-phrase lookup against
-``_TRIGGER_PHRASES``), the effect by ``_parse_effect_phrase`` from
-``effects``. Adding a new condition or effect grows its respective
-grammar without touching the line-level pattern.
+``_TRIGGER_PHRASES`` and ``_PREDICATE_TRIGGER_PHRASES``), the effect
+by ``_parse_effect_phrase`` from ``effects``. Adding a new condition
+or effect grows its respective grammar without touching the line-
+level pattern.
+
+Two trigger shapes coexist during the predicate-trigger migration:
+
+- **String-key style** (legacy): the condition phrase maps to a flat
+  string key (``"dies"``, ``"attacks"``, …) and the engine's per-event
+  ``_fire_*`` functions hardcode-match it. Phases later than this one
+  will migrate the remaining string-key keys to the predicate path.
+- **Predicate style** (new): the condition phrase maps to an
+  ``(Event, Predicate)`` pair and the engine's centralized
+  ``dispatch_event`` walks every triggered ability looking for a
+  matching ``event`` whose ``predicate`` evaluates true. Phase 2
+  migrated the ENTERS-event family (``etb`` / ``landfall`` /
+  ``artifact_enters_you_control`` and the qualified variants).
 
 Some triggered-ability lines are prefixed by an *ability-word* label
 followed by an em-dash (e.g. ``Landfall — Whenever a land you
@@ -23,6 +37,15 @@ import re
 
 from mtg_bot.cards.base import TriggeredAbility
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    IsArtifact,
+    IsLand,
+    IsSelf,
+    Predicate,
+)
 
 
 _TRIGGERED_ABILITY_LINE = re.compile(
@@ -30,17 +53,14 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 )
 
 
-# Trigger-condition phrases → engine-level trigger key.
+# Trigger-condition phrases → engine-level trigger key (legacy
+# string-key shape). Pre-phase-2 this dict held every recognized
+# condition; phase 2 lifted the ENTERS-event family into
+# ``_PREDICATE_TRIGGER_PHRASES`` below. The remaining entries here
+# stay on the string-key path until later phases migrate them.
 _TRIGGER_PHRASES: dict[str, str] = {
-    "this creature enters": "etb",
     "this creature dies": "dies",
     "this creature attacks": "attacks",
-    # Land-enters trigger. The engine uses ``landfall`` as the
-    # canonical trigger key (see ``eoe_creatures.py``); the
-    # ``Landfall —`` ability-word label, when present in oracle text,
-    # is stripped by ``_strip_ability_word_prefix`` before this
-    # lookup runs.
-    "a land you control enters": "landfall",
     # Spell-cast triggers. The verbatim phrase
     # ``you cast your second spell each turn`` maps to the engine's
     # canonical ``second_spell_each_turn`` key (see Illvoi Operative,
@@ -87,15 +107,44 @@ _TRIGGER_PHRASES: dict[str, str] = {
     # engine's ``blocks_creature_with_flying`` key.
     "this creature blocks a creature with flying":
         "blocks_creature_with_flying",
-    # Artifact-enters-you-control trigger. The engine collapses the
-    # ``a``-vs-``another`` distinction in
-    # ``_fire_artifact_enters_triggers`` (the source object is excluded
-    # from the firing loop), so both surface phrases map to the single
-    # ``artifact_enters_you_control`` key. Mm'menon, Uthros Exile uses
-    # ``an artifact you control enters``; Mechan Assembler and
-    # Oreplate Pangolin use ``another artifact you control enters``.
-    "an artifact you control enters": "artifact_enters_you_control",
-    "another artifact you control enters": "artifact_enters_you_control",
+}
+
+
+# Trigger-condition phrases for the predicate-trigger path → tuple of
+# (Event, Predicate). Phase 2 migrated the ENTERS-event family —
+# every condition phrase here corresponds to an ETB-family trigger
+# whose static cards now express the firing condition via a
+# ``(event=Event.ENTERS, predicate=...)`` ``TriggeredAbility``.
+#
+# The ``"another"`` variants for artifact/etc. enters use the same
+# event but layer ``~IsSelf()`` onto the predicate so the source
+# permanent is excluded from the firing pool — the engine no longer
+# needs special-case "exclude the entering object" logic at the
+# fire site for these.
+_PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
+    # ``Whenever this creature enters`` — the source's own ETB.
+    "this creature enters": (Event.ENTERS, IsSelf()),
+    # Land-enters ("landfall"). The ``Landfall —`` ability-word label,
+    # when present in oracle text, is stripped by
+    # ``_strip_ability_word_prefix`` before this lookup runs.
+    "a land you control enters": (
+        Event.ENTERS, IsLand() & Controlled(YOU),
+    ),
+    # Artifact-enters-you-control. Both ``an artifact you control
+    # enters`` (Mm'menon, Uthros Exile) and ``another artifact you
+    # control enters`` (Mechan Assembler, Oreplate Pangolin) collapse
+    # to the same predicate. The legacy
+    # ``_fire_artifact_enters_triggers`` engine helper excluded the
+    # entering object from the firing pool unconditionally, so the
+    # ``a`` vs ``another`` wording was a surface distinction without
+    # behavioral impact — preserving that here keeps the migration
+    # behavior-identical to the legacy fire path.
+    "an artifact you control enters": (
+        Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+    ),
+    "another artifact you control enters": (
+        Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+    ),
 }
 
 
@@ -129,15 +178,33 @@ def _parse_trigger_phrase(phrase: str) -> str | None:
     return _TRIGGER_PHRASES.get(phrase.strip())
 
 
+def _parse_predicate_trigger_phrase(
+    phrase: str,
+) -> tuple[Event, Predicate] | None:
+    return _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+
+
 def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     line = _strip_ability_word_prefix(line)
     m = _TRIGGERED_ABILITY_LINE.match(line)
     if m is None:
         return None
-    trigger = _parse_trigger_phrase(m.group(1))
-    if trigger is None:
-        return None
+    condition = m.group(1)
     effect = _parse_effect_phrase(m.group(2))
     if effect is None:
+        return None
+    # Predicate-style trigger lookup wins when the condition phrase is
+    # claimed by both tables — phase 2 only registers ENTERS-family
+    # phrases on the predicate side, so today the two tables are
+    # disjoint, but precedence here makes the migration order safe to
+    # extend in subsequent phases.
+    pred_match = _parse_predicate_trigger_phrase(condition)
+    if pred_match is not None:
+        event, predicate = pred_match
+        return TriggeredAbility(
+            event=event, predicate=predicate, effect=effect,
+        )
+    trigger = _parse_trigger_phrase(condition)
+    if trigger is None:
         return None
     return TriggeredAbility(trigger=trigger, effect=effect)

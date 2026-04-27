@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from mtg_bot.cards.base import *  # noqa: F401,F403
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
+    Event,
+    IsArtifact,
+    IsSelf,
+)
 
 
 EOE_SPELLS: dict[str, CardPrinting] = {
@@ -169,7 +176,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             subtype="Tezzeret",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="artifact_enters_you_control",
+                    event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),
                     effect=PutLoyaltyCounterOnSelf(amount=1),
                 ),
             ),
@@ -210,7 +217,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             devour_land_multiplier=3,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=FamishedWorldsireETBEffect(),
                 ),
             ),
@@ -291,7 +298,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             stationed_keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=OptionalSacLandOrLanderForBasicLandRamp(
                         land_count=2,
                     ),
@@ -313,7 +320,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateTokenPerMulticoloredPermanent(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         tapped=True,
@@ -359,7 +366,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             stationed_keywords={"flying", "trample"},
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=Sequence(effects=(
                         DestroyTargetNoncreaturePermanent(),
                         DealNDamageToEachCreature(amount=4),
@@ -387,7 +394,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             attached_grants_ward="{1}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=ExileTargetCreatureUntilSourceLeaves(
                         opponents_only=True,
                     ),
@@ -426,7 +433,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             attached_grants_control=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=TractorBeamETBEffect(),
                 ),
             ),
@@ -461,7 +468,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Pain for All", "{2}{R}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PainForAllETBEffect(),
                 ),
                 TriggeredAbility(
@@ -482,7 +489,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Pinnacle Starcage", "{1}{W}{W}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=PinnacleStarcageETBEffect(),
                 ),
             ),
@@ -649,7 +656,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             grants_control_opponent_ability_when_equipped=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AttachToTargetCreatureYouControl(),
                 ),
             ),
@@ -664,7 +671,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             power_bonus=1, toughness_bonus=0,
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=AttachToTargetCreatureYouControl(),
                 ),
                 TriggeredAbility(
@@ -688,7 +695,7 @@ EOE_SPELLS: dict[str, CardPrinting] = {
             "Weftwalking", "{4}{U}{U}",
             triggered_abilities=(
                 TriggeredAbility(
-                    trigger="etb",
+                    event=Event.ENTERS, predicate=IsSelf(),
                     effect=WeftwalkingETBEffect(),
                 ),
             ),
