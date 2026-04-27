@@ -137,6 +137,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         make_creature(
             "Virus Beetle", "{1}{B}", 1, 1,
+            artifact=True,
+            subtypes=("Insect",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(), effect=EachOpponentDiscards(count=1)
@@ -321,6 +323,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Mechan Navigator: becomes-tapped → draw, discard.
         make_creature(
             "Mechan Navigator", "{1}{U}", 2, 1,
+            artifact=True,
+            subtypes=("Robot", "Pilot"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BECOMES_TAPPED, predicate=IsSelf(),
