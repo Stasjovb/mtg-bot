@@ -111,3 +111,9 @@ class DefaultTacticalAgent(Agent):
         # "may → always yes" behavior that many cards in the codebase
         # rely on. Deterministic for MCTS.
         return True
+
+    def choose_legend_keep(self, state, player_id, legend_object_ids):
+        # Legend rule SBA: keep the first legendary in the group.
+        # Deterministic for search; tactical policy can override to
+        # pick the strongest one.
+        return legend_object_ids[0]

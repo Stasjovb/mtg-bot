@@ -1015,6 +1015,37 @@ def state_based_actions(state: GameState) -> bool:
         move_off_battlefield(state, pw, destination="graveyard")
         changed = True
 
+    # Legend rule (CR 704.5j): if a player controls two or more
+    # legendary permanents with the same name, that player chooses
+    # one of them, and the rest are put into their owners'
+    # graveyards. Group by (controller_id, printed_name) over
+    # legendary permanents only.
+    legend_groups: dict[tuple[int, str], list] = {}
+    for obj in state.battlefield:
+        if not obj.printing.is_legendary:
+            continue
+        key = (obj.controller_id, obj.printing.name)
+        legend_groups.setdefault(key, []).append(obj)
+    for (ctrl_id, _name), group in legend_groups.items():
+        if len(group) < 2:
+            continue
+        controller = state.player_by_id(ctrl_id)
+        if controller.agent is not None:
+            keep_id = controller.agent.choose_legend_keep(
+                state, ctrl_id, [o.id for o in group],
+            )
+        else:
+            keep_id = group[0].id
+        for obj in group:
+            if obj.id == keep_id:
+                continue
+            state.log.append(
+                f"{obj.printing.name} put into graveyard "
+                f"(legend rule; P{ctrl_id} kept #{keep_id})"
+            )
+            move_off_battlefield(state, obj, destination="graveyard")
+            changed = True
+
     destroyed = []
     for obj in state.battlefield:
         if not is_creature_now(obj):

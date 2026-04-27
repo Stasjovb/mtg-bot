@@ -191,6 +191,25 @@ class Agent:
         tests to exercise the no-branch."""
         return True
 
+    def choose_legend_keep(
+        self,
+        state: "GameState",
+        player_id: int,
+        legend_object_ids: list[int],
+    ) -> int:
+        """Legend-rule SBA decision (CR 704.5j): when ``player_id``
+        controls multiple legendary permanents with the same name,
+        pick which one to KEEP. The rest go to their owners'
+        graveyards.
+
+        Default: returns the first id (deterministic). Concrete
+        agents override for smarter selection (e.g., pick the most
+        valuable one). Implementations must return a value in
+        ``legend_object_ids``; the list is guaranteed to have at
+        least 2 entries (otherwise no legend rule fires).
+        """
+        return legend_object_ids[0]
+
 
 @dataclass
 class RandomAgent(Agent):
