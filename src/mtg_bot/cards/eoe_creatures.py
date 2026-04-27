@@ -196,6 +196,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Eumidian Terrabotanist: Landfall — gain 1 life.
         make_creature(
             "Eumidian Terrabotanist", "{1}{G}", 2, 3,
+            subtypes=("Insect", "Druid"),
             triggered_abilities=(
                 TriggeredAbility(
                     trigger="landfall",
