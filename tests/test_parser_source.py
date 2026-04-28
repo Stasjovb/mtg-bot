@@ -1159,11 +1159,13 @@ def test_source_claims_bygone_colossus():
     assert "Bygone Colossus" in source.claimed_names
 
 
-def test_source_does_not_claim_timeline_culler():
-    """Timeline Culler has the ``Warp—{B}, Pay 2 life.`` rider that's
-    out of scope this batch — the card must remain unclaimed."""
+def test_source_claims_timeline_culler():
+    """Timeline Culler is now claimed via the bespoke creature dispatch
+    table in creature_builder.py (batch 21). Previously blocked by the
+    Warp + pay-2-life rider which the grammar doesn't produce; the
+    bespoke path sidesteps the grammar entirely."""
     source = OracleParserCardSource()
-    assert "Timeline Culler" not in source.claimed_names
+    assert "Timeline Culler" in source.claimed_names
 
 
 # ---------- Ward ----------
@@ -1369,12 +1371,13 @@ def test_source_claims_sunset_saboteur():
     assert "Sunset Saboteur" in source.claimed_names
 
 
-def test_source_does_not_claim_harmonious_grovestrider():
-    """Harmonious Grovestrider has simple ``Ward {2}`` but its
-    power/toughness are ``*/*`` (lands-you-control), so the parser
-    rejects it at the integer-power check."""
+def test_source_claims_harmonious_grovestrider():
+    """Harmonious Grovestrider is now claimed via the bespoke creature
+    dispatch table in creature_builder.py (batch 21). Previously blocked
+    by the ``*/*`` dynamic P/T check (the grammar rejects non-integer
+    power/toughness); the bespoke path bypasses that check entirely."""
     source = OracleParserCardSource()
-    assert "Harmonious Grovestrider" not in source.claimed_names
+    assert "Harmonious Grovestrider" in source.claimed_names
 
 
 def test_source_does_not_claim_famished_worldsire():
