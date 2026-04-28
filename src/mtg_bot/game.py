@@ -89,7 +89,13 @@ class GameObject:
     # cleanup.
     temp_base_pt_override: "tuple[int, int] | None" = None
     # Warp-cast state. ``cast_via_warp`` is set True when this card was cast
-    # from hand for its warp cost — it triggers an exile at the next end step.
+    # for its warp cost (from hand or, for Timeline Culler, from graveyard).
+    # The end-step exile is scheduled as a proper delayed triggered ability
+    # on ``state.delayed_triggers`` at cast time (see ``_cast_spell``); this
+    # flag is read by effects that key off "if cast via warp" — Astelli
+    # Reclaimer's X computation and the ``granted_keywords_if_warp_cast``
+    # rider on pump effects (Full Bore). Cleared by ``WarpExileSelf`` when
+    # the delayed trigger fires.
     # ``warped`` is set True when this card sits in exile having been exiled
     # via that trigger — it can be cast from exile at its normal cost.
     cast_via_warp: bool = False
