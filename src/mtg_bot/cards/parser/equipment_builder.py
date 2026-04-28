@@ -26,15 +26,18 @@ optional ETB triggers. The grammar this builder claims today covers:
 - Hylderblade's Void rider — a literal beginning-of-end-step
   attach-to-target-creature trigger gated on ``requires_void=True``
   (the engine's stand-in for the EoE intervening-if condition);
+- Robe of Stars' Astral Projection activation — a flavor-named
+  ``"<name> — <cost>: Equipped creature phases out."`` line wired
+  into an ``ActivatedAbility`` whose effect is the bespoke
+  ``PhaseOutEquippedCreature``;
 - a closing ``"Equip {N}"`` line whose mana-cost token feeds
   ``make_equipment(equip_cost=...)``.
 
 Anything outside that shape — ``Equipped creature has
 "<granted activated ability>"``, the custom attack trigger on Atomic
-Microsizer, Robe of Stars' Astral Projection activated ability, or any
-line the per-line dispatcher doesn't recognize — falls through and the
-Equipment is silently skipped, mirroring the creature/spell/land
-builders.
+Microsizer, or any line the per-line dispatcher doesn't recognize —
+falls through and the Equipment is silently skipped, mirroring the
+creature/spell/land builders.
 
 These line phrases are equipment-specific ("Equipped creature ...",
 "Equip {N}", "When this Equipment enters, ...") and don't fit the
@@ -47,9 +50,12 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
     CardPrinting,
     TriggeredAbility,
     make_equipment,
+    parse_mana_cost,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES, _parse_keyword_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
@@ -58,6 +64,7 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     CreateTokenAndAttachSelf,
+    PhaseOutEquippedCreature,
 )
 from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
@@ -151,6 +158,21 @@ _VOID_END_STEP_ATTACH_LINE = (
 )
 
 
+# Robe of Stars' Astral Projection activation — a flavor-named
+# ``"<name> — <cost>: <effect>"`` activated ability whose effect is
+# ``"Equipped creature phases out."``. The flavor name on the prefix is
+# load-bearing for the printed line shape but doesn't carry any rules
+# behavior, so the parser captures only the mana cost. The current EoE
+# pool has exactly one Equipment activation of this shape, so a narrow
+# regex pinned to the "Equipped creature phases out." effect text is
+# enough — broader Equipment-activation grammar is deferred until a
+# second example exists.
+_PHASE_OUT_ACTIVATION_RE = re.compile(
+    r"^[A-Z][A-Za-z ]+ — (\{[^}]+\}(?:\{[^}]+\})*): "
+    r"Equipped creature phases out\.$"
+)
+
+
 def _parse_granted_keyword_list(rider: str) -> frozenset[str] | None:
     """Parse a comma-joined evergreen-keyword rider (``"flying"``,
     ``"flying, trample"``, ``"reach"``) into the frozen set of engine
@@ -204,6 +226,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     granted_keywords: set[str] = set()
     self_keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
+    activated: list[ActivatedAbility] = []
     equip_cost: str | None = None
 
     for raw_line in text.split("\n"):
@@ -289,6 +312,24 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 )
             )
             continue
+        # Robe of Stars' Astral Projection — a flavor-named activated
+        # ability whose effect is the bespoke
+        # ``PhaseOutEquippedCreature``. Only the mana cost is captured
+        # off the line; the prefix flavor name is recognized but
+        # discarded. Activated abilities accumulate alongside the
+        # synthesized Equip ability ``make_equipment`` appends.
+        m = _PHASE_OUT_ACTIVATION_RE.match(line)
+        if m is not None:
+            cost_str = m.group(1)
+            activated.append(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost(cost_str), mana_str=cost_str,
+                    ),
+                    effect=PhaseOutEquippedCreature(),
+                )
+            )
+            continue
         # Standalone evergreen-keyword line on the Equipment itself
         # (most often "Flash"). Routed through the shared keyword-line
         # parser so multi-keyword sentence-case lines also work.
@@ -311,5 +352,6 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         granted_keywords=frozenset(granted_keywords),
         keywords=frozenset(self_keywords),
         triggered_abilities=tuple(triggers),
+        activated_abilities=tuple(activated),
         equip_cost=equip_cost,
     )

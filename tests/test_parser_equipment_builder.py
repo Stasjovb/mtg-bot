@@ -454,3 +454,50 @@ def test_source_claims_hylderblade():
     end-step attach dispatch arm."""
     source = OracleParserCardSource()
     assert "Hylderblade" in source.claimed_names
+
+
+def test_build_equipment_printing_supports_astral_projection_activation():
+    """Robe of Stars' ``Astral Projection — {1}{W}: Equipped creature
+    phases out.`` line is parsed as an ``ActivatedAbility`` with the
+    bespoke ``PhaseOutEquippedCreature`` effect. The flavor name on
+    the prefix is captured by the regex but discarded (the rules text
+    after the colon is what carries the behavior)."""
+    from mtg_bot.cards.base import ActivatedAbility, ActivationCost
+    from mtg_bot.cards.base import parse_mana_cost as _parse
+    from mtg_bot.effects.generic import PhaseOutEquippedCreature
+
+    card = {
+        "name": "Robe of Stars",
+        "mana_cost": "{1}{W}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "Equipped creature gets +0/+3.\n"
+            "Astral Projection — {1}{W}: Equipped creature phases out. "
+            "(Treat it and anything attached to it as though they don't "
+            "exist until its controller's next turn.)\n"
+            "Equip {1}"
+        ),
+    }
+    printing = _build_equipment_printing(card)
+    assert printing is not None
+    # Two activated abilities: Astral Projection (parser-built, index 0)
+    # and the synthesized printed Equip {1} ability (appended last by
+    # ``make_equipment(equip_cost=...)``).
+    assert len(printing.activated_abilities) == 2
+    astral = printing.activated_abilities[0]
+    assert astral == ActivatedAbility(
+        cost=ActivationCost(
+            mana=_parse("{1}{W}"), mana_str="{1}{W}",
+        ),
+        effect=PhaseOutEquippedCreature(),
+    )
+    equip = printing.activated_abilities[1]
+    assert equip.cost.mana_str == "{1}"
+    assert equip.sorcery_speed
+
+
+def test_source_claims_robe_of_stars():
+    """End-to-end: Robe of Stars (Special Guests) is claimed via the
+    Astral Projection activation dispatch arm."""
+    source = OracleParserCardSource()
+    assert "Robe of Stars" in source.claimed_names

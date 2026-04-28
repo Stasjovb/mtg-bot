@@ -39,11 +39,19 @@ def test_robe_is_wired_up():
     assert "Equipment" in r.subtypes
     power_bonus, toughness_bonus, kws = r.equipment_bonuses
     assert power_bonus == 0 and toughness_bonus == 3
-    # Astral Projection is the sole activated ability.
-    assert len(r.activated_abilities) == 1
+    # Robe has two activated abilities: the Astral Projection phase-out
+    # at index 0 and the synthesized printed Equip {1} ability at index
+    # 1 (appended last by ``make_equipment(equip_cost=...)``).
+    assert len(r.activated_abilities) == 2
     ability = r.activated_abilities[0]
     assert ability.cost.mana_str == "{1}{W}"
     assert isinstance(ability.effect, PhaseOutEquippedCreature)
+    # The Equip ability is sorcery-speed and uses the canonical
+    # ``EquipToTargetCreatureYouControl`` effect — same as every other
+    # Equipment in the engine.
+    equip_ability = r.activated_abilities[1]
+    assert equip_ability.cost.mana_str == "{1}"
+    assert equip_ability.sorcery_speed
 
 
 def test_equipped_creature_gets_plus_zero_three():

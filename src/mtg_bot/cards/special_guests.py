@@ -16,7 +16,6 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    AttachToTargetCreatureYouControl,
     CardPrinting,
     CounterTargetSpell,
     CreateToken,
@@ -38,7 +37,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf
+from mtg_bot.effects.predicates import OPPONENT, Controlled, Event
 
 
 # Edge of Eternities Special Guests (10 cards, Scryfall ``set:spg
@@ -80,19 +79,15 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
     # controller's next untap step (turn.run_untap_step). Combat
     # damage skips phased creatures; triggers/anthems/targeting
     # don't yet hide them — documented simplification.
-    # Equip activation isn't modeled in this engine (the Equip cost is
-    # a known limitation shared with other EoE Equipment); Robe enters
-    # attached via the same "ETB attach-to-target-creature" pattern
-    # used elsewhere.
+    # The printed Equip {1} ability is wired via the standard
+    # ``make_equipment(equip_cost=...)`` arm; the engine's
+    # sorcery-speed Equip activation already attaches Robe via
+    # ``EquipToTargetCreatureYouControl`` (the same path every other
+    # Equipment uses). The earlier free ETB-attach trigger was a
+    # parser-discovered drift from the printed text and is dropped here.
     "Robe of Stars": make_equipment(
         "Robe of Stars", "{1}{W}",
         power_bonus=0, toughness_bonus=3,
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.ENTERS, predicate=IsSelf(),
-                effect=AttachToTargetCreatureYouControl(),
-            ),
-        ),
         activated_abilities=(
             ActivatedAbility(
                 cost=ActivationCost(
@@ -101,6 +96,7 @@ SPECIAL_GUESTS_EOE: dict[str, CardPrinting] = {
                 effect=PhaseOutEquippedCreature(),
             ),
         ),
+        equip_cost="{1}",
     ),
     # Nexus of Fate {5}{U}{U}: take an extra turn after this one. If it
     # would be put into a graveyard from anywhere, reveal Nexus and
