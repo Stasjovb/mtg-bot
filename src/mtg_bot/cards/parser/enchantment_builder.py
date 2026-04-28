@@ -1,13 +1,13 @@
-"""Whole-card name-keyed dispatch for Edge of Eternities Enchantments.
+"""Whole-card name-keyed dispatch for Edge of Eternities + Duskmourn
+Enchantments.
 
-All 15 enchantments in EoE main set (set code ``eoe``) whose oracle text
-maps directly to well-typed CardPrinting fields are claimed here via a
-name-keyed exact-dispatch table — one factory per card, no grammar
-required.
+Each enchantment whose oracle text maps directly to well-typed
+``CardPrinting`` fields is claimed here via a name-keyed exact-dispatch
+table — one factory per card, no grammar required.
 
 This module covers:
 
-Non-Aura enchantments:
+Non-Aura enchantments (EoE):
 - Banishing Light ``{2}{W}``
 - Seam Rip ``{W}``
 - Loading Zone ``{3}{G}``
@@ -18,13 +18,17 @@ Non-Aura enchantments:
 - Bioengineered Future ``{1}{G}{G}``
 - Eusocial Engineering ``{3}{G}{G}``
 
-Aura enchantments:
+Aura enchantments (EoE):
 - Moonlit Meditation ``{2}{U}``
 - Tractor Beam ``{2}{U}{U}``
 - Chorale of the Void ``{3}{B}``
 - Cryoshatter ``{U}``
 - Meltstrider's Resolve ``{G}``
 - Hardlight Containment ``{W}``
+- Pain for All ``{2}{R}``
+
+Aura enchantments (DSK):
+- Duskmourn's Domination ``{4}{U}{U}``
 """
 
 from __future__ import annotations
@@ -308,6 +312,38 @@ def _build_pain_for_all() -> CardPrinting:
 
 
 # ---------------------------------------------------------------------------
+# Duskmourn (DSK) Aura factories
+# ---------------------------------------------------------------------------
+
+def _build_duskmourns_domination() -> CardPrinting:
+    """Duskmourn's Domination ``{4}{U}{U}``: Enchantment — Aura.
+
+    Oracle text:
+        Enchant creature
+        You control enchanted creature.
+        Enchanted creature gets -3/-0 and loses all abilities.
+
+    Maps onto the existing ``make_aura`` flag set:
+    - ``attached_grants_control=True`` for the gain-control rider
+      (Tractor Beam precedent: the EoE Aura that grants control of
+      its enchanted creature).
+    - ``attached_grants_lose_all_abilities=True`` for the lose-all-
+      abilities rider (already wired on ``make_aura``; no DSK-
+      specific engine field needed).
+    - ``power_bonus=-3, toughness_bonus=0`` for the ``-3/-0``
+      continuous bonus, routed through the shared
+      ``equipment_bonuses`` machinery the same way Cryoshatter's
+      ``-5/-0`` is.
+    """
+    return make_aura(
+        "Duskmourn's Domination", "{4}{U}{U}",
+        power_bonus=-3, toughness_bonus=0,
+        attached_grants_control=True,
+        attached_grants_lose_all_abilities=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table: card name → factory
 # ---------------------------------------------------------------------------
 
@@ -330,6 +366,8 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Meltstrider's Resolve": _build_meltstriders_resolve,
     "Hardlight Containment": _build_hardlight_containment,
     "Pain for All": _build_pain_for_all,
+    # Duskmourn (DSK) Auras
+    "Duskmourn's Domination": _build_duskmourns_domination,
 }
 
 

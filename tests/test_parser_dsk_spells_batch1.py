@@ -28,6 +28,15 @@ New whole-spell exact-text dispatch entries
   Divert Disaster's parity simplification — the base mechanic, a
   counterspell, survives the rider drop.
 
+New name-keyed enchantment dispatch entries
+(``_ENCHANTMENT_BUILDERS`` in ``parser.enchantment_builder``):
+
+* **Duskmourn's Domination** ``{4}{U}{U}`` Aura — gain control + lose
+  all abilities + ``-3/-0`` continuous bonus on the enchanted
+  creature. Composes existing ``make_aura`` flags
+  (``attached_grants_control``, ``attached_grants_lose_all_abilities``,
+  ``power_bonus=-3``); no new engine fields needed.
+
 Cards newly claimed via the new primitive:
 
 * **Pyroclasm** ``{1}{R}`` Sorcery — single-line ``Pyroclasm deals 2
@@ -35,6 +44,8 @@ Cards newly claimed via the new primitive:
   effect path now that the regex is in place.
 * **Don't Make a Sound** ``{1}{U}`` Instant — claimed via the new
   whole-spell exact-text dispatch entry above.
+* **Duskmourn's Domination** ``{4}{U}{U}`` Aura — claimed via the new
+  name-keyed dispatch entry above.
 """
 
 from __future__ import annotations
@@ -142,3 +153,25 @@ def test_dispatch_dont_make_a_sound_unrelated_text_returns_none():
         "Counter target spell unless its controller pays {2}. "
         "If they do, draw a card."
     ) is None
+
+
+# ---------- enchantment dispatch (Duskmourn's Domination) ----------
+
+def test_duskmourns_domination_claimed_by_parser():
+    # Duskmourn's Domination ``{4}{U}{U}`` Aura — gain control + lose
+    # all abilities + -3/-0. Claimed via the name-keyed
+    # ``_ENCHANTMENT_BUILDERS`` dispatch in
+    # ``parser.enchantment_builder``.
+    assert "Duskmourn's Domination" in _claimed_names()
+
+
+def test_duskmourns_domination_carries_aura_fields():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the three hooks the static side ships:
+    # ``attached_grants_control``, ``attached_grants_lose_all_abilities``,
+    # and the ``-3/-0`` ``equipment_bonuses`` triple.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Duskmourn's Domination"]
+    assert p.attached_grants_control is True
+    assert p.attached_grants_lose_all_abilities is True
+    assert p.equipment_bonuses == (-3, 0, frozenset())
