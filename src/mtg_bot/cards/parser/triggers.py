@@ -80,13 +80,28 @@ from mtg_bot.effects.predicates import (
     IsNontoken,
     IsPlayer,
     IsSelf,
+    OpponentControlsMoreLandsThanYou,
     Predicate,
     SpellsCastThisTurn,
+    VoidActive,
 )
 
 
 _TRIGGERED_ABILITY_LINE = re.compile(
     r"^(?:When|Whenever) (.+?), (.+)\.$"
+)
+
+
+# Intervening-if shape: ``When/Whenever <condition>, if <gate>, <effect>.``
+# (CR 603.4). The gate sits BETWEEN the trigger condition and the
+# effect, gated on game state at both trigger time and resolve time.
+# We rely on the regex's non-greedy ``<condition>`` and ``<gate>`` to
+# stop at the first ``, `` boundary so the leading clause stays
+# minimal; the effect captures the rest of the sentence up to the
+# trailing period. A line that doesn't carry an ``if`` middle clause
+# falls through to ``_TRIGGERED_ABILITY_LINE`` unchanged.
+_TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
+    r"^(?:When|Whenever) (.+?), if (.+?), (.+)\.$"
 )
 
 
@@ -347,6 +362,41 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
 }
 
 
+# Intervening-if gate phrases → predicate. The phrase is the verbatim
+# oracle text between ``if`` and the trailing comma of the middle
+# clause (after stripping surrounding whitespace). Each predicate is a
+# game-state check evaluated against the source's controller and the
+# current battlefield — none of these gates depend on a per-event
+# subject, so they compose with the trigger's existing event predicate
+# via plain ``And``. The dispatcher's predicate evaluation handles the
+# trigger-time gate (CR 603.4 trigger check); the matching resolve-
+# time recheck on the same predicate is not yet wired through the
+# resolve pipeline, so a state change between trigger and resolve is
+# a known gap (the existing static cards using these gates rely on
+# the same trigger-time-only check today via ``requires_void`` /
+# ``ConditionalIf*`` effect wrappers, which are themselves single-
+# point gates).
+#
+# The "Void —" ability-word prefix on Alpharael Stonechosen / Roving
+# Actuator strips through ``_strip_ability_word_prefix`` before this
+# lookup runs, so the ``"a nonland permanent left the battlefield
+# this turn or a spell was warped this turn"`` gate phrase here covers
+# both prefixed and bare wordings of the Void rider.
+_INTERVENING_IF_PHRASES: dict[str, Predicate] = {
+    "an opponent controls more lands than you": (
+        OpponentControlsMoreLandsThanYou()
+    ),
+    (
+        "a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn"
+    ): VoidActive(),
+}
+
+
+def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
+    return _INTERVENING_IF_PHRASES.get(phrase.strip())
+
+
 # Ability-word prefix on a triggered-ability line. An ability word is
 # one or more capitalized words followed by `` — `` and a triggered-
 # ability body. Per the comprehensive rules ability words have no
@@ -385,6 +435,41 @@ def _parse_predicate_trigger_phrase(
 
 def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     line = _strip_ability_word_prefix(line)
+    # Intervening-if shape (CR 603.4) tried first: a recognized gate
+    # phrase between the trigger condition and the effect collapses to
+    # a single ``TriggeredAbility`` with the gate predicate AND-ed onto
+    # the event's base predicate. If the gate phrase isn't recognized
+    # the line is rejected outright (we don't fall back to the
+    # no-intervening-if shape because the surface text would then
+    # silently lose its gate, producing an over-firing trigger). This
+    # matters: an unrecognized gate is a parser failure to claim the
+    # card, not a license to drop the gate.
+    iif_match = _TRIGGERED_ABILITY_INTERVENING_IF_LINE.match(line)
+    if iif_match is not None:
+        condition = iif_match.group(1)
+        gate_phrase = iif_match.group(2)
+        gate_pred = _parse_intervening_if_phrase(gate_phrase)
+        if gate_pred is None:
+            return None
+        effect = _parse_effect_phrase(iif_match.group(3))
+        if effect is None:
+            return None
+        # Only the predicate-style trigger path supports an AND-able
+        # gate predicate; the legacy string-key path can't carry a
+        # predicate at all, so a gated trigger must resolve to an event
+        # that's already on the predicate side. The two table lookups
+        # below preserve the same precedence as the no-gate path; if
+        # only the legacy string-key table claims the condition phrase
+        # we decline rather than silently drop the gate.
+        pred_match = _parse_predicate_trigger_phrase(condition)
+        if pred_match is None:
+            return None
+        event, base_predicate = pred_match
+        return TriggeredAbility(
+            event=event,
+            predicate=base_predicate & gate_pred,
+            effect=effect,
+        )
     m = _TRIGGERED_ABILITY_LINE.match(line)
     if m is None:
         return None

@@ -551,6 +551,60 @@ class HasCounter(Predicate):
 
 
 @dataclass(frozen=True)
+class VoidActive(Predicate):
+    """Game-state predicate: Void is active right now — i.e. a nonland
+    permanent left the battlefield this turn or a spell was warped this
+    turn. Subject-independent (the predicate ignores ``subjects``).
+
+    Models the EoE "Void —" intervening-if gate that appears on
+    triggered-ability lines like ``Void — Whenever <X>, if a nonland
+    permanent left the battlefield this turn or a spell was warped this
+    turn, <effect>.`` (Alpharael Stonechosen, Roving Actuator). The
+    static-side equivalent today is ``TriggeredAbility(...,
+    requires_void=True)`` checked in ``should_fire_trigger``; the
+    predicate path expresses the same gate as a regular AND clause on
+    the trigger's predicate so the dispatcher's existing predicate
+    evaluation handles it without a separate flag.
+    """
+
+    def matches(self, state, subjects, source):
+        from mtg_bot.game import is_void_active
+
+        return is_void_active(state)
+
+
+@dataclass(frozen=True)
+class OpponentControlsMoreLandsThanYou(Predicate):
+    """Game-state predicate: at least one opponent of the source's
+    controller controls strictly more lands than the source's controller.
+    Subject-independent.
+
+    Models the "if an opponent controls more lands than you"
+    intervening-if gate on Sunstar Expansionist's ETB. The static-side
+    equivalent is ``ConditionalIfOpponentHasMoreLands`` (an effect
+    combinator that gates resolution); this predicate is the
+    trigger-time analogue used by the predicate-style trigger path.
+    """
+
+    def matches(self, state, subjects, source):
+        my_id = source.controller_id
+        my_lands = sum(
+            1 for o in state.battlefield
+            if o.controller_id == my_id and o.printing.is_land
+        )
+        for p in state.players:
+            if p.id == my_id or getattr(p, "has_lost", False):
+                continue
+            count = sum(
+                1 for o in state.battlefield
+                if o.controller_id == p.id and o.printing.is_land
+            )
+            if count > my_lands:
+                return True
+        return False
+
+
+@dataclass(frozen=True)
 class SpellsCastThisTurn(Predicate):
     """Game-state predicate: the named subject's controller has cast
     exactly ``n`` spells this turn (counted via
