@@ -46,7 +46,9 @@ from mtg_bot.cards.base import (
     ConditionalIfVoid,
     ConsultTheStarChartsEffect,
     CostReduction,
+    CounterTargetSpell,
     CreateToken,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     CutPropulsionEffect,
     DealDamageAnyTarget,
@@ -762,6 +764,28 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Close Encounter deals damage equal to the power of the "
         "chosen creature or card to target creature."
     ): CloseEncounterEffect(),
+    # Warping Wail: 3-mode modal whose third mode contains an inner
+    # quoted ability sentence (``It has "Sacrifice this token: Add
+    # {C}."``). The static side simplifies mode 3 to a bare token
+    # creation because the token printing already carries the
+    # sacrifice-for-mana ability — no redundant inner-effect modeling
+    # needed. The modal-mode parser is single-sentence per mode and
+    # the existing per-mode primitives don't cover ``Exile target
+    # creature with power or toughness 1 or less.`` or ``Counter
+    # target sorcery spell.``, so the spell lands here as a whole-
+    # text dispatch entry. The leading ``({C} represents colorless
+    # mana.)`` line is reminder text and stripped before lookup.
+    (
+        "Choose one —\n"
+        "• Exile target creature with power or toughness 1 or less.\n"
+        "• Counter target sorcery spell.\n"
+        "• Create a 1/1 colorless Eldrazi Scion creature token. "
+        "It has \"Sacrifice this token: Add {C}.\""
+    ): ModalChooseOne(modes=(
+        ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1),
+        CounterTargetSpell(filter_types=frozenset({"Sorcery"})),
+        CreateToken(token_printing=TOKEN_PRINTINGS["Eldrazi Scion"]),
+    )),
     # Lithobraking: create-Lander + reflexive-trigger optional sac.
     # The static ships ``Sequence(CreateToken(Lander),
     # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``.

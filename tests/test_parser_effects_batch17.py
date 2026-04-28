@@ -40,8 +40,11 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    CounterTargetSpell,
     CreateToken,
     DealNDamageToEachCreature,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
+    ModalChooseOne,
     OptionalSacArtifactForEffect,
     PreventAllCombatDamageThisTurn,
     SearchLibraryForGreenCreatureWithMVAtMostX,
@@ -347,3 +350,35 @@ def test_detect_kicker_cost_returns_none_when_absent():
     assert _detect_kicker_cost(
         "Counter target spell. You draw a card."
     ) is None
+
+
+# ---------- Warping Wail ----------
+
+def test_warping_wail_claimed_by_parser():
+    # Warping Wail ``{1}{C}`` Instant — 3-mode modal whose third mode
+    # has an inner quoted ability sentence (``It has "Sacrifice this
+    # token: Add {C}."``) that the modal-mode parser can't carve up;
+    # plus modes 1 and 2 are bespoke target shapes (power-or-tough
+    # gate, sorcery-only counter) without per-clause primitives. The
+    # spell lands as a whole-spell exact-text dispatch entry that
+    # returns the static-side ``ModalChooseOne`` directly. The
+    # leading ``({C} represents colorless mana.)`` reminder line is
+    # stripped before lookup.
+    assert "Warping Wail" in _claimed_names()
+
+
+def test_dispatch_warping_wail_returns_modal():
+    # The dispatch key uses the post-reminder-stripping form — the
+    # leading ``({C} represents colorless mana.)`` reminder is gone.
+    eff = _try_whole_spell_exact_text(
+        "Choose one —\n"
+        "• Exile target creature with power or toughness 1 or less.\n"
+        "• Counter target sorcery spell.\n"
+        "• Create a 1/1 colorless Eldrazi Scion creature token. "
+        "It has \"Sacrifice this token: Add {C}.\""
+    )
+    assert eff == ModalChooseOne(modes=(
+        ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1),
+        CounterTargetSpell(filter_types=frozenset({"Sorcery"})),
+        CreateToken(token_printing=TOKEN_PRINTINGS["Eldrazi Scion"]),
+    ))
