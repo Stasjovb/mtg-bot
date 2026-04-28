@@ -22,7 +22,9 @@ from mtg_bot.cards.base import (
     DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageToTargetCreature,
+    DealDamageToTargetTappedCreature,
     DestroyTargetArtifact,
+    DestroyTargetArtifactEnchantmentOrFlyingCreature,
     DestroyTargetArtifactOrTappedCreature,
     DestroyTargetCreature,
     DestroyTargetLand,
@@ -42,8 +44,11 @@ from mtg_bot.cards.base import (
     OptionalManaCostThenEffect,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     PumpSelfUntilEOT,
+    PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
+    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
@@ -219,6 +224,15 @@ _MILL_N_CARDS = re.compile(
     rf"^mill (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
 )
 _DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
+# "Destroy target artifact, enchantment, or creature with flying." —
+# Shattered Wings's destroy clause. Maps to
+# ``DestroyTargetArtifactEnchantmentOrFlyingCreature()`` whose
+# ``legal_targets`` filters to artifacts (any), enchantments (any),
+# or creatures that currently have flying. The Oxford comma after
+# ``enchantment`` is required (matches Scryfall's printed form).
+_DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
+    r"^destroy target artifact, enchantment, or creature with flying$"
+)
 _DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
@@ -379,6 +393,16 @@ _EXILE_TARGET_CREATURE_OR_SPACECRAFT = re.compile(
 _DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE = re.compile(
     r"^destroy target artifact or tapped creature$"
 )
+# "Target artifact or creature's owner puts it on their choice of the
+# top or bottom of their library." — Lost in Space's bounce-to-library
+# clause. Maps to ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOf
+# Library()`` whose target kind is ``("permanent", id)`` so artifacts
+# (any) and creatures (any) are both legal; the chosen target's owner
+# (not the spell's controller) decides top vs bottom at resolution.
+_OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM = re.compile(
+    r"^target artifact or creature's owner puts it on their choice of "
+    r"the top or bottom of their library$"
+)
 # "Tap target artifact or creature." — Mental Modulation's middle
 # clause and any future card that ships the same surface form. Maps to
 # ``TapTargetArtifactOrCreature()``. No-op if the chosen target is
@@ -426,6 +450,47 @@ _PUMP_SELF_UEOT = re.compile(
 # returned, mirroring the behavior of the pump-and-gain primitive.
 _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
     r"^another target creature you control gains (.+) until end of turn$"
+)
+# "Target artifact or creature gains <kw>[ and <kw2>...] until end of
+# turn." — pure keyword-grant on a permanent target whose legal pool
+# spans both artifacts and creatures (Reroute Systems mode 0). Maps to
+# ``PumpTargetArtifactOrCreatureUntilEOT(granted_keywords=...)`` which
+# uses the ``("permanent", id)`` target kind so the chosen permanent
+# may be either an artifact (any) or a creature.
+#
+# No P/T pump captured — the engine class doesn't ship one for this
+# surface today (Reroute Systems' +0/+0 default is the only form in
+# use). The keyword body is parsed via ``_parse_keyword_grant_body``
+# and validated against the keyword-line whitelist; rejection returns
+# ``None`` so an unknown keyword keeps the wrapping spell unclaimed.
+_PUMP_TARGET_ARTIFACT_OR_CREATURE_GAINS_KEYWORDS_UEOT = re.compile(
+    r"^target artifact or creature gains (.+) until end of turn$"
+)
+# "<source> deals N damage to target tapped creature" — Reroute Systems
+# mode 1's tapped-only burn. Maps to ``DealDamageToTargetTappedCreature(
+# amount=N)`` whose ``legal_targets`` filters to creatures that are
+# currently tapped, with a re-check at resolution in case a between-
+# cast-and-resolve untap removes the tapped creature from the legal
+# pool. The ``deals`` form (no ``it`` / ``you`` subject) is what
+# Scryfall prints for spells that name themselves as the subject; the
+# spell-effect normalizer strips the ``<Name>`` prefix before this
+# regex sees the phrase, so the surface form here is exactly
+# ``deals N damage to target tapped creature``.
+_DEAL_DAMAGE_TARGET_TAPPED_CREATURE = re.compile(
+    r"^deals (\d+) damage to target tapped creature$"
+)
+# "Put N charge counters on target Spacecraft or Planet you control" —
+# Drill Too Deep mode 0 (and any future card with the same surface).
+# Maps to ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(amount=
+# N)``. Amount is a digit or one of the spelled-out small cardinals
+# (Drill Too Deep prints ``Put five charge counters …``); the engine
+# class's ``amount`` field is an int either way. The
+# ``Spacecraft or Planet`` capitalization is verbatim from the oracle
+# text — the spell-effect normalizer only lowercases the first letter
+# of the phrase, so inner type-name capitalization survives.
+_PUT_CHARGE_COUNTERS_ON_TARGET_SPACECRAFT_OR_PLANET_YOU_CONTROL = re.compile(
+    rf"^put (\d+|{_SMALL_CARDINAL_PATTERN}) charge counters on "
+    rf"target Spacecraft or Planet you control$"
 )
 # "Target player mills cards equal to your life total" — Space-Time
 # Anomaly's printed form. Maps to
@@ -645,6 +710,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_N_DAMAGE_EACH_OPPONENT.match(phrase)
     if m is not None:
         return DealDamageEachOpponent(amount=int(m.group(1)))
+    # ``deals N damage to target tapped creature`` — Reroute Systems
+    # mode 1's tapped-only burn. Tried AFTER the targeted ``deals N
+    # damage to target creature`` regex above so the bare creature
+    # form wins on phrases without the ``tapped`` qualifier; this
+    # more-specific shape only claims phrases that carry the
+    # ``tapped`` tail. Maps to ``DealDamageToTargetTappedCreature``
+    # whose ``legal_targets`` gates on ``obj.tapped`` and re-checks
+    # at resolution.
+    m = _DEAL_DAMAGE_TARGET_TAPPED_CREATURE.match(phrase)
+    if m is not None:
+        return DealDamageToTargetTappedCreature(amount=int(m.group(1)))
     if _DRAW_A_CARD.match(phrase) is not None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
@@ -718,6 +794,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         return SelfMill(amount=_parse_amount(m.group(1)))
     if _DESTROY_TARGET_ARTIFACT.match(phrase) is not None:
         return DestroyTargetArtifact()
+    if _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE.match(
+        phrase
+    ) is not None:
+        # ``destroy target artifact, enchantment, or creature with
+        # flying`` — Shattered Wings. The engine class's
+        # ``legal_targets`` filters to artifacts (any), enchantments
+        # (any), or creatures that currently have flying, with a
+        # re-check at resolution in case a between-cast-and-resolve
+        # ability removes flying. Tried after the bare
+        # ``destroy target artifact`` regex would have matched (which
+        # this surface text doesn't due to the ``$`` anchor) so the
+        # more-specific shape only claims phrases that carry the
+        # ``, enchantment, or creature with flying`` tail.
+        return DestroyTargetArtifactEnchantmentOrFlyingCreature()
     if _DESTROY_TARGET_LAND.match(phrase) is not None:
         return DestroyTargetLand()
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
@@ -739,6 +829,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # middle clause and any future card with the same surface.
         # No-op if the chosen target is already tapped at resolution.
         return TapTargetArtifactOrCreature()
+    if _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM.match(
+        phrase
+    ) is not None:
+        # ``target artifact or creature's owner puts it on their
+        # choice of the top or bottom of their library`` — Lost in
+        # Space's bounce-to-library clause. The chosen target's
+        # owner decides top vs bottom at resolution (not the
+        # spell's controller). Maps to the engine class with no
+        # parameters — the surface form is a literal match.
+        return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))
@@ -808,6 +908,34 @@ def _parse_effect(phrase: str) -> Effect | None:
             granted_keywords=keywords,
             you_control_only=True,
             exclude_self=True,
+        )
+    # ``target artifact or creature gains <kw>[ and <kw2>...] until
+    # end of turn`` — pure keyword grant on a permanent target whose
+    # legal pool spans both artifacts and creatures (Reroute Systems
+    # mode 0 grants indestructible). Maps to
+    # ``PumpTargetArtifactOrCreatureUntilEOT(granted_keywords=...)``.
+    # Validated against the keyword-line whitelist; rejection returns
+    # ``None`` so an unknown keyword keeps the wrapping spell
+    # unclaimed rather than silently dropping the grant.
+    m = _PUMP_TARGET_ARTIFACT_OR_CREATURE_GAINS_KEYWORDS_UEOT.match(phrase)
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(1))
+        if keywords is None:
+            return None
+        return PumpTargetArtifactOrCreatureUntilEOT(
+            granted_keywords=keywords,
+        )
+    m = _PUT_CHARGE_COUNTERS_ON_TARGET_SPACECRAFT_OR_PLANET_YOU_CONTROL.match(
+        phrase
+    )
+    if m is not None:
+        # ``put N charge counters on target Spacecraft or Planet you
+        # control`` — Drill Too Deep mode 0 and any future card with
+        # the same surface. Amount is a digit or one of the spelled-out
+        # small cardinals; both go through ``_parse_amount`` to land
+        # as an int on the engine class's ``amount`` field.
+        return PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
+            amount=_parse_amount(m.group(1)),
         )
     if _MILL_TARGET_PLAYER_EQUAL_TO_YOUR_LIFE.match(phrase) is not None:
         # ``target player mills cards equal to your life total`` —
