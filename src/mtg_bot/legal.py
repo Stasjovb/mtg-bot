@@ -129,6 +129,22 @@ def _additional_costs_payable(
         )
         if not have_sac:
             return False
+    if card.printing.additional_cost_sacrifice_creature_or_enchantment:
+        # Final Vengeance: "As an additional cost to cast this spell,
+        # sacrifice a creature or enchantment." Eligible permanents are
+        # any creature or enchantment the caster controls. Auras count
+        # (an Aura is an Enchantment subtype); the same controller-
+        # filter as the artifact-or-creature flag applies.
+        have_sac = any(
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and (
+                o.printing.is_creature
+                or "Enchantment" in o.printing.card_types
+            )
+        )
+        if not have_sac:
+            return False
     if card.printing.additional_cost_choose_your_creature:
         # "Choose a creature you control or a warped creature card you
         # own in exile." Either source satisfies the cost.

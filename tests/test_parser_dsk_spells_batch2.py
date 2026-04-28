@@ -36,6 +36,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     DestroyTargetCreature,
     DrawCards,
+    ExileTargetCreature,
     LoseLife,
     Sequence,
 )
@@ -191,3 +192,81 @@ def test_glimmerburst_engine_class():
         DrawCards(amount=2),
         CreateToken(token_printing=TOKEN_PRINTINGS["Glimmer"], count=1),
     ))
+
+
+# ---------- Final Vengeance: additional-cost preamble flag ----------
+
+def test_final_vengeance_claimed_by_parser():
+    # Final Vengeance ``{1}{B}{B}`` Sorcery — additional-cost-sacrifice
+    # preamble (creature-or-enchantment variant) + ``Exile target
+    # creature.`` Claimed via the new printing flag on the additional-
+    # cost preamble dispatcher; base effect is the existing
+    # ``ExileTargetCreature``.
+    assert "Final Vengeance" in _claimed_names()
+
+
+def test_final_vengeance_carries_additional_cost_flag():
+    # The additional-cost-sacrifice-creature-or-enchantment flag must
+    # be threaded onto the ``CardPrinting`` so the engine's cast-time
+    # cost-paying path knows to demand the sacrifice. The base spell
+    # effect is the bare ``ExileTargetCreature`` — the additional-cost
+    # preamble itself doesn't contribute an effect.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Final Vengeance"]
+    assert p.additional_cost_sacrifice_creature_or_enchantment is True
+    assert p.spell_effect == ExileTargetCreature()
+
+
+def test_final_vengeance_additional_cost_gates_legal_actions():
+    # Belt-and-suspenders that the new printing flag actually gates
+    # casting at legal-actions time — without a creature OR enchantment
+    # to sacrifice, the spell is not castable.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+    from mtg_bot.legal import _additional_costs_payable
+
+    parser = OracleParserCardSource()
+    final_vengeance = parser.get_printings()["Final Vengeance"]
+    # Build a minimal hand-card and battlefield. The card itself is
+    # in P0's hand; the battlefield is empty so the cost is unpayable.
+    card_obj = GameObject(
+        id=10, printing=final_vengeance, owner_id=0, controller_id=0,
+        zone=Zone.HAND,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[],
+    )
+    assert _additional_costs_payable(state, 0, card_obj) is False
+    # Now put a creature on P0's battlefield — the cost becomes payable.
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    state.battlefield.append(GameObject(
+        id=11, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    ))
+    assert _additional_costs_payable(state, 0, card_obj) is True
+
+
+def test_final_vengeance_additional_cost_accepts_enchantment_sacrifice():
+    # An Enchantment on P0's battlefield is also a valid sac target —
+    # Final Vengeance's printed cost says "creature OR enchantment".
+    from mtg_bot.cards.base import make_enchantment
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+    from mtg_bot.legal import _additional_costs_payable
+
+    parser = OracleParserCardSource()
+    final_vengeance = parser.get_printings()["Final Vengeance"]
+    card_obj = GameObject(
+        id=10, printing=final_vengeance, owner_id=0, controller_id=0,
+        zone=Zone.HAND,
+    )
+    ench_pr = make_enchantment("Tome", "{1}{U}")
+    ench_obj = GameObject(
+        id=12, printing=ench_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[ench_obj],
+    )
+    assert _additional_costs_payable(state, 0, card_obj) is True

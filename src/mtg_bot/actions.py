@@ -1689,6 +1689,36 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
+    # Additional cost: sacrifice a creature or enchantment. Parallel
+    # path to the creature-or-artifact branch above; same agent-pick
+    # plumbing, different eligible-permanent filter (an Enchantment in
+    # ``card_types`` covers both bare enchantments and Auras).
+    if card.printing.additional_cost_sacrifice_creature_or_enchantment:
+        sac_options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and (
+                o.printing.is_creature
+                or "Enchantment" in o.printing.card_types
+            )
+        ]
+        if sac_options:
+            from mtg_bot.turn import sacrifice as _sacrifice
+
+            chosen = sac_options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in sac_options]
+                )
+                chosen = next(
+                    (o for o in sac_options if o.id == pick_id),
+                    sac_options[0],
+                )
+            state.log.append(
+                f"additional cost: P{player_id} sacrifices "
+                f"{chosen.printing.name}"
+            )
+            _sacrifice(state, chosen)
     # Additional cost: designate a creature you control or a warped
     # creature card you own in exile (Close Encounter). Ungated by
     # sacrifice/tap — just a choice. The chosen id lands on the StackItem

@@ -242,6 +242,12 @@ _ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
     "you own in exile": {
         "additional_cost_choose_your_creature": True,
     },
+    # Final Vengeance (Duskmourn) — "sacrifice a creature or
+    # enchantment" parallel to Embrace Oblivion's
+    # "sacrifice an artifact or creature".
+    "sacrifice a creature or enchantment": {
+        "additional_cost_sacrifice_creature_or_enchantment": True,
+    },
 }
 
 

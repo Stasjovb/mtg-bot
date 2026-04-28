@@ -583,6 +583,15 @@ class CardPrinting:
     # Embrace Oblivion's "As an additional cost to cast this spell,
     # sacrifice an artifact or creature."
     additional_cost_sacrifice_creature_or_artifact: bool = False
+    # Additional cost to cast: sacrifice a creature or enchantment the
+    # caster controls. Matches Final Vengeance's "As an additional cost
+    # to cast this spell, sacrifice a creature or enchantment."
+    # Parallel to ``additional_cost_sacrifice_creature_or_artifact``;
+    # both flags route through the same ``_additional_costs_payable``
+    # gate in ``legal.py`` and the same pay-time sacrifice path in
+    # ``actions.py``, just with the eligible-permanent filter set per
+    # the printed cost body.
+    additional_cost_sacrifice_creature_or_enchantment: bool = False
     # Additional cost to cast: designate one of your creatures. The
     # chosen creature's id is stored on the StackItem and exposed via
     # state.resolving_additional_cost_choice_id for the effect to use
@@ -1061,6 +1070,7 @@ def make_instant(
     cost_reductions: tuple[CostReduction, ...] = (),
     kicker: str | None = None,
     additional_cost_choose_your_creature: bool = False,
+    additional_cost_sacrifice_creature_or_enchantment: bool = False,
     shuffles_into_library_instead_of_graveyard: bool = False,
     has_convoke: bool = False,
 ) -> CardPrinting:
@@ -1081,6 +1091,9 @@ def make_instant(
         additional_cost_choose_your_creature=(
             additional_cost_choose_your_creature
         ),
+        additional_cost_sacrifice_creature_or_enchantment=(
+            additional_cost_sacrifice_creature_or_enchantment
+        ),
         shuffles_into_library_instead_of_graveyard=(
             shuffles_into_library_instead_of_graveyard
         ),
@@ -1092,6 +1105,7 @@ def make_sorcery(
     name: str, cost: str, effect: Effect,
     cost_reductions: tuple[CostReduction, ...] = (),
     additional_cost_sacrifice_creature_or_artifact: bool = False,
+    additional_cost_sacrifice_creature_or_enchantment: bool = False,
     shuffles_into_library_instead_of_graveyard: bool = False,
     has_convoke: bool = False,
 ) -> CardPrinting:
@@ -1109,6 +1123,9 @@ def make_sorcery(
         cost_reductions=tuple(cost_reductions),
         additional_cost_sacrifice_creature_or_artifact=(
             additional_cost_sacrifice_creature_or_artifact
+        ),
+        additional_cost_sacrifice_creature_or_enchantment=(
+            additional_cost_sacrifice_creature_or_enchantment
         ),
         shuffles_into_library_instead_of_graveyard=(
             shuffles_into_library_instead_of_graveyard
