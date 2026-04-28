@@ -23,10 +23,13 @@ optional ETB triggers. The grammar this builder claims today covers:
   creature token and attach this Equipment to it."`` wired through
   ``CreateTokenAndAttachSelf`` against ``TOKEN_PRINTINGS["Robot"]`` —
   Auxiliary Boosters' bespoke ETB;
+- Hylderblade's Void rider — a literal beginning-of-end-step
+  attach-to-target-creature trigger gated on ``requires_void=True``
+  (the engine's stand-in for the EoE intervening-if condition);
 - a closing ``"Equip {N}"`` line whose mana-cost token feeds
   ``make_equipment(equip_cost=...)``.
 
-Anything outside that shape — Void riders, ``Equipped creature has
+Anything outside that shape — ``Equipped creature has
 "<granted activated ability>"``, the custom attack trigger on Atomic
 Microsizer, Robe of Stars' Astral Projection activated ability, or any
 line the per-line dispatcher doesn't recognize — falls through and the
@@ -56,7 +59,7 @@ from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     CreateTokenAndAttachSelf,
 )
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
 
 # "Equipped creature gets +N/+M" with an optional trailing rider that
@@ -129,6 +132,22 @@ _ETB_ATTACH_UEOT_RE = re.compile(
 _ETB_CREATE_ROBOT_AND_ATTACH_LINE = (
     "When this Equipment enters, create a 2/2 colorless Robot artifact "
     "creature token and attach this Equipment to it."
+)
+
+
+# Hylderblade's Void rider — a beginning-of-end-step trigger that
+# attaches the Equipment to a chosen creature, gated on the EoE Void
+# intervening-if condition ("a nonland permanent left the battlefield
+# this turn or a spell was warped this turn"). The static side encodes
+# the intervening-if as ``requires_void=True`` on the
+# ``TriggeredAbility``, which is the same gate ``should_fire_trigger``
+# checks for every Void rider in the engine. The line shape is literal
+# enough that we recognize it as a string match — the only Equipment
+# in the pool today carrying a Void rider.
+_VOID_END_STEP_ATTACH_LINE = (
+    "Void — At the beginning of your end step, if a nonland "
+    "permanent left the battlefield this turn or a spell was warped "
+    "this turn, attach this Equipment to target creature you control."
 )
 
 
@@ -255,6 +274,18 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                     effect=CreateTokenAndAttachSelf(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                     ),
+                )
+            )
+            continue
+        # Hylderblade's Void rider — beginning-of-end-step attach gated
+        # on the EoE Void intervening-if condition.
+        if line == _VOID_END_STEP_ATTACH_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_END_STEP,
+                    predicate=Controlled(YOU),
+                    requires_void=True,
+                    effect=AttachToTargetCreatureYouControl(),
                 )
             )
             continue

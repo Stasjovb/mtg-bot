@@ -412,3 +412,45 @@ def test_source_claims_auxiliary_boosters():
     create-Robot-token-and-attach ETB dispatch arm."""
     source = OracleParserCardSource()
     assert "Auxiliary Boosters" in source.claimed_names
+
+
+def test_build_equipment_printing_supports_hylderblade_void_rider():
+    """Hylderblade's literal ``"Void — At the beginning of your end
+    step, ..., attach this Equipment to target creature you control."``
+    line builds a ``BEGINNING_OF_END_STEP``-event triggered ability
+    with ``requires_void=True`` — the engine's stand-in for the EoE
+    Void intervening-if check."""
+    from mtg_bot.effects.predicates import Controlled, YOU
+
+    card = {
+        "name": "Hylderblade",
+        "mana_cost": "{B}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "Equipped creature gets +3/+1.\n"
+            "Void — At the beginning of your end step, if a nonland "
+            "permanent left the battlefield this turn or a spell was "
+            "warped this turn, attach this Equipment to target "
+            "creature you control.\n"
+            "Equip {4} ({4}: Attach to target creature you control. "
+            "Equip only as a sorcery.)"
+        ),
+    }
+    printing = _build_equipment_printing(card)
+    assert printing is not None
+    assert printing.equipment_bonuses == (3, 1, frozenset())
+    assert printing.triggered_abilities == (
+        TriggeredAbility(
+            event=Event.BEGINNING_OF_END_STEP,
+            predicate=Controlled(YOU),
+            requires_void=True,
+            effect=AttachToTargetCreatureYouControl(),
+        ),
+    )
+
+
+def test_source_claims_hylderblade():
+    """End-to-end: Hylderblade is claimed via the literal Void
+    end-step attach dispatch arm."""
+    source = OracleParserCardSource()
+    assert "Hylderblade" in source.claimed_names
