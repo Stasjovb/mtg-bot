@@ -604,6 +604,64 @@ class OpponentControlsMoreLandsThanYou(Predicate):
         return False
 
 
+# The Duskmourn "Delirium" mechanic counts distinct *card types* in the
+# source controller's graveyard — Creature, Land, Sorcery, Instant,
+# Enchantment, Artifact, Planeswalker, Battle, Tribal. The threshold is
+# the printed "four or more" gate on every Delirium card; any future
+# threshold variant would warrant a parameter rather than a new class
+# (no such variant exists in DSK). The set of types counted is fixed by
+# the comprehensive rules' card-type taxonomy — supertypes (Legendary,
+# Snow, Basic) and subtypes (Goblin, Forest, Equipment) don't count.
+_DELIRIUM_CARD_TYPES: frozenset[str] = frozenset({
+    "Creature",
+    "Land",
+    "Sorcery",
+    "Instant",
+    "Enchantment",
+    "Artifact",
+    "Planeswalker",
+    "Battle",
+    "Tribal",
+})
+
+
+@dataclass(frozen=True)
+class Delirium(Predicate):
+    """Game-state predicate: the source's controller has at least four
+    distinct card types among cards in their graveyard. Subject-
+    independent (the predicate ignores ``subjects``).
+
+    Models the Duskmourn "Delirium" mechanic — every card that prints
+    a ``Delirium —`` ability word or the ``if there are four or more
+    card types among cards in your graveyard`` intervening-if gate
+    delegates to this predicate. The trigger-time check matches the
+    printed gate exactly; the matching resolve-time recheck is not
+    yet wired through the resolve pipeline (same gap as the Void /
+    OpponentControlsMoreLandsThanYou siblings — those single-point
+    intervening-if gates rely on trigger-time-only checks today).
+
+    The card-type set is fixed by the comprehensive rules' card-type
+    taxonomy (CR 205.2a) — supertypes and subtypes don't count. We
+    walk the controller's graveyard once and short-circuit as soon
+    as the running set hits four distinct types.
+    """
+
+    def matches(self, state, subjects, source):
+        ctrl_id = source.controller_id
+        try:
+            player = state.player_by_id(ctrl_id)
+        except (KeyError, AttributeError):
+            return False
+        seen: set[str] = set()
+        for card in player.graveyard:
+            for t in card.printing.card_types:
+                if t in _DELIRIUM_CARD_TYPES:
+                    seen.add(t)
+                    if len(seen) >= 4:
+                        return True
+        return False
+
+
 @dataclass(frozen=True)
 class SpellsCastThisTurn(Predicate):
     """Game-state predicate: the named subject's controller has cast

@@ -82,6 +82,7 @@ from mtg_bot.effects.predicates import (
     YOU,
     Always,
     Controlled,
+    Delirium,
     Event,
     HasCounter,
     HasKeyword,
@@ -744,6 +745,16 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
         "a nonland permanent left the battlefield this turn "
         "or a spell was warped this turn"
     ): VoidActive(),
+    # Duskmourn "Delirium" gate — the canonical printed phrasing of
+    # the four-card-types-in-graveyard threshold. Pairs with the
+    # generic ``Delirium — `` ability-word prefix that strips through
+    # ``_strip_ability_word_prefix`` (no Delirium-specific helper
+    # needed; the prefix has no rules consequence per CR 207.2c).
+    # Mirrors the ``VoidActive()`` gate's role for the EoE Void
+    # mechanic — same shape, different trigger-time game-state check.
+    "there are four or more card types among cards in your graveyard": (
+        Delirium()
+    ),
 }
 
 
