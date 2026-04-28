@@ -46,6 +46,7 @@ from mtg_bot.cards.base import (
     DealDamageAnyTarget,
     Effect,
     ModalChooseOne,
+    PumpTargetCreatureUntilEOT,
     Sequence,
     make_instant,
     make_sorcery,
@@ -75,6 +76,23 @@ _MODAL_MODE_LINE_RE = re.compile(r"^• (.+)$")
 # to form a ConditionalIfVoid switching the damage amount.
 _SPELL_VOID_DAMAGE_REPLACEMENT = (
     r"^Void — {name} deals (\d+) damage instead "
+    r"if a nonland permanent left the battlefield this turn "
+    r"or a spell was warped this turn\.$"
+)
+
+
+# Tragic-Trajectory-shaped Void rider: a second clause of the form
+# "Void — That creature gets ±M/±M' until end of turn instead if a
+# nonland permanent left the battlefield this turn or a spell was
+# warped this turn."
+# Pairs with a preceding "Target creature gets ±N/±N' until end of
+# turn." clause to form a ConditionalIfVoid switching the pump
+# bonuses. The carry-over subject ``That creature`` refers back to
+# the target chosen on the first clause; the engine reuses the
+# same target when resolving either branch (single-target spell).
+_SPELL_VOID_PUMP_REPLACEMENT = re.compile(
+    r"^Void — That creature gets ([+-]\d+)/([+-]\d+) "
+    r"until end of turn instead "
     r"if a nonland permanent left the battlefield this turn "
     r"or a spell was warped this turn\.$"
 )
@@ -170,6 +188,42 @@ def _parse_void_damage_replacement(
     if m is None:
         return None
     return DealDamageAnyTarget(amount=int(m.group(1)))
+
+
+def _parse_void_pump_replacement(
+    phrase: str, base_effect: Effect
+) -> Effect | None:
+    """If ``phrase`` is a Void rider replacing the pump bonuses of
+    ``base_effect``, return the void-branch ``Effect`` (same shape as
+    base, new bonuses). Returns ``None`` otherwise.
+
+    Currently only handles ``PumpTargetCreatureUntilEOT`` as the base —
+    the only pump shape that pairs with a Void rider in the EoE pool
+    we support today (Tragic Trajectory). The carry-over subject
+    ``That creature`` refers back to the target chosen on the first
+    clause; the engine reuses the same target when resolving either
+    branch (single-target spell).
+
+    Mirrors the structure of ``_parse_void_damage_replacement`` —
+    keeping the two as separate helpers (vs one polymorphic function)
+    keeps the per-shape regex literal explicit and the per-shape
+    engine class wiring obvious. Extend per-card as new pairings
+    surface; e.g. a future Void rider replacing
+    ``DealDamageToTargetCreature`` would land as a third helper.
+
+    The ``base_effect``'s bonuses are not used to compute the void
+    branch — only the type is matched. The void branch's bonuses
+    come entirely from the rider clause itself.
+    """
+    if not isinstance(base_effect, PumpTargetCreatureUntilEOT):
+        return None
+    m = _SPELL_VOID_PUMP_REPLACEMENT.match(phrase.strip())
+    if m is None:
+        return None
+    return PumpTargetCreatureUntilEOT(
+        power_bonus=int(m.group(1)),
+        toughness_bonus=int(m.group(2)),
+    )
 
 
 def _parse_modal_choose_one(
@@ -285,13 +339,19 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         return None
     if len(clauses) == 1:
         return _parse_spell_effect_phrase(clauses[0], name)
-    # Two-clause Void-replacement shape (Plasma Bolt).
+    # Two-clause Void-replacement shape (Plasma Bolt's damage rider,
+    # Tragic Trajectory's pump rider). The dispatch tries each
+    # supported base/rider pairing in turn and picks the first that
+    # both parses the base-clause cleanly AND matches the rider's
+    # surface form for that base shape.
     if len(clauses) == 2:
         first = _parse_spell_effect_phrase(clauses[0], name)
         if first is not None:
             void_then = _parse_void_damage_replacement(
                 clauses[1], name, first
             )
+            if void_then is None:
+                void_then = _parse_void_pump_replacement(clauses[1], first)
             if void_then is not None:
                 return ConditionalIfVoid(
                     then_effect=void_then, else_effect=first

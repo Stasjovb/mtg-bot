@@ -42,12 +42,14 @@ claim depends on both a new primitive and an existing combinator
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    ConditionalIfVoid,
     DealDamageToTargetTappedCreature,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     ModalChooseOne,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     PumpTargetArtifactOrCreatureUntilEOT,
+    PumpTargetCreatureUntilEOT,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     Sequence,
     Surveil,
@@ -56,6 +58,10 @@ from mtg_bot.cards.parser.effects import (
     _parse_effect,
     _parse_effect_phrase,
     _parse_spell_effect_phrase,
+)
+from mtg_bot.cards.parser.spell_builder import (
+    _parse_spell_oracle_text,
+    _parse_void_pump_replacement,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
@@ -352,3 +358,113 @@ def test_shattered_wings_sequence_shape():
         eff.effects[0], DestroyTargetArtifactEnchantmentOrFlyingCreature
     )
     assert isinstance(eff.effects[1], Surveil)
+
+
+# ---------- Void rider replacing pump bonuses (Tragic Trajectory) ----------
+
+def test_parse_void_pump_replacement_recognizes_tragic_trajectory():
+    # Tragic Trajectory's printed Void rider — replaces -2/-2 with
+    # -10/-10 when Void is active. The base-clause's bonuses don't
+    # influence the void-branch result; only the rider's own
+    # captured bonuses do.
+    base = PumpTargetCreatureUntilEOT(power_bonus=-2, toughness_bonus=-2)
+    rider = (
+        "Void — That creature gets -10/-10 until end of turn instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn."
+    )
+    assert _parse_void_pump_replacement(rider, base) == (
+        PumpTargetCreatureUntilEOT(power_bonus=-10, toughness_bonus=-10)
+    )
+
+
+def test_parse_void_pump_replacement_returns_none_for_wrong_base_type():
+    # The void rider only matches when the base effect is a pump
+    # (``PumpTargetCreatureUntilEOT``). A damage-base + pump-rider
+    # mismatch returns ``None`` so the caller can try the next
+    # base/rider pairing in turn (see the dispatch chain in
+    # ``_parse_spell_oracle_text``).
+    from mtg_bot.cards.base import DealDamageAnyTarget
+
+    base = DealDamageAnyTarget(amount=2)
+    rider = (
+        "Void — That creature gets -10/-10 until end of turn instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn."
+    )
+    assert _parse_void_pump_replacement(rider, base) is None
+
+
+def test_parse_void_pump_replacement_returns_none_for_wrong_rider_shape():
+    # A rider whose surface form doesn't match (e.g. wrong subject
+    # or missing the ``instead if …`` tail) returns ``None``. The
+    # rider regex is anchored top-to-bottom so partial matches
+    # don't accidentally claim the clause.
+    base = PumpTargetCreatureUntilEOT(power_bonus=-2, toughness_bonus=-2)
+    bad_rider = "Void — That creature gets -10/-10 until end of turn."
+    assert _parse_void_pump_replacement(bad_rider, base) is None
+
+
+def test_parse_spell_oracle_text_assembles_tragic_trajectory():
+    # End-to-end: the two-clause oracle text combines via
+    # ``ConditionalIfVoid`` with the pump rider as the ``then``
+    # branch and the base pump as the ``else`` branch.
+    text = (
+        "Target creature gets -2/-2 until end of turn.\n"
+        "Void — That creature gets -10/-10 until end of turn instead "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn."
+    )
+    assert _parse_spell_oracle_text(text, "Tragic Trajectory") == (
+        ConditionalIfVoid(
+            then_effect=PumpTargetCreatureUntilEOT(
+                power_bonus=-10, toughness_bonus=-10,
+            ),
+            else_effect=PumpTargetCreatureUntilEOT(
+                power_bonus=-2, toughness_bonus=-2,
+            ),
+        )
+    )
+
+
+def test_tragic_trajectory_claimed_by_parser():
+    # Tragic Trajectory `{B}` Sorcery — Void rider on a pump
+    # debuff. Unlocked by this batch's ``_parse_void_pump_
+    # replacement`` helper that pairs with the existing
+    # ``PumpTargetCreatureUntilEOT`` base via the two-clause Void
+    # combinator path.
+    assert "Tragic Trajectory" in _claimed_names()
+
+
+def test_tragic_trajectory_conditional_void_shape():
+    # Spot-check structural shape — ``ConditionalIfVoid`` wrapping
+    # two ``PumpTargetCreatureUntilEOT`` effects with disjoint
+    # bonuses. The parity gate covers exact equality with the
+    # static; this test pins the combinator-level shape.
+    printings = OracleParserCardSource().get_printings()
+    eff = printings["Tragic Trajectory"].spell_effect
+    assert isinstance(eff, ConditionalIfVoid)
+    assert isinstance(eff.then_effect, PumpTargetCreatureUntilEOT)
+    assert isinstance(eff.else_effect, PumpTargetCreatureUntilEOT)
+    assert (eff.then_effect.power_bonus, eff.then_effect.toughness_bonus) == (
+        -10, -10,
+    )
+    assert (eff.else_effect.power_bonus, eff.else_effect.toughness_bonus) == (
+        -2, -2,
+    )
+
+
+def test_void_pump_rider_does_not_perturb_plasma_bolt():
+    # Plasma Bolt's existing Void rider (damage-replacement) must
+    # still claim Plasma Bolt unchanged after adding the pump-
+    # rider helper. The dispatch tries the damage rider first and
+    # only falls through to the pump rider when the damage rider
+    # rejects, so the Plasma Bolt path is unperturbed.
+    assert "Plasma Bolt" in _claimed_names()
+    printings = OracleParserCardSource().get_printings()
+    eff = printings["Plasma Bolt"].spell_effect
+    assert isinstance(eff, ConditionalIfVoid)
+    # Plasma Bolt's branches are damage effects, not pumps.
+    from mtg_bot.cards.base import DealDamageAnyTarget
+    assert isinstance(eff.then_effect, DealDamageAnyTarget)
+    assert isinstance(eff.else_effect, DealDamageAnyTarget)
