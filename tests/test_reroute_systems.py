@@ -9,17 +9,17 @@ both restored modes plus the two supporting effects
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     DealDamageToTargetTappedCreature,
     ModalChooseOne,
     PumpTargetArtifactOrCreatureUntilEOT,
 )
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ModeAgent(Agent):
@@ -54,7 +54,7 @@ def test_reroute_systems_mode_0_grants_indestructible_to_creature():
     )
     state.battlefield.append(bear)
 
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     spell.spell_effect.resolve(state, 0, (("permanent", bear.id),))
 
     assert "indestructible" in effective_keywords(state, bear)
@@ -72,7 +72,7 @@ def test_reroute_systems_mode_0_grants_indestructible_to_artifact():
     )
     state.battlefield.append(lander)
 
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     spell.spell_effect.resolve(state, 0, (("permanent", lander.id),))
 
     assert "indestructible" in effective_keywords(state, lander)
@@ -94,7 +94,7 @@ def test_reroute_systems_mode_0_can_target_opponents_permanent():
     )
     state.battlefield.append(opp_bear)
 
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     legal = spell.spell_effect.legal_targets(state, 0)
     assert ("permanent", opp_bear.id) in legal
 
@@ -115,7 +115,7 @@ def test_reroute_systems_mode_1_damages_tapped_creature():
     bear.tapped = True
     state.battlefield.append(bear)
 
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     spell.spell_effect.resolve(state, 0, (("creature", bear.id),))
 
     assert bear.damage == 2
@@ -165,7 +165,7 @@ def test_reroute_systems_mode_1_fizzles_if_target_untaps_before_resolve():
 
 
 def test_reroute_systems_is_modal_with_two_modes():
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     effect = spell.spell_effect
     assert isinstance(effect, ModalChooseOne)
     assert len(effect.modes) == 2
@@ -190,7 +190,7 @@ def test_reroute_systems_legal_targets_unions_both_modes():
     tapped_bear.tapped = True
     state.battlefield.append(tapped_bear)
 
-    spell = EOE_SPELLS["Reroute Systems"]
+    spell = _PRINTINGS["Reroute Systems"]
     legal = spell.spell_effect.legal_targets(state, 0)
     assert ("permanent", lander.id) in legal
     assert ("creature", tapped_bear.id) in legal

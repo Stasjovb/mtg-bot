@@ -27,7 +27,7 @@ from mtg_bot.actions import (
     CastSpell, apply_action, can_pay_cost, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.cards.base import (
     ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
     parse_mana_cost,
@@ -36,6 +36,10 @@ from mtg_bot.effects.generic import AddManaToPool
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -113,7 +117,7 @@ def _hand(state, printing, owner_id=0):
 
 
 def test_vote_out_has_convoke():
-    assert EOE_SPELLS["Vote Out"].has_convoke is True
+    assert _PRINTINGS["Vote Out"].has_convoke is True
 
 
 def test_vote_out_castable_with_only_creatures_no_lands():
@@ -130,10 +134,10 @@ def test_vote_out_castable_with_only_creatures_no_lands():
     # Opponent has a target.
     victim = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
     # Vote Out in hand, no lands.
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     # Affordability check sees convoke as payable.
     assert can_pay_cost(
-        state, 0, EOE_SPELLS["Vote Out"].mana_cost, convoke=True,
+        state, 0, _PRINTINGS["Vote Out"].mana_cost, convoke=True,
     )
     # Cast and resolve.
     apply_action(state, 0, CastSpell(vo.id))
@@ -156,7 +160,7 @@ def test_vote_out_partial_convoke_remaining_paid_by_lands():
     # 2 non-black creatures (each pays {1} via convoke).
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(2)]
     victim = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     assert all(b.tapped for b in bears)
@@ -174,7 +178,7 @@ def test_vote_out_color_match_pays_colored_pip_first():
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(3)]
     swamp = _put(state, BASIC_LANDS["Swamp"], 0)
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     # Convoke covered the entire cost; the swamp shouldn't be tapped.
@@ -192,7 +196,7 @@ def test_already_tapped_creature_not_eligible_for_convoke():
     # Need to actually pay the cost from somewhere; add lands.
     swamps = [_put(state, BASIC_LANDS["Swamp"], 0) for _ in range(4)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     # Rat stays tapped (it was already tapped — no double-tap).
@@ -209,7 +213,7 @@ def test_summoning_sick_creature_can_convoke():
     bear.summoning_sick = True
     swamps = [_put(state, BASIC_LANDS["Swamp"], 0) for _ in range(4)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     assert bear.tapped
@@ -225,7 +229,7 @@ def test_agent_declines_convoke_pays_full_cost_from_lands():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     swamps = [_put(state, BASIC_LANDS["Swamp"], 0) for _ in range(4)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     assert not bear.tapped
@@ -235,7 +239,7 @@ def test_agent_declines_convoke_pays_full_cost_from_lands():
 def test_vote_out_unplayable_with_no_creatures_or_lands():
     """No creatures, no lands → cost unpayable → not in legal actions."""
     state = _new_state()
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
     cast_acts = [
         a for a in legal_actions(state, 0)
@@ -251,7 +255,7 @@ def test_vote_out_convoke_makes_otherwise_unplayable_castable():
     swamp = _put(state, BASIC_LANDS["Swamp"], 0)
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(3)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     cast_acts = [
         a for a in legal_actions(state, 0)
         if isinstance(a, CastSpell) and a.card_id == vo.id
@@ -275,7 +279,7 @@ def test_convoke_and_scion_sac_mutually_exclusive_on_same_cast():
     scion.summoning_sick = False
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(3)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     # Scion sacrificed at 601.2g (no longer on the battlefield).
     assert scion not in state.battlefield
@@ -290,7 +294,7 @@ def test_convoke_excess_candidates_stops_when_cost_fully_paid():
     rat = _put(state, SYNTHETIC_CREATURES["Cemetery Rat"], 0)
     bears = [_put(state, SYNTHETIC_CREATURES["Wild Bear"], 0) for _ in range(5)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     # Cost is 4 pips; rat + first 3 bears tap. Last 2 bears stay untapped.
@@ -326,7 +330,7 @@ def test_convoke_dedupes_duplicate_ids_from_agent():
     rat = _put(state, SYNTHETIC_CREATURES["Cemetery Rat"], 0)
     swamps = [_put(state, BASIC_LANDS["Swamp"], 0) for _ in range(4)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
-    vo = _hand(state, EOE_SPELLS["Vote Out"], 0)
+    vo = _hand(state, _PRINTINGS["Vote Out"], 0)
     apply_action(state, 0, CastSpell(vo.id))
     resolve_top_of_stack(state)
     assert rat.tapped
@@ -352,8 +356,8 @@ def test_non_convoke_spell_ignores_agent_convoke_pick():
     swamps = [_put(state, BASIC_LANDS["Swamp"], 0) for _ in range(4)]
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
     # Use Gravkill: {3}{B} instant, no convoke.
-    gk = _hand(state, EOE_SPELLS["Gravkill"], 0)
-    assert EOE_SPELLS["Gravkill"].has_convoke is False
+    gk = _hand(state, _PRINTINGS["Gravkill"], 0)
+    assert _PRINTINGS["Gravkill"].has_convoke is False
     apply_action(state, 0, CastSpell(gk.id))
     resolve_top_of_stack(state)
     # No creatures tapped (no convoke).

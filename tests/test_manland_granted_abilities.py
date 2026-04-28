@@ -12,7 +12,7 @@ from mtg_bot.actions import (
     ActivateAbility, apply_action, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS, parse_mana_cost
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
     ActivatedAbility, ActivationCost, BecomeLandCreatureUEOT,
@@ -24,6 +24,10 @@ from mtg_bot.game import (
     effective_activated_abilities, effective_power, effective_toughness,
 )
 from mtg_bot.turn import Step, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _Agent(Agent):
@@ -65,7 +69,7 @@ def _mana_for(state, cost_str):
 
 def _animate(state, name, cost_str):
     """Activate the manland animation and resolve the stack."""
-    land = _put(state, STELLAR_SIGHTS_LANDS[name])
+    land = _put(state, _PRINTINGS[name])
     _mana_for(state, cost_str)
     apply_action(
         state, 0, ActivateAbility(source_id=land.id, ability_index=0),

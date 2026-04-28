@@ -6,11 +6,15 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import CloseEncounterEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -56,7 +60,7 @@ def test_close_encounter_unplayable_without_a_creature():
     for _ in range(2):
         l = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(l)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     acts = legal_actions(state, 0)
     cast_acts = [
@@ -82,7 +86,7 @@ def test_close_encounter_deals_damage_equal_to_chosen_creatures_power():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     apply_action(state, 0, CastSpell(close.id))
     resolve_top_of_stack(state)
@@ -104,7 +108,7 @@ def test_close_encounter_preserves_additional_cost_choice_across_stack():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     apply_action(state, 0, CastSpell(close.id))
     item = state.stack[-1]
@@ -125,7 +129,7 @@ def test_close_encounter_resolving_choice_cleared_after_resolution():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     apply_action(state, 0, CastSpell(close.id))
     resolve_top_of_stack(state)
@@ -218,7 +222,7 @@ def test_close_encounter_warped_exile_satisfies_cost_with_no_battlefield_creatur
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     acts = legal_actions(state, 0)
     cast_acts = [
@@ -246,7 +250,7 @@ def test_close_encounter_warped_exile_deals_damage_equal_to_printed_power():
         SYNTHETIC_CREATURES["Great Wurm"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     apply_action(state, 0, CastSpell(close.id))
     resolve_top_of_stack(state)
@@ -266,7 +270,7 @@ def test_close_encounter_unwarped_exile_card_does_not_satisfy_cost():
     )
     # Note: bear.warped left False (e.g., a card exiled by another effect).
     p.exile.append(bear)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     acts = legal_actions(state, 0)
     cast_acts = [
@@ -291,7 +295,7 @@ def test_close_encounter_opponents_warped_exile_does_not_satisfy_cost():
     )
     bear.warped = True
     opp.exile.append(bear)
-    close = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    close = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     p.hand.append(close)
     acts = legal_actions(state, 0)
     cast_acts = [

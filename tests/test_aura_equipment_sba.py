@@ -13,11 +13,15 @@ from __future__ import annotations
 
 from mtg_bot.actions import apply_aura_static_grants_on_attach
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.cards.base import make_basic_land
 from mtg_bot.cards.demo_layers import LIGNIFY
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -130,7 +134,7 @@ def test_aura_artifact_enchant_type_unattached_when_artifact_loses_artifact_type
         subtypes=(),
     )
     target = _put(state, artifact, 0)
-    aura = _put(state, EOE_SPELLS["Hardlight Containment"], 0)
+    aura = _put(state, _PRINTINGS["Hardlight Containment"], 0)
     aura.attached_to = target.id
     state_based_actions(state)
     # Legal attachment (target is an artifact).

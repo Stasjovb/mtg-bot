@@ -8,7 +8,7 @@ abilities."
 
 Lignify is a real Magic card from Lorwyn, not in the Edge of
 Eternities pool. The printing lives in
-``mtg_bot.cards.demo_layers`` so the EoE-only NONLAND_POOL stays
+``mtg_bot.cards.demo_layers`` so the EoE-only _PRINTINGS stays
 clean — no draft/deck-builder side effects.
 
 Tests pin:
@@ -50,6 +50,10 @@ from mtg_bot.game import (
     effective_triggered_abilities,
 )
 from mtg_bot.turn import Step, destroy, move_off_battlefield
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -95,10 +99,9 @@ def test_lignify_printing_shape():
 
 def test_lignify_not_in_eoe_pool():
     """Lignify is a demo-only card. It must not leak into the EoE
-    NONLAND_POOL or all_printings — those drive the deck builder."""
-    from mtg_bot.cards.registry import NONLAND_POOL, all_printings
-    assert "Lignify" not in NONLAND_POOL
-    assert "Lignify" not in all_printings()
+    _PRINTINGS or all_printings — those drive the deck builder."""
+    assert "Lignify" not in _PRINTINGS
+    assert "Lignify" not in _PRINTINGS
 
 
 # ---------- Layer 7a: base P/T set to 0/4 ----------

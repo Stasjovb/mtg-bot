@@ -6,13 +6,17 @@ Oracle:
   Equip {1}
 """
 
-from mtg_bot.cards import SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers, resolve_combat_damage
 from mtg_bot.effects import PhaseOutEquippedCreature
 from mtg_bot.game import (
     GameState, Player, Zone, effective_power, effective_toughness,
 )
 from mtg_bot.turn import run_cleanup_step, run_untap_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -33,7 +37,7 @@ def _put(state, printing, controller, attached_to=None):
 
 
 def test_robe_is_wired_up():
-    r = SPECIAL_GUESTS_EOE["Robe of Stars"]
+    r = _PRINTINGS["Robe of Stars"]
     assert r.mana_cost_str == "{1}{W}"
     assert r.is_artifact
     assert "Equipment" in r.subtypes
@@ -60,7 +64,7 @@ def test_equipped_creature_gets_plus_zero_three():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)  # 2/2
     robe = _put(
-        state, SPECIAL_GUESTS_EOE["Robe of Stars"], 0,
+        state, _PRINTINGS["Robe of Stars"], 0,
         attached_to=bear.id,
     )
     assert effective_power(state, bear) == 2
@@ -71,12 +75,12 @@ def test_phase_out_sets_phased_out_on_equipped_creature():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     robe = _put(
-        state, SPECIAL_GUESTS_EOE["Robe of Stars"], 0,
+        state, _PRINTINGS["Robe of Stars"], 0,
         attached_to=bear.id,
     )
     state.resolving_source = robe
     try:
-        SPECIAL_GUESTS_EOE["Robe of Stars"].activated_abilities[
+        _PRINTINGS["Robe of Stars"].activated_abilities[
             0
         ].effect.resolve(state, 0, ())
     finally:
@@ -86,7 +90,7 @@ def test_phase_out_sets_phased_out_on_equipped_creature():
 
 def test_phase_out_with_no_attached_creature_noop():
     state = _new_state()
-    robe = _put(state, SPECIAL_GUESTS_EOE["Robe of Stars"], 0)
+    robe = _put(state, _PRINTINGS["Robe of Stars"], 0)
     # Unattached Robe.
     state.resolving_source = robe
     try:
@@ -152,7 +156,7 @@ def test_phase_out_removes_from_combat():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     bear.attacking = True
     robe = _put(
-        state, SPECIAL_GUESTS_EOE["Robe of Stars"], 0,
+        state, _PRINTINGS["Robe of Stars"], 0,
         attached_to=bear.id,
     )
     state.resolving_source = robe
@@ -168,7 +172,7 @@ def test_phase_out_defensive_when_attached_target_gone():
     """If the attached creature has left the battlefield before the
     activation resolves, the effect silently does nothing."""
     state = _new_state()
-    robe = _put(state, SPECIAL_GUESTS_EOE["Robe of Stars"], 0)
+    robe = _put(state, _PRINTINGS["Robe of Stars"], 0)
     robe.attached_to = 9999  # Dangling ref.
     state.resolving_source = robe
     try:

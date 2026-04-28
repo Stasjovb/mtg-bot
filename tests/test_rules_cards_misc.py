@@ -40,6 +40,10 @@ from mtg_bot.turn import (
 from tests._rules_helpers import *  # noqa: F401,F403
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 def test_mill_target_player_fixed_amount():
     from mtg_bot.effects import MillTargetPlayer
@@ -286,11 +290,10 @@ def test_invasive_maneuvers_base_damage():
 
 def test_invasive_maneuvers_boosted_by_spacecraft():
     from mtg_bot.effects import DealDamageToTargetCreatureSpacecraftBoosted
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     skiff = state.new_object(
-        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(skiff)
     victim = state.new_object(
@@ -313,12 +316,11 @@ def test_invasive_maneuvers_noop_paths():
 
 def test_elegy_acolyte_void_creates_robot():
     """Lifelink-printed + Void EoT creates a 2/2 Robot token."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     acolyte = state.new_object(
-        EOE_CREATURES["Elegy Acolyte"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Elegy Acolyte"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(acolyte)
     assert "lifelink" in acolyte.printing.keywords
@@ -339,12 +341,12 @@ def test_elegy_acolyte_void_creates_robot():
 
 
 def test_remnant_elemental_landfall_pumps():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import fire_landfall_triggers
 
     state = _arena()
     elem = state.new_object(
-        EOE_CREATURES["Remnant Elemental"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Remnant Elemental"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(elem)
     # Put a land onto the battlefield and fire landfall.
@@ -359,12 +361,12 @@ def test_remnant_elemental_landfall_pumps():
 
 
 def test_icecave_crasher_trample_plus_landfall():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import fire_landfall_triggers
 
     state = _arena()
     crasher = state.new_object(
-        EOE_CREATURES["Icecave Crasher"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Icecave Crasher"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(crasher)
     assert "trample" in crasher.printing.keywords
@@ -380,7 +382,6 @@ def test_icecave_crasher_trample_plus_landfall():
 
 def test_blooming_stinger_grants_deathtouch():
     """Printed deathtouch + ETB grants deathtouch to another creature."""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     ally = state.new_object(
@@ -388,7 +389,7 @@ def test_blooming_stinger_grants_deathtouch():
     )
     state.battlefield.append(ally)
     stinger = state.new_object(
-        EOE_CREATURES["Blooming Stinger"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Blooming Stinger"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(stinger)
     assert "deathtouch" in stinger.printing.keywords
@@ -405,13 +406,12 @@ def test_blooming_stinger_grants_deathtouch():
 
 
 def test_seedship_agrarian_tap_creates_lander():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
     from mtg_bot.actions import drain_stack
 
     state = _arena()
     agr = state.new_object(
-        EOE_CREATURES["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(agr)
     tap_permanent(state, agr)
@@ -421,12 +421,12 @@ def test_seedship_agrarian_tap_creates_lander():
 
 
 def test_seedship_agrarian_landfall_counter():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import fire_landfall_triggers
 
     state = _arena()
     agr = state.new_object(
-        EOE_CREATURES["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Seedship Agrarian"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(agr)
     land = state.new_object(
@@ -440,11 +440,10 @@ def test_seedship_agrarian_landfall_counter():
 
 
 def test_biomechan_engineer_etb_and_activation():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     eng = state.new_object(
-        EOE_CREATURES["Biomechan Engineer"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Biomechan Engineer"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(eng)
     # Fire ETB manually.
@@ -465,7 +464,6 @@ def test_biomechan_engineer_etb_and_activation():
 
 
 def test_interceptor_mechan_etb_grabs_from_graveyard():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     # Seed a creature card in P0's graveyard.
@@ -475,7 +473,7 @@ def test_interceptor_mechan_etb_grabs_from_graveyard():
     state.players[0].graveyard.append(ghost)
 
     mechan = state.new_object(
-        EOE_CREATURES["Interceptor Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Interceptor Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mechan)
     etb = next(
@@ -521,7 +519,6 @@ def test_self_mill_empty_library():
 
 
 def test_seedship_broodtender_etb_and_reanimate():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     _stock_library(state, 0, count=10)
@@ -532,7 +529,7 @@ def test_seedship_broodtender_etb_and_reanimate():
     state.players[0].graveyard.append(gone)
 
     broodt = state.new_object(
-        EOE_CREATURES["Seedship Broodtender"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Seedship Broodtender"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(broodt)
     # Fire ETB (mills 3).
@@ -551,7 +548,6 @@ def test_seedship_broodtender_etb_and_reanimate():
 
 
 def test_xu_ifit_activated_reanimate():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     ghost = state.new_object(
@@ -559,7 +555,7 @@ def test_xu_ifit_activated_reanimate():
     )
     state.players[0].graveyard.append(ghost)
     xu = state.new_object(
-        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        _PRINTINGS["Xu-Ifit, Osteoharmonist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(xu)
@@ -573,12 +569,11 @@ def test_xu_ifit_activated_reanimate():
 
 
 def test_flight_deck_coordinator_gains_life_with_two_tapped():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     coord = state.new_object(
-        EOE_CREATURES["Flight-Deck Coordinator"], owner_id=0,
+        _PRINTINGS["Flight-Deck Coordinator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(coord)
@@ -598,12 +593,11 @@ def test_flight_deck_coordinator_gains_life_with_two_tapped():
 
 
 def test_flight_deck_coordinator_noop_when_condition_unmet():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     coord = state.new_object(
-        EOE_CREATURES["Flight-Deck Coordinator"], owner_id=0,
+        _PRINTINGS["Flight-Deck Coordinator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(coord)  # only one (untapped) creature
@@ -626,12 +620,11 @@ def test_conditional_on_tapped_creatures_forwards_targets():
 
 
 def test_sunstar_chaplain_conditional_plus_one():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = None  # we'll drive the trigger manually
     cpn = state.new_object(
-        EOE_CREATURES["Sunstar Chaplain"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Sunstar Chaplain"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(cpn)
     ally = state.new_object(
@@ -655,12 +648,11 @@ def test_sunstar_chaplain_conditional_plus_one():
 def test_dawnstrike_vanguard_mass_buff_when_condition_met():
     """Condition met → each OTHER creature you control gets +1/+1; the
     Vanguard itself does NOT (oracle: "other than this creature")."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_toughness
 
     state = _arena()
     van = state.new_object(
-        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(van)
     allies = []
@@ -690,12 +682,11 @@ def test_dawnstrike_vanguard_mass_buff_when_condition_met():
 def test_dawnstrike_vanguard_no_buff_when_condition_unmet():
     """Condition unmet (fewer than 2 tapped creatures) → no counters
     on anybody, including the Vanguard."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_toughness
 
     state = _arena()
     van = state.new_object(
-        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(van)
     ally = state.new_object(
@@ -721,12 +712,11 @@ def test_dawnstrike_vanguard_repeated_triggers_never_buff_self():
     never on the Vanguard itself, even though it's a tapped creature
     that helps satisfy the condition. Live shifts in plus_one_counters
     confirm the "other than this creature" clause holds across firings."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_toughness
 
     state = _arena()
     van = state.new_object(
-        EOE_CREATURES["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dawnstrike Vanguard"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(van)
     ally = state.new_object(
@@ -765,12 +755,12 @@ def test_dawnstrike_vanguard_repeated_triggers_never_buff_self():
 
 
 def test_cloudsculpt_technician_self_buff_with_artifact():
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.game import effective_power, effective_keywords
 
     state = _arena()
     tech = state.new_object(
-        EOE_CREATURES["Cloudsculpt Technician"], owner_id=0,
+        _PRINTINGS["Cloudsculpt Technician"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(tech)
@@ -786,12 +776,12 @@ def test_cloudsculpt_technician_self_buff_with_artifact():
 
 
 def test_gravblade_heavy_self_buff_plus_deathtouch():
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.game import effective_power, effective_keywords
 
     state = _arena()
     grav = state.new_object(
-        EOE_CREATURES["Gravblade Heavy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Gravblade Heavy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(grav)
     # Base 3/4, no deathtouch.
@@ -826,13 +816,12 @@ def test_self_static_missing_state_returns_false():
 def test_wurmwall_sweeper_etb_surveil():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     _stock_library(state, 0, count=10)
     ws = state.new_object(
-        EOE_CREATURES["Wurmwall Sweeper"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Wurmwall Sweeper"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ws)
     # Trigger ETB surveil 2.
@@ -847,12 +836,11 @@ def test_wurmwall_sweeper_etb_surveil():
 
 
 def test_fell_gravship_etb_mill_and_return():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     _stock_library(state, 0, count=10)
     fg = state.new_object(
-        EOE_CREATURES["Fell Gravship"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Fell Gravship"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(fg)
     # Pre-seed a creature in graveyard so return-to-hand has a target.
@@ -877,7 +865,6 @@ def test_fell_gravship_etb_mill_and_return():
 
 
 def test_pinnacle_kill_ship_etb_deals_damage():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     target = state.new_object(
@@ -886,7 +873,7 @@ def test_pinnacle_kill_ship_etb_deals_damage():
     )  # 4/4
     state.battlefield.append(target)
     ship = state.new_object(
-        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=0,
+        _PRINTINGS["Pinnacle Kill-Ship"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
@@ -902,9 +889,8 @@ def test_pinnacle_kill_ship_etb_target_is_optional_no_creatures():
     """Oracle: 'up to one target creature.' With no creatures on the
     battlefield, the trigger still goes on the stack and resolves as a
     no-op (target_count_range = (0, 1) → empty targets allowed)."""
-    from mtg_bot.cards import EOE_CREATURES
 
-    ship_p = EOE_CREATURES["Pinnacle Kill-Ship"]
+    ship_p = _PRINTINGS["Pinnacle Kill-Ship"]
     etb = next(
         ab for ab in ship_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
@@ -916,7 +902,7 @@ def test_pinnacle_kill_ship_etb_target_is_optional_no_creatures():
 
 
 def test_warmaker_gunship_damage_scales_with_artifacts():
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     target = state.new_object(
@@ -924,7 +910,7 @@ def test_warmaker_gunship_damage_scales_with_artifacts():
     )
     state.battlefield.append(target)
     gunship = state.new_object(
-        EOE_CREATURES["Warmaker Gunship"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Warmaker Gunship"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(gunship)
     # Gunship itself counts as an artifact (Spacecraft is an artifact).
@@ -969,7 +955,6 @@ def test_warmaker_gunship_effect_noop_paths():
 def test_susurian_dirgecraft_forces_opponent_sac():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[1].agent = RandomAgent(rng=random.Random(0))
@@ -983,7 +968,7 @@ def test_susurian_dirgecraft_forces_opponent_sac():
         victims.append(bear)
 
     ship = state.new_object(
-        EOE_CREATURES["Susurian Dirgecraft"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Susurian Dirgecraft"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ship)
     etb = next(
@@ -999,9 +984,8 @@ def test_susurian_dirgecraft_forces_opponent_sac():
 def test_susurian_dirgecraft_grants_flying_at_7():
     """Regression: printed text grants Flying at 7+ (not Menace).
     Audit-found bug — earlier impl had a copy-paste 'menace' value."""
-    from mtg_bot.cards import EOE_CREATURES
 
-    c = EOE_CREATURES["Susurian Dirgecraft"]
+    c = _PRINTINGS["Susurian Dirgecraft"]
     assert c.is_spacecraft
     assert c.station_threshold == 7
     assert c.stationed_keywords == frozenset({"flying"})
@@ -1011,12 +995,11 @@ def test_susurian_dirgecraft_grants_flying_at_7():
 def test_susurian_dirgecraft_flies_when_stationed():
     """Behaviour test: once charge_counters reach the station threshold,
     effective_keywords includes flying."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords
 
     state = _arena()
     ship = state.new_object(
-        EOE_CREATURES["Susurian Dirgecraft"],
+        _PRINTINGS["Susurian Dirgecraft"],
         owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
@@ -1046,7 +1029,7 @@ def test_each_opponent_sac_with_only_tokens_is_noop():
 def test_cerebral_download_surveil_x_then_draw_three():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(1))
@@ -1059,7 +1042,7 @@ def test_cerebral_download_surveil_x_then_draw_three():
         state.battlefield.append(a)
 
     hand_before = len(state.players[0].hand)
-    cd = EOE_SPELLS["Cerebral Download"]
+    cd = _PRINTINGS["Cerebral Download"]
     cd.spell_effect.resolve(state, 0)
     # Drew 3 cards.
     assert len(state.players[0].hand) == hand_before + 3
@@ -1068,7 +1051,6 @@ def test_cerebral_download_surveil_x_then_draw_three():
 
 
 def test_mental_modulation_taps_and_draws():
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     _stock_library(state, 0, count=3)
@@ -1076,7 +1058,7 @@ def test_mental_modulation_taps_and_draws():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(victim)
-    mental = EOE_SPELLS["Mental Modulation"]
+    mental = _PRINTINGS["Mental Modulation"]
     hand_before = len(state.players[0].hand)
     mental.spell_effect.resolve(
         state, controller_id=0, targets=(("permanent", victim.id),)
@@ -1100,7 +1082,6 @@ def test_tap_target_noop_paths():
 def test_ruinous_rampage_mode_zero_damages_opponents():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     # Deterministic agent that always picks mode 0 (burn).
@@ -1109,14 +1090,14 @@ def test_ruinous_rampage_mode_zero_damages_opponents():
             return 0
     state.players[0].agent = PickZero(rng=random.Random(0))
     life_before = state.players[1].life
-    EOE_SPELLS["Ruinous Rampage"].spell_effect.resolve(state, 0)
+    _PRINTINGS["Ruinous Rampage"].spell_effect.resolve(state, 0)
     assert state.players[1].life == life_before - 3
 
 
 def test_ruinous_rampage_mode_one_exiles_artifacts():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
 
@@ -1134,7 +1115,7 @@ def test_ruinous_rampage_mode_one_exiles_artifacts():
     )
     state.battlefield.append(lander1)
 
-    EOE_SPELLS["Ruinous Rampage"].spell_effect.resolve(state, 0)
+    _PRINTINGS["Ruinous Rampage"].spell_effect.resolve(state, 0)
     # Both Landers exiled (tokens cease to exist regardless of player).
     assert lander0 not in state.battlefield
     assert lander1 not in state.battlefield
@@ -1190,7 +1171,7 @@ def test_modal_fizzles_when_targeted_mode_has_no_legal_target():
 def test_drill_too_deep_destroy_artifact_mode():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
 
@@ -1204,7 +1185,7 @@ def test_drill_too_deep_destroy_artifact_mode():
     )
     state.battlefield.append(lander)
 
-    dtd = EOE_SPELLS["Drill Too Deep"]
+    dtd = _PRINTINGS["Drill Too Deep"]
     dtd.spell_effect.resolve(
         state, 0, (("permanent", lander.id),)
     )
@@ -1214,7 +1195,6 @@ def test_drill_too_deep_destroy_artifact_mode():
 def test_drill_too_deep_charge_counter_mode():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, EOE_CREATURES
 
     state = _arena()
 
@@ -1224,12 +1204,12 @@ def test_drill_too_deep_charge_counter_mode():
     state.players[0].agent = PickCharge(rng=random.Random(0))
 
     skiff = state.new_object(
-        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(skiff)
     assert skiff.charge_counters == 0
 
-    dtd = EOE_SPELLS["Drill Too Deep"]
+    dtd = _PRINTINGS["Drill Too Deep"]
     dtd.spell_effect.resolve(
         state, 0, (("permanent", skiff.id),)
     )
@@ -1259,7 +1239,7 @@ def test_put_charge_counters_noop_paths():
 
 
 def test_luxknight_breacher_enters_with_scaled_counters():
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     # Seed two existing creatures + one artifact (Lander) for P0.
@@ -1279,7 +1259,7 @@ def test_luxknight_breacher_enters_with_scaled_counters():
     state.battlefield.append(enemy)
 
     lux = state.new_object(
-        EOE_CREATURES["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(lux)
     etb = next(
@@ -1292,11 +1272,10 @@ def test_luxknight_breacher_enters_with_scaled_counters():
 
 
 def test_luxknight_breacher_noop_with_empty_board():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     lux = state.new_object(
-        EOE_CREATURES["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Luxknight Breacher"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(lux)
     etb = next(
@@ -1320,7 +1299,6 @@ def test_put_counters_per_other_noop_without_source():
 
 
 def test_fallers_faithful_etb_destroys_creature():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     # Stock P1's library so the rider draw (target's controller draws 2)
@@ -1331,7 +1309,7 @@ def test_fallers_faithful_etb_destroys_creature():
     )
     state.battlefield.append(victim)
     ff = state.new_object(
-        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ff)
     etb = next(
@@ -1347,7 +1325,6 @@ def test_fallers_faithful_undamaged_target_draws_two():
     controller draws two cards.' Target is a freshly-summoned Wild Bear
     that's never been damaged, so its controller (P1) draws 2.
     """
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     _stock_library(state, 1, count=10)
@@ -1357,7 +1334,7 @@ def test_fallers_faithful_undamaged_target_draws_two():
     state.battlefield.append(victim)
     assert victim.damaged_this_turn is False
     ff = state.new_object(
-        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ff)
     etb = next(
@@ -1377,7 +1354,6 @@ def test_fallers_faithful_damaged_target_no_draw():
     """If the targeted creature WAS dealt damage this turn, the rider
     doesn't fire — controller doesn't draw.
     """
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     _stock_library(state, 1, count=10)
@@ -1389,7 +1365,7 @@ def test_fallers_faithful_damaged_target_no_draw():
     victim.damage = 1
     victim.damaged_this_turn = True
     ff = state.new_object(
-        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ff)
     etb = next(
@@ -1409,9 +1385,8 @@ def test_fallers_faithful_etb_target_is_optional():
     """Oracle: 'up to one OTHER target creature.' With no creatures on
     the battlefield (other than the trigger source), the trigger
     resolves as a no-op rather than fizzling on lack of targets."""
-    from mtg_bot.cards import EOE_CREATURES
 
-    ff_p = EOE_CREATURES["Faller's Faithful"]
+    ff_p = _PRINTINGS["Faller's Faithful"]
     etb = next(
         ab for ab in ff_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
@@ -1428,7 +1403,6 @@ def test_fallers_faithful_etb_target_is_optional():
 def test_fallers_faithful_excludes_self_target():
     """The 'other' clause: Faller's Faithful itself is not a legal
     target of its own ETB trigger."""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     bear = state.new_object(
@@ -1436,7 +1410,7 @@ def test_fallers_faithful_excludes_self_target():
     )
     state.battlefield.append(bear)
     ff = state.new_object(
-        EOE_CREATURES["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Faller's Faithful"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ff)
     etb = next(
@@ -1485,12 +1459,11 @@ def test_apply_damage_marks_damaged_this_turn():
 
 def test_biotech_specialist_and_kav_landseeker_make_landers():
     """Both creatures create exactly one Lander on ETB."""
-    from mtg_bot.cards import EOE_CREATURES
 
     for name in ("Biotech Specialist", "Kav Landseeker"):
         state = _arena()
         c = state.new_object(
-            EOE_CREATURES[name], owner_id=0, zone=Zone.BATTLEFIELD
+            _PRINTINGS[name], owner_id=0, zone=Zone.BATTLEFIELD
         )
         state.battlefield.append(c)
         etb = next(
@@ -1503,16 +1476,15 @@ def test_biotech_specialist_and_kav_landseeker_make_landers():
 
 
 def test_kav_landseeker_has_menace():
-    from mtg_bot.cards import EOE_CREATURES
 
-    assert "menace" in EOE_CREATURES["Kav Landseeker"].keywords
+    assert "menace" in _PRINTINGS["Kav Landseeker"].keywords
 
 
 def test_biotech_specialist_sacrifice_artifact_damages_opponent():
     """Oracle: 'Whenever you sacrifice an artifact, this creature deals 2
     damage to target opponent.' Sacrificing the Lander it creates should
     fire the trigger and deal 2 to the opponent."""
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import sacrifice
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
@@ -1522,7 +1494,7 @@ def test_biotech_specialist_sacrifice_artifact_damages_opponent():
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     state.players[1].agent = RandomAgent(rng=random.Random(0))
     spec = state.new_object(
-        EOE_CREATURES["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(spec)
     lander = state.new_object(
@@ -1540,12 +1512,11 @@ def test_biotech_specialist_sacrifice_artifact_damages_opponent():
 def test_biotech_specialist_sacrifice_creature_does_not_fire_artifact_trigger():
     """Sacrificing a non-artifact creature should not fire the artifact-
     sacrifice trigger."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import sacrifice
 
     state = _arena()
     spec = state.new_object(
-        EOE_CREATURES["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Biotech Specialist"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(spec)
     bear = state.new_object(
@@ -1563,7 +1534,7 @@ def test_biotech_specialist_sacrifice_creature_does_not_fire_artifact_trigger():
 
 
 def test_exosuit_savior_bounces_own_permanent():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     plains = state.new_object(
@@ -1571,7 +1542,7 @@ def test_exosuit_savior_bounces_own_permanent():
     )
     state.battlefield.append(plains)
     savior = state.new_object(
-        EOE_CREATURES["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(savior)
     assert "flying" in savior.printing.keywords
@@ -1590,9 +1561,8 @@ def test_exosuit_savior_target_is_optional_and_excludes_self():
     owner's hand.' Trigger lands on the stack with no target when only the
     Savior itself is in play, and Savior is excluded from its own legal
     targets."""
-    from mtg_bot.cards import EOE_CREATURES
 
-    savior_p = EOE_CREATURES["Exosuit Savior"]
+    savior_p = _PRINTINGS["Exosuit Savior"]
     etb = next(
         ab for ab in savior_p.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
@@ -1613,7 +1583,7 @@ def test_exosuit_savior_target_is_optional_and_excludes_self():
 
 
 def test_exosuit_savior_excludes_self_with_other_permanents():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     plains = state.new_object(
@@ -1621,7 +1591,7 @@ def test_exosuit_savior_excludes_self_with_other_permanents():
     )
     state.battlefield.append(plains)
     savior = state.new_object(
-        EOE_CREATURES["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Exosuit Savior"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(savior)
     etb = next(
@@ -1667,11 +1637,10 @@ def test_ward_counters_spell_when_caster_cant_pay():
     """Casting Bombard (target-creature burn) at a warded opponent
     creature — caster has no mana left → spell countered, nothing dies."""
     from mtg_bot.actions import _apply_ward_check
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mouth)
     # Caster has 0 untapped lands → cannot pay the Ward {2}.
@@ -1682,11 +1651,11 @@ def test_ward_counters_spell_when_caster_cant_pay():
 def test_ward_autopays_when_caster_has_lands():
     """Caster with 2 untapped lands auto-taps them to pay Ward {2}."""
     from mtg_bot.actions import _apply_ward_check
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mouth)
     lands: list = []
@@ -1704,11 +1673,10 @@ def test_ward_autopays_when_caster_has_lands():
 def test_ward_does_not_fire_on_own_permanent():
     """A creature's ward is only relevant for OPPONENT spells."""
     from mtg_bot.actions import _apply_ward_check
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mouth)
     countered = _apply_ward_check(state, caster_id=0, targets=(("creature", mouth.id),))
@@ -1721,7 +1689,7 @@ def test_countered_spell_goes_to_graveyard_and_no_effect():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -1737,11 +1705,11 @@ def test_countered_spell_goes_to_graveyard_and_no_effect():
     )
     state.battlefield.append(mtn2)
     # Seed the spell in hand. Bombard = {R} DealDamageToTargetCreature(2)
-    bombard = EOE_SPELLS["Bombard"]
+    bombard = _PRINTINGS["Bombard"]
     hand_card = state.new_object(bombard, owner_id=0, zone=Zone.HAND)
     state.players[0].hand.append(hand_card)
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mouth of the Storm"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mouth)
 
@@ -1754,11 +1722,10 @@ def test_countered_spell_goes_to_graveyard_and_no_effect():
 
 
 def test_bioengineered_future_etb_makes_lander():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     enc = state.new_object(
-        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        _PRINTINGS["Bioengineered Future"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(enc)
@@ -1777,13 +1744,13 @@ def test_bioengineered_future_grants_etb_counters_per_land_entered_this_turn():
     control this turn.'
 
     Two lands entered → next creature enters with 2 +1/+1 counters."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.actions import put_into_battlefield
 
     state = _arena()
     state.players[0].lands_entered_this_turn = 2
     enc = state.new_object(
-        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        _PRINTINGS["Bioengineered Future"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(enc)
@@ -1796,13 +1763,12 @@ def test_bioengineered_future_grants_etb_counters_per_land_entered_this_turn():
 
 def test_bioengineered_future_no_lands_means_no_extra_counters():
     """If no lands entered yet, the entering creature gets 0 extra counters."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.actions import put_into_battlefield
 
     state = _arena()
     assert state.players[0].lands_entered_this_turn == 0
     enc = state.new_object(
-        EOE_CREATURES["Bioengineered Future"], owner_id=0,
+        _PRINTINGS["Bioengineered Future"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(enc)
@@ -1815,14 +1781,13 @@ def test_bioengineered_future_no_lands_means_no_extra_counters():
 
 def test_bioengineered_future_anthem_stacks_with_multiple_sources():
     """Two Bioengineered Futures double the counters per land entered."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.actions import put_into_battlefield
 
     state = _arena()
     state.players[0].lands_entered_this_turn = 3
     for _ in range(2):
         enc = state.new_object(
-            EOE_CREATURES["Bioengineered Future"], owner_id=0,
+            _PRINTINGS["Bioengineered Future"], owner_id=0,
             zone=Zone.BATTLEFIELD,
         )
         state.battlefield.append(enc)
@@ -1864,12 +1829,12 @@ def test_lands_entered_this_turn_resets_at_cleanup():
 
 def test_eusocial_engineering_landfall_makes_robot():
     """Enchantment sits on battlefield and fires Landfall."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import fire_landfall_triggers
 
     state = _arena()
     euso = state.new_object(
-        EOE_CREATURES["Eusocial Engineering"], owner_id=0,
+        _PRINTINGS["Eusocial Engineering"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(euso)
@@ -1885,9 +1850,8 @@ def test_eusocial_engineering_landfall_makes_robot():
 
 
 def test_enchantment_is_permanent_but_not_creature():
-    from mtg_bot.cards import EOE_CREATURES
 
-    c = EOE_CREATURES["Eusocial Engineering"]
+    c = _PRINTINGS["Eusocial Engineering"]
     assert c.is_permanent is True
     assert c.is_creature is False
     assert c.is_instant is False
@@ -1898,11 +1862,11 @@ def test_eusocial_engineering_warp_cast_and_end_step_exile():
     it resolves onto the battlefield, then end-of-turn warp-exile fires."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import run_end_step_warp_exile
     import random
 
-    euso = EOE_CREATURES["Eusocial Engineering"]
+    euso = _PRINTINGS["Eusocial Engineering"]
     assert euso.warp_cost_str == "{1}{G}"
     state = _arena(
         p0_hand=[euso],
@@ -1925,13 +1889,12 @@ def test_eusocial_engineering_warp_cast_and_end_step_exile():
 def test_simplified_spacecraft_loads_and_stations():
     """Synthesizer Labship and Sledge-Class Seedship ship as vanilla
     Spacecraft — simplified to station threshold + stationed_keywords."""
-    from mtg_bot.cards import EOE_CREATURES
 
     for name, threshold, stationed_kw in (
         ("Synthesizer Labship", 9, "flying"),
         ("Sledge-Class Seedship", 7, "flying"),
     ):
-        c = EOE_CREATURES[name]
+        c = _PRINTINGS[name]
         assert c.is_spacecraft
         assert c.station_threshold == threshold
         assert stationed_kw in c.stationed_keywords
@@ -2016,7 +1979,6 @@ def test_emergency_eject_fizzles_against_indestructible_no_lander():
 def test_reroute_systems_indestructible_mode():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
 
@@ -2028,7 +1990,7 @@ def test_reroute_systems_indestructible_mode():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(bear)
-    EOE_SPELLS["Reroute Systems"].spell_effect.resolve(
+    _PRINTINGS["Reroute Systems"].spell_effect.resolve(
         state, 0, (("permanent", bear.id),)
     )
     from mtg_bot.game import effective_keywords
@@ -2036,7 +1998,6 @@ def test_reroute_systems_indestructible_mode():
 
 
 def test_singularity_rupture_destroys_all_creatures():
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     # Mix of creatures + a non-creature (Lander artifact stays).
@@ -2052,7 +2013,7 @@ def test_singularity_rupture_destroys_all_creatures():
     )
     state.battlefield.append(lander)
 
-    EOE_SPELLS["Singularity Rupture"].spell_effect.resolve(state, 0)
+    _PRINTINGS["Singularity Rupture"].spell_effect.resolve(state, 0)
     creatures_remaining = [o for o in state.battlefield if o.printing.is_creature]
     assert creatures_remaining == []
     assert lander in state.battlefield
@@ -2082,7 +2043,7 @@ def test_annul_counters_artifact_spell_on_stack():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -2098,10 +2059,10 @@ def test_annul_counters_artifact_spell_on_stack():
     state.battlefield.append(p0_land)
 
     # P1 casts Hullcarver (artifact creature) — put on stack.
-    # Actually Hullcarver is in EOE_CREATURES; pick any artifact card.
+    # Actually Hullcarver is in _PRINTINGS; pick any artifact card.
     # Let's use a Spacecraft which is an artifact card.
     skiff_in_hand = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], owner_id=1, zone=Zone.HAND
+        _PRINTINGS["Synthesizer Labship"], owner_id=1, zone=Zone.HAND
     )
     state.players[1].hand.append(skiff_in_hand)
     # Only enough mana for {U} not {1}{U}; our cost engine auto-taps
@@ -2112,7 +2073,7 @@ def test_annul_counters_artifact_spell_on_stack():
 
     # P0 casts Annul targeting the Synthesizer Labship.
     annul_in_hand = state.new_object(
-        EOE_SPELLS["Annul"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Annul"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(annul_in_hand)
     _cast_spell(state, 0, annul_in_hand.id)
@@ -2129,16 +2090,15 @@ def test_annul_counters_artifact_spell_on_stack():
 
 def test_counter_target_spell_filters_types():
     from mtg_bot.effects import CounterTargetSpell
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
 
     state = _arena()
     # Put an artifact-creature spell and an instant on the stack manually.
     art_card = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], owner_id=1, zone=Zone.STACK
+        _PRINTINGS["Synthesizer Labship"], owner_id=1, zone=Zone.STACK
     )
     state.stack.append(StackItem(source=art_card, controller_id=1))
     bolt_card = state.new_object(
-        EOE_SPELLS["Plasma Bolt"], owner_id=1, zone=Zone.STACK
+        _PRINTINGS["Plasma Bolt"], owner_id=1, zone=Zone.STACK
     )
     state.stack.append(StackItem(source=bolt_card, controller_id=1))
 
@@ -2166,12 +2126,11 @@ def test_counter_noop_paths():
 
 
 def test_frontline_war_rager_conditional_counter():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     rager = state.new_object(
-        EOE_CREATURES["Frontline War-Rager"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Frontline War-Rager"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(rager)
     from mtg_bot.actions import drain_stack
@@ -2192,12 +2151,11 @@ def test_frontline_war_rager_conditional_counter():
 
 
 def test_kavaron_turbodrone_activated_pump():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords, effective_power
 
     state = _arena()
     drone = state.new_object(
-        EOE_CREATURES["Kavaron Turbodrone"], owner_id=0,
+        _PRINTINGS["Kavaron Turbodrone"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(drone)
@@ -2216,7 +2174,6 @@ def test_kavaron_turbodrone_activated_pump():
 def test_melded_moxite_etb_loot_and_sac_for_robot():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     # Use a deterministic yes-agent so the new optional "may discard"
     # gate (audit-found bug fix) takes the loot path. RandomAgent's
@@ -2235,7 +2192,7 @@ def test_melded_moxite_etb_loot_and_sac_for_robot():
     state.players[0].hand.append(discard_fodder)
 
     moxite = state.new_object(
-        EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(moxite)
     # Fire ETB (loot: discard 1, draw 2).
@@ -2266,9 +2223,8 @@ def test_melded_moxite_activated_ability_cost_is_three_generic_and_sac():
     sacrificing the Moxite itself — no tap, no colored mana, no other
     riders. A future refactor that changes either piece would break this.
     """
-    from mtg_bot.cards import EOE_CREATURES
 
-    moxite = EOE_CREATURES["Melded Moxite"]
+    moxite = _PRINTINGS["Melded Moxite"]
     assert len(moxite.activated_abilities) == 1
     act = moxite.activated_abilities[0]
     assert act.cost.mana_str == "{3}"
@@ -2286,10 +2242,9 @@ def test_melded_moxite_activated_creates_one_tapped_2_2_colorless_robot():
     accidentally adding a color, dropping the artifact card type, or the
     'enters tapped' bit getting toggled off.
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import CreateToken
 
-    moxite = EOE_CREATURES["Melded Moxite"]
+    moxite = _PRINTINGS["Melded Moxite"]
     act = moxite.activated_abilities[0]
     assert isinstance(act.effect, CreateToken)
     assert act.effect.count == 1
@@ -2309,7 +2264,6 @@ def test_melded_moxite_activated_creates_one_tapped_2_2_colorless_robot():
 
 
 def test_dubious_delicacy_etb_and_activated():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     victim = state.new_object(
@@ -2317,7 +2271,7 @@ def test_dubious_delicacy_etb_and_activated():
     )
     state.battlefield.append(victim)
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(dd)
     assert "flash" in dd.printing.keywords
@@ -2346,7 +2300,7 @@ def test_second_spell_trigger_fires_once_per_turn():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -2361,13 +2315,13 @@ def test_second_spell_trigger_fires_once_per_turn():
     # won't cast it; just need it on battlefield as a trigger host).
     # Operative already on battlefield; count triggers on its controller.
     op = state.new_object(
-        EOE_CREATURES["Illvoi Operative"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Illvoi Operative"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(op)
     # Plasma Bolt {R} damage — won't add counters to Operative.
     for _ in range(2):
         card = state.new_object(
-            EOE_SPELLS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
+            _PRINTINGS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
         )
         state.players[0].hand.append(card)
     # Cast first spell — no trigger yet.
@@ -2399,7 +2353,6 @@ def test_second_spell_counter_resets_across_turns():
 def test_cosmogrand_zenith_token_mode():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     class PickTokens(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
@@ -2408,7 +2361,7 @@ def test_cosmogrand_zenith_token_mode():
     state = _arena()
     state.players[0].agent = PickTokens(rng=random.Random(0))
     zenith = state.new_object(
-        EOE_CREATURES["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(zenith)
     trig = zenith.printing.triggered_abilities[0]
@@ -2423,7 +2376,6 @@ def test_cosmogrand_zenith_token_mode():
 def test_cosmogrand_zenith_counter_mode():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     class PickCounters(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
@@ -2432,7 +2384,7 @@ def test_cosmogrand_zenith_counter_mode():
     state = _arena()
     state.players[0].agent = PickCounters(rng=random.Random(0))
     zenith = state.new_object(
-        EOE_CREATURES["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cosmogrand Zenith"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(zenith)
     mate = state.new_object(
@@ -2447,12 +2399,11 @@ def test_cosmogrand_zenith_counter_mode():
 
 
 def test_brightspear_zealot_power_boost_requires_two_spells():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power
 
     state = _arena()
     z = state.new_object(
-        EOE_CREATURES["Brightspear Zealot"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Brightspear Zealot"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(z)
     # 0 spells → base 2 power.
@@ -2468,11 +2419,11 @@ def test_brightspear_zealot_power_boost_requires_two_spells():
 
 def test_oreplate_pangolin_artifact_enters_trigger():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import BASIC_LANDS, TOKEN_PRINTINGS
 
     state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],))
     pang = state.new_object(
-        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(pang)
     # Another artifact enters via token creation → controller can pay
@@ -2497,13 +2448,13 @@ def test_oreplate_pangolin_artifact_enters_trigger():
 def test_pangolin_doesnt_trigger_on_itself():
     """The trigger says 'another artifact' — self-entry shouldn't fire."""
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+    from mtg_bot.cards import BASIC_LANDS
 
     # Plenty of mana available — even so the self-entry must not put a
     # counter, because the trigger says "another artifact".
     state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],) * 3)
     pang = state.new_object(
-        EOE_CREATURES["Oreplate Pangolin"], owner_id=0,
+        _PRINTINGS["Oreplate Pangolin"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     put_into_battlefield(state, pang, 0)
@@ -2513,11 +2464,11 @@ def test_pangolin_doesnt_trigger_on_itself():
 def test_pangolin_skips_counter_when_cannot_pay_optional_one():
     """No mana available → optional {1} can't be paid → no counter."""
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()  # no lands → controller can't pay {1}
     pang = state.new_object(
-        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(pang)
     lander = state.new_object(
@@ -2530,7 +2481,7 @@ def test_pangolin_skips_counter_when_cannot_pay_optional_one():
 def test_pangolin_taps_a_land_to_pay_optional_cost():
     """When the trigger fires and pays {1}, an untapped land becomes tapped."""
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import BASIC_LANDS, TOKEN_PRINTINGS
 
     state = _arena(p0_battlefield=(BASIC_LANDS["Mountain"],))
     mountain = next(
@@ -2539,7 +2490,7 @@ def test_pangolin_taps_a_land_to_pay_optional_cost():
     )
     assert not mountain.tapped
     pang = state.new_object(
-        EOE_CREATURES["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Oreplate Pangolin"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(pang)
     lander = state.new_object(
@@ -2553,11 +2504,11 @@ def test_pangolin_taps_a_land_to_pay_optional_cost():
 
 def test_mechan_assembler_fires_once_per_turn():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     ma = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ma)
     # First artifact enters → Robot token created.
@@ -2580,12 +2531,12 @@ def test_mechan_assembler_fires_once_per_turn():
 
 def test_once_per_turn_resets_on_cleanup():
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import run_cleanup_step
 
     state = _arena()
     ma = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mechan Assembler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ma)
     art = state.new_object(
@@ -2599,12 +2550,11 @@ def test_once_per_turn_resets_on_cleanup():
 
 def test_nanoform_sentinel_fizzles_without_tapped_target():
     """When no legal untap target exists, the trigger fizzles silently."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
     ns = state.new_object(
-        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ns)
     # No other tapped permanents → legal_targets is empty → fizzle.
@@ -2614,13 +2564,12 @@ def test_nanoform_sentinel_fizzles_without_tapped_target():
 
 def test_nanoform_sentinel_no_agent_just_taps():
     """Controller has no agent → trigger can still fire but picks nothing."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
     state.players[0].agent = None  # no agent
     ns = state.new_object(
-        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ns)
     tapped_ally = state.new_object(
@@ -2637,13 +2586,12 @@ def test_nanoform_sentinel_untaps_once_per_turn():
     from mtg_bot.agents import RandomAgent
     import random
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     ns = state.new_object(
-        EOE_CREATURES["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Nanoform Sentinel"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ns)
     tapped_ally = state.new_object(
@@ -2659,13 +2607,12 @@ def test_nanoform_sentinel_untaps_once_per_turn():
 
 def test_meltstrider_eulogist_counter_dies_triggers_draw():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
     state = _arena()
     _stock_library(state, 0, count=5)
     eul = state.new_object(
-        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        _PRINTINGS["Meltstrider Eulogist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(eul)
@@ -2681,13 +2628,12 @@ def test_meltstrider_eulogist_counter_dies_triggers_draw():
 
 
 def test_meltstrider_eulogist_no_trigger_if_no_counter():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
     state = _arena()
     _stock_library(state, 0, count=5)
     eul = state.new_object(
-        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        _PRINTINGS["Meltstrider Eulogist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(eul)
@@ -2702,12 +2648,11 @@ def test_meltstrider_eulogist_no_trigger_if_no_counter():
 
 def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
     """Only YOUR creatures dying trigger it."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
     state = _arena()
     eul = state.new_object(
-        EOE_CREATURES["Meltstrider Eulogist"], owner_id=0,
+        _PRINTINGS["Meltstrider Eulogist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(eul)
@@ -2723,12 +2668,12 @@ def test_meltstrider_eulogist_no_trigger_on_opponent_creature():
 
 def test_lightless_evangel_counter_on_sacrifice():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import sacrifice
 
     state = _arena()
     le = state.new_object(
-        EOE_CREATURES["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(le)
     # Sacrificing a Lander (artifact) → counter on Evangel.
@@ -2744,12 +2689,11 @@ def test_lightless_evangel_counter_on_sacrifice():
 def test_lightless_evangel_does_not_trigger_on_self_sacrifice():
     """Sacrificing the Evangel itself shouldn't count (trigger says
     'another creature or artifact')."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import sacrifice
 
     state = _arena()
     le = state.new_object(
-        EOE_CREATURES["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Lightless Evangel"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(le)
     # Only Evangel on the field; sacrificing it shouldn't re-trigger.
@@ -2759,7 +2703,7 @@ def test_lightless_evangel_does_not_trigger_on_self_sacrifice():
 
 
 def test_sunstar_expansionist_etb_triggers_only_when_behind():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     # Opponent has 2 lands, caster has 0.
@@ -2770,7 +2714,7 @@ def test_sunstar_expansionist_etb_triggers_only_when_behind():
         state.battlefield.append(land)
 
     se = state.new_object(
-        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        _PRINTINGS["Sunstar Expansionist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(se)
@@ -2785,7 +2729,7 @@ def test_sunstar_expansionist_etb_triggers_only_when_behind():
 
 
 def test_sunstar_expansionist_etb_skipped_when_ahead():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     # Caster has 3 lands, opponent has 1.
@@ -2800,7 +2744,7 @@ def test_sunstar_expansionist_etb_skipped_when_ahead():
     state.battlefield.append(opp_land)
 
     se = state.new_object(
-        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        _PRINTINGS["Sunstar Expansionist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(se)
@@ -2813,12 +2757,12 @@ def test_sunstar_expansionist_etb_skipped_when_ahead():
 
 
 def test_sunstar_expansionist_landfall_pumps_self():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import fire_landfall_triggers
 
     state = _arena()
     se = state.new_object(
-        EOE_CREATURES["Sunstar Expansionist"], owner_id=0,
+        _PRINTINGS["Sunstar Expansionist"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(se)
@@ -2834,13 +2778,12 @@ def test_sunstar_expansionist_landfall_pumps_self():
 
 def test_illvoi_infiltrator_draws_on_combat_damage_to_player():
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step
 
     state = _arena()
     _stock_library(state, 0, count=5)
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(inf)
     inf.attacking = True
@@ -2858,13 +2801,12 @@ def test_illvoi_infiltrator_draws_on_combat_damage_to_player():
 
 def test_combat_damage_to_player_trigger_skips_when_blocked():
     """No damage to player → no trigger."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step
 
     state = _arena()
     _stock_library(state, 0, count=5)
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(inf)
     inf.attacking = True
@@ -2884,12 +2826,11 @@ def test_illvoi_infiltrator_blockable_when_fewer_than_two_spells_cast():
     """can_block returns True (Illvoi blockable) when controller has cast
     0 or 1 spells this turn — the conditional unblockable hasn't kicked in.
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import can_block
 
     state = _arena()
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(inf)
@@ -2911,12 +2852,11 @@ def test_illvoi_infiltrator_unblockable_when_two_spells_cast():
     """can_block returns False against Illvoi once its controller has cast
     2 (or more) spells this turn.
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import can_block
 
     state = _arena()
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(inf)
@@ -2945,13 +2885,12 @@ def test_illvoi_infiltrator_declare_blockers_drops_block_and_logs():
     draw-a-card trigger.
     """
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step, declare_blockers
 
     state = _arena()
     _stock_library(state, 0, count=5)
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(inf)
@@ -2979,11 +2918,10 @@ def test_illvoi_infiltrator_declare_blockers_drops_block_and_logs():
 
 
 def test_thaumaton_torpedo_destroys_nonland_permanent():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     torpedo = state.new_object(
-        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        _PRINTINGS["Thaumaton Torpedo"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(torpedo)
@@ -3000,11 +2938,10 @@ def test_thaumaton_torpedo_full_cost_when_no_spacecraft_attack():
     """Without a Spacecraft attack this turn, the activation costs
     the printed {6}."""
     from mtg_bot.actions import _effective_ability_mana_cost
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     torpedo = state.new_object(
-        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        _PRINTINGS["Thaumaton Torpedo"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(torpedo)
@@ -3018,11 +2955,10 @@ def test_thaumaton_torpedo_reduced_cost_after_spacecraft_attack():
     """After the controller has attacked with a Spacecraft this turn,
     the activation costs {3} less, i.e. {3}."""
     from mtg_bot.actions import _effective_ability_mana_cost
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     torpedo = state.new_object(
-        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        _PRINTINGS["Thaumaton Torpedo"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(torpedo)
@@ -3036,13 +2972,12 @@ def test_thaumaton_torpedo_cost_reduction_floors_at_zero():
     """A cost reduction larger than the printed generic floors at 0
     rather than going negative — matches ManaCost.reduced()'s clamp."""
     from mtg_bot.actions import _effective_ability_mana_cost
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.cards.base import ActivationCost, CostReduction, parse_mana_cost
     from mtg_bot.effects import ActivatedAbility, DestroyTargetNonlandPermanent
 
     state = _arena()
     torpedo = state.new_object(
-        EOE_CREATURES["Thaumaton Torpedo"], owner_id=0,
+        _PRINTINGS["Thaumaton Torpedo"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(torpedo)
@@ -3090,7 +3025,6 @@ def test_destroy_target_nonland_permanent_noop_paths():
 
 
 def test_meltstriders_gear_equips_and_buffs():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_keywords
 
     state = _arena()
@@ -3099,7 +3033,7 @@ def test_meltstriders_gear_equips_and_buffs():
     )
     state.battlefield.append(ally)
     gear = state.new_object(
-        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        _PRINTINGS["Meltstrider's Gear"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(gear)
@@ -3117,7 +3051,6 @@ def test_meltstriders_gear_equips_and_buffs():
 
 
 def test_equipment_falls_off_when_creature_dies():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import destroy, move_off_battlefield
     from mtg_bot.game import effective_power
 
@@ -3127,7 +3060,7 @@ def test_equipment_falls_off_when_creature_dies():
     )
     state.battlefield.append(ally)
     gear = state.new_object(
-        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        _PRINTINGS["Meltstrider's Gear"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(gear)
@@ -3140,15 +3073,13 @@ def test_equipment_falls_off_when_creature_dies():
 
 
 def test_squires_lightblade_has_flash_and_buff():
-    from mtg_bot.cards import EOE_CREATURES
 
-    c = EOE_CREATURES["Squire's Lightblade"]
+    c = _PRINTINGS["Squire's Lightblade"]
     assert "flash" in c.keywords
     assert c.equipment_bonuses == (1, 0, frozenset())
 
 
 def test_illvoi_light_jammer_has_flash_plus_buff():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_toughness
 
     state = _arena()
@@ -3157,7 +3088,7 @@ def test_illvoi_light_jammer_has_flash_plus_buff():
     )
     state.battlefield.append(ally)
     jammer = state.new_object(
-        EOE_CREATURES["Illvoi Light Jammer"], owner_id=0,
+        _PRINTINGS["Illvoi Light Jammer"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(jammer)
@@ -3173,7 +3104,6 @@ def test_illvoi_light_jammer_has_flash_plus_buff():
 def test_attach_fizzle_paths():
     """AttachToTargetCreatureYouControl no-ops when misused."""
     from mtg_bot.effects import AttachToTargetCreatureYouControl
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     e = AttachToTargetCreatureYouControl()
@@ -3189,7 +3119,7 @@ def test_attach_fizzle_paths():
     e.resolve(state, controller_id=0, targets=(("creature", 1),))
     # Equipment source, missing targets.
     gear = state.new_object(
-        EOE_CREATURES["Meltstrider's Gear"], owner_id=0,
+        _PRINTINGS["Meltstrider's Gear"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.resolving_source = gear
@@ -3206,12 +3136,11 @@ def test_attach_fizzle_paths():
 
 
 def test_auxiliary_boosters_etb_creates_and_attaches():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power, effective_toughness, effective_keywords
 
     state = _arena()
     gear = state.new_object(
-        EOE_CREATURES["Auxiliary Boosters"], owner_id=0,
+        _PRINTINGS["Auxiliary Boosters"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(gear)
@@ -3234,7 +3163,6 @@ def test_hylderblade_void_reattaches_at_end_step():
     from mtg_bot.agents import RandomAgent
     import random
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
 
     state = _arena(step=Step.END, active=0)
@@ -3244,7 +3172,7 @@ def test_hylderblade_void_reattaches_at_end_step():
     )
     state.battlefield.append(ally)
     hyl = state.new_object(
-        EOE_CREATURES["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(hyl)
     # Void inactive → no re-attach.
@@ -3260,12 +3188,11 @@ def test_hylderblade_void_reattaches_at_end_step():
 
 def test_end_step_trigger_fizzles_without_legal_targets():
     """Hylderblade on an otherwise-empty battlefield: no target → fizzle."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, Step
 
     state = _arena(step=Step.END, active=0)
     hyl = state.new_object(
-        EOE_CREATURES["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Hylderblade"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(hyl)
     state.permanent_left_battlefield_this_turn = True
@@ -3277,7 +3204,6 @@ def test_end_step_trigger_fizzles_without_legal_targets():
 def test_specimen_freighter_bounces_up_to_two():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(1))
@@ -3291,7 +3217,7 @@ def test_specimen_freighter_bounces_up_to_two():
         bears.append(b)
 
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(freighter)
     # Fire the ETB with multi-target: pick both bears.
@@ -3322,7 +3248,6 @@ def test_return_up_to_n_empty_targets_is_noop():
 
 def test_specimen_freighter_etb_excludes_spacecraft_targets():
     """Oracle: 'return up to two target NON-SPACECRAFT creatures.'"""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     bear = state.new_object(
@@ -3332,11 +3257,11 @@ def test_specimen_freighter_etb_excludes_spacecraft_targets():
     # Stationed enemy Spacecraft (counts as a creature) — oracle excludes
     # it from the bounce target list.
     rival = state.new_object(
-        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Pinnacle Kill-Ship"], owner_id=1, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(rival)
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(freighter)
     etb = next(
@@ -3353,7 +3278,7 @@ def test_specimen_freighter_etb_excludes_spacecraft_targets():
 def test_specimen_freighter_attacks_trigger_mills_4_from_each_opponent():
     """Oracle: 'Whenever this Spacecraft attacks, defending player mills
     four cards.' Modeled as 'each opponent mills 4' (exact in 2-player)."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     # Stack opponent's library with enough cards to mill.
@@ -3363,7 +3288,7 @@ def test_specimen_freighter_attacks_trigger_mills_4_from_each_opponent():
         )
         state.players[1].library.append(c)
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(freighter)
     from mtg_bot.effects.predicates import Event, IsSelf
@@ -3384,7 +3309,7 @@ def test_multi_target_cast_path_through_cast_spell():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -3405,7 +3330,7 @@ def test_multi_target_cast_path_through_cast_spell():
         bears.append(b)
     # Freighter in hand.
     freighter_in_hand = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(freighter_in_hand)
     _cast_spell(state, 0, freighter_in_hand.id)
@@ -3418,7 +3343,6 @@ def test_multi_target_cast_path_through_cast_spell():
 
 
 def test_scout_for_survivors_returns_with_counters():
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     # Oracle: 'with TOTAL mana value 3 or less'. Seed 3 MV-1 creatures
@@ -3440,7 +3364,7 @@ def test_scout_for_survivors_returns_with_counters():
     )  # {3}{U}, MV 4
     state.players[0].graveyard.append(big)
 
-    effect = EOE_SPELLS["Scout for Survivors"].spell_effect
+    effect = _PRINTINGS["Scout for Survivors"].spell_effect
     legal = effect.legal_targets(state, 0)
     legal_ids = {tid for _, tid in legal}
     # All 3 small creatures legal, big one NOT legal (MV > 3 budget).
@@ -3559,7 +3483,6 @@ def test_scout_for_survivors_legal_targets_excludes_oversized_singletons():
 
 
 def test_biosynthic_burst_counter_keywords_untap():
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_keywords
 
     state = _arena()
@@ -3568,7 +3491,7 @@ def test_biosynthic_burst_counter_keywords_untap():
     )
     ally.tapped = True
     state.battlefield.append(ally)
-    EOE_SPELLS["Biosynthic Burst"].spell_effect.resolve(
+    _PRINTINGS["Biosynthic Burst"].spell_effect.resolve(
         state, 0, (("creature", ally.id),)
     )
     assert ally.plus_one_counters == 1
@@ -3603,7 +3526,7 @@ def test_multi_target_agent_declines_after_min():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
 
@@ -3633,7 +3556,7 @@ def test_multi_target_agent_declines_after_min():
         state.battlefield.append(b)
         bears.append(b)
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(freighter)
     _cast_spell(state, 0, freighter.id)
@@ -3651,7 +3574,7 @@ def test_multi_target_etb_runs_out_of_legal_targets():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -3667,7 +3590,7 @@ def test_multi_target_etb_runs_out_of_legal_targets():
     )
     state.battlefield.append(victim)
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(freighter)
     _cast_spell(state, 0, freighter.id)
@@ -3684,7 +3607,7 @@ def test_multi_target_agent_picks_out_of_set():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
 
@@ -3709,7 +3632,7 @@ def test_multi_target_agent_picks_out_of_set():
         )
         state.battlefield.append(b)
     freighter = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(freighter)
     _cast_spell(state, 0, freighter.id)
@@ -3718,7 +3641,6 @@ def test_multi_target_agent_picks_out_of_set():
 
 
 def test_dark_endurance_pumps_and_protects():
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_power, effective_keywords
 
     state = _arena()
@@ -3726,7 +3648,7 @@ def test_dark_endurance_pumps_and_protects():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(bear)
-    EOE_SPELLS["Dark Endurance"].spell_effect.resolve(
+    _PRINTINGS["Dark Endurance"].spell_effect.resolve(
         state, 0, (("creature", bear.id),)
     )
     assert effective_power(state, bear) == 4  # 2 + 2
@@ -3734,7 +3656,6 @@ def test_dark_endurance_pumps_and_protects():
 
 
 def test_full_bore_pumps_own_creature():
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_power, effective_toughness, effective_keywords
 
     state = _arena()
@@ -3742,7 +3663,7 @@ def test_full_bore_pumps_own_creature():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ally)
-    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+    _PRINTINGS["Full Bore"].spell_effect.resolve(
         state, 0, (("creature", ally.id),)
     )
     assert effective_power(state, ally) == 5  # 2 + 3
@@ -3756,7 +3677,6 @@ def test_full_bore_pumps_own_creature():
 def test_full_bore_warp_cast_target_also_gains_trample_and_haste():
     """Oracle: 'If that creature was cast for its warp cost, it also gains
     trample and haste until end of turn.'"""
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_keywords
 
     state = _arena()
@@ -3765,7 +3685,7 @@ def test_full_bore_warp_cast_target_also_gains_trample_and_haste():
     )
     ally.cast_via_warp = True
     state.battlefield.append(ally)
-    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+    _PRINTINGS["Full Bore"].spell_effect.resolve(
         state, 0, (("creature", ally.id),)
     )
     kw = effective_keywords(state, ally)
@@ -3774,7 +3694,6 @@ def test_full_bore_warp_cast_target_also_gains_trample_and_haste():
 
 
 def test_full_bore_warp_rider_cleans_up_at_end_of_turn():
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_keywords
     from mtg_bot.turn import run_cleanup_step
 
@@ -3784,7 +3703,7 @@ def test_full_bore_warp_rider_cleans_up_at_end_of_turn():
     )
     ally.cast_via_warp = True
     state.battlefield.append(ally)
-    EOE_SPELLS["Full Bore"].spell_effect.resolve(
+    _PRINTINGS["Full Bore"].spell_effect.resolve(
         state, 0, (("creature", ally.id),)
     )
     assert "haste" in effective_keywords(state, ally)
@@ -3798,7 +3717,7 @@ def test_cryoshatter_aura_attaches_and_debuffs():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -3814,7 +3733,7 @@ def test_cryoshatter_aura_attaches_and_debuffs():
     )  # 4/4 — with -5/-0, SBAs should eventually kill it via damage
     state.battlefield.append(victim)
     cryo_in_hand = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(cryo_in_hand)
     _cast_spell(state, 0, cryo_in_hand.id)
@@ -3832,7 +3751,7 @@ def test_aura_fizzles_if_target_gone_at_resolution():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -3847,7 +3766,7 @@ def test_aura_fizzles_if_target_gone_at_resolution():
     )
     state.battlefield.append(victim)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(cryo)
     _cast_spell(state, 0, cryo.id)
@@ -3860,7 +3779,6 @@ def test_aura_fizzles_if_target_gone_at_resolution():
 
 
 def test_aura_goes_to_graveyard_when_enchanted_creature_leaves():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -3869,7 +3787,7 @@ def test_aura_goes_to_graveyard_when_enchanted_creature_leaves():
     )
     state.battlefield.append(ally)
     aura = state.new_object(
-        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        _PRINTINGS["Meltstrider's Resolve"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     aura.attached_to = ally.id
@@ -3885,7 +3803,6 @@ def test_cryoshatter_destroys_host_when_host_becomes_tapped():
     half: tapping the host should destroy the host, and the aura then
     follows it off the battlefield (auras leave when their host does).
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
@@ -3894,7 +3811,7 @@ def test_cryoshatter_destroys_host_when_host_becomes_tapped():
     )
     state.battlefield.append(bear)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -3917,7 +3834,6 @@ def test_cryoshatter_destroys_host_when_host_becomes_tapped():
 def test_cryoshatter_no_op_when_host_already_tapped():
     """If the host is already tapped, tap_permanent is a no-op and the
     aura's becomes-tapped trigger does NOT fire (no re-trigger)."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
@@ -3927,7 +3843,7 @@ def test_cryoshatter_no_op_when_host_already_tapped():
     bear.tapped = True
     state.battlefield.append(bear)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -3939,7 +3855,6 @@ def test_cryoshatter_no_op_when_host_already_tapped():
 def test_tap_permanent_does_not_fire_aura_trigger_for_other_hosts():
     """An aura's enchanted-permanent-becomes-tapped trigger only fires
     when ITS host is tapped, not when some other permanent is tapped."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
@@ -3952,7 +3867,7 @@ def test_tap_permanent_does_not_fire_aura_trigger_for_other_hosts():
     )
     state.battlefield.append(other)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -3973,7 +3888,6 @@ def test_cryoshatter_destroys_host_when_dealt_combat_damage():
     rather than _apply_damage (direct damage) so this exercises the
     combat-damage path of the trigger plumbing.
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step
     from mtg_bot.turn import state_based_actions
 
@@ -3984,7 +3898,7 @@ def test_cryoshatter_destroys_host_when_dealt_combat_damage():
     )
     state.battlefield.append(bear)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -4013,7 +3927,6 @@ def test_cryoshatter_destroys_host_when_dealt_direct_damage():
     a "deal N damage to target creature" effect routed through
     ``_apply_damage`` triggers the aura the same way combat damage does.
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import DealDamageAnyTarget
     from mtg_bot.turn import state_based_actions
 
@@ -4023,7 +3936,7 @@ def test_cryoshatter_destroys_host_when_dealt_direct_damage():
     )
     state.battlefield.append(bear)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -4048,7 +3961,6 @@ def test_cryoshatter_no_op_when_no_damage_dealt():
     -5/-0 is still tracked as a creature with negative power; SBAs only
     kill it via lethal damage / zero-toughness, neither of which apply).
     """
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import state_based_actions
 
     state = _arena()
@@ -4057,7 +3969,7 @@ def test_cryoshatter_no_op_when_no_damage_dealt():
     )
     state.battlefield.append(bear)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     cryo.attached_to = bear.id
     state.battlefield.append(cryo)
@@ -4069,7 +3981,6 @@ def test_cryoshatter_no_op_when_no_damage_dealt():
 
 
 def test_meltstriders_resolve_grants_buff_and_menace():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_toughness, effective_keywords
 
     state = _arena()
@@ -4078,7 +3989,7 @@ def test_meltstriders_resolve_grants_buff_and_menace():
     )
     state.battlefield.append(ally)
     aura = state.new_object(
-        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        _PRINTINGS["Meltstrider's Resolve"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     aura.attached_to = ally.id
@@ -4093,7 +4004,7 @@ def test_aura_cast_with_no_legal_target_no_targets():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -4102,7 +4013,7 @@ def test_aura_cast_with_no_legal_target_no_targets():
     )
     state.battlefield.append(mana)
     cryo = state.new_object(
-        EOE_CREATURES["Cryoshatter"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Cryoshatter"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(cryo)
     _cast_spell(state, 0, cryo.id)
@@ -4115,10 +4026,9 @@ def test_gigastorm_titan_cost_reduction_when_second_spell():
     """Gigastorm Titan normally costs {4}{U}; with 1 spell already cast
     this turn, costs {1}{U}."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
-    card = EOE_CREATURES["Gigastorm Titan"]
+    card = _PRINTINGS["Gigastorm Titan"]
     # No spells cast yet → no reduction.
     reduced = apply_cost_reductions(card, state, 0, card.mana_cost)
     assert reduced.generic == 4
@@ -4131,10 +4041,10 @@ def test_gigastorm_titan_cost_reduction_when_second_spell():
 def test_fungal_colossus_cost_reduction_per_land_group():
     """{6}{G} → reduced by number of differently-named lands."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
-    card = EOE_CREATURES["Fungal Colossus"]
+    card = _PRINTINGS["Fungal Colossus"]
     # No lands → no reduction.
     assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 6
     # One Forest, one Mountain, one Plains → 3 different names → -3.
@@ -4154,11 +4064,10 @@ def test_attacked_with_spacecraft_tracking_and_cleanup():
     """declare_attackers sets the flag; cleanup clears it."""
     from mtg_bot.combat import declare_attackers
     from mtg_bot.turn import run_cleanup_step
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     ship = state.new_object(
-        EOE_CREATURES["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(ship)
     # Station it so it's a creature.
@@ -4192,10 +4101,9 @@ def test_uthros_psionicist_external_reduction_kicks_in_for_second_spell():
     """Psionicist on the battlefield → second spell of the turn costs
     {2} less generic. First spell of the turn → no reduction."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
-    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
-    target = EOE_CREATURES["Rayblade Trooper"]  # {2}{G} 3/3, no own reductions
+    state = _arena(p0_battlefield=[_PRINTINGS["Uthros Psionicist"]])
+    target = _PRINTINGS["Rayblade Trooper"]  # {2}{G} 3/3, no own reductions
     # First spell: spells_cast_this_turn == 0 → no reduction.
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == 2
@@ -4209,10 +4117,9 @@ def test_uthros_psionicist_does_not_reduce_for_third_or_later_spell():
     """The condition is exactly the second spell, not 'spells beyond
     the first' — third spell of the turn shouldn't get the discount."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
-    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
-    target = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(p0_battlefield=[_PRINTINGS["Uthros Psionicist"]])
+    target = _PRINTINGS["Rayblade Trooper"]
     state.players[0].spells_cast_this_turn = 2  # this would be the 3rd
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == 2  # back to base
@@ -4222,10 +4129,9 @@ def test_psionicist_does_not_reduce_opponent_spells():
     """External cost reduction is "you control" only — opponents'
     spells get no discount even if it's their second spell."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
-    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
-    target = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(p0_battlefield=[_PRINTINGS["Uthros Psionicist"]])
+    target = _PRINTINGS["Rayblade Trooper"]
     state.players[1].spells_cast_this_turn = 1
     # Casting as P1 — Psionicist belongs to P0, no discount.
     reduced = apply_cost_reductions(target, state, 1, target.mana_cost)
@@ -4237,10 +4143,9 @@ def test_psionicist_plus_gigastorm_titan_stacks_to_zero_generic():
     spell already cast this turn (Melded Moxite), then cast Gigastorm
     Titan. Titan's own -3 + Psionicist's -2 → {4}{U} → {U}."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
-    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
-    titan = EOE_CREATURES["Gigastorm Titan"]
+    state = _arena(p0_battlefield=[_PRINTINGS["Uthros Psionicist"]])
+    titan = _PRINTINGS["Gigastorm Titan"]
     state.players[0].spells_cast_this_turn = 1  # Moxite was the 1st spell
     reduced = apply_cost_reductions(titan, state, 0, titan.mana_cost)
     assert reduced.generic == 0  # 4 - 3 (own) - 2 (psionicist) = -1 → clamped to 0
@@ -4252,10 +4157,9 @@ def test_external_reduction_logged_with_source_name():
     """The reduction log line should name the source permanent so a
     replay reader can see WHERE the discount came from."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
-    state = _arena(p0_battlefield=[EOE_CREATURES["Uthros Psionicist"]])
-    target = EOE_CREATURES["Rayblade Trooper"]
+    state = _arena(p0_battlefield=[_PRINTINGS["Uthros Psionicist"]])
+    target = _PRINTINGS["Rayblade Trooper"]
     state.players[0].spells_cast_this_turn = 1
     apply_cost_reductions(target, state, 0, target.mana_cost)
     assert any(
@@ -4274,13 +4178,12 @@ def test_mana_cost_reduced_never_below_zero():
 
 
 def test_kav_landseeker_schedules_sacrifice_and_fires():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_delayed_end_step_triggers
 
     state = _arena()
     state.turn_number = 1  # P0's turn
     kav = state.new_object(
-        EOE_CREATURES["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(kav)
     # Fire ETB: schedules delayed trigger.
@@ -4308,13 +4211,12 @@ def test_kav_landseeker_schedules_sacrifice_and_fires():
 def test_delayed_trigger_survives_removal_if_target_gone():
     """If the target leaves before the trigger fires, the entry is
     consumed but nothing happens."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_delayed_end_step_triggers, destroy
 
     state = _arena()
     state.turn_number = 1
     kav = state.new_object(
-        EOE_CREATURES["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Kav Landseeker"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(kav)
     etb = next(
@@ -4331,7 +4233,7 @@ def test_delayed_trigger_survives_removal_if_target_gone():
 
 def test_delayed_trigger_waits_for_correct_turn():
     """Trigger scheduled for turn 3 doesn't fire at turn 2."""
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import run_delayed_end_step_triggers
 
     state = _arena()
@@ -4426,11 +4328,10 @@ def test_shock_land_without_agent_enters_normal():
 
 def test_weftstalker_ardent_pings_opponent_on_creature_enter():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     stalker = state.new_object(
-        EOE_CREATURES["Weftstalker Ardent"], owner_id=0,
+        _PRINTINGS["Weftstalker Ardent"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(stalker)
@@ -4446,11 +4347,10 @@ def test_weftstalker_ardent_pings_opponent_on_creature_enter():
 
 def test_haliya_gains_life_on_creature_enter():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     haliya = state.new_object(
-        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        _PRINTINGS["Haliya, Guided by Light"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(haliya)
@@ -4465,13 +4365,13 @@ def test_haliya_gains_life_on_creature_enter():
 
 def test_haliya_guided_eot_draws_when_three_life_gained():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     state.active_player_idx = 0
     haliya = state.new_object(
-        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        _PRINTINGS["Haliya, Guided by Light"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(haliya)
@@ -4487,13 +4387,13 @@ def test_haliya_guided_eot_draws_when_three_life_gained():
 
 def test_haliya_guided_eot_no_draw_below_threshold():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     state.active_player_idx = 0
     haliya = state.new_object(
-        EOE_CREATURES["Haliya, Guided by Light"], owner_id=0,
+        _PRINTINGS["Haliya, Guided by Light"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(haliya)
@@ -4507,9 +4407,8 @@ def test_haliya_guided_eot_no_draw_below_threshold():
 
 
 def test_haliya_guided_has_warp_cost():
-    from mtg_bot.cards import EOE_CREATURES
 
-    h = EOE_CREATURES["Haliya, Guided by Light"]
+    h = _PRINTINGS["Haliya, Guided by Light"]
     assert h.warp_cost_str == "{W}"
 
 
@@ -4517,11 +4416,10 @@ def test_creature_or_artifact_trigger_skips_self_entry():
     """The trigger says 'another creature or artifact'. Self-entry
     shouldn't trigger — the source is excluded."""
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     stalker = state.new_object(
-        EOE_CREATURES["Weftstalker Ardent"], owner_id=0,
+        _PRINTINGS["Weftstalker Ardent"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     put_into_battlefield(state, stalker, 0)
@@ -4531,9 +4429,8 @@ def test_creature_or_artifact_trigger_skips_self_entry():
 
 
 def test_entropic_battlecruiser_loads():
-    from mtg_bot.cards import EOE_CREATURES
 
-    c = EOE_CREATURES["Entropic Battlecruiser"]
+    c = _PRINTINGS["Entropic Battlecruiser"]
     assert c.is_spacecraft
     assert c.station_threshold == 8
     assert "flying" in c.stationed_keywords
@@ -4541,12 +4438,11 @@ def test_entropic_battlecruiser_loads():
 
 
 def test_drix_fatemaker_grants_trample_to_counter_creatures():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords
 
     state = _arena()
     drix = state.new_object(
-        EOE_CREATURES["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(drix)
     without_counter = state.new_object(
@@ -4563,11 +4459,10 @@ def test_drix_fatemaker_grants_trample_to_counter_creatures():
 
 
 def test_drix_fatemaker_etb_adds_counter_to_target():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     drix = state.new_object(
-        EOE_CREATURES["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Drix Fatemaker"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(drix)
     ally = state.new_object(
@@ -4583,7 +4478,7 @@ def test_drix_fatemaker_etb_adds_counter_to_target():
 
 
 def test_seedship_impact_destroys_small_artifact_and_makes_lander():
-    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     # Lander is an artifact with MV 0 → qualifies for the rider.
@@ -4591,7 +4486,7 @@ def test_seedship_impact_destroys_small_artifact_and_makes_lander():
         TOKEN_PRINTINGS["Lander"], owner_id=1, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(enemy_art)
-    EOE_SPELLS["Seedship Impact"].spell_effect.resolve(
+    _PRINTINGS["Seedship Impact"].spell_effect.resolve(
         state, 0, (("permanent", enemy_art.id),)
     )
     assert enemy_art not in state.battlefield
@@ -4605,14 +4500,13 @@ def test_seedship_impact_destroys_small_artifact_and_makes_lander():
 
 def test_seedship_impact_big_artifact_no_lander():
     """A Spacecraft with MV > 2 doesn't get the Lander rider."""
-    from mtg_bot.cards import EOE_SPELLS, EOE_CREATURES
 
     state = _arena()
     big = state.new_object(
-        EOE_CREATURES["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
     )  # {5}{W} MV=6
     state.battlefield.append(big)
-    EOE_SPELLS["Seedship Impact"].spell_effect.resolve(
+    _PRINTINGS["Seedship Impact"].spell_effect.resolve(
         state, 0, (("permanent", big.id),)
     )
     assert big not in state.battlefield
@@ -4643,7 +4537,6 @@ def test_seedship_impact_noop_paths():
 
 
 def test_banishing_light_exiles_then_returns_on_leave():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -4652,7 +4545,7 @@ def test_banishing_light_exiles_then_returns_on_leave():
     )
     state.battlefield.append(victim)
     bl = state.new_object(
-        EOE_CREATURES["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(bl)
     # Fire Banishing Light's ETB trigger.
@@ -4678,18 +4571,17 @@ def test_warp_card_exiled_by_banishing_light_is_not_castable_from_exile():
     set warped=True and should NOT appear in the owner's legal
     cast actions."""
     from mtg_bot.actions import CastSpell
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.legal import legal_actions
 
     state = _arena()
     # Red Tiger Mechan has warp_cost {1}{R} and mana_cost {3}{R}.
     victim = state.new_object(
-        EOE_CREATURES["Red Tiger Mechan"],
+        _PRINTINGS["Red Tiger Mechan"],
         owner_id=1, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(victim)
     bl = state.new_object(
-        EOE_CREATURES["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD,
+        _PRINTINGS["Banishing Light"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(bl)
     # Fire Banishing Light's ETB exile.
@@ -4726,12 +4618,11 @@ def test_warp_card_exiled_by_banishing_light_is_not_castable_from_exile():
 
 
 def test_seam_rip_rejects_big_permanents():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
 
     state = _arena()
     big = state.new_object(
-        EOE_CREATURES["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Rescue Skiff"], owner_id=1, zone=Zone.BATTLEFIELD
     )  # MV 6
     state.battlefield.append(big)
     small = state.new_object(
@@ -4779,13 +4670,12 @@ def test_exile_until_leaves_noop_paths():
 def test_sunset_saboteur_attacks_trigger_fires():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import declare_attackers
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     sab = state.new_object(
-        EOE_CREATURES["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     sab.summoning_sick = False
     state.battlefield.append(sab)
@@ -4799,12 +4689,11 @@ def test_sunset_saboteur_attacks_trigger_fires():
 
 
 def test_attacks_trigger_fizzles_without_targets():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import declare_attackers
 
     state = _arena()
     sab = state.new_object(
-        EOE_CREATURES["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Sunset Saboteur"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     sab.summoning_sick = False
     state.battlefield.append(sab)
@@ -4837,7 +4726,6 @@ def test_put_counter_on_opponent_creature_rejects_own():
 def test_temporal_intervention_directed_discard():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -4852,7 +4740,7 @@ def test_temporal_intervention_directed_discard():
         BASIC_LANDS["Forest"], owner_id=1, zone=Zone.HAND
     )
     state.players[1].hand.append(land)
-    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+    _PRINTINGS["Temporal Intervention"].spell_effect.resolve(
         state, 0, (("player", 1),)
     )
     # Creature discarded, land stays.
@@ -4864,7 +4752,7 @@ def test_temporal_intervention_no_nonland_cards_noop():
     """If the opponent has only lands, the directed discard fizzles."""
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -4872,7 +4760,7 @@ def test_temporal_intervention_no_nonland_cards_noop():
         BASIC_LANDS["Forest"], owner_id=1, zone=Zone.HAND
     )
     state.players[1].hand.append(land)
-    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+    _PRINTINGS["Temporal Intervention"].spell_effect.resolve(
         state, 0, (("player", 1),)
     )
     assert land in state.players[1].hand
@@ -4881,10 +4769,9 @@ def test_temporal_intervention_no_nonland_cards_noop():
 def test_temporal_intervention_cost_reduced_under_void():
     """Void active → cost reduced by 2."""
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
-    spell = EOE_SPELLS["Temporal Intervention"]
+    spell = _PRINTINGS["Temporal Intervention"]
     # Void inactive.
     assert apply_cost_reductions(
         spell, state, 0, spell.mana_cost
@@ -4908,7 +4795,6 @@ def test_temporal_intervention_noop_paths():
 
 
 def test_temporal_intervention_no_agent_picks_first():
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     state.players[0].agent = None
@@ -4916,7 +4802,7 @@ def test_temporal_intervention_no_agent_picks_first():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.HAND
     )
     state.players[1].hand.append(creature)
-    EOE_SPELLS["Temporal Intervention"].spell_effect.resolve(
+    _PRINTINGS["Temporal Intervention"].spell_effect.resolve(
         state, 0, (("player", 1),)
     )
     assert creature in state.players[1].graveyard
@@ -4925,11 +4811,10 @@ def test_temporal_intervention_no_agent_picks_first():
 def test_additional_costs_payable_returns_true_for_no_cost():
     """Cards without additional costs pass the check trivially."""
     from mtg_bot.legal import _additional_costs_payable
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _arena()
     card = state.new_object(
-        EOE_SPELLS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Plasma Bolt"], owner_id=0, zone=Zone.HAND
     )
     assert _additional_costs_payable(state, 0, card) is True
 
@@ -4958,7 +4843,7 @@ def test_embrace_oblivion_requires_sac_target_to_cast():
     """With no own creatures/artifacts, Embrace Oblivion can't be cast."""
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -4973,7 +4858,7 @@ def test_embrace_oblivion_requires_sac_target_to_cast():
     )
     state.battlefield.append(enemy)
     obli_in_hand = state.new_object(
-        EOE_SPELLS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(obli_in_hand)
     actions = legal_moves(state)
@@ -4989,7 +4874,7 @@ def test_embrace_oblivion_with_sac_target_casts_and_destroys():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_SPELLS, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -5010,7 +4895,7 @@ def test_embrace_oblivion_with_sac_target_casts_and_destroys():
     )
     state.battlefield.append(victim)
     obli = state.new_object(
-        EOE_SPELLS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Embrace Oblivion"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(obli)
     _cast_spell(state, 0, obli.id)
@@ -5023,17 +4908,16 @@ def test_embrace_oblivion_can_target_unstationed_spacecraft():
     """Oracle: 'Destroy target creature OR Spacecraft.' An unstationed
     Spacecraft (not currently a creature) is a legal target via the
     or_spacecraft branch."""
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
 
     state = _arena()
     spacecraft = state.new_object(
-        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1,
+        _PRINTINGS["Pinnacle Kill-Ship"], owner_id=1,
         zone=Zone.BATTLEFIELD,
     )
     # No charge counters → not animated as a creature.
     assert spacecraft.charge_counters == 0
     state.battlefield.append(spacecraft)
-    legal = EOE_SPELLS["Embrace Oblivion"].spell_effect.legal_targets(
+    legal = _PRINTINGS["Embrace Oblivion"].spell_effect.legal_targets(
         state, controller_id=0,
     )
     target_ids = {tid for _, tid in legal}
@@ -5042,15 +4926,14 @@ def test_embrace_oblivion_can_target_unstationed_spacecraft():
 
 def test_embrace_oblivion_destroys_unstationed_spacecraft():
     """An unstationed Spacecraft picked as the target gets destroyed."""
-    from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS
 
     state = _arena()
     spacecraft = state.new_object(
-        EOE_CREATURES["Pinnacle Kill-Ship"], owner_id=1,
+        _PRINTINGS["Pinnacle Kill-Ship"], owner_id=1,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(spacecraft)
-    EOE_SPELLS["Embrace Oblivion"].spell_effect.resolve(
+    _PRINTINGS["Embrace Oblivion"].spell_effect.resolve(
         state, 0, (("creature", spacecraft.id),),
     )
     assert spacecraft not in state.battlefield
@@ -5061,13 +4944,12 @@ def test_umbral_collar_activated_sac_another_surveil():
     from mtg_bot.actions import _activate_ability, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     _stock_library(state, 0, count=5)
     zealot = state.new_object(
-        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        _PRINTINGS["Umbral Collar Zealot"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(zealot)
@@ -5087,12 +4969,11 @@ def test_umbral_collar_activated_sac_another_surveil():
 def test_umbral_collar_not_legal_without_another_sac():
     """Without another creature/artifact to sacrifice, the ability
     should not appear in legal_actions."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.actions import ActivateAbility
 
     state = _arena()
     zealot = state.new_object(
-        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        _PRINTINGS["Umbral Collar Zealot"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     zealot.summoning_sick = False
@@ -5107,13 +4988,12 @@ def test_umbral_collar_not_legal_without_another_sac():
 
 def test_umbral_collar_no_agent_uses_first_sac():
     from mtg_bot.actions import _activate_ability
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = None
     _stock_library(state, 0, count=5)
     zealot = state.new_object(
-        EOE_CREATURES["Umbral Collar Zealot"], owner_id=0,
+        _PRINTINGS["Umbral Collar Zealot"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(zealot)
@@ -5127,7 +5007,7 @@ def test_umbral_collar_no_agent_uses_first_sac():
 
 def test_slagdrill_no_agent_picks_first_sac():
     from mtg_bot.actions import _activate_ability
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = None
@@ -5138,7 +5018,7 @@ def test_slagdrill_no_agent_picks_first_sac():
         )
         state.battlefield.append(m)
     scrap = state.new_object(
-        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        _PRINTINGS["Slagdrill Scrapper"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     scrap.summoning_sick = False
@@ -5158,7 +5038,7 @@ def test_slagdrill_scrapper_sac_land_or_artifact_draws():
     from mtg_bot.actions import _activate_ability, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -5170,7 +5050,7 @@ def test_slagdrill_scrapper_sac_land_or_artifact_draws():
         )
         state.battlefield.append(m)
     scrap = state.new_object(
-        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        _PRINTINGS["Slagdrill Scrapper"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     scrap.summoning_sick = False
@@ -5182,7 +5062,7 @@ def test_slagdrill_scrapper_sac_land_or_artifact_draws():
 
 
 def test_slagdrill_scrapper_not_legal_without_sac_target():
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.actions import ActivateAbility
 
     state = _arena()
@@ -5193,7 +5073,7 @@ def test_slagdrill_scrapper_not_legal_without_sac_target():
         )
         state.battlefield.append(m)
     scrap = state.new_object(
-        EOE_CREATURES["Slagdrill Scrapper"], owner_id=0,
+        _PRINTINGS["Slagdrill Scrapper"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     scrap.summoning_sick = False
@@ -5222,7 +5102,7 @@ def test_aura_fizzle_cleanup_covers_no_targets_branch():
     from mtg_bot.actions import _cast_spell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
@@ -5232,7 +5112,7 @@ def test_aura_fizzle_cleanup_covers_no_targets_branch():
     )
     state.battlefield.append(mana)
     aura = state.new_object(
-        EOE_CREATURES["Meltstrider's Resolve"], owner_id=0,
+        _PRINTINGS["Meltstrider's Resolve"], owner_id=0,
         zone=Zone.HAND,
     )
     state.players[0].hand.append(aura)
@@ -5273,14 +5153,13 @@ def test_activation_cost_describe_includes_sac_another():
 def test_comet_crawler_attacks_may_sac_pumps():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import declare_attackers
     from mtg_bot.game import effective_power
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     crawler = state.new_object(
-        EOE_CREATURES["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     crawler.summoning_sick = False
     state.battlefield.append(crawler)
@@ -5298,14 +5177,13 @@ def test_comet_crawler_attacks_may_sac_pumps():
 def test_comet_crawler_attacks_no_sac_no_pump():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import declare_attackers
     from mtg_bot.game import effective_power
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     crawler = state.new_object(
-        EOE_CREATURES["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Comet Crawler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     crawler.summoning_sick = False
     state.battlefield.append(crawler)
@@ -5349,14 +5227,13 @@ def test_optional_sac_missing_source_is_noop():
 def test_swarm_culler_becomes_tapped_may_sac_for_draw():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     _stock_library(state, 0, count=5)
     culler = state.new_object(
-        EOE_CREATURES["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(culler)
     fodder = state.new_object(
@@ -5375,14 +5252,13 @@ def test_swarm_culler_becomes_tapped_may_sac_for_draw():
 def test_swarm_culler_becomes_tapped_no_fodder_noop():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import tap_permanent
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     _stock_library(state, 0, count=5)
     culler = state.new_object(
-        EOE_CREATURES["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Swarm Culler"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(culler)
     hand_before = len(state.players[0].hand)
@@ -5426,13 +5302,12 @@ def test_optional_sac_another_for_effect_no_agent_picks_first():
 def test_seriema_tutors_legendary_creature_to_hand():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     # Seed library with Xu-Ifit (legendary) + non-legendaries.
     xu_ifit = state.new_object(
-        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        _PRINTINGS["Xu-Ifit, Osteoharmonist"], owner_id=0,
         zone=Zone.LIBRARY,
     )
     state.players[0].library.append(xu_ifit)
@@ -5441,7 +5316,7 @@ def test_seriema_tutors_legendary_creature_to_hand():
     )
     state.players[0].library.append(bear)
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["The Seriema"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(seriema)
     etb = next(
@@ -5456,7 +5331,7 @@ def test_seriema_tutors_legendary_creature_to_hand():
 def test_starfield_shepherd_tutors_small_creature():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     class PickCreatureMode(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
@@ -5480,7 +5355,7 @@ def test_starfield_shepherd_tutors_small_creature():
     state.players[0].library.append(land)
 
     shep = state.new_object(
-        EOE_CREATURES["Starfield Shepherd"], owner_id=0,
+        _PRINTINGS["Starfield Shepherd"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(shep)
@@ -5500,7 +5375,7 @@ def test_starfield_shepherd_tutors_basic_plains():
     stays put."""
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     class PickPlainsMode(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
@@ -5524,7 +5399,7 @@ def test_starfield_shepherd_tutors_basic_plains():
     state.players[0].library.append(forest)
 
     shep = state.new_object(
-        EOE_CREATURES["Starfield Shepherd"], owner_id=0,
+        _PRINTINGS["Starfield Shepherd"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(shep)
@@ -5545,10 +5420,9 @@ def test_starfield_shepherd_modal_describes_both_modes():
     basic-Plains search. ``describe()`` surfaces both for the agent's
     mode-pick prompt; ``legal_targets`` is empty (neither mode is
     targeted)."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import ModalChooseOne
 
-    shep = EOE_CREATURES["Starfield Shepherd"]
+    shep = _PRINTINGS["Starfield Shepherd"]
     etb = next(
         ab for ab in shep.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
@@ -5596,7 +5470,6 @@ def test_search_library_agent_declines_when_may_fail():
     """If may_fail=True and agent returns None, no fetch happens."""
     from mtg_bot.agents import RandomAgent
     from mtg_bot.effects import SearchLibraryForCard
-    from mtg_bot.cards import EOE_CREATURES
 
     class Decliner(RandomAgent):
         def choose_card_from_library(self, state, player_id, option_ids):
@@ -5606,7 +5479,7 @@ def test_search_library_agent_declines_when_may_fail():
     state = _arena()
     state.players[0].agent = Decliner(rng=random.Random(0))
     xu = state.new_object(
-        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        _PRINTINGS["Xu-Ifit, Osteoharmonist"], owner_id=0,
         zone=Zone.LIBRARY,
     )
     state.players[0].library.append(xu)
@@ -5618,12 +5491,11 @@ def test_search_library_agent_declines_when_may_fail():
 def test_search_library_no_agent_falls_back():
     """With agent=None, treated as None choice; may_fail=False still fetches."""
     from mtg_bot.effects import SearchLibraryForCard
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = None
     xu = state.new_object(
-        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        _PRINTINGS["Xu-Ifit, Osteoharmonist"], owner_id=0,
         zone=Zone.LIBRARY,
     )
     state.players[0].library.append(xu)
@@ -5659,7 +5531,6 @@ def test_search_library_forced_fetch_when_may_fail_false():
     """may_fail=False forces a fetch even if agent returns None."""
     from mtg_bot.agents import RandomAgent
     from mtg_bot.effects import SearchLibraryForCard
-    from mtg_bot.cards import EOE_CREATURES
 
     class Decliner(RandomAgent):
         def choose_card_from_library(self, state, player_id, option_ids):
@@ -5669,7 +5540,7 @@ def test_search_library_forced_fetch_when_may_fail_false():
     state = _arena()
     state.players[0].agent = Decliner(rng=random.Random(0))
     xu = state.new_object(
-        EOE_CREATURES["Xu-Ifit, Osteoharmonist"], owner_id=0,
+        _PRINTINGS["Xu-Ifit, Osteoharmonist"], owner_id=0,
         zone=Zone.LIBRARY,
     )
     state.players[0].library.append(xu)
@@ -5695,9 +5566,8 @@ def test_colorless_land_taps_for_generic():
 
 
 def test_colorless_land_is_in_all_printings():
-    from mtg_bot.cards import all_printings
 
-    printings = all_printings()
+    printings = _PRINTINGS
     assert "Secluded Starforge" in printings
     assert "Command Bridge" in printings
 
@@ -5725,9 +5595,8 @@ def test_planet_lands_enter_tapped_and_produce_one_color():
 
 
 def test_planet_land_in_all_printings():
-    from mtg_bot.cards import all_printings
 
-    printings = all_printings()
+    printings = _PRINTINGS
     for name in (
         "Adagia, Windswept Bastion", "Uthros, Titanic Godcore",
         "Susur Secundi, Void Altar", "Kavaron, Memorial World",
@@ -5902,12 +5771,12 @@ def test_sacrifice_self_unless_tap_invalid_agent_pick_sacrifices():
 def test_command_bridge_in_all_printings_with_full_rules_text():
     """Sanity: Command Bridge is registered AND its printing reflects
     the full rules text (enters_tapped, ETB trigger, mana ability)."""
-    from mtg_bot.cards import UTILITY_LANDS, all_printings
+    from mtg_bot.cards import UTILITY_LANDS
     from mtg_bot.effects import (
         AddManaToPool, SacrificeSelfUnlessTapPermanent,
     )
 
-    assert "Command Bridge" in all_printings()
+    assert "Command Bridge" in _PRINTINGS
     cb = UTILITY_LANDS["Command Bridge"]
     assert cb.enters_tapped is True
     assert len(cb.triggered_abilities) == 1
@@ -5924,10 +5793,9 @@ def test_command_bridge_in_all_printings_with_full_rules_text():
 
 def test_lashwhip_cost_reduction_with_three_enemy_creatures():
     from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
-    card = EOE_CREATURES["Lashwhip Predator"]
+    card = _PRINTINGS["Lashwhip Predator"]
     # 0 enemy creatures → full cost.
     assert apply_cost_reductions(card, state, 0, card.mana_cost).generic == 4
     # 2 enemy creatures → still full cost.
@@ -5949,14 +5817,14 @@ def test_lashwhip_cost_reduction_with_three_enemy_creatures():
 
 def test_mm_menon_artifact_enters_triggers_counter_on_target():
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     from mtg_bot.agents import RandomAgent
     import random
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     mm = state.new_object(
-        EOE_CREATURES["Mm'menon, Uthros Exile"], owner_id=0,
+        _PRINTINGS["Mm'menon, Uthros Exile"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(mm)
@@ -5981,13 +5849,12 @@ def test_mm_menon_artifact_enters_triggers_counter_on_target():
 
 
 def test_zookeeper_mechan_pump_activation():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import PumpTargetCreatureUntilEOT
     from mtg_bot.game import effective_power
 
     state = _arena()
     zoo = state.new_object(
-        EOE_CREATURES["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(zoo)
     ally = state.new_object(
@@ -6006,10 +5873,9 @@ def test_zookeeper_mechan_has_mana_ability():
     """Oracle: '{T}: Add {R}.' Zookeeper Mechan now ships the mana
     ability that was previously dropped behind a stale 'creature mana
     abilities aren't modeled' comment."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import AddManaToPool
 
-    zoo = EOE_CREATURES["Zookeeper Mechan"]
+    zoo = _PRINTINGS["Zookeeper Mechan"]
     mana_abilities = [
         a for a in zoo.activated_abilities
         if isinstance(a.effect, AddManaToPool)
@@ -6023,12 +5889,11 @@ def test_zookeeper_mechan_has_mana_ability():
 
 def test_zookeeper_mechan_taps_to_add_red_mana():
     """Activating the mana ability taps Zookeeper and adds {R} to the pool."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import AddManaToPool
 
     state = _arena()
     zoo = state.new_object(
-        EOE_CREATURES["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Zookeeper Mechan"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(zoo)
     ma = next(
@@ -6043,10 +5908,9 @@ def test_zookeeper_mechan_taps_to_add_red_mana():
 
 
 def test_skystinger_has_blocks_flying_trigger():
-    from mtg_bot.cards import EOE_CREATURES
     from tests._etb_helpers import _legacy_or_inferred_key
 
-    c = EOE_CREATURES["Skystinger"]
+    c = _PRINTINGS["Skystinger"]
     assert "reach" in c.keywords
     assert c.power == 3 and c.toughness == 3
     # Blocks-a-flying-creature trigger pumps Skystinger +5/+0 UEOT.
@@ -6062,7 +5926,6 @@ def test_skystinger_has_blocks_flying_trigger():
 
 
 def test_all_fates_stalker_exiles_and_returns_on_death():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import destroy
 
     state = _arena()
@@ -6071,7 +5934,7 @@ def test_all_fates_stalker_exiles_and_returns_on_death():
     )
     state.battlefield.append(victim)
     stalker = state.new_object(
-        EOE_CREATURES["All-Fates Stalker"], owner_id=0,
+        _PRINTINGS["All-Fates Stalker"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(stalker)
@@ -6108,13 +5971,12 @@ def test_exile_target_creature_until_source_leaves_noop_paths():
 def test_codecracker_hound_splits_top_two():
     from mtg_bot.agents import RandomAgent
     import random
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     _stock_library(state, 0, count=5)
     hound = state.new_object(
-        EOE_CREATURES["Codecracker Hound"], owner_id=0,
+        _PRINTINGS["Codecracker Hound"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(hound)
@@ -6266,14 +6128,13 @@ def test_stun_counter_keeps_creature_tapped_one_turn():
 
 
 def test_cryogen_relic_etb_and_leaves_draw():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.actions import drain_stack, put_into_battlefield
     from mtg_bot.turn import destroy
 
     state = _arena()
     _stock_library(state, 0, count=5)
     relic = state.new_object(
-        EOE_CREATURES["Cryogen Relic"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Cryogen Relic"], owner_id=0, zone=Zone.HAND
     )
     hand_before = len(state.players[0].hand)
     put_into_battlefield(state, relic, 0)
@@ -6288,11 +6149,10 @@ def test_cryogen_relic_etb_and_leaves_draw():
 
 
 def test_cryogen_relic_stun_activated():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     relic = state.new_object(
-        EOE_CREATURES["Cryogen Relic"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Cryogen Relic"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(relic)
     tapped_target = state.new_object(
@@ -6331,18 +6191,18 @@ def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
     from mtg_bot.agents import RandomAgent
     import random
     from mtg_bot.actions import put_into_battlefield, drain_stack
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     state.players[0].agent = RandomAgent(rng=random.Random(0))
     wm = state.new_object(
-        EOE_CREATURES["Weapons Manufacturing"], owner_id=0,
+        _PRINTINGS["Weapons Manufacturing"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(wm)
     # Put a NON-token artifact onto the battlefield.
     moxite = state.new_object(
-        EOE_CREATURES["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Melded Moxite"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     put_into_battlefield(state, moxite, 0)
     drain_stack(state)
@@ -6355,11 +6215,11 @@ def test_weapons_manufacturing_creates_munitions_on_nontoken_artifact():
 
 def test_weapons_manufacturing_ignores_token_artifacts():
     from mtg_bot.actions import put_into_battlefield
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
 
     state = _arena()
     wm = state.new_object(
-        EOE_CREATURES["Weapons Manufacturing"], owner_id=0,
+        _PRINTINGS["Weapons Manufacturing"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(wm)
@@ -6399,11 +6259,10 @@ def test_munitions_leaves_battlefield_damages_target():
 
 
 def test_dockworker_drone_etb_counter_and_dies_transfer():
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _arena()
     drone = state.new_object(
-        EOE_CREATURES["Dockworker Drone"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dockworker Drone"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(drone)
     # Fire ETB to put the counter.
@@ -6456,12 +6315,11 @@ def test_move_self_counters_noop_paths():
 
 def test_kavaron_skywarden_void_eot_counter():
     """Reach + Void EoT +1/+1 counter on self."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     warden = state.new_object(
-        EOE_CREATURES["Kavaron Skywarden"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Kavaron Skywarden"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(warden)
     # Sanity: reach keyword on printing.
@@ -6482,14 +6340,13 @@ def test_kavaron_skywarden_void_eot_counter():
 
 def test_voidforged_titan_fires_only_when_void_active():
     """End-step Void trigger draws + loses 1 when void is active."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
     state = _arena()
     # Stock P0's library so the draw has something to pull.
     _stock_library(state, 0, count=5)
     titan = state.new_object(
-        EOE_CREATURES["Voidforged Titan"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Voidforged Titan"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(titan)
 
@@ -6536,7 +6393,7 @@ def _lost_in_space_arena():
     library so surveil has something to look at. Returns the state and
     the Lost in Space hand card.
     """
-    from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS
+    from mtg_bot.cards import BASIC_LANDS
 
     state = _arena()
     # 4 lands for {3}{U}. Three Plains for generic + one Island for {U}.
@@ -6550,7 +6407,7 @@ def _lost_in_space_arena():
     )
     state.battlefield.append(island)
     lis = state.new_object(
-        EOE_SPELLS["Lost in Space"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Lost in Space"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(lis)
     # Stock both libraries so the surveil step has cards to examine.
@@ -6857,7 +6714,6 @@ def test_etb_triggers_fire_in_full_game_flow():
 def test_mouth_of_the_storm_etb_debuffs_only_opponents_creatures():
     """ETB resolves: opponent creatures get -3/-0 UEOT, controller's own
     creatures are untouched."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
     from mtg_bot.game import effective_power, effective_toughness
 
@@ -6865,7 +6721,7 @@ def test_mouth_of_the_storm_etb_debuffs_only_opponents_creatures():
     # P0 controls Mouth of the Storm (the source). Two opponent (P1)
     # creatures and one own (P0) creature on the battlefield.
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Mouth of the Storm"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(mouth)
     op1 = state.new_object(
@@ -6930,10 +6786,9 @@ def test_mouth_of_the_storm_debuff_clears_at_cleanup():
 def test_mouth_of_the_storm_card_definition_has_etb_trigger():
     """The card registry exposes the ETB triggered ability with the
     expected parameters."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
 
-    mouth = EOE_CREATURES["Mouth of the Storm"]
+    mouth = _PRINTINGS["Mouth of the Storm"]
     etb_abilities = [
         ab for ab in mouth.triggered_abilities if _matches_legacy_key(ab, "etb")
     ]

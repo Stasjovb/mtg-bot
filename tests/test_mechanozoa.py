@@ -3,10 +3,14 @@ TapTargetOpponentPermanentAndStunIt effect."""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import TapTargetOpponentPermanentAndStunIt
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -107,7 +111,7 @@ def test_mechanozoa_etb_taps_and_stuns_opponent_creature():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(enemy)
-    zoa = state.new_object(EOE_CREATURES["Mechanozoa"], 0, Zone.HAND)
+    zoa = state.new_object(_PRINTINGS["Mechanozoa"], 0, Zone.HAND)
     state.players[0].hand.append(zoa)
     put_into_battlefield(state, zoa, controller_id=0)
     while state.stack:
@@ -117,7 +121,7 @@ def test_mechanozoa_etb_taps_and_stuns_opponent_creature():
 
 
 def test_mechanozoa_printing_has_warp_and_etb_trigger():
-    m = EOE_CREATURES["Mechanozoa"]
+    m = _PRINTINGS["Mechanozoa"]
     assert m.warp_cost_str == "{2}{U}"
     triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers

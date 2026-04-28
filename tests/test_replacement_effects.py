@@ -6,13 +6,17 @@
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import CreateToken
 from mtg_bot.game import (
     GameState, Player, Zone,
     effective_power, effective_toughness, etb_trigger_multiplier,
 )
 from mtg_bot.turn import run_cleanup_step, run_untap_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -48,15 +52,15 @@ def test_multiplier_default_is_one():
 
 def test_multiplier_adds_one_per_starfield():
     state = _new_state()
-    _put(state, EOE_CREATURES["Starfield Vocalist"])
+    _put(state, _PRINTINGS["Starfield Vocalist"])
     assert etb_trigger_multiplier(state, 0) == 2
-    _put(state, EOE_CREATURES["Starfield Vocalist"])
+    _put(state, _PRINTINGS["Starfield Vocalist"])
     assert etb_trigger_multiplier(state, 0) == 3
 
 
 def test_multiplier_scoped_by_controller():
     state = _new_state()
-    _put(state, EOE_CREATURES["Starfield Vocalist"], owner_id=1)
+    _put(state, _PRINTINGS["Starfield Vocalist"], owner_id=1)
     assert etb_trigger_multiplier(state, 0) == 1
     assert etb_trigger_multiplier(state, 1) == 2
 
@@ -70,9 +74,9 @@ def test_starfield_doubles_own_creature_etb_trigger():
     """With Starfield on the bf, Haliya's ETB counter-pump fires twice
     → 2 counters distributed across the target pool."""
     state = _new_state()
-    sf = _put(state, EOE_CREATURES["Starfield Vocalist"])
+    sf = _put(state, _PRINTINGS["Starfield Vocalist"])
     haliya = state.new_object(
-        EOE_CREATURES["Haliya, Ascendant Cadet"], 0, Zone.HAND,
+        _PRINTINGS["Haliya, Ascendant Cadet"], 0, Zone.HAND,
     )
     put_into_battlefield(state, haliya, controller_id=0)
     while state.stack:
@@ -88,8 +92,8 @@ def test_starfield_doubles_landfall_trigger():
     """Icetill Explorer's landfall mills 1. With Starfield, it mills 2
     per land ETB."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Starfield Vocalist"])
-    _put(state, EOE_CREATURES["Icetill Explorer"])
+    _put(state, _PRINTINGS["Starfield Vocalist"])
+    _put(state, _PRINTINGS["Icetill Explorer"])
     # Seed library.
     for _ in range(5):
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
@@ -116,7 +120,7 @@ def test_starfield_doubles_landfall_trigger():
 def test_moonlit_replaces_first_token_with_copy():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    _put(state, EOE_SPELLS["Moonlit Meditation"], attached_to=bear.id)
+    _put(state, _PRINTINGS["Moonlit Meditation"], attached_to=bear.id)
     # Create a Drone token — normally a 1/1 flying artifact. With
     # Moonlit, the token becomes a copy of the enchanted bear (2/2).
     CreateToken(token_printing=TOKEN_PRINTINGS["Drone"]).resolve(
@@ -134,7 +138,7 @@ def test_moonlit_replaces_first_token_with_copy():
 def test_moonlit_only_replaces_first_time_each_turn():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    _put(state, EOE_SPELLS["Moonlit Meditation"], attached_to=bear.id)
+    _put(state, _PRINTINGS["Moonlit Meditation"], attached_to=bear.id)
     CreateToken(token_printing=TOKEN_PRINTINGS["Drone"]).resolve(
         state, 0, (),
     )
@@ -157,7 +161,7 @@ def test_moonlit_only_replaces_first_time_each_turn():
 def test_moonlit_does_not_replace_without_attachment():
     state = _new_state()
     # Moonlit on battlefield but NOT attached (edge case).
-    _put(state, EOE_SPELLS["Moonlit Meditation"])
+    _put(state, _PRINTINGS["Moonlit Meditation"])
     CreateToken(token_printing=TOKEN_PRINTINGS["Drone"]).resolve(
         state, 0, (),
     )
@@ -181,7 +185,7 @@ def test_tractor_beam_prevents_untap():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.tapped = True
-    _put(state, EOE_SPELLS["Tractor Beam"], attached_to=bear.id)
+    _put(state, _PRINTINGS["Tractor Beam"], attached_to=bear.id)
     run_untap_step(state)
     assert bear.tapped is True
 
@@ -195,18 +199,18 @@ def test_untap_works_for_non_tractor_creature():
 
 
 def test_tractor_beam_printing_has_no_untap_flag():
-    t = EOE_SPELLS["Tractor Beam"]
+    t = _PRINTINGS["Tractor Beam"]
     assert t.attached_prevents_untap is True
 
 
 def test_moonlit_meditation_printing_has_replace_flag():
-    m = EOE_SPELLS["Moonlit Meditation"]
+    m = _PRINTINGS["Moonlit Meditation"]
     assert m.replaces_first_tokens_with_copies is True
 
 
 def test_moonlit_meditation_grants_no_pump():
     """Printed oracle has no P/T bonus — pin the un-pumped reality."""
-    m = EOE_SPELLS["Moonlit Meditation"]
+    m = _PRINTINGS["Moonlit Meditation"]
     assert m.equipment_bonuses == (0, 0, frozenset())
 
 
@@ -215,11 +219,11 @@ def test_moonlit_attached_bear_keeps_printed_pt():
     pump bonus from the aura."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
-    _put(state, EOE_SPELLS["Moonlit Meditation"], attached_to=bear.id)
+    _put(state, _PRINTINGS["Moonlit Meditation"], attached_to=bear.id)
     assert effective_power(state, bear) == 2
     assert effective_toughness(state, bear) == 2
 
 
 def test_starfield_printing_has_extra_etb_trigger():
-    s = EOE_CREATURES["Starfield Vocalist"]
+    s = _PRINTINGS["Starfield Vocalist"]
     assert s.extra_etb_trigger == 1

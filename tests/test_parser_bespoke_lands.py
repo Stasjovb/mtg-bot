@@ -19,7 +19,10 @@ from mtg_bot.cards.parser.land_builder import (
     _try_build_paid_fancy_mana_land,
     _try_build_pain_two_mana_land,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_ancient_tomb_matches_static():
@@ -32,7 +35,7 @@ def test_ancient_tomb_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Ancient Tomb"]
+    assert parsed == _PRINTINGS["Ancient Tomb"]
 
 
 def test_pain_land_skips_when_mana_includes_color():
@@ -90,7 +93,7 @@ def test_crystal_quarry_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Crystal Quarry"]
+    assert parsed == _PRINTINGS["Crystal Quarry"]
 
 
 def test_cascading_cataracts_matches_static():
@@ -109,7 +112,7 @@ def test_cascading_cataracts_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Cascading Cataracts"]
+    assert parsed == _PRINTINGS["Cascading Cataracts"]
 
 
 def test_paid_fancy_skips_unknown_keyword_line():

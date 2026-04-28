@@ -2,7 +2,7 @@
 until end of turn, plus equipped_creature_attacks trigger plumbing."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers, declare_blockers
 from mtg_bot.effects import AtomicMicrosizerAttackEffect
@@ -12,6 +12,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -100,7 +104,7 @@ def test_equipment_attacks_trigger_fires():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.summoning_sick = False
     microsizer = _put(
-        state, EOE_SPELLS["Atomic Microsizer"], owner_id=0,
+        state, _PRINTINGS["Atomic Microsizer"], owner_id=0,
         attached_to=bear.id,
     )
     # Opponent has a creature to target.
@@ -117,7 +121,7 @@ def test_equipment_attacks_trigger_fires():
 
 
 def test_microsizer_printing_has_both_triggers():
-    m = EOE_SPELLS["Atomic Microsizer"]
+    m = _PRINTINGS["Atomic Microsizer"]
     triggers = {_legacy_or_inferred_key(ab, m) for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert "equipped_creature_attacks" in triggers

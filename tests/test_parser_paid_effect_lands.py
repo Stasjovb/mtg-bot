@@ -21,7 +21,10 @@ from mtg_bot.cards.parser.land_builder import (
     _build_land_printing,
     _try_build_paid_effect_utility_land,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_deserted_temple_matches_static():
@@ -37,7 +40,7 @@ def test_deserted_temple_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Deserted Temple"]
+    assert parsed == _PRINTINGS["Deserted Temple"]
 
 
 def test_mystifying_maze_matches_static():
@@ -55,7 +58,7 @@ def test_mystifying_maze_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Mystifying Maze"]
+    assert parsed == _PRINTINGS["Mystifying Maze"]
 
 
 def test_terrain_generator_matches_static():
@@ -72,7 +75,7 @@ def test_terrain_generator_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Terrain Generator"]
+    assert parsed == _PRINTINGS["Terrain Generator"]
 
 
 def test_bonders_enclave_matches_static():
@@ -93,7 +96,7 @@ def test_bonders_enclave_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Bonders' Enclave"]
+    assert parsed == _PRINTINGS["Bonders' Enclave"]
 
 
 def test_skips_unknown_rider_with_known_body():

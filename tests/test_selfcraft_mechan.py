@@ -3,10 +3,14 @@ ETB."""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SelfcraftMechanETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -76,7 +80,7 @@ def test_selfcraft_etb_sacs_artifact_puts_counter_draws():
     # sees, which is Selfcraft Mechan (only artifact). Mechan gets
     # sac'd, Bear gets the counter.
     mechan = state.new_object(
-        EOE_CREATURES["Selfcraft Mechan"], 0, Zone.HAND,
+        _PRINTINGS["Selfcraft Mechan"], 0, Zone.HAND,
     )
     put_into_battlefield(state, mechan, controller_id=0)
     while state.stack:
@@ -106,7 +110,7 @@ def test_selfcraft_etb_fizzles_when_no_artifact_can_be_sacrificed():
 
 
 def test_selfcraft_printing_has_etb():
-    m = EOE_CREATURES["Selfcraft Mechan"]
+    m = _PRINTINGS["Selfcraft Mechan"]
     triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}
     assert "etb" in triggers
     assert m.is_artifact
@@ -141,7 +145,7 @@ def test_selfcraft_etb_declined_by_yes_no_agent():
     )
     state.battlefield.append(bear)
     mechan = state.new_object(
-        EOE_CREATURES["Selfcraft Mechan"], 0, Zone.HAND,
+        _PRINTINGS["Selfcraft Mechan"], 0, Zone.HAND,
     )
     put_into_battlefield(state, mechan, controller_id=0)
     while state.stack:
@@ -165,7 +169,7 @@ def test_selfcraft_default_agent_says_yes():
     )
     state.battlefield.append(bear)
     mechan = state.new_object(
-        EOE_CREATURES["Selfcraft Mechan"], 0, Zone.HAND,
+        _PRINTINGS["Selfcraft Mechan"], 0, Zone.HAND,
     )
     put_into_battlefield(state, mechan, controller_id=0)
     while state.stack:

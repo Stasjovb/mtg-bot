@@ -1,10 +1,8 @@
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    ManaCost,
-    SYNTHETIC_CREATURES,
-    build_mono_color_deck,
-    parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, ManaCost, SYNTHETIC_CREATURES, parse_mana_cost
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_parse_empty_cost():
@@ -65,19 +63,18 @@ def test_make_creature_keywords_from_tuple():
 
 
 def test_build_deck_is_60_cards():
-    deck = build_mono_color_deck("G", seed=1)
+    deck = get_active_source().build_mono_color_deck("G", seed=1)
     assert len(deck) == 60
     assert deck.count("Forest") == 24
     # Every non-Forest card must be a card in the pool whose color is either
     # green or colorless (colorless cards get included in any mono-color deck).
-    from mtg_bot.cards import CREATURE_POOL
     for name in deck:
         if name == "Forest":
             continue
-        assert name in CREATURE_POOL
-        colors = CREATURE_POOL[name].mana_cost.colors
+        assert name in _PRINTINGS
+        colors = _PRINTINGS[name].mana_cost.colors
         assert "G" in colors or not colors
 
 
 def test_build_deck_is_deterministic_with_seed():
-    assert build_mono_color_deck("R", seed=7) == build_mono_color_deck("R", seed=7)
+    assert get_active_source().build_mono_color_deck("R", seed=7) == get_active_source().build_mono_color_deck("R", seed=7)

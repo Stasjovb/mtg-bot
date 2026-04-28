@@ -17,11 +17,15 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DiplomaticRelationsEffect
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -60,7 +64,7 @@ def test_diplomatic_relations_pumps_and_deals_post_pump_damage():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)  # 2/2
     wurm = _put(state, SYNTHETIC_CREATURES["Great Wurm"], 1)  # 6/6
     spell = state.new_object(
-        EOE_SPELLS["Diplomatic Relations"], 0, Zone.HAND
+        _PRINTINGS["Diplomatic Relations"], 0, Zone.HAND
     )
     p.hand.append(spell)
     apply_action(state, 0, CastSpell(spell.id))
@@ -88,7 +92,7 @@ def test_diplomatic_relations_uncastable_without_opponent_creature():
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     # No opponent creature on the battlefield.
     spell = state.new_object(
-        EOE_SPELLS["Diplomatic Relations"], 0, Zone.HAND
+        _PRINTINGS["Diplomatic Relations"], 0, Zone.HAND
     )
     p.hand.append(spell)
     acts = legal_actions(state, 0)
@@ -106,7 +110,7 @@ def test_diplomatic_relations_uncastable_without_friendly_creature():
         _put(state, BASIC_LANDS["Forest"], 0)
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
     spell = state.new_object(
-        EOE_SPELLS["Diplomatic Relations"], 0, Zone.HAND
+        _PRINTINGS["Diplomatic Relations"], 0, Zone.HAND
     )
     p.hand.append(spell)
     acts = legal_actions(state, 0)
@@ -128,7 +132,7 @@ def test_diplomatic_relations_vigilance_clears_at_cleanup():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     _put(state, SYNTHETIC_CREATURES["Great Wurm"], 1)
     spell = state.new_object(
-        EOE_SPELLS["Diplomatic Relations"], 0, Zone.HAND
+        _PRINTINGS["Diplomatic Relations"], 0, Zone.HAND
     )
     p.hand.append(spell)
     apply_action(state, 0, CastSpell(spell.id))

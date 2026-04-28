@@ -1,16 +1,15 @@
 """Tests for Sledge-Class Seedship's attacks trigger."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import OptionalPutCreatureFromHandOntoBattlefield
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _TakeFirstAgent(Agent):
@@ -101,7 +100,7 @@ def test_sledge_class_attack_trigger_fires_when_attacking():
     state = _new_state(_TakeFirstAgent())
     p = state.players[0]
     sledge = state.new_object(
-        EOE_CREATURES["Sledge-Class Seedship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Sledge-Class Seedship"], 0, Zone.BATTLEFIELD,
     )
     sledge.charge_counters = 7  # Stationed → creature
     sledge.summoning_sick = False
@@ -118,7 +117,7 @@ def test_sledge_class_attack_trigger_fires_when_attacking():
 
 def test_sledge_class_printing_has_attacks_trigger():
     from mtg_bot.effects.predicates import Event, IsSelf
-    s = EOE_CREATURES["Sledge-Class Seedship"]
+    s = _PRINTINGS["Sledge-Class Seedship"]
     triggers = [
         ab for ab in s.triggered_abilities
         if ab.event == Event.ATTACKS and ab.predicate == IsSelf()

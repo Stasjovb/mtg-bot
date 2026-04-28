@@ -49,6 +49,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 class _PickFirstColor(Agent):
     """Agent that picks the first option in choose_mana_color and the
@@ -104,10 +108,9 @@ def test_magical_hack_printing_shape():
 
 def test_magical_hack_not_in_eoe_pool():
     """Magical Hack is a demo-only card. It must not leak into the
-    EoE NONLAND_POOL or all_printings."""
-    from mtg_bot.cards.registry import NONLAND_POOL, all_printings
-    assert "Magical Hack" not in NONLAND_POOL
-    assert "Magical Hack" not in all_printings()
+    EoE _PRINTINGS or all_printings."""
+    assert "Magical Hack" not in _PRINTINGS
+    assert "Magical Hack" not in _PRINTINGS
 
 
 # ---------- Direct effect resolution: basic land subtype rewrite ----------

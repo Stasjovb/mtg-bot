@@ -1,15 +1,15 @@
 """Tests for Dyadrine's attack trigger."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import DyadrineAttackEffect
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -103,7 +103,7 @@ def test_dyadrine_full_attack_trigger_flow():
     p = state.players[0]
     # Dyadrine with 3 counters (simulating X=1 base cost paid).
     dyadrine = state.new_object(
-        EOE_SPELLS["Dyadrine, Synthesis Amalgam"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Dyadrine, Synthesis Amalgam"], 0, Zone.BATTLEFIELD,
     )
     dyadrine.plus_one_counters = 3
     dyadrine.summoning_sick = False
@@ -130,7 +130,7 @@ def test_dyadrine_full_attack_trigger_flow():
 
 def test_dyadrine_subtypes_and_trigger_wired():
     from mtg_bot.effects.predicates import Event, IsSelf
-    d = EOE_SPELLS["Dyadrine, Synthesis Amalgam"]
+    d = _PRINTINGS["Dyadrine, Synthesis Amalgam"]
     assert "Construct" in d.subtypes
     assert any(
         ab.event == Event.ATTACKS and ab.predicate == IsSelf()

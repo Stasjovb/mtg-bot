@@ -45,6 +45,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step, run_cleanup_step
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 class _PickColor(Agent):
     """Agent that picks a fixed color from choose_mana_color and the
@@ -107,12 +111,11 @@ def test_scuttlemutt_printing_shape():
 
 
 def test_demo_layers_not_in_eoe_pool():
-    """Demo-only cards must not leak into NONLAND_POOL."""
-    from mtg_bot.cards.registry import NONLAND_POOL, all_printings
-    assert "White Knight" not in NONLAND_POOL
-    assert "Scuttlemutt" not in NONLAND_POOL
-    assert "White Knight" not in all_printings()
-    assert "Scuttlemutt" not in all_printings()
+    """Demo-only cards must not leak into _PRINTINGS."""
+    assert "White Knight" not in _PRINTINGS
+    assert "Scuttlemutt" not in _PRINTINGS
+    assert "White Knight" not in _PRINTINGS
+    assert "Scuttlemutt" not in _PRINTINGS
 
 
 # ---------- effective_colors / effective_protection_from_colors ----------

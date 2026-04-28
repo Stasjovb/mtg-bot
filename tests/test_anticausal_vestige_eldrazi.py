@@ -20,9 +20,12 @@ from mtg_bot.actions import (
     ActivateAbility, _cast_spell, apply_action,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, STELLAR_SIGHTS_LANDS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -49,14 +52,14 @@ def _put(state, printing, owner_id=0):
 def test_anticausal_vestige_subtypes_include_eldrazi():
     """The oracle type line is `Creature — Eldrazi`; the printing
     must reflect that."""
-    p = EOE_CREATURES["Anticausal Vestige"]
+    p = _PRINTINGS["Anticausal Vestige"]
     assert "Eldrazi" in p.subtypes
 
 
 def test_anticausal_vestige_is_colorless():
     """The colorless-Eldrazi spell_kind gate also requires no colored
     pips in the printed mana cost. {6} has none."""
-    p = EOE_CREATURES["Anticausal Vestige"]
+    p = _PRINTINGS["Anticausal Vestige"]
     assert p.mana_cost.colored == ()
     assert p.mana_cost.total == 6
 
@@ -68,7 +71,7 @@ def test_eldrazi_temple_mana_pays_for_anticausal_vestige_cast():
     proving the colorless_eldrazi_spell tag is set on the cast."""
     state = _new_state()
     temples = [
-        _put(state, STELLAR_SIGHTS_LANDS["Eldrazi Temple"])
+        _put(state, _PRINTINGS["Eldrazi Temple"])
         for _ in range(3)
     ]
     for temple in temples:
@@ -82,7 +85,7 @@ def test_eldrazi_temple_mana_pays_for_anticausal_vestige_cast():
 
     # Drop a real Anticausal Vestige into hand and cast it.
     card = state.new_object(
-        EOE_CREATURES["Anticausal Vestige"], 0, Zone.HAND,
+        _PRINTINGS["Anticausal Vestige"], 0, Zone.HAND,
     )
     state.players[0].hand.append(card)
 
@@ -102,7 +105,7 @@ def test_unrestricted_eldrazi_temple_mana_alone_cannot_pay_plain_spell():
 
     state = _new_state()
     temples = [
-        _put(state, STELLAR_SIGHTS_LANDS["Eldrazi Temple"])
+        _put(state, _PRINTINGS["Eldrazi Temple"])
         for _ in range(3)
     ]
     for temple in temples:
@@ -111,7 +114,7 @@ def test_unrestricted_eldrazi_temple_mana_alone_cannot_pay_plain_spell():
             ActivateAbility(source_id=temple.id, ability_index=1),
         )
     # Six colorless-Eldrazi-tagged coins, no other mana sources.
-    cost = EOE_CREATURES["Anticausal Vestige"].mana_cost
+    cost = _PRINTINGS["Anticausal Vestige"].mana_cost
     # With the colorless_eldrazi_spell context (what _cast_spell
     # picks for an Eldrazi colorless cast), coins are usable.
     assert can_pay_cost(

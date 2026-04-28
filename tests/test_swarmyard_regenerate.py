@@ -23,11 +23,14 @@ from mtg_bot.actions import (
     ActivateAbility, apply_action, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
-from mtg_bot.cards.eoe_creatures import EOE_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -54,7 +57,7 @@ def _put(state, printing, owner_id=0):
 def test_skystinger_has_insect_subtype():
     """Sanity check: Skystinger's printing carries the Insect subtype.
     If this regresses, the rest of the file is meaningless."""
-    sky = EOE_CREATURES["Skystinger"]
+    sky = _PRINTINGS["Skystinger"]
     assert "Insect" in sky.subtypes
 
 
@@ -63,10 +66,10 @@ def test_swarmyard_filter_accepts_skystinger():
     target via its allowed_subtypes filter (Insect ∈ {Rat, Spider,
     Squirrel, Insect, Snake})."""
     state = _new_state()
-    _put(state, STELLAR_SIGHTS_LANDS["Swarmyard"])
-    sky = _put(state, EOE_CREATURES["Skystinger"])
+    _put(state, _PRINTINGS["Swarmyard"])
+    sky = _put(state, _PRINTINGS["Skystinger"])
 
-    eff = STELLAR_SIGHTS_LANDS[
+    eff = _PRINTINGS[
         "Swarmyard"
     ].activated_abilities[0].effect
     legal = eff.legal_targets(state, 0)
@@ -78,11 +81,11 @@ def test_swarmyard_filter_rejects_creature_without_allowed_subtype():
     excluded from legal_targets even though it's a creature on the
     battlefield."""
     state = _new_state()
-    _put(state, STELLAR_SIGHTS_LANDS["Swarmyard"])
-    sky = _put(state, EOE_CREATURES["Skystinger"])
+    _put(state, _PRINTINGS["Swarmyard"])
+    sky = _put(state, _PRINTINGS["Skystinger"])
     plain = _put(state, make_creature("Plain Bear", "{1}{G}", 2, 2))
 
-    eff = STELLAR_SIGHTS_LANDS[
+    eff = _PRINTINGS[
         "Swarmyard"
     ].activated_abilities[0].effect
     legal = eff.legal_targets(state, 0)
@@ -97,9 +100,9 @@ def test_swarmyard_activation_saves_skystinger_from_lethal_damage():
     state-based actions check, Skystinger survives — damage cleared,
     creature tapped, shield consumed."""
     state = _new_state()
-    swarm = _put(state, STELLAR_SIGHTS_LANDS["Swarmyard"])
+    swarm = _put(state, _PRINTINGS["Swarmyard"])
     _put(state, BASIC_LANDS["Mountain"])  # untapped {1} mana source
-    sky = _put(state, EOE_CREATURES["Skystinger"])
+    sky = _put(state, _PRINTINGS["Skystinger"])
     # Skystinger is a 3/3 — 5 damage is lethal.
     sky.damage = 5
     sky.attacking = True

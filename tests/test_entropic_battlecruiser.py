@@ -1,12 +1,7 @@
 """Tests for Entropic Battlecruiser + opponent-discards observer trigger."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
@@ -18,6 +13,10 @@ from mtg_bot.effects import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import fire_opponent_discards_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -103,7 +102,7 @@ def test_fire_opponent_discards_triggers_fires_entropic():
     """Entropic Battlecruiser at tier 1+ sees an opponent discard → life loss."""
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 1  # 1+ tier active
     state.battlefield.append(bc)
@@ -115,7 +114,7 @@ def test_fire_opponent_discards_triggers_fires_entropic():
 def test_fire_opponent_discards_triggers_tier_below_does_not_fire():
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 0  # below 1+ tier
     state.battlefield.append(bc)
@@ -129,7 +128,7 @@ def test_fire_opponent_discards_skips_same_player_permanents():
     OTHER than the discarder."""
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 1
     state.battlefield.append(bc)
@@ -143,7 +142,7 @@ def test_discard_self_fires_observer_trigger():
     """Full integration: DiscardSelf triggers Entropic's 1+ ability."""
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 1
     state.battlefield.append(bc)
@@ -160,7 +159,7 @@ def test_each_opponent_discards_fires_observer_trigger():
     """Full integration: EachOpponentDiscards fires the observer."""
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 1
     state.battlefield.append(bc)
@@ -180,7 +179,7 @@ def test_entropic_battlecruiser_attack_trigger_cascades_life_loss():
     at 1+ tier."""
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 8  # stationed, also at 1+
     bc.summoning_sick = False
@@ -199,7 +198,7 @@ def test_entropic_battlecruiser_attack_trigger_cascades_life_loss():
 def test_entropic_attack_trigger_empty_hand_loses_3_life():
     state = _new_state()
     bc = state.new_object(
-        EOE_CREATURES["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Entropic Battlecruiser"], 0, Zone.BATTLEFIELD,
     )
     bc.charge_counters = 8
     bc.summoning_sick = False
@@ -212,7 +211,7 @@ def test_entropic_attack_trigger_empty_hand_loses_3_life():
 
 
 def test_entropic_printing_has_both_triggers():
-    p = EOE_CREATURES["Entropic Battlecruiser"]
+    p = _PRINTINGS["Entropic Battlecruiser"]
     triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "opponent_discards_a_card" in triggers
     assert "attacks" in triggers

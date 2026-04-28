@@ -17,10 +17,14 @@ Covers:
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import AlpharaelDreamingAcolyteDiscardEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ScriptedAgent(Agent):
@@ -85,7 +89,7 @@ def test_artifact_dodge_discards_one_artifact_when_available():
     plains_a = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     plains_b = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     artifact = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], 0, Zone.HAND,
+        _PRINTINGS["Mechan Assembler"], 0, Zone.HAND,
     )
     p.hand.extend([plains_a, plains_b, artifact])
 
@@ -141,7 +145,7 @@ def test_agent_declines_dodge_falls_back_to_two_discard():
     plains = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     forest = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
     artifact = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], 0, Zone.HAND,
+        _PRINTINGS["Mechan Assembler"], 0, Zone.HAND,
     )
     p.hand.extend([plains, forest, artifact])
 
@@ -186,10 +190,10 @@ def test_artifact_dodge_falls_back_when_agent_returns_non_artifact():
     p = state.players[0]
     plains = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     artifact_a = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], 0, Zone.HAND,
+        _PRINTINGS["Mechan Assembler"], 0, Zone.HAND,
     )
     artifact_b = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], 0, Zone.HAND,
+        _PRINTINGS["Mechan Assembler"], 0, Zone.HAND,
     )
     p.hand.extend([plains, artifact_a, artifact_b])
     plains_id_capture["non_artifact_id"] = plains.id
@@ -223,13 +227,13 @@ def test_full_etb_with_artifact_dodge_draws_two_then_pitches_one_artifact():
     _stock_library(state, 0, n=10)
     p = state.players[0]
     artifact = state.new_object(
-        EOE_CREATURES["Mechan Assembler"], 0, Zone.HAND,
+        _PRINTINGS["Mechan Assembler"], 0, Zone.HAND,
     )
     p.hand.append(artifact)
     hand_before = len(p.hand)
 
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
+        _PRINTINGS["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
     )
     put_into_battlefield(state, alpha, controller_id=0)
     _resolve_all(state)
@@ -248,7 +252,7 @@ def test_full_etb_without_artifact_pitches_two():
     # Empty hand at start: draws 2, then discards 2.
     p = state.players[0]
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
+        _PRINTINGS["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
     )
     put_into_battlefield(state, alpha, controller_id=0)
     _resolve_all(state)
@@ -264,7 +268,7 @@ def test_full_etb_without_artifact_pitches_two():
 
 
 def test_alpharael_dreaming_acolyte_printing_metadata():
-    a = EOE_CREATURES["Alpharael, Dreaming Acolyte"]
+    a = _PRINTINGS["Alpharael, Dreaming Acolyte"]
     assert "Legendary" in a.supertypes
     # Single ETB triggered ability.
     assert len(a.triggered_abilities) == 1

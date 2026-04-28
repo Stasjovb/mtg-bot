@@ -23,7 +23,10 @@ from mtg_bot.cards.parser.land_builder import (
     _parse_manland_keywords,
     _try_build_manland,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 _SIMPLE_MANLAND_NAMES = (
@@ -55,7 +58,7 @@ def _shambling_vent_card() -> dict:
 def test_shambling_vent_matches_static():
     parsed = _build_land_printing(_shambling_vent_card())
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Shambling Vent"]
+    assert parsed == _PRINTINGS["Shambling Vent"]
 
 
 def test_celestial_colonnade_matches_static():
@@ -74,7 +77,7 @@ def test_celestial_colonnade_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Celestial Colonnade"]
+    assert parsed == _PRINTINGS["Celestial Colonnade"]
 
 
 def test_all_six_simple_manlands_claimed_with_parity():
@@ -85,7 +88,7 @@ def test_all_six_simple_manlands_claimed_with_parity():
     parsed = parser.get_printings()
     for name in _SIMPLE_MANLAND_NAMES:
         assert name in parsed, f"{name} not claimed"
-        assert parsed[name] == STELLAR_SIGHTS_LANDS[name]
+        assert parsed[name] == _PRINTINGS[name]
 
 
 def test_creeping_tar_pit_matches_static():
@@ -108,7 +111,7 @@ def test_creeping_tar_pit_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Creeping Tar Pit"]
+    assert parsed == _PRINTINGS["Creeping Tar Pit"]
 
 
 def test_skips_when_color_pair_mismatches_animate_line():
@@ -241,7 +244,7 @@ def test_lavaclaw_reaches_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Lavaclaw Reaches"]
+    assert parsed == _PRINTINGS["Lavaclaw Reaches"]
 
 
 def test_wandering_fumarole_matches_static():
@@ -262,7 +265,7 @@ def test_wandering_fumarole_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Wandering Fumarole"]
+    assert parsed == _PRINTINGS["Wandering Fumarole"]
 
 
 def test_raging_ravine_matches_static():
@@ -284,7 +287,7 @@ def test_raging_ravine_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Raging Ravine"]
+    assert parsed == _PRINTINGS["Raging Ravine"]
 
 
 def test_skips_granted_body_outside_dispatch_table():

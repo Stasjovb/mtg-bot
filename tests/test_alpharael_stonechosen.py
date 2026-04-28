@@ -3,10 +3,14 @@ Void-gated half-life attack."""
 
 from mtg_bot.actions import _cast_spell, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import DefendingPlayerLosesHalfLifeRoundedUp
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -54,7 +58,7 @@ def test_half_life_loss_describe():
 def test_ward_discard_forces_caster_to_discard():
     state = _new_state()
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
     )
     alpha.summoning_sick = False
     state.battlefield.append(alpha)
@@ -67,7 +71,7 @@ def test_ward_discard_forces_caster_to_discard():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
         state.players[0].hand.append(c)
     # Cast Gravkill (exile target creature) at P1's Alpharael.
-    grav = state.new_object(EOE_SPELLS["Gravkill"], 0, Zone.HAND)
+    grav = state.new_object(_PRINTINGS["Gravkill"], 0, Zone.HAND)
     state.players[0].hand.append(grav)
     hand_before = len(state.players[0].hand)
     _cast_spell(state, 0, grav.id)
@@ -78,13 +82,13 @@ def test_ward_discard_forces_caster_to_discard():
 def test_ward_discard_counters_spell_when_hand_empty():
     state = _new_state()
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(alpha)
     for _ in range(4):
         m = state.new_object(BASIC_LANDS["Swamp"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(m)
-    grav = state.new_object(EOE_SPELLS["Gravkill"], 0, Zone.HAND)
+    grav = state.new_object(_PRINTINGS["Gravkill"], 0, Zone.HAND)
     state.players[0].hand.append(grav)
     # Hand has only the spell being cast; removing it leaves empty, so
     # the Ward has no random target → spell should be countered.
@@ -101,7 +105,7 @@ def test_ward_discard_counters_spell_when_hand_empty():
 def test_alpharael_attack_halves_life_when_void_active():
     state = _new_state()
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Stonechosen"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Stonechosen"], 0, Zone.BATTLEFIELD,
     )
     alpha.summoning_sick = False
     state.battlefield.append(alpha)
@@ -116,7 +120,7 @@ def test_alpharael_attack_halves_life_when_void_active():
 def test_alpharael_attack_does_nothing_when_void_inactive():
     state = _new_state()
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Stonechosen"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Stonechosen"], 0, Zone.BATTLEFIELD,
     )
     alpha.summoning_sick = False
     state.battlefield.append(alpha)
@@ -128,7 +132,7 @@ def test_alpharael_attack_does_nothing_when_void_inactive():
 
 
 def test_alpharael_printing_metadata():
-    a = EOE_CREATURES["Alpharael, Stonechosen"]
+    a = _PRINTINGS["Alpharael, Stonechosen"]
     assert "Legendary" in a.supertypes
     assert a.ward_discard_random is True
     assert a.warp_cost_str == "{2}{B}"

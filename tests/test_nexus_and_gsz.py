@@ -9,13 +9,15 @@ effect (extra-turn queueing, green-creature tutor).
 import random
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES, make_creature,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, make_creature
 from mtg_bot.effects import (
     SearchLibraryForGreenCreatureWithMVAtMostX, TakeExtraTurnAfterThisOne,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -33,7 +35,7 @@ def _new_state(p0_agent=None):
 # ---- Nexus of Fate ----------------------------------------------------
 
 def test_nexus_is_wired_up():
-    n = SPECIAL_GUESTS_EOE["Nexus of Fate"]
+    n = _PRINTINGS["Nexus of Fate"]
     assert n.is_instant
     assert n.mana_cost_str == "{5}{U}{U}"
     assert isinstance(n.spell_effect, TakeExtraTurnAfterThisOne)
@@ -55,7 +57,7 @@ def test_nexus_shuffles_instead_of_graveyard_on_resolve():
 
     state = _new_state()
     card = state.new_object(
-        SPECIAL_GUESTS_EOE["Nexus of Fate"], 0, Zone.STACK,
+        _PRINTINGS["Nexus of Fate"], 0, Zone.STACK,
     )
     state.stack.append(StackItem(
         source=card, controller_id=0, targets=(), countered=False,
@@ -77,7 +79,7 @@ def test_nexus_countered_also_shuffles():
 
     state = _new_state()
     card = state.new_object(
-        SPECIAL_GUESTS_EOE["Nexus of Fate"], 0, Zone.STACK,
+        _PRINTINGS["Nexus of Fate"], 0, Zone.STACK,
     )
     state.stack.append(StackItem(
         source=card, controller_id=0, targets=(), countered=True,
@@ -98,7 +100,7 @@ def test_non_nexus_spell_still_goes_to_graveyard():
 
     state = _new_state()
     darkness = state.new_object(
-        SPECIAL_GUESTS_EOE["Darkness"], 0, Zone.STACK,
+        _PRINTINGS["Darkness"], 0, Zone.STACK,
     )
     state.stack.append(StackItem(
         source=darkness, controller_id=0, targets=(), countered=False,
@@ -183,7 +185,7 @@ def test_extra_turn_queue_skips_dead_player():
 # ---- Green Sun's Zenith ----------------------------------------------
 
 def test_gsz_is_wired_up():
-    g = SPECIAL_GUESTS_EOE["Green Sun's Zenith"]
+    g = _PRINTINGS["Green Sun's Zenith"]
     assert g.is_sorcery
     assert g.mana_cost_str == "{X}{G}"
     assert isinstance(
@@ -263,7 +265,7 @@ def test_gsz_shuffles_self_into_library_on_resolve():
     p.library.append(green2)
 
     gsz = state.new_object(
-        SPECIAL_GUESTS_EOE["Green Sun's Zenith"], 0, Zone.STACK,
+        _PRINTINGS["Green Sun's Zenith"], 0, Zone.STACK,
     )
     state.stack.append(StackItem(
         source=gsz, controller_id=0, targets=(), countered=False,

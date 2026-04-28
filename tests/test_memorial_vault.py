@@ -7,15 +7,15 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import ActivationCost, MemorialVaultActivatedEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -60,7 +60,7 @@ def test_activation_illegal_when_only_creatures_present():
     incorrectly accepted creatures)."""
     state = _new_state(num_mountains=4)
     state.step = Step.PRECOMBAT_MAIN
-    vault = _put(state, EOE_SPELLS["Memorial Vault"])
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
     vault.summoning_sick = False
     # Only the Vault itself + a creature (no other artifacts).
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
@@ -73,7 +73,7 @@ def test_activation_illegal_when_only_lands_present():
     """Lands also cannot pay the artifact-only sac cost."""
     state = _new_state(num_mountains=4)
     state.step = Step.PRECOMBAT_MAIN
-    vault = _put(state, EOE_SPELLS["Memorial Vault"])
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
     vault.summoning_sick = False
     # Mountains are lands, not artifacts — cannot satisfy the cost.
     acts = [a for a in legal_actions(state, 0) if isinstance(a, ActivateAbility)]
@@ -84,9 +84,9 @@ def test_activation_legal_with_another_artifact():
     """A second artifact on the battlefield satisfies the cost."""
     state = _new_state(num_mountains=4)
     state.step = Step.PRECOMBAT_MAIN
-    vault = _put(state, EOE_SPELLS["Memorial Vault"])
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
     vault.summoning_sick = False
-    block = _put(state, EOE_SPELLS["Nutrient Block"])  # MV 1 artifact
+    block = _put(state, _PRINTINGS["Nutrient Block"])  # MV 1 artifact
     block.summoning_sick = False
     acts = [
         a for a in legal_actions(state, 0)
@@ -105,9 +105,9 @@ def test_resolve_exiles_x_equals_one_plus_sacrificed_mv():
     which become playable from exile this turn."""
     state = _new_state(num_mountains=4)
     state.step = Step.PRECOMBAT_MAIN
-    vault = _put(state, EOE_SPELLS["Memorial Vault"])
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
     vault.summoning_sick = False
-    starcage = _put(state, EOE_SPELLS["Pinnacle Starcage"])  # MV 3
+    starcage = _put(state, _PRINTINGS["Pinnacle Starcage"])  # MV 3
     starcage.summoning_sick = False
     _stock_library(state, 0, 6)
 

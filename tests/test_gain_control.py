@@ -1,10 +1,14 @@
 """Tests for gain-control-until-end-of-turn (Systems Override)."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import SystemsOverrideEffect
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_cleanup_step, run_delayed_end_step_triggers
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -52,7 +56,7 @@ def test_systems_override_spacecraft_charge_counters():
     state = _new_state()
     state.active_player_idx = 0
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
     SystemsOverrideEffect().resolve(state, 0, (("permanent", ship.id),))
@@ -105,7 +109,7 @@ def test_systems_override_legal_targets_include_all_artifacts_and_creatures():
     )
     state.battlefield.append(bear)
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
     legal = SystemsOverrideEffect().legal_targets(state, 0)
@@ -138,5 +142,5 @@ def test_systems_override_already_stolen_keeps_original_controller():
 
 
 def test_systems_override_card_printing():
-    s = EOE_SPELLS["Systems Override"]
+    s = _PRINTINGS["Systems Override"]
     assert isinstance(s.spell_effect, SystemsOverrideEffect)

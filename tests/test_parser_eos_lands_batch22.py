@@ -2,7 +2,7 @@
 
 Each test verifies that ``OracleParserCardSource`` produces a
 ``CardPrinting`` identical to the one in the static registry
-(``STELLAR_SIGHTS_LANDS``).  Failure means the bespoke dispatch table in
+(``_PRINTINGS``).  Failure means the bespoke dispatch table in
 ``land_builder._BESPOKE_EOS_LANDS`` has drifted from the canonical
 ``make_utility_land`` / ``CardPrinting`` call in ``stellar_sights.py``.
 
@@ -21,7 +21,10 @@ from __future__ import annotations
 
 from mtg_bot.cards.parser.land_builder import _build_land_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 # ---------------------------------------------------------------------------
@@ -132,42 +135,42 @@ def test_blast_zone_parity():
     """ETB charge counter + {X}{X},{T} counter placement + {3},{T},sac destroy."""
     parsed = _build_land_printing(_blast_zone_card())
     assert parsed is not None, "Blast Zone was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Blast Zone"]
+    assert parsed == _PRINTINGS["Blast Zone"]
 
 
 def test_nesting_grounds_parity():
     """{1},{T}: Move a +1/+1 counter between permanents (sorcery speed)."""
     parsed = _build_land_printing(_nesting_grounds_card())
     assert parsed is not None, "Nesting Grounds was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Nesting Grounds"]
+    assert parsed == _PRINTINGS["Nesting Grounds"]
 
 
 def test_endless_sands_parity():
     """Desert: exile-creature activation + sac-self-return activation."""
     parsed = _build_land_printing(_endless_sands_card())
     assert parsed is not None, "Endless Sands was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Endless Sands"]
+    assert parsed == _PRINTINGS["Endless Sands"]
 
 
 def test_inventors_fair_parity():
     """Legendary, tapped, upkeep life-gain trigger + sac search activation."""
     parsed = _build_land_printing(_inventors_fair_card())
     assert parsed is not None, "Inventors' Fair was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Inventors' Fair"]
+    assert parsed == _PRINTINGS["Inventors' Fair"]
 
 
 def test_power_depot_parity():
     """Artifact Land, tapped, restricted-any mana ability (artifact_spell)."""
     parsed = _build_land_printing(_power_depot_card())
     assert parsed is not None, "Power Depot was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Power Depot"]
+    assert parsed == _PRINTINGS["Power Depot"]
 
 
 def test_sunken_citadel_parity():
     """Cave, tapped, any-color mana + land-activation restricted any mana."""
     parsed = _build_land_printing(_sunken_citadel_card())
     assert parsed is not None, "Sunken Citadel was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Sunken Citadel"]
+    assert parsed == _PRINTINGS["Sunken Citadel"]
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +205,6 @@ def test_all_six_match_static_via_parser_source():
     ]
     printings = OracleParserCardSource().get_printings()
     for name in names:
-        assert printings[name] == STELLAR_SIGHTS_LANDS[name], (
+        assert printings[name] == _PRINTINGS[name], (
             f"Parity failure for {name!r}"
         )

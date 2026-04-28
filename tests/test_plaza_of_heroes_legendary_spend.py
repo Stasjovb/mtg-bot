@@ -25,11 +25,15 @@ from mtg_bot.actions import (
     apply_action, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.effects import AddManaToPool
 from mtg_bot.game import GameState, ManaCoin, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -62,12 +66,12 @@ def test_plaza_of_heroes_has_four_activated_abilities():
     """{T}: Add {C}; {T}: Add one mana of any color (legendary spell);
     {T}: Add one mana of any color (legendary permanent ability);
     {3},{T},Sac: pump."""
-    p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    p = _PRINTINGS["Plaza of Heroes"]
     assert len(p.activated_abilities) == 4
 
 
 def test_plaza_of_heroes_first_three_are_mana_abilities():
-    p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    p = _PRINTINGS["Plaza of Heroes"]
     for ability in p.activated_abilities[:3]:
         assert ability.is_mana_ability is True
     # The flagship pump is not a mana ability.
@@ -79,7 +83,7 @@ def test_plaza_of_heroes_mana_ability_tags_match_oracle_text():
     Ability 2: any-color, restricted to legendary spells.
     Ability 3: any-color, restricted to legendary permanent activations.
     """
-    p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    p = _PRINTINGS["Plaza of Heroes"]
     a0_eff = p.activated_abilities[0].effect
     a1_eff = p.activated_abilities[1].effect
     a2_eff = p.activated_abilities[2].effect
@@ -137,7 +141,7 @@ def test_legendary_permanent_ability_coin_satisfies_correct_context():
 
 def test_plaza_legendary_spell_ability_produces_tagged_coin():
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=1),
     )
@@ -149,7 +153,7 @@ def test_plaza_legendary_spell_ability_produces_tagged_coin():
 
 def test_plaza_legendary_permanent_ability_produces_tagged_coin():
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=2),
     )
@@ -177,7 +181,7 @@ def _make_legendary_creature(name: str, mana_cost: str, p: int, t: int):
 
 def test_plaza_legendary_spell_mana_pays_for_legendary_creature_cast():
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Activate Plaza's legendary-spell mana ability.
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=1),
@@ -198,7 +202,7 @@ def test_plaza_legendary_spell_mana_pays_for_legendary_creature_cast():
 
 def test_plaza_legendary_spell_mana_does_not_pay_for_nonlegendary_cast():
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Activate the legendary-spell mana ability.
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=1),
@@ -227,7 +231,7 @@ def test_plaza_legendary_perm_ability_mana_pays_for_legendary_activation():
     a {1} cost on activating an ability of another legendary
     permanent (Inventors' Fair's {1},{T},Sac search)."""
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Build Plaza's legendary-permanent-ability coin.
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=2),
@@ -241,7 +245,7 @@ def test_plaza_legendary_perm_ability_mana_pays_for_legendary_activation():
     # activation. Use it as the legendary permanent whose ability we
     # want to activate. The legendary-permanent-ability coin should
     # satisfy its {1} mana cost.
-    fair = _put(state, STELLAR_SIGHTS_LANDS["Inventors' Fair"])
+    fair = _put(state, _PRINTINGS["Inventors' Fair"])
     fair.tapped = False
     fair.summoning_sick = False
     # Put a card in library so the search has something to find.
@@ -314,7 +318,7 @@ def test_legal_actions_sees_legendary_creature_castable_via_plaza():
     from mtg_bot.legal import legal_actions
 
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Tap Plaza for the legendary-spell mana.
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=1),
@@ -340,7 +344,7 @@ def test_legal_actions_hides_nonlegendary_when_only_plaza_mana_is_floating():
     from mtg_bot.legal import legal_actions
 
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Tap Plaza only for the legendary-spell mana.
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=1),

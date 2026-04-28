@@ -12,9 +12,13 @@ so "if you do" is not satisfied and the draw is skipped.
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _YesAgent(Agent):
@@ -49,7 +53,7 @@ def _state_with_moxite(agent):
     state.active_player_idx = 0
     p0 = state.players[0]
     moxite = state.new_object(
-        EOE_CREATURES["Melded Moxite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Melded Moxite"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(moxite)
     state.resolving_source = moxite

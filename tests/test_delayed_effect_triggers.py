@@ -12,7 +12,7 @@ Covers:
 
 from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
@@ -22,6 +22,10 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_delayed_end_step_triggers, sacrifice
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -200,7 +204,7 @@ def test_mystifying_maze_exiles_attacker_and_schedules_return():
     # P1 is the defender and controls Mystifying Maze. Cast from P1's
     # perspective so controller_id=1.
     state.active_player_idx = 0  # still P0's turn
-    maze = _put(state, STELLAR_SIGHTS_LANDS["Mystifying Maze"], owner_id=1)
+    maze = _put(state, _PRINTINGS["Mystifying Maze"], owner_id=1)
     # Pay {4} from four Mountains under P1.
     for _ in range(4):
         _put(state, BASIC_LANDS["Mountain"], owner_id=1)
@@ -232,7 +236,7 @@ def test_mystifying_maze_return_fires_at_end_step():
     )
     attacker.summoning_sick = False
     declare_attackers(state, [attacker.id])
-    maze = _put(state, STELLAR_SIGHTS_LANDS["Mystifying Maze"], owner_id=1)
+    maze = _put(state, _PRINTINGS["Mystifying Maze"], owner_id=1)
     for _ in range(4):
         _put(state, BASIC_LANDS["Mountain"], owner_id=1)
     apply_action(
@@ -259,7 +263,7 @@ def test_mystifying_maze_return_not_affected_by_maze_leaving_play():
     )
     attacker.summoning_sick = False
     declare_attackers(state, [attacker.id])
-    maze = _put(state, STELLAR_SIGHTS_LANDS["Mystifying Maze"], owner_id=1)
+    maze = _put(state, _PRINTINGS["Mystifying Maze"], owner_id=1)
     for _ in range(4):
         _put(state, BASIC_LANDS["Mountain"], owner_id=1)
     apply_action(

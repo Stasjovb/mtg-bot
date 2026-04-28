@@ -23,7 +23,7 @@ from mtg_bot.actions import (
     CastSpell, apply_action, can_pay_cost, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import (
     ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
     parse_mana_cost,
@@ -34,6 +34,10 @@ from mtg_bot.effects.generic import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _treasure(produces_color: str) -> CardPrinting:
@@ -114,7 +118,7 @@ def test_treasure_sacrificed_to_pay_for_spell():
     {R}; cost paid; spell on stack."""
     state = _new_state()
     treasure = _put(state, _TREASURE_R, 0)
-    _put(state, EOE_CREATURES["Wild Bear"], 1) if False else None
+    _put(state, _PRINTINGS["Wild Bear"], 1) if False else None
     # Need a creature target for DealDamageToTargetCreature.
     from mtg_bot.cards import SYNTHETIC_CREATURES
     victim = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)
@@ -136,7 +140,7 @@ def test_affinity_discount_AND_treasure_sacrificed_on_same_cast():
     remaining {R}. End-to-end probe of interleaved cost-determination
     and mana-ability activation on a single cast."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     treasure = _put(state, _TREASURE_R, 0)
     from mtg_bot.cards import SYNTHETIC_CREATURES
     victim = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 1)

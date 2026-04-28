@@ -15,12 +15,14 @@ from mtg_bot.actions import (
 )
 from tests._etb_helpers import _matches_legacy_key
 from mtg_bot.agents import Agent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.effects import SearchLibraryForEquipmentToBattlefield
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _Agent(Agent):
@@ -74,7 +76,7 @@ def _mana_for(state, cost_str):
 
 
 def test_printing_has_etb_token_and_activated_tutor():
-    p = EOE_CREATURES["Honored Knight-Captain"]
+    p = _PRINTINGS["Honored Knight-Captain"]
     assert len(p.triggered_abilities) == 1
     assert p.triggered_abilities[0] and _matches_legacy_key(p.triggered_abilities[0], "etb")
     assert len(p.activated_abilities) == 1
@@ -92,14 +94,14 @@ def test_printing_has_etb_token_and_activated_tutor():
 
 def test_activation_fetches_equipment_to_battlefield_and_shuffles():
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     captain.summoning_sick = False
     _stock_library(
         state, 0,
         [
-            EOE_CREATURES["Auxiliary Boosters"],   # Equipment
-            EOE_CREATURES["Hylderblade"],          # Equipment
-            EOE_CREATURES["Starfighter Pilot"],    # not Equipment
+            _PRINTINGS["Auxiliary Boosters"],   # Equipment
+            _PRINTINGS["Hylderblade"],          # Equipment
+            _PRINTINGS["Starfighter Pilot"],    # not Equipment
         ],
     )
     _mana_for(state, "{4}{W}{W}")
@@ -139,13 +141,13 @@ def test_activation_fetches_equipment_to_battlefield_and_shuffles():
 
 def test_activation_with_no_equipment_in_library_just_shuffles():
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     captain.summoning_sick = False
     _stock_library(
         state, 0,
         [
-            EOE_CREATURES["Starfighter Pilot"],
-            EOE_CREATURES["Rayblade Trooper"],
+            _PRINTINGS["Starfighter Pilot"],
+            _PRINTINGS["Rayblade Trooper"],
         ],
     )
     _mana_for(state, "{4}{W}{W}")
@@ -183,9 +185,9 @@ def test_fetched_equipment_etb_triggers_fire():
     fetched Equipment goes through the same ETB pipeline as a normal
     cast — the Robot token should appear."""
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     captain.summoning_sick = False
-    _stock_library(state, 0, [EOE_CREATURES["Auxiliary Boosters"]])
+    _stock_library(state, 0, [_PRINTINGS["Auxiliary Boosters"]])
     _mana_for(state, "{4}{W}{W}")
     apply_action(
         state, 0, ActivateAbility(source_id=captain.id, ability_index=0),
@@ -211,9 +213,9 @@ def test_activation_unavailable_without_sufficient_mana():
     from mtg_bot.legal import legal_actions
 
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     captain.summoning_sick = False
-    _stock_library(state, 0, [EOE_CREATURES["Auxiliary Boosters"]])
+    _stock_library(state, 0, [_PRINTINGS["Auxiliary Boosters"]])
     _mana_for(state, "{2}{W}{W}")  # only {4} total, need {6}
     actions = legal_actions(state, 0)
     activates = [

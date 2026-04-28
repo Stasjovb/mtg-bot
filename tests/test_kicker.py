@@ -6,17 +6,15 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    ManaCost,
-    parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, ManaCost, parse_mana_cost
 from mtg_bot.effects import ConsultTheStarChartsEffect
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _TakeFirstAgent(Agent):
@@ -48,7 +46,7 @@ def _new_state(lands: int = 0, library_size: int = 0, agent=None):
 
 
 def test_consult_printing_has_kicker_cost():
-    p = EOE_SPELLS["Consult the Star Charts"]
+    p = _PRINTINGS["Consult the Star Charts"]
     assert p.kicker_cost is not None
     assert p.kicker_cost == parse_mana_cost("{1}{U}")
     assert p.kicker_cost_str == "{1}{U}"
@@ -63,7 +61,7 @@ def test_legal_actions_include_kicked_when_payable():
     # Need 4 Islands to pay {1}{U} base + {1}{U} kicker.
     state = _new_state(lands=4, library_size=2)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     acts = [a for a in legal_actions(state, 0) if isinstance(a, CastSpell)]
@@ -76,7 +74,7 @@ def test_legal_actions_skip_kicked_when_unpayable():
     # Only 2 Islands — can pay base but not kicker.
     state = _new_state(lands=2, library_size=2)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     acts = [a for a in legal_actions(state, 0) if isinstance(a, CastSpell)]
@@ -92,7 +90,7 @@ def test_legal_actions_skip_kicked_when_unpayable():
 def test_cast_kicker_taps_extra_lands_and_marks_stack_item():
     state = _new_state(lands=4, library_size=2)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     apply_action(state, 0, CastSpell(consult.id, kicked=True))
@@ -108,7 +106,7 @@ def test_cast_kicker_taps_extra_lands_and_marks_stack_item():
 def test_cast_without_kicker_leaves_stack_item_kicked_false():
     state = _new_state(lands=4, library_size=2)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     apply_action(state, 0, CastSpell(consult.id))
@@ -123,7 +121,7 @@ def test_cast_without_kicker_leaves_stack_item_kicked_false():
 def test_consult_unkicked_picks_one_card():
     state = _new_state(lands=3, library_size=5)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     apply_action(state, 0, CastSpell(consult.id))
@@ -140,7 +138,7 @@ def test_consult_unkicked_picks_one_card():
 def test_consult_kicked_picks_two_cards():
     state = _new_state(lands=3, library_size=5)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     # Need 2 more Islands to pay kicker. 3 currently; _cast_spell
@@ -193,7 +191,7 @@ def test_consult_describe():
 def test_resolving_kicked_reset_after_spell_resolution():
     state = _new_state(lands=4, library_size=5)
     consult = state.new_object(
-        EOE_SPELLS["Consult the Star Charts"], 0, Zone.HAND,
+        _PRINTINGS["Consult the Star Charts"], 0, Zone.HAND,
     )
     state.players[0].hand.append(consult)
     apply_action(state, 0, CastSpell(consult.id, kicked=True))

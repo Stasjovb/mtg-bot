@@ -1,9 +1,13 @@
 """Tests for All-Fates Scroll's simplified sac-draw activated."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import AllFatesScrollDrawEffect
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -50,7 +54,7 @@ def test_effect_describe():
 
 def test_scroll_printing_has_two_activated_abilities():
     """Mana ability ({T}: Add any-color) + sac-for-draw ({7},{T},sac)."""
-    s = EOE_SPELLS["All-Fates Scroll"]
+    s = _PRINTINGS["All-Fates Scroll"]
     assert len(s.activated_abilities) == 2
     mana_abil = next(
         a for a in s.activated_abilities if a.is_mana_ability

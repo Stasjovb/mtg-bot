@@ -4,10 +4,14 @@
 from mtg_bot import legal_moves
 from mtg_bot.actions import PlayLand, apply_action, drain_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -28,7 +32,7 @@ def _put(state, printing, owner_id=0):
 
 def test_additional_land_per_turn_allows_second_land_play():
     state = _new_state()
-    _put(state, EOE_CREATURES["Icetill Explorer"])
+    _put(state, _PRINTINGS["Icetill Explorer"])
     land1 = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
     land2 = state.new_object(BASIC_LANDS["Plains"], 0, Zone.HAND)
     state.players[0].hand.extend([land1, land2])
@@ -58,7 +62,7 @@ def test_no_icetill_limits_to_one_land_per_turn():
 
 def test_landfall_mills_a_card_when_land_enters():
     state = _new_state()
-    _put(state, EOE_CREATURES["Icetill Explorer"])
+    _put(state, _PRINTINGS["Icetill Explorer"])
     # Seed library
     for _ in range(3):
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
@@ -75,7 +79,7 @@ def test_landfall_mills_a_card_when_land_enters():
 
 
 def test_icetill_printing_metadata():
-    i = EOE_CREATURES["Icetill Explorer"]
+    i = _PRINTINGS["Icetill Explorer"]
     assert i.grants_additional_land_per_turn == 1
     assert i.grants_play_lands_from_graveyard is True
     triggers = {_legacy_or_inferred_key(ab) for ab in i.triggered_abilities}
@@ -87,7 +91,7 @@ def test_icetill_explorer_lists_graveyard_lands_as_legal_plays():
     play, the controller's graveyard land cards should appear as
     PlayLand legal actions alongside hand lands."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Icetill Explorer"])
+    _put(state, _PRINTINGS["Icetill Explorer"])
     # Forest in hand AND a Plains in graveyard.
     hand_land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.HAND)
     state.players[0].hand.append(hand_land)
@@ -104,7 +108,7 @@ def test_icetill_explorer_play_land_from_graveyard_removes_from_grave():
     battlefield, removes it from the graveyard, and counts toward the
     per-turn land cap."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Icetill Explorer"])
+    _put(state, _PRINTINGS["Icetill Explorer"])
     grave_land = state.new_object(BASIC_LANDS["Plains"], 0, Zone.GRAVEYARD)
     state.players[0].graveyard.append(grave_land)
     apply_action(state, 0, PlayLand(grave_land.id))

@@ -1,17 +1,16 @@
 """Tests for poison counter system + Virulent Silencer."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_combat_damage_to_player_triggers
 from mtg_bot.effects import PutPoisonCountersOnTargetPlayer
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -94,7 +93,7 @@ def test_virulent_silencer_applies_poison_when_my_artifact_creature_hits():
     deal combat damage to a player → that player gets 2 poison counters."""
     state = _new_state()
     silencer = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(silencer)
     # Fire the observer: silencer itself hit P1.
@@ -108,7 +107,7 @@ def test_virulent_silencer_no_poison_for_token_damage():
     'nontoken')."""
     state = _new_state()
     silencer = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(silencer)
     token = state.new_object(
@@ -124,7 +123,7 @@ def test_virulent_silencer_no_poison_for_non_artifact_creature():
     """A non-artifact creature dealing damage doesn't trigger Silencer."""
     state = _new_state()
     silencer = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(silencer)
     bear = state.new_object(
@@ -140,11 +139,11 @@ def test_virulent_silencer_no_poison_from_opponent_artifact_creature():
     controller (my nontoken artifact creature)."""
     state = _new_state()
     silencer = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(silencer)
     opp_silencer = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(opp_silencer)
     # Opp's silencer hits P0 — my silencer should NOT fire poison.
@@ -157,7 +156,7 @@ def test_virulent_silencer_no_poison_from_opponent_artifact_creature():
 
 
 def test_virulent_silencer_subtypes():
-    silencer = EOE_SPELLS["Virulent Silencer"]
+    silencer = _PRINTINGS["Virulent Silencer"]
     assert "Robot" in silencer.subtypes
     assert "Assassin" in silencer.subtypes
 

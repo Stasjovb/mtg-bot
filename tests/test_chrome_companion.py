@@ -4,11 +4,15 @@ effect."""
 
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.actions import drain_stack
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import PutCardFromGraveyardOnBottomOfLibrary
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import tap_permanent
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -92,7 +96,7 @@ def test_effect_wrong_kind_is_noop():
 def test_chrome_companion_gains_life_on_becoming_tapped():
     state = _new_state()
     chrome = state.new_object(
-        EOE_CREATURES["Chrome Companion"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Chrome Companion"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(chrome)
     life_before = state.players[0].life
@@ -105,7 +109,7 @@ def test_chrome_companion_gains_life_on_becoming_tapped():
 def test_chrome_companion_lifegain_does_not_repeat_when_already_tapped():
     state = _new_state()
     chrome = state.new_object(
-        EOE_CREATURES["Chrome Companion"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Chrome Companion"], 0, Zone.BATTLEFIELD,
     )
     chrome.tapped = True
     state.battlefield.append(chrome)
@@ -117,7 +121,7 @@ def test_chrome_companion_lifegain_does_not_repeat_when_already_tapped():
 
 
 def test_chrome_printing_has_trigger_and_activated_ability():
-    c = EOE_CREATURES["Chrome Companion"]
+    c = _PRINTINGS["Chrome Companion"]
     triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
     assert "becomes_tapped" in triggers
     assert len(c.activated_abilities) == 1

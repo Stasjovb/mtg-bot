@@ -40,6 +40,10 @@ from mtg_bot.turn import (
 
 from tests._rules_helpers import *  # noqa: F401,F403
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 # --------------------------------------------------------------------------
 # Rule: KEYWORDS propagate through serialization (infra check)
@@ -263,18 +267,16 @@ def test_virus_beetle_trigger_does_nothing_if_target_has_empty_hand():
 
 
 def test_hullcarver_is_playable_and_has_deathtouch():
-    from mtg_bot.cards import EOE_CREATURES
-    hull = EOE_CREATURES["Hullcarver"]
+    hull = _PRINTINGS["Hullcarver"]
     assert hull.mana_cost_str == "{B}"
     assert hull.power == 1 and hull.toughness == 1
     assert "deathtouch" in hull.keywords
 
 
 def test_monoist_sentry_cannot_attack_but_can_block():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import eligible_attackers, eligible_blockers
 
-    sentry = EOE_CREATURES["Monoist Sentry"]
+    sentry = _PRINTINGS["Monoist Sentry"]
     state = _arena(p0_battlefield=[sentry], p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]])
     obj = state.battlefield[0]
     assert obj not in eligible_attackers(state, 0)
@@ -283,9 +285,8 @@ def test_monoist_sentry_cannot_attack_but_can_block():
 
 def test_germinating_wurm_etb_gains_two_life():
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
 
-    wurm = EOE_CREATURES["Germinating Wurm"]
+    wurm = _PRINTINGS["Germinating Wurm"]
     state = _arena(
         p0_hand=[wurm],
         p0_battlefield=[BASIC_LANDS["Forest"]] * 5,
@@ -303,9 +304,8 @@ def test_quantum_riddler_etb_draws_a_card():
     hand is 0 at ETB time, Riddler is on the battlefield, so the +1
     rider fires — DrawCards(1) draws 2."""
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
 
-    riddler = EOE_CREATURES["Quantum Riddler"]
+    riddler = _PRINTINGS["Quantum Riddler"]
     state = _arena(
         p0_hand=[riddler],
         p0_battlefield=[BASIC_LANDS["Island"]] * 5,
@@ -325,10 +325,10 @@ def test_quantum_riddler_etb_draws_a_card():
 def test_quantum_riddler_replacement_off_when_hand_too_full():
     """With 2+ cards in hand, the replacement doesn't apply — draws are
     plain count."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import draw_n_cards
 
-    riddler = EOE_CREATURES["Quantum Riddler"]
+    riddler = _PRINTINGS["Quantum Riddler"]
     state = _arena(
         p0_hand=[BASIC_LANDS["Island"]] * 2,  # 2 cards
         p0_battlefield=[],
@@ -359,10 +359,10 @@ def test_quantum_riddler_replacement_off_with_no_riddler():
 def test_quantum_riddler_replacement_adds_one_per_event_not_per_card():
     """A "draw 3" event becomes "draw 4", not "draw 6" — the rider
     triggers once per event."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import draw_n_cards
 
-    riddler = EOE_CREATURES["Quantum Riddler"]
+    riddler = _PRINTINGS["Quantum Riddler"]
     state = _arena(p0_hand=[], p0_battlefield=[])
     rb = state.new_object(riddler, owner_id=0, zone=Zone.BATTLEFIELD)
     state.battlefield.append(rb)
@@ -376,10 +376,10 @@ def test_quantum_riddler_replacement_adds_one_per_event_not_per_card():
 def test_quantum_riddler_replacement_does_not_stack_with_multiple_copies():
     """Two Riddlers add one card per event, not two — the replacement
     is binary "is any Riddler active", not multiplicative."""
-    from mtg_bot.cards import EOE_CREATURES, BASIC_LANDS
+    from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import draw_n_cards
 
-    riddler = EOE_CREATURES["Quantum Riddler"]
+    riddler = _PRINTINGS["Quantum Riddler"]
     state = _arena(p0_hand=[], p0_battlefield=[])
     for _ in range(2):
         rb = state.new_object(riddler, owner_id=0, zone=Zone.BATTLEFIELD)
@@ -392,9 +392,8 @@ def test_quantum_riddler_replacement_does_not_stack_with_multiple_copies():
 
 
 def test_quantum_riddler_has_warp_cost_and_flying():
-    from mtg_bot.cards import EOE_CREATURES
 
-    r = EOE_CREATURES["Quantum Riddler"]
+    r = _PRINTINGS["Quantum Riddler"]
     assert r.warp_cost_str == "{1}{U}"
     assert "flying" in r.keywords
     assert r.replaces_draw_with_extra_when_hand_at_most_one is True
@@ -406,10 +405,9 @@ def test_real_virus_beetle_makes_every_opponent_discard():
     version."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    beetle = EOE_CREATURES["Virus Beetle"]
+    beetle = _PRINTINGS["Virus Beetle"]
     state = _arena(
         p0_hand=[beetle],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
@@ -433,10 +431,9 @@ def test_real_virus_beetle_makes_every_opponent_discard():
 def test_nebula_dragon_etb_deals_3_damage_to_chosen_target():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    dragon = EOE_CREATURES["Nebula Dragon"]
+    dragon = _PRINTINGS["Nebula Dragon"]
     state = _arena(
         p0_hand=[dragon],
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 7,  # {6}{R}
@@ -469,10 +466,9 @@ def test_nebula_dragon_fizzles_if_no_legal_targets():
     legal targets and doesn't go on the stack."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    dragon = EOE_CREATURES["Nebula Dragon"]
+    dragon = _PRINTINGS["Nebula Dragon"]
     state = _arena(
         p0_hand=[dragon],
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 7,
@@ -499,10 +495,9 @@ def test_nova_hellkite_etb_pings_an_enemy_creature():
     opponent controls. The 1/1 goblin-sized target should die from the ping."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    hellkite = EOE_CREATURES["Nova Hellkite"]
+    hellkite = _PRINTINGS["Nova Hellkite"]
     state = _arena(
         p0_hand=[hellkite],
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 5,
@@ -530,10 +525,9 @@ def test_nova_hellkite_etb_pings_an_enemy_creature():
 def test_nova_hellkite_fizzles_with_no_enemy_creatures():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    hellkite = EOE_CREATURES["Nova Hellkite"]
+    hellkite = _PRINTINGS["Nova Hellkite"]
     state = _arena(
         p0_hand=[hellkite],
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 5,
@@ -553,10 +547,9 @@ def test_rayblade_trooper_etb_can_counter_itself():
     legal target — it counters itself."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    rayblade = _PRINTINGS["Rayblade Trooper"]
     state = _arena(
         p0_hand=[rayblade],
         p0_battlefield=[BASIC_LANDS["Plains"]] * 3,
@@ -580,10 +573,9 @@ def test_rayblade_trooper_etb_boosts_existing_creature():
     creature P0 controls — not an opponent's."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    rayblade = _PRINTINGS["Rayblade Trooper"]
     state = _arena(
         p0_hand=[rayblade],
         p0_battlefield=[BASIC_LANDS["Plains"]] * 3,
@@ -614,10 +606,9 @@ def test_rayblade_trooper_dies_trigger_makes_soldier_token():
     """Rayblade's death-watch: a nontoken creature you control with a
     +1/+1 counter dies → 1/1 Soldier token appears."""
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield
 
-    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    rayblade = _PRINTINGS["Rayblade Trooper"]
     state = _arena(
         p0_battlefield=[],
     )
@@ -638,10 +629,10 @@ def test_rayblade_trooper_dies_trigger_makes_soldier_token():
 def test_rayblade_trooper_dies_trigger_skips_token_dying():
     """The trigger explicitly says NONTOKEN — a dying token with a
     counter shouldn't fire it."""
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
-    rayblade = EOE_CREATURES["Rayblade Trooper"]
+    rayblade = _PRINTINGS["Rayblade Trooper"]
     state = _arena()
     rb = state.new_object(rayblade, owner_id=0, zone=Zone.BATTLEFIELD)
     state.battlefield.append(rb)
@@ -660,16 +651,14 @@ def test_rayblade_trooper_dies_trigger_skips_token_dying():
 
 
 def test_rayblade_trooper_has_warp_cost():
-    from mtg_bot.cards import EOE_CREATURES
 
-    assert EOE_CREATURES["Rayblade Trooper"].warp_cost_str == "{1}{W}"
+    assert _PRINTINGS["Rayblade Trooper"].warp_cost_str == "{1}{W}"
 
 
 def test_honored_knight_captain_etb_creates_a_soldier_token():
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
 
-    captain = EOE_CREATURES["Honored Knight-Captain"]
+    captain = _PRINTINGS["Honored Knight-Captain"]
     state = _arena(
         p0_hand=[captain],
         p0_battlefield=[BASIC_LANDS["Plains"]] * 2,
@@ -689,9 +678,8 @@ def test_honored_knight_captain_etb_creates_a_soldier_token():
 
 def test_knight_luminary_etb_creates_a_soldier_token():
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
 
-    luminary = EOE_CREATURES["Knight Luminary"]
+    luminary = _PRINTINGS["Knight Luminary"]
     # Warp {1}{W} alt-cost is now declared on the printing.
     assert luminary.warp_cost_str == "{1}{W}"
     state = _arena(
@@ -710,9 +698,8 @@ def test_soldier_token_dies_in_combat_and_vanishes():
     """Token destroyed in combat must not show up in any graveyard — it
     ceases to exist per rule 704.5d."""
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
 
-    captain = EOE_CREATURES["Honored Knight-Captain"]
+    captain = _PRINTINGS["Honored Knight-Captain"]
     state = _arena(
         p0_hand=[captain],
         p0_battlefield=[BASIC_LANDS["Plains"]] * 2,

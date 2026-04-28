@@ -2,12 +2,16 @@
 Robot token + end-of-combat sacrifice."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import clear_combat_state, declare_attackers
 from mtg_bot.effects import KavaronHarrierAttackEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -31,7 +35,7 @@ def _put(state, printing, owner_id=0):
 
 def test_effect_creates_tapped_attacking_robot_and_schedules_sac():
     state = _new_state()
-    harrier = _put(state, EOE_CREATURES["Kavaron Harrier"])
+    harrier = _put(state, _PRINTINGS["Kavaron Harrier"])
     for _ in range(2):
         m = _put(state, BASIC_LANDS["Mountain"])
     state.resolving_source = harrier
@@ -48,7 +52,7 @@ def test_effect_creates_tapped_attacking_robot_and_schedules_sac():
 
 def test_effect_noop_when_cannot_pay():
     state = _new_state()
-    harrier = _put(state, EOE_CREATURES["Kavaron Harrier"])
+    harrier = _put(state, _PRINTINGS["Kavaron Harrier"])
     # No lands → can't afford {2}.
     state.resolving_source = harrier
     try:
@@ -85,7 +89,7 @@ def test_clear_combat_sacrifices_scheduled_tokens():
 
 def test_harrier_attack_fires_and_token_dies_at_eoc():
     state = _new_state()
-    harrier = _put(state, EOE_CREATURES["Kavaron Harrier"])
+    harrier = _put(state, _PRINTINGS["Kavaron Harrier"])
     harrier.summoning_sick = False
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
@@ -101,7 +105,7 @@ def test_harrier_attack_fires_and_token_dies_at_eoc():
 
 
 def test_harrier_printing_has_attacks_trigger():
-    h = EOE_CREATURES["Kavaron Harrier"]
+    h = _PRINTINGS["Kavaron Harrier"]
     triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}
     assert "attacks" in triggers
     assert h.is_artifact

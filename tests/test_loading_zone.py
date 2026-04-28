@@ -1,12 +1,7 @@
 """Tests for Loading Zone: +1/+1 counter doubling replacement."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
@@ -18,6 +13,10 @@ from mtg_bot.game import (
     Zone,
     add_plus_one_counters,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -50,7 +49,7 @@ def test_add_plus_one_counters_with_loading_zone_doubles():
     )
     state.battlefield.append(bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     applied = add_plus_one_counters(state, bear, 2)
@@ -66,7 +65,7 @@ def test_two_loading_zones_stack_multiplicatively():
     state.battlefield.append(bear)
     for _ in range(2):
         z = state.new_object(
-            EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+            _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
         )
         state.battlefield.append(z)
     applied = add_plus_one_counters(state, bear, 1)
@@ -83,7 +82,7 @@ def test_loading_zone_does_not_double_opponents_counters():
     )
     state.battlefield.append(opp_bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     applied = add_plus_one_counters(state, opp_bear, 2)
@@ -99,7 +98,7 @@ def test_add_plus_one_counters_zero_is_noop():
     )
     state.battlefield.append(bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     applied = add_plus_one_counters(state, bear, 0)
@@ -114,7 +113,7 @@ def test_add_plus_one_counters_on_non_creature_non_spacecraft_not_doubled():
     land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(land)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     applied = add_plus_one_counters(state, land, 2)
@@ -135,7 +134,7 @@ def test_put_plus_one_counter_on_target_creature_doubles_with_loading_zone():
     )
     state.battlefield.append(bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     PutPlusOneCounterOnTargetCreature(amount=1).resolve(
@@ -155,7 +154,7 @@ def test_put_plus_one_counter_on_each_creature_doubles_with_loading_zone():
     )
     state.battlefield.append(bear2)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     PutPlusOneCounterOnEachCreatureYouControl(amount=1).resolve(
@@ -172,7 +171,7 @@ def test_put_plus_one_counter_on_creature_you_control_doubles():
     )
     state.battlefield.append(bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     PutPlusOneCounterOnCreatureYouControl(amount=1).resolve(
@@ -182,22 +181,21 @@ def test_put_plus_one_counter_on_creature_you_control_doubles():
 
 
 def test_loading_zone_printing_has_flag_and_warp():
-    p = EOE_SPELLS["Loading Zone"]
+    p = _PRINTINGS["Loading Zone"]
     assert p.is_counter_doubler is True
     assert p.warp_cost is not None
 
 
 def test_loading_zone_also_doubles_spacecraft_counters():
     """Spacecraft qualify for the doubling scope."""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _new_state()
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     add_plus_one_counters(state, ship, 1)
@@ -212,16 +210,15 @@ def test_loading_zone_also_doubles_spacecraft_counters():
 def test_loading_zone_doubles_charge_counters_on_spacecraft():
     """Oracle: 'twice that many of EACH of those kinds of counters'.
     Charge counters on a Spacecraft are now doubled by Loading Zone."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import add_charge_counters
 
     state = _new_state()
     ship = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Specimen Freighter"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     added = add_charge_counters(state, ship, 3)
@@ -244,7 +241,7 @@ def test_loading_zone_doubles_stun_counters_on_creature():
     )
     state.battlefield.append(bear)
     zone = state.new_object(
-        EOE_SPELLS["Loading Zone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Loading Zone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(zone)
     added = add_stun_counters(state, bear, 1)
@@ -253,12 +250,11 @@ def test_loading_zone_doubles_stun_counters_on_creature():
 
 
 def test_add_charge_counters_helper_zero_is_noop():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import add_charge_counters
 
     state = _new_state()
     ship = state.new_object(
-        EOE_CREATURES["Specimen Freighter"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Specimen Freighter"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ship)
     assert add_charge_counters(state, ship, 0) == 0

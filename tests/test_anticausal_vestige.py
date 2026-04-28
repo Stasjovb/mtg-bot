@@ -3,11 +3,15 @@ permanent from hand ETB."""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import AnticausalVestigeLeavesEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -50,10 +54,10 @@ def test_effect_draws_and_puts_permanent_onto_battlefield():
     for _ in range(4):
         land = state.new_object(BASIC_LANDS["Mountain"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(land)
-    vault = state.new_object(EOE_SPELLS["Memorial Vault"], 0, Zone.HAND)
+    vault = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.HAND)
     state.players[0].hand.append(vault)
     state.resolving_source = state.new_object(
-        EOE_CREATURES["Anticausal Vestige"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Anticausal Vestige"], 0, Zone.GRAVEYARD,
     )
     try:
         AnticausalVestigeLeavesEffect().resolve(state, 0, ())
@@ -72,7 +76,7 @@ def test_effect_drops_permanent_card_when_mana_value_too_high():
     # Only 1 land → X = 1. Memorial Vault MV 4 not legal.
     land = state.new_object(BASIC_LANDS["Mountain"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(land)
-    vault = state.new_object(EOE_SPELLS["Memorial Vault"], 0, Zone.HAND)
+    vault = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.HAND)
     state.players[0].hand.append(vault)
     AnticausalVestigeLeavesEffect().resolve(state, 0, ())
     # Drew a card, but vault still in hand.
@@ -106,7 +110,7 @@ def test_vestige_leaves_battlefield_fires_trigger():
     state = _new_state()
     _stock_library(state, 0, 2)
     vestige = state.new_object(
-        EOE_CREATURES["Anticausal Vestige"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Anticausal Vestige"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(vestige)
     lib_before = len(state.players[0].library)
@@ -118,7 +122,7 @@ def test_vestige_leaves_battlefield_fires_trigger():
 
 
 def test_vestige_printing_has_leaves_trigger_and_warp():
-    v = EOE_CREATURES["Anticausal Vestige"]
+    v = _PRINTINGS["Anticausal Vestige"]
     assert v.warp_cost_str == "{4}"
     triggers = {_legacy_or_inferred_key(ab) for ab in v.triggered_abilities}
     assert "leaves_battlefield" in triggers

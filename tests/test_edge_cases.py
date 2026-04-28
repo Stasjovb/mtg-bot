@@ -10,16 +10,13 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    SYNTHETIC_CREATURES,
-    build_mono_color_deck,
-    parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, parse_mana_cost
 from mtg_bot.combat import resolve_combat_damage
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.simulate import simulate_game
 from mtg_bot.turn import draw_card, run_cleanup_step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
 
 
 # -----------------------
@@ -47,18 +44,18 @@ def test_parse_mana_cost_x_is_zero_generic():
 
 def test_build_deck_rejects_unknown_color():
     with pytest.raises(ValueError, match="unknown color"):
-        build_mono_color_deck("Z")
+        get_active_source().build_mono_color_deck("Z")
 
 
 def test_build_deck_rejects_color_with_no_creatures(monkeypatch):
-    # Fake-out the non-land pool so a color has no cards, exercising the
-    # "no creatures in color" branch.
-    from mtg_bot import cards
-    from mtg_bot.cards import registry
+    # Fake-out the parser source's printings so a color has no cards,
+    # exercising the "no creatures in color" branch.
+    from mtg_bot.cards.source import get_active_source
 
-    monkeypatch.setattr(registry, "NONLAND_POOL", {})
+    src = get_active_source()
+    monkeypatch.setattr(src, "_printings", {})
     with pytest.raises(ValueError, match="no creatures in color"):
-        cards.build_mono_color_deck("G")
+        src.build_mono_color_deck("G")
 
 
 # -----------------------

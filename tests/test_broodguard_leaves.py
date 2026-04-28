@@ -2,10 +2,14 @@
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
 from tests._etb_helpers import _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -23,7 +27,7 @@ def _new_state(agent=None):
 def test_broodguard_transfer_counters_on_death():
     state = _new_state(_PickFirstAgent())
     broodguard = state.new_object(
-        EOE_SPELLS["Broodguard Elite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Broodguard Elite"], 0, Zone.BATTLEFIELD,
     )
     broodguard.plus_one_counters = 3
     state.battlefield.append(broodguard)
@@ -43,7 +47,7 @@ def test_broodguard_transfer_counters_zero_noop():
     trigger does nothing useful."""
     state = _new_state(_PickFirstAgent())
     broodguard = state.new_object(
-        EOE_SPELLS["Broodguard Elite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Broodguard Elite"], 0, Zone.BATTLEFIELD,
     )
     broodguard.plus_one_counters = 0
     state.battlefield.append(broodguard)
@@ -56,7 +60,7 @@ def test_broodguard_transfer_counters_zero_noop():
 
 
 def test_broodguard_printing_has_leaves_trigger():
-    p = EOE_SPELLS["Broodguard Elite"]
+    p = _PRINTINGS["Broodguard Elite"]
     triggers = [
         ab for ab in p.triggered_abilities
         if _matches_legacy_key(ab, "leaves_battlefield")

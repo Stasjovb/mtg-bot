@@ -1,7 +1,7 @@
 """Tests for Pain for All — ETB damage = power + damage-echo observer."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 from mtg_bot.effects import PainForAllDamageEchoEffect, PainForAllETBEffect
@@ -9,6 +9,10 @@ from mtg_bot.game import (
     GameState, Player, Zone, effective_power, effective_toughness,
 )
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -39,7 +43,7 @@ def _put(state, printing, owner_id=0, attached_to=None):
 def test_etb_deals_power_damage_to_target_player():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         PainForAllETBEffect().resolve(state, 0, (("player", 1),))
@@ -52,7 +56,7 @@ def test_etb_deals_power_damage_to_target_player():
 def test_etb_deals_power_damage_to_target_creature():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     state.resolving_source = aura
     try:
@@ -65,7 +69,7 @@ def test_etb_deals_power_damage_to_target_creature():
 def test_etb_legal_targets_exclude_enchanted_creature():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         legal = PainForAllETBEffect().legal_targets(state, 0)
@@ -115,7 +119,7 @@ def test_damage_echo_describe():
 def test_aura_fires_when_enchanted_creature_takes_damage():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     # Directly invoke the combat hook with amount = 4.
     _fire_enchanted_dealt_damage_triggers(state, bear, 4)
     drain_stack(state)
@@ -123,7 +127,7 @@ def test_aura_fires_when_enchanted_creature_takes_damage():
 
 
 def test_pain_for_all_printing_has_both_triggers():
-    p = EOE_SPELLS["Pain for All"]
+    p = _PRINTINGS["Pain for All"]
     triggers = {_legacy_or_inferred_key(ab, p) for ab in p.triggered_abilities}
     assert "etb" in triggers
     assert "enchanted_creature_dealt_damage" in triggers
@@ -131,7 +135,7 @@ def test_pain_for_all_printing_has_both_triggers():
 
 def test_pain_for_all_grants_no_pump():
     """Printed oracle has no P/T bonus — pin the un-pumped reality."""
-    p = EOE_SPELLS["Pain for All"]
+    p = _PRINTINGS["Pain for All"]
     assert p.equipment_bonuses == (0, 0, frozenset())
 
 
@@ -141,6 +145,6 @@ def test_attached_bear_keeps_printed_pt():
     power (2), not a bumped value."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
-    _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     assert effective_power(state, bear) == 2
     assert effective_toughness(state, bear) == 2

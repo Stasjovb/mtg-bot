@@ -19,7 +19,6 @@ lands.
 from __future__ import annotations
 
 from mtg_bot.actions import apply_cost_reductions
-from mtg_bot.cards import EOE_CREATURES
 from mtg_bot.cards.base import (
     ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
     parse_mana_cost,
@@ -27,6 +26,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.effects.generic import AddManaToPool
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 # Synthetic Treasure: artifact token with "Sacrifice this: Add one
@@ -83,7 +86,7 @@ def test_affinity_counts_treasure_in_play():
     {1} discount because the Treasure counts as an artifact at
     601.2f cost-determination."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     _put(state, _TREASURE_TOKEN, 0)
     # Spell {1}{R}. Affinity reduces by 1 → {0}{R}.
     reduced = apply_cost_reductions(
@@ -97,7 +100,7 @@ def test_affinity_counts_treasure_in_play():
 def test_affinity_counts_two_treasures():
     """Two Treasures + Sami → discount of {2}."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     _put(state, _TREASURE_TOKEN, 0)
     _put(state, _TREASURE_TOKEN, 0)
     reduced = apply_cost_reductions(
@@ -113,7 +116,7 @@ def test_affinity_does_not_count_sami_herself():
     no discount applies (RAW: spell-being-cast isn't on battlefield
     AND Sami isn't an artifact). Pin the gate."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     reduced = apply_cost_reductions(
         _spell("{1}{R}"), state, caster_id=0,
         base_cost=parse_mana_cost("{1}{R}"),
@@ -126,7 +129,7 @@ def test_affinity_does_not_count_opponents_artifacts():
     """Sami's affinity is "artifacts YOU control". Opponent's
     Treasure doesn't grant a discount."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     treasure_oppo = _put(state, _TREASURE_TOKEN, 1)
     treasure_oppo.controller_id = 1
     reduced = apply_cost_reductions(

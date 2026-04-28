@@ -3,12 +3,7 @@ Harmonizer's double-power landfall."""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     DoubleTargetCreaturesPowerUEOT,
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
@@ -21,6 +16,10 @@ from mtg_bot.game import (
     effective_toughness,
 )
 from mtg_bot.turn import fire_landfall_triggers, tap_permanent
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -43,7 +42,7 @@ def _new_state(agent=None):
 def test_hemosymbic_mite_becomes_tapped_pumps_target():
     state = _new_state(_PickFirstAgent())
     mite = state.new_object(
-        EOE_CREATURES["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
     )
     mite.plus_one_counters = 2  # effective power becomes 3
     state.battlefield.append(mite)
@@ -61,7 +60,7 @@ def test_hemosymbic_mite_becomes_tapped_pumps_target():
 def test_pump_target_excludes_self():
     state = _new_state(_PickFirstAgent())
     mite = state.new_object(
-        EOE_CREATURES["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mite)
     state.resolving_source = mite
@@ -103,7 +102,7 @@ def test_pump_target_zero_power_noop():
 def test_pump_target_missing_obj_noop():
     state = _new_state()
     mite = state.new_object(
-        EOE_CREATURES["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mite)
     state.resolving_source = mite
@@ -115,7 +114,7 @@ def test_pump_target_missing_obj_noop():
 def test_pump_target_wrong_kind_noop():
     state = _new_state()
     mite = state.new_object(
-        EOE_CREATURES["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hemosymbic Mite"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mite)
     state.resolving_source = mite
@@ -184,7 +183,7 @@ def test_mightform_harmonizer_landfall_doubles_target_power():
     the first creature you control); its power gets doubled."""
     state = _new_state(_PickFirstAgent())
     harmonizer = state.new_object(
-        EOE_CREATURES["Mightform Harmonizer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Mightform Harmonizer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(harmonizer)
     land = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)

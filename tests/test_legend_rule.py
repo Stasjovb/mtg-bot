@@ -10,9 +10,13 @@ agent that picks deterministically.
 from __future__ import annotations
 
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _KeepFirst(Agent):
@@ -48,7 +52,7 @@ def _put(state, printing, owner_id=0):
 def test_single_legendary_no_legend_rule():
     """One copy of a legendary doesn't trigger the SBA."""
     state = _new_state()
-    tannuk = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
+    tannuk = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
     assert state_based_actions(state) is False
     assert tannuk in state.battlefield
 
@@ -57,8 +61,8 @@ def test_two_same_name_legendaries_one_goes_to_graveyard():
     """Two copies of Tannuk under one player's control: one is kept,
     the other goes to graveyard."""
     state = _new_state(agent_cls=_KeepFirst)
-    t1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    t2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
+    t1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    t2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
 
     state_based_actions(state)
 
@@ -71,8 +75,8 @@ def test_two_same_name_legendaries_one_goes_to_graveyard():
 def test_legend_rule_uses_agent_callback_for_choice():
     """The agent decides which to keep via choose_legend_keep."""
     state = _new_state(agent_cls=_KeepLast)
-    t1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    t2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
+    t1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    t2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
 
     state_based_actions(state)
 
@@ -85,9 +89,9 @@ def test_legend_rule_uses_agent_callback_for_choice():
 def test_three_same_name_legendaries_only_one_survives():
     """Three copies → two go to graveyard."""
     state = _new_state()
-    t1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    t2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    t3 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
+    t1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    t2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    t3 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
 
     state_based_actions(state)
 
@@ -100,8 +104,8 @@ def test_two_players_each_with_their_own_legendary_no_rule():
     """The legend rule is per-controller. Each player can have one
     copy of the same legendary; no SBA fires."""
     state = _new_state()
-    t1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    t2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 1)
+    t1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    t2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 1)
     t2.controller_id = 1
 
     state_based_actions(state)
@@ -114,11 +118,11 @@ def test_two_players_each_controlling_two_copies_each_resolves_separately():
     """Each player owns two copies. Each player picks one to keep
     independently."""
     state = _new_state(agent_cls=_KeepFirst)
-    a1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    a2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    b1 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 1)
+    a1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    a2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    b1 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 1)
     b1.controller_id = 1
-    b2 = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 1)
+    b2 = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 1)
     b2.controller_id = 1
 
     state_based_actions(state)
@@ -147,8 +151,8 @@ def test_different_legendary_names_no_rule():
     """Two different legendaries (different names) are fine — even
     if one player controls both."""
     state = _new_state()
-    tannuk = _put(state, EOE_CREATURES["Tannuk, Steadfast Second"], 0)
-    sami = _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    tannuk = _put(state, _PRINTINGS["Tannuk, Steadfast Second"], 0)
+    sami = _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
 
     state_based_actions(state)
 

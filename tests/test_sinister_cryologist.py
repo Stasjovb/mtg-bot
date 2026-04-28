@@ -3,10 +3,14 @@ opponents_only filter on PumpTargetCreatureUntilEOT."""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import PumpTargetCreatureUntilEOT
 from mtg_bot.game import GameState, Player, Zone, effective_power
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -92,7 +96,7 @@ def test_cryologist_etb_debuffs_opponent_creature():
     )
     state.battlefield.append(own)
     cryo = state.new_object(
-        EOE_CREATURES["Sinister Cryologist"], 0, Zone.HAND,
+        _PRINTINGS["Sinister Cryologist"], 0, Zone.HAND,
     )
     state.players[0].hand.append(cryo)
     put_into_battlefield(state, cryo, controller_id=0)
@@ -106,7 +110,7 @@ def test_cryologist_etb_debuffs_opponent_creature():
 
 
 def test_cryologist_printing_has_warp_and_etb_trigger():
-    c = EOE_CREATURES["Sinister Cryologist"]
+    c = _PRINTINGS["Sinister Cryologist"]
     assert c.warp_cost_str == "{U}"
     triggers = {_legacy_or_inferred_key(ab) for ab in c.triggered_abilities}
     assert "etb" in triggers

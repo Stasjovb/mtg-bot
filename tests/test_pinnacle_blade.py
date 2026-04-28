@@ -9,15 +9,13 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _make_fixed_mode_agent(mode_idx: int = 0) -> RandomAgent:
@@ -104,7 +102,7 @@ def test_pinnacle_emissary_creates_drone_when_casting_artifact():
     state = _new_state()
     p = state.players[0]
     emissary = state.new_object(
-        EOE_CREATURES["Pinnacle Emissary"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pinnacle Emissary"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(emissary)
     # Add mana for a cheap artifact spell — Memorial Vault is {3}{R}.
@@ -112,7 +110,7 @@ def test_pinnacle_emissary_creates_drone_when_casting_artifact():
         l = state.new_object(BASIC_LANDS["Mountain"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(l)
     vault = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.HAND,
+        _PRINTINGS["Memorial Vault"], 0, Zone.HAND,
     )
     p.hand.append(vault)
     apply_action(state, 0, CastSpell(vault.id))
@@ -131,7 +129,7 @@ def test_pinnacle_emissary_does_not_trigger_for_non_artifact_spell():
     state = _new_state()
     p = state.players[0]
     emissary = state.new_object(
-        EOE_CREATURES["Pinnacle Emissary"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pinnacle Emissary"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(emissary)
     # Mountain + Forest for Wild Bear {1}{G}.
@@ -150,7 +148,7 @@ def test_pinnacle_emissary_does_not_trigger_for_non_artifact_spell():
 
 
 def test_pinnacle_emissary_printing_has_trigger():
-    p = EOE_CREATURES["Pinnacle Emissary"]
+    p = _PRINTINGS["Pinnacle Emissary"]
     triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "cast_artifact_spell" in triggers
 
@@ -165,7 +163,7 @@ def test_blade_of_the_swarm_enters_with_two_plus_one_counters():
     # RandomAgent could roll mode 1 (warp-bottom) and fizzle.
     state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=0))
     blade = state.new_object(
-        EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
+        _PRINTINGS["Blade of the Swarm"], 0, Zone.HAND,
     )
     put_into_battlefield(state, blade, controller_id=0)
     while state.stack:
@@ -174,7 +172,7 @@ def test_blade_of_the_swarm_enters_with_two_plus_one_counters():
 
 
 def test_blade_of_the_swarm_has_warp():
-    b = EOE_CREATURES["Blade of the Swarm"]
+    b = _PRINTINGS["Blade of the Swarm"]
     assert b.warp_cost_str == "{1}{B}"
 
 
@@ -193,7 +191,7 @@ def test_blade_of_the_swarm_etb_is_modal_with_two_modes():
         OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
         PutPlusOneCounterOnSelf,
     )
-    blade = EOE_CREATURES["Blade of the Swarm"]
+    blade = _PRINTINGS["Blade of the Swarm"]
     etb = next(a for a in blade.triggered_abilities if _matches_legacy_key(a, "etb"))
     assert isinstance(etb.effect, ModalChooseOne)
     assert len(etb.effect.modes) == 2
@@ -211,18 +209,18 @@ def test_blade_mode_1_puts_warped_exile_card_on_bottom_of_library():
     state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=1))
     # Seed P1's exile with a warped creature card (e.g. Hullcarver).
     warped = state.new_object(
-        EOE_CREATURES["Hullcarver"], 1, Zone.EXILE,
+        _PRINTINGS["Hullcarver"], 1, Zone.EXILE,
     )
     warped.warped = True
     state.players[1].exile.append(warped)
     # Give P1 a known library bottom for bottom-of-library assertion.
     sentinel = state.new_object(
-        EOE_CREATURES["Hullcarver"], 1, Zone.LIBRARY,
+        _PRINTINGS["Hullcarver"], 1, Zone.LIBRARY,
     )
     state.players[1].library.append(sentinel)
 
     blade = state.new_object(
-        EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
+        _PRINTINGS["Blade of the Swarm"], 0, Zone.HAND,
     )
     put_into_battlefield(state, blade, controller_id=0)
     while state.stack:
@@ -244,7 +242,7 @@ def test_blade_mode_1_fizzles_when_no_warped_exile_card_exists():
     no library shuffle, no crash."""
     state = _new_state(lambda: _make_fixed_mode_agent(mode_idx=1))
     blade = state.new_object(
-        EOE_CREATURES["Blade of the Swarm"], 0, Zone.HAND,
+        _PRINTINGS["Blade of the Swarm"], 0, Zone.HAND,
     )
     put_into_battlefield(state, blade, controller_id=0)
     while state.stack:
@@ -266,12 +264,12 @@ def test_blade_mode_1_legal_targets_excludes_non_warped_exile_cards():
     state = _new_state()
     # Plain (non-warped) exile card.
     plain = state.new_object(
-        EOE_CREATURES["Hullcarver"], 0, Zone.EXILE,
+        _PRINTINGS["Hullcarver"], 0, Zone.EXILE,
     )
     state.players[0].exile.append(plain)
     # Warped card on the opponent's side (still legal — "any owner").
     warped_opp = state.new_object(
-        EOE_CREATURES["Hullcarver"], 1, Zone.EXILE,
+        _PRINTINGS["Hullcarver"], 1, Zone.EXILE,
     )
     warped_opp.warped = True
     state.players[1].exile.append(warped_opp)

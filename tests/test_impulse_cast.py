@@ -5,7 +5,7 @@ Memorial Vault sacrifice exile."""
 from mtg_bot import legal_moves
 from mtg_bot.actions import CastSpell, apply_action
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     MemorialVaultActivatedEffect,
     TerritorialBruntarLandfallEffect,
@@ -13,6 +13,10 @@ from mtg_bot.effects import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -122,7 +126,7 @@ def test_memorial_vault_effect_exiles_top_X_and_marks_playable():
     state = _new_state()
     p = state.players[0]
     # Pretend a 3 CMC artifact was sacrificed into graveyard.
-    vault = state.new_object(EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD)
+    vault = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD)
     p.graveyard.append(vault)  # MV 4 → X = 5
     # Stock library.
     for _ in range(7):
@@ -146,13 +150,13 @@ def test_memorial_vault_describe():
 
 
 def test_territorial_bruntar_printing_has_landfall_trigger():
-    t = EOE_CREATURES["Territorial Bruntar"]
+    t = _PRINTINGS["Territorial Bruntar"]
     triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "landfall" in triggers
 
 
 def test_memorial_vault_printing_has_activated_ability():
-    v = EOE_SPELLS["Memorial Vault"]
+    v = _PRINTINGS["Memorial Vault"]
     assert len(v.activated_abilities) == 1
     cost = v.activated_abilities[0].cost
     assert cost.tap_self

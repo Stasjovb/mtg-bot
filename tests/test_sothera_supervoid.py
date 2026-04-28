@@ -3,11 +3,15 @@ reanimate effects."""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import SotheraEndStepReanimateEffect, SotheraExileOpponentCreatureEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy, run_beginning_of_end_step_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -39,7 +43,7 @@ def _put(state, printing, owner_id=0):
 
 def test_dies_observer_exiles_opponent_creature():
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     state.resolving_source = sothera
     try:
@@ -54,7 +58,7 @@ def test_dies_observer_exiles_opponent_creature():
 def test_dies_observer_skips_controller():
     """Each opponent — not controller — chooses their creature."""
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     state.resolving_source = sothera
     try:
@@ -77,7 +81,7 @@ def test_dies_observer_describe():
 
 def test_creature_dies_triggers_observer_via_pipeline():
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     my_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     destroy(state, my_bear)
@@ -92,7 +96,7 @@ def test_creature_dies_triggers_observer_via_pipeline():
 
 def test_end_step_does_nothing_if_all_players_have_creatures():
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     run_beginning_of_end_step_triggers(state)
@@ -101,7 +105,7 @@ def test_end_step_does_nothing_if_all_players_have_creatures():
 
 def test_end_step_sacrifices_sothera_and_reanimates_when_player_creatureless():
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     # P0 controls no creatures (only Sothera — an enchantment).
     # P1 controls a Wild Bear.
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
@@ -122,7 +126,7 @@ def test_end_step_sacrifices_sothera_and_reanimates_when_player_creatureless():
 
 
 def test_sothera_printing_metadata():
-    s = EOE_SPELLS["Sothera, the Supervoid"]
+    s = _PRINTINGS["Sothera, the Supervoid"]
     assert "Legendary" in s.supertypes
     triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "your_creature_or_artifact_dies" in triggers

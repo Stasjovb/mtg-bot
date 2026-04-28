@@ -31,6 +31,10 @@ from mtg_bot.effects.predicates import (
     IsSelf,
 )
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 def test_once_per_turn_rider_sets_flag_on_predicate_path():
     """``Whenever another artifact you control enters, create a 2/2
@@ -123,12 +127,11 @@ def test_once_per_turn_rider_round_trips_via_creature_builder():
     also catch, but spelled out here so the once-per-turn rider has
     its own targeted regression test.
     """
-    from mtg_bot.cards.eoe_creatures import EOE_CREATURES
     from mtg_bot.cards.parser.source import OracleParserCardSource
 
     parser = OracleParserCardSource()
     parsed = parser.get_printings()["Mechan Assembler"]
-    static = EOE_CREATURES["Mechan Assembler"]
+    static = _PRINTINGS["Mechan Assembler"]
     assert parsed == static
     assert len(parsed.triggered_abilities) == 1
     assert parsed.triggered_abilities[0].once_per_turn is True

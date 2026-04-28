@@ -5,7 +5,7 @@ if-gained-life untap trigger."""
 from mtg_bot import legal_moves
 from mtg_bot.actions import ActivateAbility, apply_action, drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import GainLife, IfGainedLifeThisTurnUntapSelf
 from mtg_bot.game import (
     GameState, Player, Zone,
@@ -13,6 +13,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step, run_beginning_of_end_step_triggers, run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -78,23 +82,23 @@ def test_gain_life_effect_routes_through_helper():
 
 def test_ragost_static_adds_food_subtype_to_your_artifacts():
     state = _new_state()
-    _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
-    art = _put(state, EOE_SPELLS["Nutrient Block"])  # {1} artifact
+    _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])  # {1} artifact
     subs = effective_subtypes(state, art)
     assert "Food" in subs
 
 
 def test_ragost_static_does_not_affect_opponents_artifacts():
     state = _new_state()
-    _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
-    opp_art = _put(state, EOE_SPELLS["Nutrient Block"], owner_id=1)
+    _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
+    opp_art = _put(state, _PRINTINGS["Nutrient Block"], owner_id=1)
     subs = effective_subtypes(state, opp_art)
     assert "Food" not in subs
 
 
 def test_ragost_static_does_not_affect_non_artifacts():
     state = _new_state()
-    _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     subs = effective_subtypes(state, bear)
     assert "Food" not in subs
@@ -102,8 +106,8 @@ def test_ragost_static_does_not_affect_non_artifacts():
 
 def test_ragost_static_grants_sac_for_3_life_ability():
     state = _new_state()
-    _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     abilities = effective_activated_abilities(state, art)
     # Nutrient Block's printed ability PLUS Ragost's granted ability.
     assert len(abilities) == len(art.printing.activated_abilities) + 1
@@ -111,8 +115,8 @@ def test_ragost_static_grants_sac_for_3_life_ability():
 
 def test_ragost_removed_retracts_food_and_ability_grants():
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     assert "Food" in effective_subtypes(state, art)
     state.battlefield.remove(ragost)
     assert "Food" not in effective_subtypes(state, art)
@@ -125,8 +129,8 @@ def test_ragost_removed_retracts_food_and_ability_grants():
 
 def test_granted_food_ability_activatable_and_gains_life():
     state = _new_state()
-    _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     # Mana for {2}.
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
@@ -156,10 +160,10 @@ def test_granted_food_ability_activatable_and_gains_life():
 
 def test_ragost_sac_food_deals_3_to_each_opponent():
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.summoning_sick = False
     # Grant artifact that becomes Food via Ragost's static.
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     # Mana for {1}.
     _put(state, BASIC_LANDS["Mountain"])
     life_before = state.players[1].life
@@ -179,7 +183,7 @@ def test_ragost_sac_food_deals_3_to_each_opponent():
 
 def test_ragost_sac_food_not_legal_without_a_food():
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.summoning_sick = False
     _put(state, BASIC_LANDS["Mountain"])
     # No artifacts to sac as Food → ability not legal.
@@ -197,7 +201,7 @@ def test_ragost_sac_food_not_legal_without_a_food():
 
 def test_ragost_untaps_at_own_end_step_if_gained_life():
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.tapped = True
     state.players[0].life_gained_this_turn = 2
     run_beginning_of_end_step_triggers(state)
@@ -207,7 +211,7 @@ def test_ragost_untaps_at_own_end_step_if_gained_life():
 
 def test_ragost_stays_tapped_without_life_gain():
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.tapped = True
     # No life gained.
     run_beginning_of_end_step_triggers(state)
@@ -219,7 +223,7 @@ def test_ragost_untaps_on_opponents_end_step_too():
     """'At the beginning of EACH end step' — fires on both players'
     end steps."""
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.tapped = True
     state.players[0].life_gained_this_turn = 1
     # Switch active player to opponent's turn.
@@ -244,13 +248,13 @@ def test_gain_life_public_helper_reads_amount():
 
 def test_effective_subtypes_no_ragost_returns_printed_only():
     state = _new_state()
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     assert effective_subtypes(state, art) == art.printing.subtypes
 
 
 def test_effective_activated_abilities_no_ragost_returns_printed_only():
     state = _new_state()
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     assert effective_activated_abilities(state, art) == art.printing.activated_abilities
 
 
@@ -258,11 +262,11 @@ def test_ragost_sac_food_legal_when_ragost_gives_food_subtype():
     """Confirm legality via Ragost's granted Food subtype on an
     artifact that's not printed as Food."""
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.summoning_sick = False
     _put(state, BASIC_LANDS["Mountain"])
     # Printed-non-Food artifact now counts as Food.
-    _put(state, EOE_SPELLS["Nutrient Block"])
+    _put(state, _PRINTINGS["Nutrient Block"])
     actions = legal_moves(state)
     assert any(
         isinstance(a, ActivateAbility) and a.source_id == ragost.id
@@ -275,7 +279,7 @@ def test_each_end_step_observer_does_not_duplicate_own_fire():
     controller's own end step (regression against accidentally
     matching both branches)."""
     state = _new_state()
-    ragost = _put(state, EOE_CREATURES["Ragost, Deft Gastronaut"])
+    ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.tapped = True
     state.players[0].life_gained_this_turn = 1
     # Count untaps via logs.
@@ -291,7 +295,7 @@ def test_each_end_step_observer_does_not_duplicate_own_fire():
 
 
 def test_ragost_printing_metadata():
-    r = EOE_CREATURES["Ragost, Deft Gastronaut"]
+    r = _PRINTINGS["Ragost, Deft Gastronaut"]
     assert "Legendary" in r.supertypes
     assert r.grants_food_to_your_artifacts is True
     assert r.grants_food_ability_to_your_artifacts is True

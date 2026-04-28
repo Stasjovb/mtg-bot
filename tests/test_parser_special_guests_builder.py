@@ -11,7 +11,10 @@ from __future__ import annotations
 from mtg_bot.cards.parser.special_guests_builder import (
     _build_special_guest_printing,
 )
-from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_magus_of_the_moon_matches_static():
@@ -23,7 +26,7 @@ def test_magus_of_the_moon_matches_static():
     }
     parsed = _build_special_guest_printing(card)
     assert parsed is not None
-    assert parsed == SPECIAL_GUESTS_EOE["Magus of the Moon"]
+    assert parsed == _PRINTINGS["Magus of the Moon"]
 
 
 def test_deafening_silence_matches_static():
@@ -38,7 +41,7 @@ def test_deafening_silence_matches_static():
     }
     parsed = _build_special_guest_printing(card)
     assert parsed is not None
-    assert parsed == SPECIAL_GUESTS_EOE["Deafening Silence"]
+    assert parsed == _PRINTINGS["Deafening Silence"]
 
 
 def test_burgeoning_matches_static():
@@ -53,7 +56,7 @@ def test_burgeoning_matches_static():
     }
     parsed = _build_special_guest_printing(card)
     assert parsed is not None
-    assert parsed == SPECIAL_GUESTS_EOE["Burgeoning"]
+    assert parsed == _PRINTINGS["Burgeoning"]
 
 
 def test_sliver_overlord_matches_static():
@@ -70,7 +73,7 @@ def test_sliver_overlord_matches_static():
     }
     parsed = _build_special_guest_printing(card)
     assert parsed is not None
-    assert parsed == SPECIAL_GUESTS_EOE["Sliver Overlord"]
+    assert parsed == _PRINTINGS["Sliver Overlord"]
 
 
 def test_skips_non_spg_set():
@@ -122,5 +125,5 @@ def test_source_claims_both_via_data_walk():
     parsed = parser.get_printings()
     assert "Magus of the Moon" in parsed
     assert "Deafening Silence" in parsed
-    assert parsed["Magus of the Moon"] == SPECIAL_GUESTS_EOE["Magus of the Moon"]
-    assert parsed["Deafening Silence"] == SPECIAL_GUESTS_EOE["Deafening Silence"]
+    assert parsed["Magus of the Moon"] == _PRINTINGS["Magus of the Moon"]
+    assert parsed["Deafening Silence"] == _PRINTINGS["Deafening Silence"]

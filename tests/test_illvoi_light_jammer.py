@@ -16,7 +16,7 @@ the Equip activated ability yet).
 
 from __future__ import annotations
 
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import AttachToTargetCreatureYouControl
 from mtg_bot.game import (
     Zone,
@@ -28,6 +28,10 @@ from mtg_bot.turn import run_cleanup_step
 
 from tests._rules_helpers import _arena
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _put_bear(state, owner_id):
@@ -41,7 +45,7 @@ def _put_bear(state, owner_id):
 
 def _put_jammer(state, owner_id):
     obj = state.new_object(
-        EOE_CREATURES["Illvoi Light Jammer"], owner_id=owner_id,
+        _PRINTINGS["Illvoi Light Jammer"], owner_id=owner_id,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(obj)

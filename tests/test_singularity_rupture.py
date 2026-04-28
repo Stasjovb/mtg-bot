@@ -1,9 +1,13 @@
 """Tests for Singularity Rupture: wrath + multi-target mill-half."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SingularityRuptureEffect
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state_with_libraries():
@@ -131,5 +135,5 @@ def test_singularity_rupture_describe():
 
 
 def test_singularity_rupture_card_printing():
-    s = EOE_SPELLS["Singularity Rupture"]
+    s = _PRINTINGS["Singularity Rupture"]
     assert isinstance(s.spell_effect, SingularityRuptureEffect)

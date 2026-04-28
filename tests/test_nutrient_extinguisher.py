@@ -8,15 +8,14 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DestroyTargetNoncreaturePermanent
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import Step, destroy, sacrifice
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -39,7 +38,7 @@ def _new_state(agent=None):
 def test_nutrient_block_has_indestructible():
     state = _new_state()
     nb = state.new_object(
-        EOE_SPELLS["Nutrient Block"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Nutrient Block"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(nb)
     kws = effective_keywords(state, nb)
@@ -51,7 +50,7 @@ def test_nutrient_block_activation_gains_life_and_sacs():
     state.step = Step.PRECOMBAT_MAIN
     p = state.players[0]
     nb = state.new_object(
-        EOE_SPELLS["Nutrient Block"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Nutrient Block"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(nb)
     for _ in range(2):
@@ -70,7 +69,7 @@ def test_nutrient_block_draws_on_leave_battlefield():
     state = _new_state()
     p = state.players[0]
     nb = state.new_object(
-        EOE_SPELLS["Nutrient Block"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Nutrient Block"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(nb)
     drawn = state.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
@@ -83,7 +82,7 @@ def test_nutrient_block_draws_on_leave_battlefield():
 def test_nutrient_block_destroy_fizzles_due_to_indestructible():
     state = _new_state()
     nb = state.new_object(
-        EOE_SPELLS["Nutrient Block"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Nutrient Block"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(nb)
     result = destroy(state, nb)
@@ -102,7 +101,7 @@ def test_extinguisher_etb_destroys_noncreature_and_damages_each_creature():
     # Opponent has a non-creature artifact and a creature.
     p1 = state.players[1]
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Memorial Vault"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(artifact)
     bear = state.new_object(
@@ -111,7 +110,7 @@ def test_extinguisher_etb_destroys_noncreature_and_damages_each_creature():
     state.battlefield.append(bear)
     # Put Extinguisher Battleship into play (triggering ETB).
     ship = state.new_object(
-        EOE_SPELLS["Extinguisher Battleship"], 0, Zone.HAND,
+        _PRINTINGS["Extinguisher Battleship"], 0, Zone.HAND,
     )
     put_into_battlefield(state, ship, controller_id=0)
     # Resolve ETB trigger (the stack has it).
@@ -124,7 +123,7 @@ def test_extinguisher_etb_destroys_noncreature_and_damages_each_creature():
 
 
 def test_extinguisher_station_threshold_is_five():
-    ship = EOE_SPELLS["Extinguisher Battleship"]
+    ship = _PRINTINGS["Extinguisher Battleship"]
     assert ship.station_threshold == 5
 
 

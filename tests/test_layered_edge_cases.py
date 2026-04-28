@@ -45,6 +45,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step, destroy
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 class _PickFirst(Agent):
     def choose_target(self, state, player_id, legal_targets):
@@ -274,7 +278,6 @@ def test_lignify_attached_to_clone_after_copy_works():
 def test_magus_alone_makes_nonbasic_land_a_mountain():
     """Magus of the Moon: a nonbasic land's effective subtypes are
     set to ``("Mountain",)`` and it produces {R}."""
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     # Build a synthetic nonbasic land — a Forest+Mountain dual.
@@ -294,7 +297,7 @@ def test_magus_alone_makes_nonbasic_land_a_mountain():
     land.etb_timestamp = 1
     # Magus of the Moon enters at a later timestamp.
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 10
@@ -342,7 +345,6 @@ def test_magus_older_then_dryad_newer_lands_have_all_basic_types():
     by Dryad). All five colors producible.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     # Nonbasic Forest+Mountain dual on the battlefield.
@@ -361,7 +363,7 @@ def test_magus_older_then_dryad_newer_lands_have_all_basic_types():
     land.etb_timestamp = 1
     # T2: Magus of the Moon (older effect on the battlefield).
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 5
@@ -396,7 +398,6 @@ def test_dryad_older_then_magus_newer_lands_become_just_mountains():
     Magus/Blood Moon comes down second.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     dual = CardPrinting(
@@ -417,7 +418,7 @@ def test_dryad_older_then_magus_newer_lands_become_just_mountains():
     dryad.etb_timestamp = 5
     # T3: Magus later (newer).
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 20
@@ -442,7 +443,6 @@ def test_tractor_beam_on_dryad_layer2_then_layer4_dependency():
     layer-2 → layer-4 dependency: layer 2 must be resolved before
     layer 4 reads it.
     """
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _new_state()
     # P0 has a Forest. P1 has a Forest. Dryad starts under P1's control.
@@ -460,7 +460,7 @@ def test_tractor_beam_on_dryad_layer2_then_layer4_dependency():
     assert "Plains" not in effective_subtypes(state, p0_forest)
 
     # P0 attaches a Tractor Beam to Dryad — P0 now controls Dryad.
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     _attach(state, aura, dryad)
     assert dryad.controller_id == 0
 
@@ -477,12 +477,11 @@ def test_lignified_tractor_beam_keeps_control_grant():
     layer-6 wipe happens, and the wipe does not retroactively undo
     layers below it.
     """
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_controller
 
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     _attach(state, aura, bear)
     assert effective_controller(state, bear) == 0
 
@@ -504,7 +503,6 @@ def test_two_lignified_magi_still_collapse_lands():
     Lignified.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     dual = CardPrinting(
@@ -519,12 +517,12 @@ def test_two_lignified_magi_still_collapse_lands():
     state.battlefield.append(land)
     land.etb_timestamp = 1
     magus_a = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus_a)
     magus_a.etb_timestamp = 5
     magus_b = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus_b)
     magus_b.etb_timestamp = 6
@@ -571,7 +569,6 @@ def test_magus_leaves_play_lands_revert_to_printed():
     revert to their printed subtypes / produces.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     dual = CardPrinting(
@@ -586,7 +583,7 @@ def test_magus_leaves_play_lands_revert_to_printed():
     state.battlefield.append(land)
     land.etb_timestamp = 1
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 5
@@ -642,7 +639,6 @@ def test_lignified_magus_still_collapses_nonbasic_lands_per_cr():
     effect — strict layer order says layer 4 runs before layer 6.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     dual = CardPrinting(
@@ -659,7 +655,7 @@ def test_lignified_magus_still_collapses_nonbasic_lands_per_cr():
     state.battlefield.append(land)
     land.etb_timestamp = 1
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 5
@@ -684,7 +680,6 @@ def test_lignified_sliver_lord_still_grants_anthem_keywords_per_dependency():
     targets the LORD, not the Slivers, and the dependency rule
     orders the lord's anthem before the wipe.
     """
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
@@ -693,7 +688,7 @@ def test_lignified_sliver_lord_still_grants_anthem_keywords_per_dependency():
         target_id=bear.id, params=("Sliver",),
         description="(test) Bear is a Sliver",
     )
-    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool = _put(state, _PRINTINGS["Thrumming Hivepool"], owner_id=0)
     kws = effective_keywords(state, bear)
     assert "haste" in kws
     assert "double strike" in kws
@@ -726,7 +721,6 @@ def test_magus_and_dryad_both_lignified_lands_keep_all_basic_types():
     Mountain, Dryad adds the other four).
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.cards.special_guests import SPECIAL_GUESTS_EOE
 
     state = _new_state()
     dual = CardPrinting(
@@ -741,7 +735,7 @@ def test_magus_and_dryad_both_lignified_lands_keep_all_basic_types():
     state.battlefield.append(land)
     land.etb_timestamp = 1
     magus = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Magus of the Moon"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(magus)
     magus.etb_timestamp = 5
@@ -772,7 +766,6 @@ def test_lignify_on_recipient_older_then_lord_newer_grants_haste():
     Result: Sliver has haste + double strike, despite being
     Lignified (because the anthem is newer).
     """
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
@@ -790,7 +783,7 @@ def test_lignify_on_recipient_older_then_lord_newer_grants_haste():
     assert effective_keywords(state, bear) == frozenset()
 
     # Hivepool enters NEWER than Lignify.
-    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool = _put(state, _PRINTINGS["Thrumming Hivepool"], owner_id=0)
     hivepool.etb_timestamp = 100  # newer
 
     # Per CR timestamp order in layer 6: Lignify wipe (T=5) then
@@ -805,7 +798,6 @@ def test_lord_older_then_lignify_on_recipient_newer_wipes_keywords():
     newer. Per CR timestamp walk: lord grants haste, then Lignify
     wipes. Sliver has no keywords.
     """
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
@@ -815,7 +807,7 @@ def test_lord_older_then_lignify_on_recipient_newer_wipes_keywords():
         description="(test) Bear is a Sliver",
     )
     bear.etb_timestamp = 1
-    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool = _put(state, _PRINTINGS["Thrumming Hivepool"], owner_id=0)
     hivepool.etb_timestamp = 5  # older
     kws = effective_keywords(state, bear)
     assert "haste" in kws
@@ -937,12 +929,11 @@ def test_lignified_dominion_bracelet_keeps_granted_activated_ability():
     ability — the wipe targets the Bracelet, not the equipped
     creature.
     """
-    from mtg_bot.cards import EOE_SPELLS
 
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     bracelet = _put(
-        state, EOE_SPELLS["The Dominion Bracelet"], owner_id=0,
+        state, _PRINTINGS["The Dominion Bracelet"], owner_id=0,
     )
     bracelet.attached_to = bear.id
     abilities = effective_activated_abilities(state, bear)
@@ -971,10 +962,9 @@ def test_lignify_on_tarmogoyf_style_cda_overrides_with_0_4():
     is empty), the layer-7b set still gives 0/4. Both reasonings
     converge on 0/4.
     """
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
-    cosmogoyf = _put(state, EOE_SPELLS["Cosmogoyf"], owner_id=0)
+    cosmogoyf = _put(state, _PRINTINGS["Cosmogoyf"], owner_id=0)
     # No exile yet → Cosmogoyf is 0/1.
     assert effective_power(state, cosmogoyf) == 0
     assert effective_toughness(state, cosmogoyf) == 1
@@ -1462,10 +1452,9 @@ def test_humility_tarmogoyf_style_is_1_1():
     the CDA. Layer 7a is empty. Layer 7b sets 1/1. Result: 1/1.
     """
     from mtg_bot.cards.demo_layers import HUMILITY
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
-    cosmogoyf = _put(state, EOE_SPELLS["Cosmogoyf"], owner_id=0)
+    cosmogoyf = _put(state, _PRINTINGS["Cosmogoyf"], owner_id=0)
     cosmogoyf.etb_timestamp = 1
     state.players[0].exile.extend([cosmogoyf.printing] * 5)
     # Without Humility: Cosmogoyf is 5/6 from CDA.
@@ -1677,11 +1666,9 @@ def test_synthetic_added_subtype_picked_up_by_subtype_keyed_anthem():
     you control have double strike and haste") should pick up the
     granted Sliver subtype via ``effective_subtypes``, not just
     printed subtypes."""
-    from mtg_bot.cards import EOE_CREATURES
-    from mtg_bot.cards.eoe_spells import EOE_SPELLS
 
     state = _new_state()
-    hivepool = _put(state, EOE_SPELLS["Thrumming Hivepool"], owner_id=0)
+    hivepool = _put(state, _PRINTINGS["Thrumming Hivepool"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     # No layered effect → bear is no Sliver, no haste/double strike.
     assert "haste" not in effective_keywords(state, bear)

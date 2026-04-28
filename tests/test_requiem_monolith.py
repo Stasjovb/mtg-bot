@@ -4,12 +4,16 @@ controller a may-deal-1-damage decision that, if accepted, fires the
 fresh trigger for 1 draw + 1 life loss."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     RequiemMonolithActivatedEffect,
     RequiemMonolithDealtDamageEffect,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _AcceptDamage(Agent):
@@ -133,7 +137,7 @@ def test_dealt_damage_rider_describe():
 
 
 def test_requiem_printing_has_sorcery_speed_activated():
-    m = EOE_SPELLS["Requiem Monolith"]
+    m = _PRINTINGS["Requiem Monolith"]
     assert len(m.activated_abilities) == 1
     a = m.activated_abilities[0]
     assert a.sorcery_speed

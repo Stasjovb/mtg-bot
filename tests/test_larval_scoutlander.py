@@ -2,17 +2,16 @@
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     OptionalSacLandOrLanderForBasicLandRamp,
     SearchLibraryForBasicLandTapped,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -124,7 +123,7 @@ def test_larval_scoutlander_etb_flow():
         lib = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(lib)
     scout = state.new_object(
-        EOE_SPELLS["Larval Scoutlander"], 0, Zone.HAND,
+        _PRINTINGS["Larval Scoutlander"], 0, Zone.HAND,
     )
     put_into_battlefield(state, scout, controller_id=0)
     while state.stack:

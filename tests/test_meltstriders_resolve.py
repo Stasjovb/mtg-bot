@@ -13,11 +13,15 @@ this module focuses on the previously-dropped ETB fight rider.
 """
 
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import EnchantedCreatureFightsTargetEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -63,7 +67,7 @@ def test_legal_targets_are_opponent_creatures_only():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)  # ally
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         legal = EnchantedCreatureFightsTargetEffect().legal_targets(state, 0)
@@ -86,7 +90,7 @@ def test_etb_no_opponent_creature_is_noop_but_aura_attaches():
     no-target case."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)  # 2/2
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         EnchantedCreatureFightsTargetEffect().resolve(state, 0, ())
@@ -109,7 +113,7 @@ def test_etb_both_fighters_survive_take_each_others_power():
     """
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)  # 2/2
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     enemy = _put(state, SYNTHETIC_CREATURES["Forest Giant"], owner_id=1)  # 3/3
     state.resolving_source = aura
     try:
@@ -135,7 +139,7 @@ def test_etb_enchanted_creature_dies_in_fight():
     """
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)  # 2/2
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     big = _put(state, SYNTHETIC_CREATURES["Great Wurm"], owner_id=1)  # 6/6
     state.resolving_source = aura
     try:
@@ -175,7 +179,7 @@ def test_etb_resolve_with_unknown_creature_target_is_noop():
     between targeting and resolution), nothing happens."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         EnchantedCreatureFightsTargetEffect().resolve(
@@ -190,7 +194,7 @@ def test_etb_resolve_with_non_creature_target_kind_is_noop():
     """Engine-shape guard: a non-'creature' target kind is a no-op."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         EnchantedCreatureFightsTargetEffect().resolve(
@@ -208,7 +212,7 @@ def test_etb_resolve_with_detached_aura_is_noop():
     happens — no enchanted creature to wield the fight."""
     state = _new_state()
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"])
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"])
     aura.attached_to = None
     state.resolving_source = aura
     try:
@@ -226,7 +230,7 @@ def test_etb_resolve_with_missing_enchanted_creature_is_noop():
     nothing rather than crashing."""
     state = _new_state()
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    aura = _put(state, EOE_CREATURES["Meltstrider's Resolve"])
+    aura = _put(state, _PRINTINGS["Meltstrider's Resolve"])
     aura.attached_to = 999_999  # nonexistent
     state.resolving_source = aura
     try:
@@ -244,7 +248,7 @@ def test_etb_resolve_with_missing_enchanted_creature_is_noop():
 
 
 def test_printing_has_etb_trigger_and_buffs():
-    p = EOE_CREATURES["Meltstrider's Resolve"]
+    p = _PRINTINGS["Meltstrider's Resolve"]
     triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "etb" in triggers
     # The +0/+2 + menace continuous bonus is preserved.

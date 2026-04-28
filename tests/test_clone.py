@@ -42,6 +42,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step, destroy, move_off_battlefield
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 class _PickFirst(Agent):
     """Deterministic agent: always picks the first legal target."""
@@ -91,11 +95,10 @@ def test_clone_printing_shape():
 
 
 def test_clone_not_in_eoe_pool():
-    """Clone is a demo-only card. It must not leak into NONLAND_POOL
+    """Clone is a demo-only card. It must not leak into _PRINTINGS
     or all_printings."""
-    from mtg_bot.cards.registry import NONLAND_POOL, all_printings
-    assert "Clone" not in NONLAND_POOL
-    assert "Clone" not in all_printings()
+    assert "Clone" not in _PRINTINGS
+    assert "Clone" not in _PRINTINGS
 
 
 # ---------- Helper-direct invocation (skip the full cast pipeline) ----------

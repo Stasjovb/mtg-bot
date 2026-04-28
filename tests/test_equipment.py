@@ -15,14 +15,16 @@ from mtg_bot.actions import (
     ActivateAbility, apply_action, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     AttachToTargetCreatureYouControl, EquipToTargetCreatureYouControl,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, move_off_battlefield
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -69,7 +71,7 @@ def _put(state, printing, owner_id=0, attached_to=None, summoning_sick=False):
 def test_equipment_cards_ship_with_printed_equip_cost(card_name, expected_cost):
     """Each EoE Equipment card has an Equip activated ability whose mana cost
     matches the printed Equip {N} from oracle text."""
-    eq = EOE_CREATURES[card_name]
+    eq = _PRINTINGS[card_name]
     equip_abilities = [
         a for a in eq.activated_abilities
         if isinstance(a.effect, EquipToTargetCreatureYouControl)
@@ -92,7 +94,7 @@ def test_equip_activation_requires_sorcery_speed():
     legal_moves outside the active player's main phase with empty stack."""
     state = _new_state(active=0, step=Step.UPKEEP)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    eq = _put(state, EOE_CREATURES["Auxiliary Boosters"])
+    eq = _put(state, _PRINTINGS["Auxiliary Boosters"])
     # Plenty of mana to pay {3} so cost can't be the gating factor.
     for _ in range(5):
         _put(state, BASIC_LANDS["Forest"])
@@ -116,7 +118,7 @@ def test_equip_activation_costs_printed_mana():
     """Activating Equip {3} taps three lands (and only three)."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    eq = _put(state, EOE_CREATURES["Auxiliary Boosters"])
+    eq = _put(state, _PRINTINGS["Auxiliary Boosters"])
     lands = [_put(state, BASIC_LANDS["Forest"]) for _ in range(5)]
     apply_action(
         state, 0, ActivateAbility(source_id=eq.id, ability_index=0),
@@ -138,7 +140,7 @@ def test_equip_moves_attachment_from_one_creature_to_another():
     state = _new_state()
     bear_a = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear_b = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    eq = _put(state, EOE_CREATURES["Squire's Lightblade"])
+    eq = _put(state, _PRINTINGS["Squire's Lightblade"])
     eq.attached_to = bear_a.id  # initially equipped to A
     for _ in range(3):
         _put(state, BASIC_LANDS["Plains"])
@@ -171,7 +173,7 @@ def test_equipment_falls_off_when_attached_creature_leaves():
     creature to the graveyard like an Aura would)."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    eq = _put(state, EOE_CREATURES["Hylderblade"], attached_to=bear.id)
+    eq = _put(state, _PRINTINGS["Hylderblade"], attached_to=bear.id)
     move_off_battlefield(state, bear, destination="graveyard")
     assert eq in state.battlefield
     assert eq.attached_to is None
@@ -189,7 +191,7 @@ def test_equip_effect_inherits_attach_legality_filter():
     state = _new_state()
     my_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     foe_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    eq = _put(state, EOE_CREATURES["Meltstrider's Gear"])
+    eq = _put(state, _PRINTINGS["Meltstrider's Gear"])
     eff = EquipToTargetCreatureYouControl()
     state.resolving_source = eq
     try:
@@ -209,7 +211,7 @@ def test_equip_resolution_sets_attached_to():
     Equipment) attaches the source to the chosen target."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    eq = _put(state, EOE_CREATURES["Illvoi Light Jammer"])
+    eq = _put(state, _PRINTINGS["Illvoi Light Jammer"])
     state.resolving_source = eq
     try:
         EquipToTargetCreatureYouControl().resolve(

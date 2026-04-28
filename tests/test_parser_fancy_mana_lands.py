@@ -15,7 +15,10 @@ from mtg_bot.cards.parser.land_builder import (
     _build_land_printing,
     _try_build_fancy_mana_land,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_mana_confluence_matches_static():
@@ -28,7 +31,7 @@ def test_mana_confluence_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Mana Confluence"]
+    assert parsed == _PRINTINGS["Mana Confluence"]
 
 
 def test_meteor_crater_matches_static():
@@ -44,7 +47,7 @@ def test_meteor_crater_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Meteor Crater"]
+    assert parsed == _PRINTINGS["Meteor Crater"]
 
 
 def test_reflecting_pool_matches_static():
@@ -60,7 +63,7 @@ def test_reflecting_pool_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Reflecting Pool"]
+    assert parsed == _PRINTINGS["Reflecting Pool"]
 
 
 def test_skips_unknown_oracle_text():

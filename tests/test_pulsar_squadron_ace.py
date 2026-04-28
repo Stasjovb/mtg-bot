@@ -2,14 +2,13 @@
 
 from mtg_bot.actions import put_into_battlefield
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import LookAtTopNRevealOrCounter
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _TakeFirstAgent(Agent):
@@ -40,7 +39,7 @@ def test_pulsar_ace_reveals_spacecraft_into_hand():
     p = state.players[0]
     # Stack the library: 1 Spacecraft in top 5, rest non-spacecraft.
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.LIBRARY,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.LIBRARY,
     )
     p.library.append(ship)
     for _ in range(4):
@@ -48,7 +47,7 @@ def test_pulsar_ace_reveals_spacecraft_into_hand():
         p.library.append(c)
     # Put the Ace on the battlefield to serve as resolving source.
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace
@@ -71,7 +70,7 @@ def test_pulsar_ace_counter_when_no_spacecraft_available():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(c)
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace
@@ -87,14 +86,14 @@ def test_pulsar_ace_counter_when_agent_declines():
     state = _new_state(agent=_DeclineAgent())
     p = state.players[0]
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.LIBRARY,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.LIBRARY,
     )
     p.library.append(ship)
     for _ in range(4):
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(c)
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace
@@ -112,13 +111,13 @@ def test_pulsar_ace_small_library():
     p = state.players[0]
     # Only 2 cards: a Spacecraft and a land.
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.LIBRARY,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.LIBRARY,
     )
     p.library.append(ship)
     land = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
     p.library.append(land)
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace
@@ -151,7 +150,7 @@ def test_pulsar_ace_filter_artifact():
     state = _new_state(agent=_TakeFirstAgent())
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     for _ in range(4):
@@ -170,7 +169,7 @@ def test_pulsar_ace_unknown_filter_treats_as_no_match():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(c)
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace

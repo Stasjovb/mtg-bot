@@ -1,7 +1,7 @@
 """Tests for Cosmogoyf: dynamic P/T from cards owned in exile."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import (
     GameState,
     Player,
@@ -9,6 +9,10 @@ from mtg_bot.game import (
     effective_power,
     effective_toughness,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -21,7 +25,7 @@ def _new_state():
 def test_cosmogoyf_zero_exile_is_zero_over_one():
     state = _new_state()
     goyf = state.new_object(
-        EOE_SPELLS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(goyf)
     assert effective_power(state, goyf) == 0
@@ -32,7 +36,7 @@ def test_cosmogoyf_scales_with_exile_size():
     state = _new_state()
     p = state.players[0]
     goyf = state.new_object(
-        EOE_SPELLS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(goyf)
     # Add three cards to P0's exile.
@@ -48,7 +52,7 @@ def test_cosmogoyf_opponent_exile_does_not_count():
     state = _new_state()
     p1 = state.players[1]
     goyf = state.new_object(
-        EOE_SPELLS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(goyf)
     # Put 5 cards in the opponent's exile.
@@ -64,7 +68,7 @@ def test_cosmogoyf_plus_one_counters_add_on_top_of_dynamic():
     state = _new_state()
     p = state.players[0]
     goyf = state.new_object(
-        EOE_SPELLS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Cosmogoyf"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(goyf)
     for _ in range(2):
@@ -77,13 +81,13 @@ def test_cosmogoyf_plus_one_counters_add_on_top_of_dynamic():
 
 
 def test_cosmogoyf_subtypes():
-    goyf = EOE_SPELLS["Cosmogoyf"]
+    goyf = _PRINTINGS["Cosmogoyf"]
     assert "Elemental" in goyf.subtypes
     assert "Lhurgoyf" in goyf.subtypes
 
 
 def test_cosmogoyf_dynamic_pt_formula_set():
-    assert EOE_SPELLS["Cosmogoyf"].dynamic_pt_formula == "cosmogoyf"
+    assert _PRINTINGS["Cosmogoyf"].dynamic_pt_formula == "cosmogoyf"
 
 
 def test_non_dynamic_creature_uses_printed_pt():

@@ -8,11 +8,7 @@ and the broadened ``ModalChooseOne.target_count_range`` upper bound.
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     ExileTargetCreature,
     ModalChooseOne,
@@ -20,6 +16,10 @@ from mtg_bot.effects import (
     ReturnUpToNCreaturesFromYourGraveyardToHand,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ModeAgent(Agent):
@@ -66,7 +66,7 @@ def test_archenemys_charm_mode_0_exiles_target_creature():
     )
     state.battlefield.append(bear)
 
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     spell.spell_effect.resolve(state, 0, (("creature", bear.id),))
 
     # Bear should be exiled (off the battlefield, in opponent's exile).
@@ -91,7 +91,7 @@ def test_archenemys_charm_mode_1_returns_two_from_graveyard():
     )
     p.graveyard.extend([bear_a, bear_b])
 
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     spell.spell_effect.resolve(
         state, 0,
         (
@@ -116,7 +116,7 @@ def test_archenemys_charm_mode_1_returns_just_one_when_only_one_exists():
     )
     p.graveyard.append(bear)
 
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     spell.spell_effect.resolve(
         state, 0, (("graveyard_creature", bear.id),),
     )
@@ -140,7 +140,7 @@ def test_archenemys_charm_mode_2_grants_counters_and_lifelink():
     assert bear.plus_one_counters == 0
     assert "lifelink" not in bear.temp_keywords
 
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     spell.spell_effect.resolve(state, 0, (("creature", bear.id),))
 
     assert bear.plus_one_counters == 2
@@ -155,7 +155,7 @@ def test_archenemys_charm_mode_2_grants_counters_and_lifelink():
 def test_archenemys_charm_modal_target_count_range_is_one_to_two():
     """Mode 1 needs (1, 2) targets; modes 0/2 need exactly 1. Union of
     all-targeted modes => (min over all, max over all) = (1, 2)."""
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     effect = spell.spell_effect
     assert isinstance(effect, ModalChooseOne)
     assert effect.requires_target() is True
@@ -173,7 +173,7 @@ def test_modal_choose_one_filters_targets_for_chosen_mode():
     )
     p.graveyard.append(gy_card)
 
-    spell = EOE_SPELLS["Archenemy's Charm"]
+    spell = _PRINTINGS["Archenemy's Charm"]
     # Pass a graveyard_creature target but pick exile-creature mode.
     spell.spell_effect.resolve(
         state, 0, (("graveyard_creature", gy_card.id),),
@@ -195,7 +195,7 @@ def test_return_up_to_n_from_graveyard_legal_targets_creature_only():
     )
     p.graveyard.append(bear)
     # Non-creature card in graveyard should not appear.
-    spell = state.new_object(EOE_SPELLS["Plasma Bolt"], 0, Zone.GRAVEYARD)
+    spell = state.new_object(_PRINTINGS["Plasma Bolt"], 0, Zone.GRAVEYARD)
     p.graveyard.append(spell)
 
     effect = ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2)

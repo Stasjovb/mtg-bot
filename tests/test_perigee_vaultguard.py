@@ -2,15 +2,14 @@
 
 from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DiscardHandThenDrawN
 from mtg_bot.game import GameState, Player, Zone, effective_power
 from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -85,7 +84,7 @@ def test_vaultguard_trooper_fires_when_two_tapped_creatures():
     p = state.players[0]
     # Two tapped creatures on P0's side.
     vg = state.new_object(
-        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
     )
     vg.tapped = True
     state.battlefield.append(vg)
@@ -113,7 +112,7 @@ def test_vaultguard_trooper_skips_when_fewer_than_two_tapped():
     state.active_player_idx = 0
     p = state.players[0]
     vg = state.new_object(
-        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
     )
     vg.tapped = True
     state.battlefield.append(vg)
@@ -139,7 +138,7 @@ def test_perigee_beckoner_etb_pumps_target_creature():
     )
     state.battlefield.append(target)
     beckoner = state.new_object(
-        EOE_CREATURES["Perigee Beckoner"], 0, Zone.HAND,
+        _PRINTINGS["Perigee Beckoner"], 0, Zone.HAND,
     )
     state.players[0].hand.append(beckoner)
     put_into_battlefield(state, beckoner, controller_id=0)
@@ -151,7 +150,7 @@ def test_perigee_beckoner_etb_pumps_target_creature():
 
 def test_perigee_beckoner_warp_cost_is_one_black():
     """Verify we corrected to the printed warp cost {1}{B}."""
-    p = EOE_CREATURES["Perigee Beckoner"]
+    p = _PRINTINGS["Perigee Beckoner"]
     assert p.warp_cost_str == "{1}{B}"
 
 
@@ -174,7 +173,7 @@ def test_vaultguard_trooper_declined_by_yes_no_agent():
     state.active_player_idx = 0
     p = state.players[0]
     vg = state.new_object(
-        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
     )
     vg.tapped = True
     state.battlefield.append(vg)
@@ -211,7 +210,7 @@ def test_vaultguard_trooper_default_agent_says_yes():
     state.active_player_idx = 0
     p = state.players[0]
     vg = state.new_object(
-        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
     )
     vg.tapped = True
     state.battlefield.append(vg)

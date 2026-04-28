@@ -8,15 +8,14 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import PutLoyaltyCounterOnSelf
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -27,7 +26,7 @@ def _new_state():
 
 
 def test_tezzeret_is_planeswalker_with_loyalty_four():
-    p = EOE_SPELLS["Tezzeret, Cruel Captain"]
+    p = _PRINTINGS["Tezzeret, Cruel Captain"]
     assert p.is_planeswalker
     assert p.loyalty == 4
 
@@ -35,7 +34,7 @@ def test_tezzeret_is_planeswalker_with_loyalty_four():
 def test_tezzeret_enters_with_loyalty_counters():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.HAND,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.HAND,
     )
     put_into_battlefield(state, tez, controller_id=0)
     assert tez.loyalty_counters == 4
@@ -44,7 +43,7 @@ def test_tezzeret_enters_with_loyalty_counters():
 def test_tezzeret_artifact_enters_trigger_adds_loyalty():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
     )
     tez.loyalty_counters = 4
     state.battlefield.append(tez)
@@ -59,7 +58,7 @@ def test_tezzeret_artifact_enters_trigger_adds_loyalty():
 def test_tezzeret_only_triggers_for_your_own_artifacts():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
     )
     tez.loyalty_counters = 4
     state.battlefield.append(tez)
@@ -73,7 +72,7 @@ def test_tezzeret_only_triggers_for_your_own_artifacts():
 def test_state_based_action_buries_planeswalker_at_zero_loyalty():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
     )
     tez.loyalty_counters = 0
     state.battlefield.append(tez)
@@ -86,7 +85,7 @@ def test_state_based_action_buries_planeswalker_at_zero_loyalty():
 def test_state_based_action_leaves_planeswalker_alone_at_positive_loyalty():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
     )
     tez.loyalty_counters = 1
     state.battlefield.append(tez)
@@ -97,7 +96,7 @@ def test_state_based_action_leaves_planeswalker_alone_at_positive_loyalty():
 def test_put_loyalty_counter_on_self():
     state = _new_state()
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.BATTLEFIELD,
     )
     tez.loyalty_counters = 2
     state.battlefield.append(tez)
@@ -139,7 +138,7 @@ def test_planeswalker_end_to_end_cast():
         pl = state.new_object(BASIC_LANDS["Plains"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(pl)
     tez = state.new_object(
-        EOE_SPELLS["Tezzeret, Cruel Captain"], 0, Zone.HAND,
+        _PRINTINGS["Tezzeret, Cruel Captain"], 0, Zone.HAND,
     )
     p.hand.append(tez)
     apply_action(state, 0, CastSpell(tez.id))

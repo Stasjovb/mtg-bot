@@ -21,11 +21,7 @@ Coverage by site:
 from __future__ import annotations
 
 from mtg_bot.agents import Agent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     LookAtTopNRevealOrCounter,
     ReturnTargetCreatureToOwnersHand,
@@ -46,6 +42,10 @@ from mtg_bot.game import (
     reveal_to_all,
     shuffle_library,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 _SYN_CREATURE = "Battlefield Recruit"  # any vanilla synthetic creature
 
@@ -212,10 +212,10 @@ def test_bounce_multi_marks_each_returned_card_publicly_known():
 def test_return_artifact_from_graveyard_marks_publicly_known():
     state = _new_state()
     p0 = state.players[0]
-    # Use any artifact card from EOE_CREATURES — Synthesizer Labship is a
+    # Use any artifact card from _PRINTINGS — Synthesizer Labship is a
     # Spacecraft (artifact). Land it in the graveyard directly.
     art = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.GRAVEYARD,
     )
     p0.graveyard.append(art)
     ReturnTargetArtifactCardFromYourGraveyardToHand().resolve(
@@ -308,7 +308,7 @@ def test_look_at_top_n_reveal_marks_only_revealed_card_publicly_known():
     state = _new_state()
     p0 = state.players[0]
     ship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.LIBRARY,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.LIBRARY,
     )
     p0.library.append(ship)
     for _ in range(4):
@@ -316,7 +316,7 @@ def test_look_at_top_n_reveal_marks_only_revealed_card_publicly_known():
             state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         )
     ace = state.new_object(
-        EOE_CREATURES["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ace)
     state.resolving_source = ace

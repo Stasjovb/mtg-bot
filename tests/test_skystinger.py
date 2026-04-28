@@ -1,10 +1,14 @@
 """Tests for Skystinger's "blocks a creature with flying" trigger."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_blockers
 from mtg_bot.game import GameState, Player, Zone, effective_power
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -17,7 +21,7 @@ def _new_state():
 def test_skystinger_pumps_when_blocking_flier():
     state = _new_state()
     stinger = state.new_object(
-        EOE_CREATURES["Skystinger"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Skystinger"], 0, Zone.BATTLEFIELD,
     )
     stinger.summoning_sick = False
     state.battlefield.append(stinger)
@@ -42,7 +46,7 @@ def test_skystinger_pumps_when_blocking_flier():
 def test_skystinger_no_pump_when_blocking_non_flier():
     state = _new_state()
     stinger = state.new_object(
-        EOE_CREATURES["Skystinger"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Skystinger"], 0, Zone.BATTLEFIELD,
     )
     stinger.summoning_sick = False
     state.battlefield.append(stinger)

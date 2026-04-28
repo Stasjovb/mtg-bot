@@ -9,10 +9,7 @@ from mtg_bot.actions import (
     put_into_battlefield, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.combat import (
     declare_attackers, declare_blockers, _fire_enchanted_dealt_damage_triggers,
 )
@@ -26,6 +23,10 @@ from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
     Step, destroy, fire_landfall_triggers, move_off_battlefield,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _NoTargetAgent(Agent):
@@ -71,7 +72,7 @@ def test_chorale_attacks_trigger_fizzles_with_no_graveyard_creature():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.summoning_sick = False
     aura = _put(
-        state, EOE_SPELLS["Chorale of the Void"], attached_to=bear.id,
+        state, _PRINTINGS["Chorale of the Void"], attached_to=bear.id,
     )
     # P1's graveyard is empty → no legal targets for Chorale's reanimate.
     declare_attackers(state, [bear.id])
@@ -199,7 +200,7 @@ def test_leaves_battlefield_trigger_fizzles_with_no_legal_targets():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         state.players[0].library.append(c)
     # Hand has a permanent but agent declines → no put.
-    perm = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.HAND)
+    perm = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.HAND)
     state.players[0].hand.append(perm)
     AnticausalVestigeLeavesEffect().resolve(state, 0, ())
     # Drew at least one card.
@@ -247,7 +248,7 @@ def test_close_encounter_not_castable_without_own_creature():
     # Mana for Close Encounter {4}{G}.
     for _ in range(5):
         _put(state, BASIC_LANDS["Forest"])
-    ce = state.new_object(EOE_SPELLS["Close Encounter"], 0, Zone.HAND)
+    ce = state.new_object(_PRINTINGS["Close Encounter"], 0, Zone.HAND)
     state.players[0].hand.append(ce)
     actions = legal_moves(state)
     assert not any(
@@ -281,13 +282,13 @@ def test_ward_discard_empty_hand_counters_via_cast_flow():
 
     state = _new_state()
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Stonechosen"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(alpha)
     # P0: enough mana to cast Gravkill {1}{B}, but only Gravkill in hand.
     for _ in range(3):
         _put(state, BASIC_LANDS["Swamp"])
-    grav = state.new_object(EOE_SPELLS["Gravkill"], 0, Zone.HAND)
+    grav = state.new_object(_PRINTINGS["Gravkill"], 0, Zone.HAND)
     state.players[0].hand.append(grav)
     _cast_spell(state, 0, grav.id)
     # Spell countered — alpha remains.
@@ -302,7 +303,7 @@ def test_ward_discard_empty_hand_counters_via_cast_flow():
 def test_pain_for_all_etb_noop_with_no_target():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=bear.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=bear.id)
     state.resolving_source = aura
     try:
         PainForAllETBEffect().resolve(state, 0, ())
@@ -316,7 +317,7 @@ def test_pain_for_all_etb_noop_with_no_target():
 def test_pain_for_all_etb_noop_when_enchanted_missing():
     """If the aura isn't attached, ETB no-ops."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Pain for All"])  # not attached
+    aura = _put(state, _PRINTINGS["Pain for All"])  # not attached
     state.resolving_source = aura
     try:
         PainForAllETBEffect().resolve(state, 0, (("player", 1),))
@@ -415,7 +416,7 @@ def test_add_plus_one_counters_on_non_creature_no_doubling():
 
 def test_mana_ability_not_offered_when_creature_summoning_sick():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = True  # just entered
     from mtg_bot.actions import ActivateAbility
 
@@ -447,7 +448,7 @@ def test_selfcraft_without_agent_falls_back_to_first_artifact():
     state = _new_state()
     state.players[0].agent = None
     # Controller has one artifact to sac.
-    art = _put(state, EOE_SPELLS["Nutrient Block"])
+    art = _put(state, _PRINTINGS["Nutrient Block"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     # Seed library so draw has a card.
     c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
@@ -467,7 +468,7 @@ def test_pain_for_all_zero_power_noop():
     zero = make_creature("Zero Power", "{G}", 0, 3)
     host = state.new_object(zero, 0, Zone.BATTLEFIELD)
     state.battlefield.append(host)
-    aura = _put(state, EOE_SPELLS["Pain for All"], attached_to=host.id)
+    aura = _put(state, _PRINTINGS["Pain for All"], attached_to=host.id)
     state.resolving_source = aura
     try:
         PainForAllETBEffect().resolve(state, 0, (("player", 1),))
@@ -487,7 +488,7 @@ def test_anticausal_vestige_noop_when_agent_declines_picker():
     state.players[0].library.append(c)
     # Hand has a permanent that would be legal — but agent is None
     # so it's not put onto battlefield.
-    perm = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.HAND)
+    perm = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.HAND)
     state.players[0].hand.append(perm)
     AnticausalVestigeLeavesEffect().resolve(state, 0, ())
     assert perm in state.players[0].hand
@@ -500,7 +501,7 @@ def test_memorial_vault_effect_library_empty_stops_early():
 
     state = _new_state()
     # Graveyard has an artifact of MV 1 → X=2.
-    art = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.GRAVEYARD)
+    art = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.GRAVEYARD)
     state.players[0].graveyard.append(art)
     # Library has only 1 card.
     c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
@@ -516,7 +517,7 @@ def test_sothera_end_step_noop_when_no_exiled_creature():
     from mtg_bot.effects import SotheraEndStepReanimateEffect
 
     state = _new_state()
-    sothera = _put(state, EOE_SPELLS["Sothera, the Supervoid"])
+    sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
     # No creatures exist → "a player controls no creatures" is True,
     # sothera sacrifices itself; no exiled creature to reanimate.
     state.resolving_source = sothera

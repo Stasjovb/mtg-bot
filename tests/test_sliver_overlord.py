@@ -7,14 +7,16 @@ Oracle:
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES, TOKEN_PRINTINGS, make_creature,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS, make_creature
 from mtg_bot.effects import (
     GainControlOfTargetSliverPermanently, SearchLibraryForCard,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -37,7 +39,7 @@ _BLADE_SLIVER = make_creature(
 
 
 def test_sliver_overlord_is_wired_up():
-    so = SPECIAL_GUESTS_EOE["Sliver Overlord"]
+    so = _PRINTINGS["Sliver Overlord"]
     assert so.mana_cost_str == "{W}{U}{B}{R}{G}"
     assert "Legendary" in so.supertypes
     assert "Sliver" in so.subtypes and "Mutant" in so.subtypes
@@ -75,7 +77,7 @@ def test_tutor_fetches_sliver_from_library():
         SYNTHETIC_CREATURES["Sapling"], 0, Zone.LIBRARY,
     ))
 
-    tutor = SPECIAL_GUESTS_EOE["Sliver Overlord"].activated_abilities[0]
+    tutor = _PRINTINGS["Sliver Overlord"].activated_abilities[0]
     tutor.effect.resolve(state, 0, ())
     assert sliver in p.hand
     assert sliver not in p.library
@@ -89,7 +91,7 @@ def test_tutor_fails_gracefully_when_no_sliver_in_library():
     )
     p.library.append(bear)
 
-    tutor = SPECIAL_GUESTS_EOE["Sliver Overlord"].activated_abilities[0]
+    tutor = _PRINTINGS["Sliver Overlord"].activated_abilities[0]
     tutor.effect.resolve(state, 0, ())
     # Library unchanged; hand empty.
     assert bear in p.library

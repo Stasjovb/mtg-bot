@@ -7,10 +7,7 @@ Also exercises Inventors' Fair's restored upkeep gain-life ability
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, STELLAR_SIGHTS_LANDS,
-    SYNTHETIC_CREATURES, TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.cards.base import make_artifact, make_creature
 from mtg_bot.effects import (
     ConditionalIfYouControlAtLeast, GainLife, TriggeredAbility,
@@ -18,6 +15,10 @@ from mtg_bot.effects import (
 from mtg_bot.effects.predicates import YOU, Controlled, Event
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_beginning_of_upkeep_triggers
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -157,7 +158,7 @@ def test_conditional_describe_mentions_threshold_and_predicate():
 
 def test_inventors_fair_gains_life_with_three_artifacts():
     state = _new_state()
-    _put(state, STELLAR_SIGHTS_LANDS["Inventors' Fair"])
+    _put(state, _PRINTINGS["Inventors' Fair"])
     # Add two more artifacts; Fair itself isn't an artifact, so we need
     # three more to hit the 3-artifact threshold.
     for _ in range(3):
@@ -169,7 +170,7 @@ def test_inventors_fair_gains_life_with_three_artifacts():
 
 def test_inventors_fair_no_gain_below_artifact_threshold():
     state = _new_state()
-    _put(state, STELLAR_SIGHTS_LANDS["Inventors' Fair"])
+    _put(state, _PRINTINGS["Inventors' Fair"])
     for _ in range(2):
         _put(state, make_artifact("Scrap", "{0}"))
     run_beginning_of_upkeep_triggers(state)
@@ -183,7 +184,7 @@ def test_inventors_fair_no_gain_below_artifact_threshold():
 
 def test_hivepool_upkeep_trigger_fires_on_upkeep_step():
     state = _new_state()
-    _put(state, EOE_SPELLS["Thrumming Hivepool"])
+    _put(state, _PRINTINGS["Thrumming Hivepool"])
     run_beginning_of_upkeep_triggers(state)
     drain_stack(state)
     slivers = [o for o in state.battlefield if o.printing.name == "Sliver"]

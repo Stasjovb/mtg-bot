@@ -12,10 +12,13 @@ Two minor user-reported nits, fixed together:
 """
 
 from mtg_bot.actions import _format_log_targets, drain_stack
-from mtg_bot.cards import EOE_SPELLS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.simulate import run_turn
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -35,7 +38,7 @@ def test_format_log_targets_resolves_stack_index_to_spell_name():
     state = _new_state()
     # Push a fake spell onto the stack.
     spell_card = state.new_object(
-        EOE_SPELLS["Unravel"], 0, Zone.STACK,
+        _PRINTINGS["Unravel"], 0, Zone.STACK,
     )
     from mtg_bot.game import StackItem
     state.stack.append(StackItem(source=spell_card, controller_id=0))

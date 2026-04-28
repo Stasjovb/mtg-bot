@@ -6,7 +6,7 @@ from your hand onto the battlefield.
 
 from mtg_bot.actions import PlayLand, apply_action, drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, SPECIAL_GUESTS_EOE
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import (
     OptionalPutLandFromHandOntoBattlefield,
     TriggeredAbility,
@@ -14,6 +14,10 @@ from mtg_bot.effects import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import fire_opponent_plays_land_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -43,7 +47,7 @@ def _new_state(p0_agent=None, p1_agent=None):
 
 def _give_burgeoning(state: GameState, controller_id: int):
     obj = state.new_object(
-        SPECIAL_GUESTS_EOE["Burgeoning"], controller_id, Zone.BATTLEFIELD,
+        _PRINTINGS["Burgeoning"], controller_id, Zone.BATTLEFIELD,
     )
     state.battlefield.append(obj)
     return obj
@@ -71,7 +75,7 @@ def _fire_played_land(state: GameState, land_controller_id: int):
 
 
 def test_burgeoning_is_wired_up():
-    card = SPECIAL_GUESTS_EOE["Burgeoning"]
+    card = _PRINTINGS["Burgeoning"]
     assert card.mana_cost_str == "{G}"
     assert "Enchantment" in card.card_types
     assert len(card.triggered_abilities) == 1
@@ -174,10 +178,9 @@ def test_burgeoning_dropped_land_fires_landfall():
     # landfall-listening creature is in play. We use PutBasicLand-like
     # observers through the existing test harness by importing an
     # EoE creature that has a landfall trigger.
-    from mtg_bot.cards import EOE_CREATURES
 
     landfaller = next(
-        (p for p in EOE_CREATURES.values()
+        (p for p in _PRINTINGS.values()
          if any(_matches_legacy_key(t, "landfall") for t in p.triggered_abilities)),
         None,
     )
@@ -226,7 +229,7 @@ def test_burgeoning_dropped_land_does_not_re_fire_opponent_plays_land():
 
 
 def test_trigger_description_lists_opponent_plays_land():
-    trig = SPECIAL_GUESTS_EOE["Burgeoning"].triggered_abilities[0]
+    trig = _PRINTINGS["Burgeoning"].triggered_abilities[0]
     desc = trig.describe()
     assert "opponent plays a land" in desc.lower()
 
@@ -254,7 +257,7 @@ def test_effect_with_agent_none_does_nothing():
 # landfall watcher (Remnant Elemental, +2/+0 until end of turn on landfall).
 # These complement the conditional skip in
 # test_burgeoning_dropped_land_fires_landfall above by guaranteeing a
-# concrete observable assertion regardless of whether EOE_CREATURES still
+# concrete observable assertion regardless of whether _PRINTINGS still
 # happens to contain a landfall card.
 # ---------------------------------------------------------------------------
 
@@ -264,12 +267,11 @@ def test_burgeoning_dropped_land_fires_landfall_observable():
     fire landfall on existing landfall watchers. We pin this with
     Remnant Elemental's +2/+0 landfall pump — observable on
     ``temp_power_bonus``."""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _new_state(p0_agent=_PickFirst())
     _give_burgeoning(state, controller_id=0)
     elem = state.new_object(
-        EOE_CREATURES["Remnant Elemental"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Remnant Elemental"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(elem)
     _give_land_in_hand(state, 0, "Forest")
@@ -289,12 +291,11 @@ def test_burgeoning_drop_does_not_double_fire_landfall():
     once*. Regression guard against accidentally calling
     fire_landfall_triggers twice (once from the effect, once from a
     cascading opponent-plays-land path)."""
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _new_state(p0_agent=_PickFirst())
     _give_burgeoning(state, controller_id=0)
     elem = state.new_object(
-        EOE_CREATURES["Remnant Elemental"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Remnant Elemental"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(elem)
     _give_land_in_hand(state, 0, "Forest")

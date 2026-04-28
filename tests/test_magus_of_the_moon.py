@@ -5,10 +5,7 @@ Oracle: Nonbasic lands are Mountains.
 
 from mtg_bot.actions import CastSpell, can_pay_cost, apply_action
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, SHOCK_LANDS, SPECIAL_GUESTS_EOE,
-    STELLAR_SIGHTS_LANDS, SYNTHETIC_CREATURES, parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, SHOCK_LANDS, SYNTHETIC_CREATURES, parse_mana_cost
 from mtg_bot.game import (
     GameState, Player, Zone,
     effective_activated_abilities,
@@ -17,6 +14,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -31,7 +32,7 @@ def _new_state():
 
 def _put_magus(state: GameState, controller: int = 0):
     obj = state.new_object(
-        SPECIAL_GUESTS_EOE["Magus of the Moon"], controller,
+        _PRINTINGS["Magus of the Moon"], controller,
         Zone.BATTLEFIELD,
     )
     state.battlefield.append(obj)
@@ -39,7 +40,7 @@ def _put_magus(state: GameState, controller: int = 0):
 
 
 def test_magus_is_wired_up():
-    m = SPECIAL_GUESTS_EOE["Magus of the Moon"]
+    m = _PRINTINGS["Magus of the Moon"]
     assert m.mana_cost_str == "{2}{R}"
     assert m.power == 2 and m.toughness == 2
     assert "Human" in m.subtypes and "Wizard" in m.subtypes
@@ -98,7 +99,7 @@ def test_nonbasic_activated_abilities_suppressed():
     _put_magus(state, 0)
     # Ancient Tomb has an activated ability ({T}: Add {C}{C} + 2 dmg).
     tomb = state.new_object(
-        STELLAR_SIGHTS_LANDS["Ancient Tomb"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Ancient Tomb"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(tomb)
     assert effective_activated_abilities(state, tomb) == ()

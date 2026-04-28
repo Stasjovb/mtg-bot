@@ -10,7 +10,7 @@ the rider lives in ``temp_triggered_abilities`` until cleanup, and
 """
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     PerigeeBeckonerDiesReturnTappedEffect,
     PumpTargetCreatureUntilEOT,
@@ -24,6 +24,10 @@ from mtg_bot.turn import (
     run_cleanup_step,
 )
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -130,7 +134,7 @@ def test_cleanup_clears_rider_then_death_does_not_fire():
 
 def test_perigee_beckoner_printing_wires_granted_rider():
     """The card printing's ETB effect carries the granted dies-rider."""
-    pb = EOE_CREATURES["Perigee Beckoner"]
+    pb = _PRINTINGS["Perigee Beckoner"]
     assert len(pb.triggered_abilities) == 1
     etb = pb.triggered_abilities[0]
     assert _matches_legacy_key(etb, "etb")
@@ -200,7 +204,7 @@ def test_pump_legal_targets_excludes_self_when_flag_set():
     """exclude_self filter wires through the ETB target picker — the
     Perigee-Beckoner source itself isn't in legal_targets."""
     state = _new_state()
-    pb = _put(state, EOE_CREATURES["Perigee Beckoner"], owner_id=0)
+    pb = _put(state, _PRINTINGS["Perigee Beckoner"], owner_id=0)
     other = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     eff = PumpTargetCreatureUntilEOT(
         power_bonus=2, toughness_bonus=0,

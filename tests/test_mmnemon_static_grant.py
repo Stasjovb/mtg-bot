@@ -15,15 +15,16 @@ cast-pipeline (``_cast_spell``) and the affordability probe
 from mtg_bot.actions import (
     CastSpell, _coin_satisfies_context, can_pay_cost,
 )
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, MMNEMON_BLUE_MANA_GRANTED_ABILITY,
-    parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, MMNEMON_BLUE_MANA_GRANTED_ABILITY, parse_mana_cost
 from mtg_bot.game import (
     GameState, ManaCoin, Player, Zone, effective_activated_abilities,
 )
 from mtg_bot.legal import _spell_kinds_for_card, legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -57,7 +58,7 @@ def _put(state, printing, owner_id=0, zone=Zone.BATTLEFIELD):
 
 
 def test_printing_has_grant_flag():
-    p = EOE_CREATURES["Mm'menon, the Right Hand"]
+    p = _PRINTINGS["Mm'menon, the Right Hand"]
     assert p.grants_blue_mana_ability_to_your_artifacts is True
     assert p.grants_cast_artifact_from_top_of_library is True
     assert p.is_legendary is True
@@ -81,8 +82,8 @@ def test_granted_ability_shape():
 
 def test_artifact_gains_grant_with_mmnemon_in_play():
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
-    art = _put(state, EOE_CREATURES["Auxiliary Boosters"])
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
+    art = _put(state, _PRINTINGS["Auxiliary Boosters"])
     abilities = effective_activated_abilities(state, art)
     # Auxiliary Boosters has no printed activated abilities of its own
     # (verify) — so the only one in the effective set is the grant.
@@ -95,7 +96,7 @@ def test_artifact_gains_grant_with_mmnemon_in_play():
 
 def test_artifact_does_not_gain_grant_without_mmnemon():
     state = _new_state()
-    art = _put(state, EOE_CREATURES["Auxiliary Boosters"])
+    art = _put(state, _PRINTINGS["Auxiliary Boosters"])
     abilities = effective_activated_abilities(state, art)
     assert MMNEMON_BLUE_MANA_GRANTED_ABILITY not in abilities
 
@@ -104,17 +105,17 @@ def test_grant_only_applies_to_controllers_artifacts():
     """Mm'menon's static reads 'Artifacts you control'. An opponent's
     artifact does not gain the ability."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"], owner_id=0)
-    opp_art = _put(state, EOE_CREATURES["Auxiliary Boosters"], owner_id=1)
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"], owner_id=0)
+    opp_art = _put(state, _PRINTINGS["Auxiliary Boosters"], owner_id=1)
     abilities = effective_activated_abilities(state, opp_art)
     assert MMNEMON_BLUE_MANA_GRANTED_ABILITY not in abilities
 
 
 def test_grant_does_not_apply_to_nonartifact_creatures():
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
     # A non-artifact creature shouldn't pick up the artifact grant.
-    creature = _put(state, EOE_CREATURES["Rayblade Trooper"])
+    creature = _put(state, _PRINTINGS["Rayblade Trooper"])
     abilities = effective_activated_abilities(state, creature)
     assert MMNEMON_BLUE_MANA_GRANTED_ABILITY not in abilities
 
@@ -124,7 +125,7 @@ def test_grant_does_not_apply_to_mmnemon_itself():
     artifact, the static excludes self-grants by walking other
     permanents on the battlefield only."""
     state = _new_state()
-    mm = _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
+    mm = _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
     abilities = effective_activated_abilities(state, mm)
     assert MMNEMON_BLUE_MANA_GRANTED_ABILITY not in abilities
 
@@ -163,7 +164,7 @@ def test_coin_tag_rejects_other_restrictions():
 def test_spell_kinds_in_hand_excludes_outside_hand():
     state = _new_state()
     card = _put(
-        state, EOE_CREATURES["Auxiliary Boosters"], zone=Zone.HAND,
+        state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.HAND,
     )
     kinds = _spell_kinds_for_card(card)
     assert "cast_from_outside_hand" not in kinds
@@ -172,7 +173,7 @@ def test_spell_kinds_in_hand_excludes_outside_hand():
 def test_spell_kinds_in_library_includes_outside_hand():
     state = _new_state()
     card = _put(
-        state, EOE_CREATURES["Auxiliary Boosters"], zone=Zone.LIBRARY,
+        state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.LIBRARY,
     )
     kinds = _spell_kinds_for_card(card)
     assert "cast_from_outside_hand" in kinds
@@ -181,7 +182,7 @@ def test_spell_kinds_in_library_includes_outside_hand():
 def test_spell_kinds_in_exile_includes_outside_hand():
     state = _new_state()
     card = _put(
-        state, EOE_CREATURES["Auxiliary Boosters"], zone=Zone.EXILE,
+        state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.EXILE,
     )
     kinds = _spell_kinds_for_card(card)
     assert "cast_from_outside_hand" in kinds
@@ -228,8 +229,8 @@ def test_legal_actions_allows_funded_library_top_cast():
     being an artifact spell, and the artifact tappable for {U} (via
     the grant), the cast should be exposed by legal_actions."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
-    art = _put(state, EOE_CREATURES["Hylderblade"])  # Equipment
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
+    art = _put(state, _PRINTINGS["Hylderblade"])  # Equipment
     art.summoning_sick = False  # tap-on-mana-ability gate
     art.tapped = False
     # Also drop a Plains so a normal hand-cast wouldn't have lined up.
@@ -242,7 +243,7 @@ def test_legal_actions_allows_funded_library_top_cast():
     # library-top branch of legal_actions when the artifact is castable
     # for cost the granted mana can satisfy.
     cheap_art = state.new_object(
-        EOE_CREATURES["Hylderblade"], 0, Zone.LIBRARY,  # {B} Equipment
+        _PRINTINGS["Hylderblade"], 0, Zone.LIBRARY,  # {B} Equipment
     )
     state.players[0].library.insert(0, cheap_art)
     # Drop a Swamp so the colored {B} cost is paid by the land, and
@@ -270,7 +271,7 @@ def test_normal_hand_cast_still_uses_default_spell_kind():
     pick up the cast_from_outside_hand tag."""
     state = _new_state()
     card = _put(
-        state, EOE_CREATURES["Rayblade Trooper"], zone=Zone.HAND,
+        state, _PRINTINGS["Rayblade Trooper"], zone=Zone.HAND,
     )
     kinds = _spell_kinds_for_card(card)
     assert kinds == frozenset({"spell"})

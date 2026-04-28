@@ -15,13 +15,15 @@ from mtg_bot.actions import (
     CastSpell, _cast_spell, apply_cost_reductions, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES, ManaCost,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, ManaCost
 from mtg_bot.combat import declare_attackers, declare_blockers
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickAgent(Agent):
@@ -67,7 +69,7 @@ def _put_creature(
 
 def _give_dark_endurance(state: GameState, controller_id: int):
     card = state.new_object(
-        EOE_SPELLS["Dark Endurance"], controller_id, Zone.HAND,
+        _PRINTINGS["Dark Endurance"], controller_id, Zone.HAND,
     )
     state.players[controller_id].hand.append(card)
     return card
@@ -79,7 +81,7 @@ def _give_dark_endurance(state: GameState, controller_id: int):
 
 
 def test_dark_endurance_printing_carries_blocking_cost_reduction():
-    p = EOE_SPELLS["Dark Endurance"]
+    p = _PRINTINGS["Dark Endurance"]
     assert p.mana_cost == ManaCost(generic=1, colored=(("B", 1),))
     assert len(p.cost_reductions) == 1
     rule = p.cost_reductions[0]
@@ -98,7 +100,7 @@ def test_apply_cost_reductions_no_discount_when_target_is_attacker():
     attacker.attacking = True  # currently attacking, NOT blocking
     base = ManaCost(generic=1, colored=(("B", 1),))
     out = apply_cost_reductions(
-        EOE_SPELLS["Dark Endurance"], state, 0, base,
+        _PRINTINGS["Dark Endurance"], state, 0, base,
         chosen_targets=(("creature", attacker.id),),
     )
     assert out == base
@@ -110,7 +112,7 @@ def test_apply_cost_reductions_discount_when_target_is_blocker():
     blocker.blocking = 99  # arbitrary attacker id; truthy → "is blocking"
     base = ManaCost(generic=1, colored=(("B", 1),))
     out = apply_cost_reductions(
-        EOE_SPELLS["Dark Endurance"], state, 0, base,
+        _PRINTINGS["Dark Endurance"], state, 0, base,
         chosen_targets=(("creature", blocker.id),),
     )
     assert out == ManaCost(generic=0, colored=(("B", 1),))
@@ -124,7 +126,7 @@ def test_apply_cost_reductions_optimistic_when_targets_unknown():
     blocker.blocking = 99
     base = ManaCost(generic=1, colored=(("B", 1),))
     out = apply_cost_reductions(
-        EOE_SPELLS["Dark Endurance"], state, 0, base,
+        _PRINTINGS["Dark Endurance"], state, 0, base,
     )
     assert out == ManaCost(generic=0, colored=(("B", 1),))
 
@@ -134,7 +136,7 @@ def test_apply_cost_reductions_optimistic_no_blockers_no_discount():
     _put_creature(state, "Wild Bear", 1)  # not blocking
     base = ManaCost(generic=1, colored=(("B", 1),))
     out = apply_cost_reductions(
-        EOE_SPELLS["Dark Endurance"], state, 0, base,
+        _PRINTINGS["Dark Endurance"], state, 0, base,
     )
     assert out == base
 

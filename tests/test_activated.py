@@ -6,7 +6,6 @@ from mtg_bot import apply, legal_moves
 from mtg_bot.actions import ActivateAbility, CastSpell, PassPriority, PlayLand
 from mtg_bot.cards import (
     BASIC_LANDS,
-    CREATURE_POOL,
     SYNTHETIC_CREATURES,
     ActivatedAbility,
     ActivationCost,
@@ -16,6 +15,10 @@ from mtg_bot.cards import (
 from mtg_bot.effects import GainLife, LoseLife
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _arena_with(p0_battlefield=(), p0_hand=(), active=0):

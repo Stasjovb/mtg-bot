@@ -1,14 +1,14 @@
 """Tests for Mutinous Massacre: odd/even parity wrath + steal-all UEOT."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import MutinousMassacreEffect
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ChoosesOdd(Agent):
@@ -156,7 +156,7 @@ def test_mutinous_massacre_describe():
 
 
 def test_mutinous_massacre_card_printing():
-    m = EOE_SPELLS["Mutinous Massacre"]
+    m = _PRINTINGS["Mutinous Massacre"]
     assert isinstance(m.spell_effect, MutinousMassacreEffect)
 
 

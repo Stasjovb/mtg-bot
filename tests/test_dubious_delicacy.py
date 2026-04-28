@@ -23,7 +23,7 @@ Coverage targets each printed clause:
 
 from __future__ import annotations
 
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     PumpTargetCreatureUntilEOT,
     TargetOpponentLosesLife,
@@ -34,11 +34,15 @@ from mtg_bot.turn import state_based_actions
 from tests._rules_helpers import _arena
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 def test_dubious_delicacy_has_flash():
     state = _arena()
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     assert "flash" in dd.printing.keywords
 
@@ -51,7 +55,7 @@ def test_dubious_delicacy_etb_minus_three_kills_target_creature():
     )
     state.battlefield.append(victim)
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(dd)
 
@@ -69,7 +73,7 @@ def test_dubious_delicacy_etb_optional_no_target_no_fizzle():
     must resolve as a no-op (no exception, no fizzle)."""
     state = _arena()
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(dd)
 
@@ -88,7 +92,7 @@ def test_dubious_delicacy_gain_life_activation():
     """First activated: {2},{T},Sac — controller gains 3 life."""
     state = _arena()
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(dd)
 
@@ -106,7 +110,7 @@ def test_dubious_delicacy_target_opponent_loses_life_activation():
     """Second activated: {2},{T},Sac — TARGET opponent loses 3 (not each)."""
     state = _arena()
     dd = state.new_object(
-        EOE_CREATURES["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
+        _PRINTINGS["Dubious Delicacy"], owner_id=0, zone=Zone.BATTLEFIELD
     )
     state.battlefield.append(dd)
 

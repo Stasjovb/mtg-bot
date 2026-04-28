@@ -2,12 +2,16 @@
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_combat_triggers
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -21,7 +25,7 @@ def test_ouroboroid_adds_counters_equal_to_its_power_each_combat():
     state = _new_state()
     state.active_player_idx = 0
     ouro = state.new_object(
-        EOE_CREATURES["Ouroboroid"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Ouroboroid"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ouro)
     bear = state.new_object(
@@ -40,7 +44,7 @@ def test_ouroboroid_counter_cascade_grows_each_combat():
     state = _new_state()
     state.active_player_idx = 0
     ouro = state.new_object(
-        EOE_CREATURES["Ouroboroid"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Ouroboroid"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ouro)
     # Fire once → Ouro gets 1 counter (from itself), bear doesn't
@@ -59,7 +63,7 @@ def test_ouroboroid_no_buff_to_opponent_creatures():
     state = _new_state()
     state.active_player_idx = 0
     ouro = state.new_object(
-        EOE_CREATURES["Ouroboroid"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Ouroboroid"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ouro)
     opp_bear = state.new_object(

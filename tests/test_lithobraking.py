@@ -1,17 +1,16 @@
 """Tests for Lithobraking: create Lander + may-sac artifact → damage each creature."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     DealNDamageToEachCreature,
     OptionalSacArtifactForEffect,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -108,7 +107,7 @@ def test_lithobraking_card_full_flow():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(bear)
-    lithobraking = EOE_SPELLS["Lithobraking"]
+    lithobraking = _PRINTINGS["Lithobraking"]
     lithobraking.spell_effect.resolve(state, 0, ())
     # Bear took 2 damage.
     assert bear.damage == 2
@@ -181,7 +180,7 @@ def test_lithobraking_decline_keeps_lander_and_skips_damage():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(bear)
-    lithobraking = EOE_SPELLS["Lithobraking"]
+    lithobraking = _PRINTINGS["Lithobraking"]
     lithobraking.spell_effect.resolve(state, 0, ())
     # Bear is undamaged.
     assert bear.damage == 0

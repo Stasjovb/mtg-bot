@@ -10,16 +10,17 @@ Targets the biggest holes introduced by recent work:
 
 from mtg_bot.actions import ActivateAbility, apply_action, auto_tap_for_cost
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, STELLAR_SIGHTS_LANDS,
-    SYNTHETIC_CREATURES, parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, parse_mana_cost
 from mtg_bot.combat import (
     _fire_combat_damage_to_player_triggers,
     declare_attackers, declare_blockers, resolve_combat_damage,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -54,7 +55,7 @@ def _put(state, printing, owner_id=0):
 def test_infect_damage_to_player_gives_poison_counters():
     """Animate Inkmoth Nexus, attack with it, opponent takes poison."""
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Inkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Inkmoth Nexus"])
     nexus.summoning_sick = False
     # Activate animation.
     _put(state, BASIC_LANDS["Mountain"])
@@ -76,7 +77,7 @@ def test_infect_damage_to_creature_applies_minus_counters():
     """Inkmoth Nexus attacks, opponent blocks with a Wild Bear. Bear
     takes infect damage as -1/-1 temp bonuses."""
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Inkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Inkmoth Nexus"])
     nexus.summoning_sick = False
     _put(state, BASIC_LANDS["Mountain"])
     apply_action(
@@ -107,13 +108,13 @@ def test_dust_bowl_agent_none_uses_first_fallback():
     """
     state = _new_state()
     state.players[0].agent = None
-    db = _put(state, STELLAR_SIGHTS_LANDS["Dust Bowl"])
+    db = _put(state, _PRINTINGS["Dust Bowl"])
     # Mana for {3}.
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
     # Extra land + target nonbasic on opponent's side.
     _put(state, BASIC_LANDS["Forest"])
-    _put(state, STELLAR_SIGHTS_LANDS["Ancient Tomb"], owner_id=1)
+    _put(state, _PRINTINGS["Ancient Tomb"], owner_id=1)
     apply_action(
         state, 0, ActivateAbility(source_id=db.id, ability_index=0),
     )
@@ -127,7 +128,7 @@ def test_dust_bowl_agent_none_uses_first_fallback():
 def test_scavenger_grounds_sacrifices_desert_to_exile_graveyards():
     """Tests the sacrifice_a_desert cost payment + ExileAllGraveyards."""
     state = _new_state()
-    sg = _put(state, STELLAR_SIGHTS_LANDS["Scavenger Grounds"])
+    sg = _put(state, _PRINTINGS["Scavenger Grounds"])
     _put(state, BASIC_LANDS["Mountain"])
     _put(state, BASIC_LANDS["Mountain"])
     # Populate both graveyards.
@@ -151,7 +152,7 @@ def test_scavenger_grounds_agent_none_fallback():
     """Cover sac_a_desert agent-None branch."""
     state = _new_state()
     state.players[0].agent = None
-    sg = _put(state, STELLAR_SIGHTS_LANDS["Scavenger Grounds"])
+    sg = _put(state, _PRINTINGS["Scavenger Grounds"])
     _put(state, BASIC_LANDS["Mountain"])
     _put(state, BASIC_LANDS["Mountain"])
     apply_action(
@@ -167,7 +168,7 @@ def test_scavenger_grounds_agent_none_fallback():
 def test_mana_confluence_with_no_agent_still_debits_life():
     state = _new_state()
     state.players[0].agent = None
-    conf = _put(state, STELLAR_SIGHTS_LANDS["Mana Confluence"])
+    conf = _put(state, _PRINTINGS["Mana Confluence"])
     apply_action(
         state, 0, ActivateAbility(source_id=conf.id, ability_index=0),
     )
@@ -182,7 +183,7 @@ def test_mana_confluence_with_no_agent_still_debits_life():
 
 def test_terrain_generator_noop_when_no_basic_in_hand():
     state = _new_state()
-    tg = _put(state, STELLAR_SIGHTS_LANDS["Terrain Generator"])
+    tg = _put(state, _PRINTINGS["Terrain Generator"])
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
     # No basic in hand → effect no-ops but the cost is still paid.
@@ -220,7 +221,7 @@ def test_dust_bowl_not_offered_with_only_itself_as_land():
     from mtg_bot import legal_moves
 
     state = _new_state()
-    db = _put(state, STELLAR_SIGHTS_LANDS["Dust Bowl"])
+    db = _put(state, _PRINTINGS["Dust Bowl"])
     # Provide mana via the pool so the mana-cost gate doesn't reject
     # first (we need the sac_a_land gate to be the rejecter).
     from mtg_bot.game import ManaCoin
@@ -335,7 +336,7 @@ def test_slagdrill_not_offered_without_spare_artifact_or_land():
     from mtg_bot.game import ManaCoin
 
     state = _new_state()
-    scrap = _put(state, EOE_CREATURES["Slagdrill Scrapper"])
+    scrap = _put(state, _PRINTINGS["Slagdrill Scrapper"])
     scrap.summoning_sick = False
     # Give mana via the pool so mana cost gate passes.
     state.players[0].mana_pool.extend(
@@ -361,7 +362,7 @@ def test_roving_actuator_fizzle_when_no_legal_copy_target():
     from mtg_bot.effects import RovingActuatorETBEffect
 
     state = _new_state()
-    actuator = _put(state, EOE_CREATURES["Roving Actuator"])
+    actuator = _put(state, _PRINTINGS["Roving Actuator"])
     # Manually resolve with an empty targets tuple — exercises the
     # `if not targets: return` guard path.
     state.resolving_source = actuator
@@ -439,10 +440,10 @@ def test_roving_actuator_resolves_with_graveyard_copy():
     from mtg_bot.effects import RovingActuatorETBEffect
 
     state = _new_state()
-    actuator = _put(state, EOE_CREATURES["Roving Actuator"])
-    # Pick any no-target cheap instant/sorcery from EOE_SPELLS.
+    actuator = _put(state, _PRINTINGS["Roving Actuator"])
+    # Pick any no-target cheap instant/sorcery from _PRINTINGS.
     chosen = None
-    for name, printing in EOE_SPELLS.items():
+    for name, printing in _PRINTINGS.items():
         if (
             (printing.is_instant or printing.is_sorcery)
             and printing.mana_cost.total <= 2

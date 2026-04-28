@@ -3,11 +3,15 @@
 Oracle: Prevent all combat damage that would be dealt this turn.
 """
 
-from mtg_bot.cards import SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers, declare_blockers, resolve_combat_damage
 from mtg_bot.effects import PreventAllCombatDamageThisTurn
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_cleanup_step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -25,7 +29,7 @@ def _put(state, printing, controller, summoning_sick=False):
 
 
 def test_darkness_is_wired_up():
-    d = SPECIAL_GUESTS_EOE["Darkness"]
+    d = _PRINTINGS["Darkness"]
     assert d.is_instant
     assert d.mana_cost_str == "{B}"
     assert isinstance(d.spell_effect, PreventAllCombatDamageThisTurn)
@@ -34,7 +38,7 @@ def test_darkness_is_wired_up():
 def test_resolving_darkness_sets_the_flag():
     state = _new_state()
     assert state.prevent_combat_damage_this_turn is False
-    SPECIAL_GUESTS_EOE["Darkness"].spell_effect.resolve(state, 0, ())
+    _PRINTINGS["Darkness"].spell_effect.resolve(state, 0, ())
     assert state.prevent_combat_damage_this_turn is True
     assert any("combat damage" in line for line in state.log)
 
@@ -76,7 +80,7 @@ def test_damage_resumes_after_flag_reset():
     turn's combat deals damage normally."""
     state = _new_state()
     state.active_player_idx = 0
-    SPECIAL_GUESTS_EOE["Darkness"].spell_effect.resolve(state, 0, ())
+    _PRINTINGS["Darkness"].spell_effect.resolve(state, 0, ())
     run_cleanup_step(state)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], 0)
     declare_attackers(state, [bear.id])

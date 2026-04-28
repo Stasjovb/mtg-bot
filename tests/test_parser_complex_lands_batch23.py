@@ -28,8 +28,11 @@ from __future__ import annotations
 
 from mtg_bot.cards.parser.land_builder import _build_land_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
 from mtg_bot.cards.lands import PLANET_LANDS, UTILITY_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 # ---------------------------------------------------------------------------
@@ -241,42 +244,42 @@ def test_lotus_field_parity():
     """Hexproof keyword + enters tapped + ETB sac-2-lands trigger + 3-any-color tap."""
     parsed = _build_land_printing(_lotus_field_card())
     assert parsed is not None, "Lotus Field was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Lotus Field"]
+    assert parsed == _PRINTINGS["Lotus Field"]
 
 
 def test_mirrorpool_parity():
     """Legendary, tapped, two sac-self activations (copy spell + token copy)."""
     parsed = _build_land_printing(_mirrorpool_card())
     assert parsed is not None, "Mirrorpool was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Mirrorpool"]
+    assert parsed == _PRINTINGS["Mirrorpool"]
 
 
 def test_plaza_of_heroes_parity():
     """Legendary, 4 abilities: {C}, legend-spell any, legend-perm any, pump+grant."""
     parsed = _build_land_printing(_plaza_of_heroes_card())
     assert parsed is not None, "Plaza of Heroes was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    assert parsed == _PRINTINGS["Plaza of Heroes"]
 
 
 def test_thespians_stage_parity():
     """{T}: {C} + {2},{T}: copy target land (retains own ability)."""
     parsed = _build_land_printing(_thespians_stage_card())
     assert parsed is not None, "Thespian's Stage was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Thespian's Stage"]
+    assert parsed == _PRINTINGS["Thespian's Stage"]
 
 
 def test_echoing_deeps_parity():
     """Cave subtype + optional_copy_land_from_graveyard ETB."""
     parsed = _build_land_printing(_echoing_deeps_card())
     assert parsed is not None, "Echoing Deeps was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Echoing Deeps"]
+    assert parsed == _PRINTINGS["Echoing Deeps"]
 
 
 def test_gemstone_caverns_parity():
     """Legendary, taps for any (always-luck-counter simplification)."""
     parsed = _build_land_printing(_gemstone_caverns_card())
     assert parsed is not None, "Gemstone Caverns was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Gemstone Caverns"]
+    assert parsed == _PRINTINGS["Gemstone Caverns"]
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +360,7 @@ def test_all_twelve_claimed_by_parser_source():
 
 
 def test_eos_six_match_static_via_parser_source():
-    """End-to-end: parser source printings equal STELLAR_SIGHTS_LANDS for 6 EoS."""
+    """End-to-end: parser source printings equal _PRINTINGS for 6 EoS."""
     eos_names = [
         "Lotus Field",
         "Mirrorpool",
@@ -368,7 +371,7 @@ def test_eos_six_match_static_via_parser_source():
     ]
     printings = OracleParserCardSource().get_printings()
     for name in eos_names:
-        assert printings[name] == STELLAR_SIGHTS_LANDS[name], (
+        assert printings[name] == _PRINTINGS[name], (
             f"Parity failure for {name!r}"
         )
 

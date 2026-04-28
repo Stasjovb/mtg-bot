@@ -14,10 +14,14 @@ from mtg_bot.actions import (
     drain_stack, put_into_battlefield, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import MonoistCircuitFeederETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -83,8 +87,8 @@ def test_legal_targets_mixes_both_kinds_when_both_present():
 
 def test_resolve_applies_both_pump_and_debuff():
     state = _new_state()
-    m = _put(state, EOE_CREATURES["Monoist Circuit-Feeder"], owner_id=0)
-    art = _put(state, EOE_SPELLS["Memorial Vault"], owner_id=0)  # X=2
+    m = _put(state, _PRINTINGS["Monoist Circuit-Feeder"], owner_id=0)
+    art = _put(state, _PRINTINGS["Memorial Vault"], owner_id=0)  # X=2
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     opp = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     state.resolving_source = m
@@ -113,7 +117,7 @@ def test_etb_fizzles_when_opponent_has_no_creatures():
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     # P1 has NO creatures.
     monoist = state.new_object(
-        EOE_CREATURES["Monoist Circuit-Feeder"], 0, Zone.HAND,
+        _PRINTINGS["Monoist Circuit-Feeder"], 0, Zone.HAND,
     )
     put_into_battlefield(state, monoist, controller_id=0)
     # Drain whatever may be on the stack (artifact-enters observers, etc.).
@@ -132,7 +136,7 @@ def test_etb_fizzles_when_controller_has_no_other_creatures():
     state = _new_state()
     opp = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     monoist = state.new_object(
-        EOE_CREATURES["Monoist Circuit-Feeder"], 0, Zone.HAND,
+        _PRINTINGS["Monoist Circuit-Feeder"], 0, Zone.HAND,
     )
     put_into_battlefield(state, monoist, controller_id=0)
     drain_stack(state)
@@ -162,7 +166,7 @@ def test_etb_fires_when_both_sides_have_creatures():
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     opp = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     monoist = state.new_object(
-        EOE_CREATURES["Monoist Circuit-Feeder"], 0, Zone.HAND,
+        _PRINTINGS["Monoist Circuit-Feeder"], 0, Zone.HAND,
     )
     put_into_battlefield(state, monoist, controller_id=0)
     drain_stack(state)
@@ -176,7 +180,7 @@ def test_etb_fires_when_both_sides_have_creatures():
 
 
 def test_monoist_printing_has_flying_and_etb():
-    m = EOE_CREATURES["Monoist Circuit-Feeder"]
+    m = _PRINTINGS["Monoist Circuit-Feeder"]
     assert "flying" in m.keywords
     assert m.is_artifact
     triggers = {_legacy_or_inferred_key(ab) for ab in m.triggered_abilities}

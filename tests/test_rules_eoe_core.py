@@ -39,6 +39,10 @@ from mtg_bot.turn import (
 
 from tests._rules_helpers import *  # noqa: F401,F403
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 
 # --------------------------------------------------------------------------
@@ -49,10 +53,9 @@ from tests._rules_helpers import *  # noqa: F401,F403
 def test_sorcery_goes_on_stack_at_sorcery_timing_and_resolves_to_graveyard():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -83,13 +86,12 @@ def test_plasma_bolt_void_rider_deals_3_when_void_active():
     turn (or a spell was warped)."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
 
     class _PickFirstAgent(RandomAgent):
         def choose_target(self, state, player_id, legal_targets):
             return legal_targets[0] if legal_targets else None
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -114,13 +116,12 @@ def test_plasma_bolt_deals_2_when_void_inactive():
     warped, Plasma Bolt deals 2."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
 
     class _PickFirstAgent(RandomAgent):
         def choose_target(self, state, player_id, legal_targets):
             return legal_targets[0] if legal_targets else None
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -139,9 +140,8 @@ def test_plasma_bolt_deals_2_when_void_inactive():
 
 
 def test_sorcery_not_legal_outside_main_phase():
-    from mtg_bot.cards import EOE_SPELLS
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -151,9 +151,9 @@ def test_sorcery_not_legal_outside_main_phase():
 
 
 def test_sorcery_not_legal_with_nonempty_stack():
-    from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+    from mtg_bot.cards import SYNTHETIC_CREATURES
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt, SYNTHETIC_CREATURES["Wild Bear"]],
         p0_battlefield=[BASIC_LANDS["Mountain"], BASIC_LANDS["Forest"], BASIC_LANDS["Forest"]],
@@ -198,10 +198,9 @@ def test_spell_requiring_target_is_not_legal_with_no_legal_targets():
 def test_bombard_instant_kills_a_small_creature():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    bombard = EOE_SPELLS["Bombard"]
+    bombard = _PRINTINGS["Bombard"]
     state = _arena(
         p0_hand=[bombard],
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 3,
@@ -227,9 +226,8 @@ def test_bombard_instant_kills_a_small_creature():
 def test_bombard_is_legal_at_instant_speed():
     """Bombard is an instant — legal on the opponent's turn too, outside the
     main phase, with a non-empty stack."""
-    from mtg_bot.cards import EOE_SPELLS
 
-    bombard = EOE_SPELLS["Bombard"]
+    bombard = _PRINTINGS["Bombard"]
     # Set up: it's P1's turn, P0 has priority on their end step.
     state = _arena(
         p0_hand=[bombard],
@@ -251,10 +249,9 @@ def test_bombard_is_legal_at_instant_speed():
 def test_vote_out_destroys_a_creature():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    vote_out = EOE_SPELLS["Vote Out"]
+    vote_out = _PRINTINGS["Vote Out"]
     state = _arena(
         p0_hand=[vote_out],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 4,
@@ -277,10 +274,9 @@ def test_vote_out_destroys_a_creature():
 def test_gravkill_exiles_a_creature():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    gravkill = EOE_SPELLS["Gravkill"]
+    gravkill = _PRINTINGS["Gravkill"]
     state = _arena(
         p0_hand=[gravkill],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 4,
@@ -304,10 +300,9 @@ def test_honor_gives_counter_and_draws_card_as_one_spell():
     the +1/+1 counter and the draw on resolution."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    honor = EOE_SPELLS["Honor"]
+    honor = _PRINTINGS["Honor"]
     state = _arena(
         p0_hand=[honor],
         p0_battlefield=[BASIC_LANDS["Plains"]],
@@ -341,17 +336,15 @@ def test_honor_gives_counter_and_draws_card_as_one_spell():
 
 
 def test_warp_cost_is_parsed_and_stored():
-    from mtg_bot.cards import EOE_CREATURES
 
-    hellkite = EOE_CREATURES["Nova Hellkite"]
+    hellkite = _PRINTINGS["Nova Hellkite"]
     assert hellkite.warp_cost is not None
     assert hellkite.warp_cost_str == "{2}{R}"
 
 
 def test_legal_moves_proposes_warp_cast_when_only_warp_cost_is_payable():
-    from mtg_bot.cards import EOE_CREATURES
 
-    hellkite = EOE_CREATURES["Nova Hellkite"]  # {3}{R}{R} normal, {2}{R} warp
+    hellkite = _PRINTINGS["Nova Hellkite"]  # {3}{R}{R} normal, {2}{R} warp
     state = _arena(
         p0_hand=[hellkite],
         # Three Mountains — enough for warp ({2}{R}), not for normal cost
@@ -375,11 +368,10 @@ def test_legal_moves_proposes_warp_cast_when_only_warp_cost_is_payable():
 def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_end_step_warp_exile
     import random
 
-    colossus = EOE_CREATURES["Bygone Colossus"]  # {9} normal, {3} warp
+    colossus = _PRINTINGS["Bygone Colossus"]  # {9} normal, {3} warp
     state = _arena(
         p0_hand=[colossus],
         p0_battlefield=[BASIC_LANDS["Forest"]] * 3,
@@ -405,10 +397,9 @@ def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
 def test_warped_card_can_be_recast_from_exile_at_normal_cost():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    colossus = EOE_CREATURES["Bygone Colossus"]
+    colossus = _PRINTINGS["Bygone Colossus"]
     state = _arena(
         p0_battlefield=[BASIC_LANDS["Forest"]] * 9,
     )
@@ -439,10 +430,9 @@ def test_warped_card_can_be_recast_from_exile_at_normal_cost():
 def test_warp_cast_creature_dying_before_end_step_does_not_exile():
     """If the warp-cast permanent dies before its end step, the delayed
     exile trigger has no creature to exile — it just dies normally."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import move_off_battlefield, run_end_step_warp_exile
 
-    tiger = EOE_CREATURES["Red Tiger Mechan"]
+    tiger = _PRINTINGS["Red Tiger Mechan"]
     state = _arena()
     # Pretend Red Tiger was cast via warp and entered the battlefield.
     obj = state.new_object(tiger, owner_id=0, zone=Zone.BATTLEFIELD)
@@ -463,10 +453,9 @@ def test_timeline_culler_warp_pays_two_life_from_hand():
     """Warp—{B}, Pay 2 life. Cast from hand pays the mana + life."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    culler = EOE_CREATURES["Timeline Culler"]
+    culler = _PRINTINGS["Timeline Culler"]
     state = _arena(
         p0_hand=[culler],
         p0_battlefield=[BASIC_LANDS["Swamp"]],
@@ -488,10 +477,9 @@ def test_timeline_culler_warp_castable_from_graveyard():
     the graveyard, life is paid."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     import random
 
-    culler = EOE_CREATURES["Timeline Culler"]
+    culler = _PRINTINGS["Timeline Culler"]
     state = _arena(
         p0_battlefield=[BASIC_LANDS["Swamp"]],
         p0_life=20,
@@ -517,9 +505,8 @@ def test_timeline_culler_warp_castable_from_graveyard():
 
 def test_timeline_culler_warp_blocked_when_life_too_low():
     """Can't warp if you'd lose to the life cost."""
-    from mtg_bot.cards import EOE_CREATURES
 
-    culler = EOE_CREATURES["Timeline Culler"]
+    culler = _PRINTINGS["Timeline Culler"]
     state = _arena(
         p0_hand=[culler],
         p0_battlefield=[BASIC_LANDS["Swamp"]],
@@ -538,9 +525,8 @@ def test_timeline_culler_warp_blocked_when_life_too_low():
 
 
 def test_timeline_culler_printing_has_expected_warp_attrs():
-    from mtg_bot.cards import EOE_CREATURES
 
-    c = EOE_CREATURES["Timeline Culler"]
+    c = _PRINTINGS["Timeline Culler"]
     assert c.warp_cost_str == "{B}"
     assert c.warp_additional_life_cost == 2
     assert c.warp_castable_from_graveyard is True
@@ -552,10 +538,9 @@ def test_timeline_culler_printing_has_expected_warp_attrs():
 
 
 def test_unstationed_spacecraft_cannot_attack_or_block():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import eligible_attackers, eligible_blockers
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    sawship = _PRINTINGS["Galvanizing Sawship"]
     state = _arena(p0_battlefield=[sawship])
     obj = state.battlefield[0]
     # Spacecraft not yet stationed: not a creature, can't attack or block.
@@ -565,9 +550,8 @@ def test_unstationed_spacecraft_cannot_attack_or_block():
 
 def test_station_activation_adds_counters_equal_to_crew_power():
     from mtg_bot.actions import ActivateStation
-    from mtg_bot.cards import EOE_CREATURES
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    sawship = _PRINTINGS["Galvanizing Sawship"]
     state = _arena(
         p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],  # 3/3
     )
@@ -583,11 +567,10 @@ def test_station_activation_adds_counters_equal_to_crew_power():
 
 def test_spacecraft_becomes_creature_when_threshold_reached():
     from mtg_bot.actions import ActivateStation
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import eligible_attackers
     from mtg_bot.game import effective_keywords, is_creature_now
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]  # threshold 3
+    sawship = _PRINTINGS["Galvanizing Sawship"]  # threshold 3
     state = _arena(
         p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],  # 3 power
     )
@@ -607,9 +590,8 @@ def test_spacecraft_becomes_creature_when_threshold_reached():
 
 def test_station_cannot_use_summoning_sick_crew():
     from mtg_bot.actions import ActivateStation
-    from mtg_bot.cards import EOE_CREATURES
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    sawship = _PRINTINGS["Galvanizing Sawship"]
     state = _arena(p0_battlefield=[sawship, SYNTHETIC_CREATURES["Wild Bear"]])
     ship = state.battlefield[0]
     crew = state.battlefield[1]
@@ -625,9 +607,8 @@ def test_station_cannot_use_spacecraft_as_crew():
     """'Tap another creature' — the spacecraft can't crew itself even if
     it happens to be a creature (via an earlier stationing)."""
     from mtg_bot.actions import ActivateStation
-    from mtg_bot.cards import EOE_CREATURES
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    sawship = _PRINTINGS["Galvanizing Sawship"]
     state = _arena(p0_battlefield=[sawship])
     ship = state.battlefield[0]
 
@@ -637,9 +618,8 @@ def test_station_cannot_use_spacecraft_as_crew():
 
 def test_station_not_legal_at_instant_speed():
     from mtg_bot.actions import ActivateStation
-    from mtg_bot.cards import EOE_CREATURES
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]
+    sawship = _PRINTINGS["Galvanizing Sawship"]
     state = _arena(
         p0_battlefield=[sawship, SYNTHETIC_CREATURES["Forest Giant"]],
         step=Step.END,
@@ -651,12 +631,11 @@ def test_station_not_legal_at_instant_speed():
 def test_stationed_spacecraft_takes_combat_damage_and_can_die():
     """A Spacecraft that's a creature (stationed) dies like any other when
     damage ≥ effective toughness."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import declare_attackers, resolve_combat_damage
     from mtg_bot.game import is_creature_now
     from mtg_bot.turn import state_based_actions
 
-    sawship = EOE_CREATURES["Galvanizing Sawship"]  # 6/5 once stationed
+    sawship = _PRINTINGS["Galvanizing Sawship"]  # 6/5 once stationed
     state = _arena(
         p0_battlefield=[sawship],
         p1_battlefield=[SYNTHETIC_CREATURES["Great Wurm"]],  # 6/6
@@ -690,10 +669,9 @@ def test_stationed_spacecraft_takes_combat_damage_and_can_die():
 
 
 def test_skittermaw_has_menace_and_void_end_step_ability():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.effects.predicates import YOU, Controlled, Event
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     assert "menace" in mw.keywords
     assert len(mw.triggered_abilities) == 1
     ab = mw.triggered_abilities[0]
@@ -703,10 +681,9 @@ def test_skittermaw_has_menace_and_void_end_step_ability():
 
 
 def test_skittermaw_does_not_fire_when_void_inactive():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     state = _arena(p0_battlefield=[mw])
     skitter = state.battlefield[0]
     # No nonland permanent left BF this turn, no spell warped — Void inactive.
@@ -716,10 +693,9 @@ def test_skittermaw_does_not_fire_when_void_inactive():
 
 def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     state = _arena(p0_battlefield=[mw])
     skitter = state.battlefield[0]
     # A creature died earlier this turn — Void is active.
@@ -731,10 +707,9 @@ def test_skittermaw_grows_when_a_nonland_permanent_left_this_turn():
 
 def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     state = _arena(p0_battlefield=[mw])
     skitter = state.battlefield[0]
     state.spell_warped_this_turn = True
@@ -746,10 +721,9 @@ def test_skittermaw_grows_when_a_spell_was_warped_this_turn():
 def test_skittermaw_only_fires_on_its_controllers_end_step():
     """End-step triggers fire on the active player's end step. A Skittermaw
     under P1 shouldn't grow when it's P0's end step."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     state = _arena(p1_battlefield=[mw])  # under P1
     skitter = state.battlefield[0]
     state.active_player_idx = 0  # P0 is the active player
@@ -763,10 +737,9 @@ def test_void_end_step_trigger_stacks_across_turns():
     """Over multiple turns with Void active each time, Skittermaw piles up
     counters — sanity that counters persist across turns."""
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.turn import run_beginning_of_end_step_triggers, run_cleanup_step
 
-    mw = EOE_CREATURES["Insatiable Skittermaw"]
+    mw = _PRINTINGS["Insatiable Skittermaw"]
     state = _arena(p0_battlefield=[mw])
     skitter = state.battlefield[0]
 
@@ -781,10 +754,9 @@ def test_void_end_step_trigger_stacks_across_turns():
 def test_decode_transmissions_base_mode_self_life_loss():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    decode = EOE_SPELLS["Decode Transmissions"]
+    decode = _PRINTINGS["Decode Transmissions"]
     state = _arena(
         p0_hand=[decode],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 3,
@@ -814,10 +786,9 @@ def test_decode_transmissions_base_mode_self_life_loss():
 def test_decode_transmissions_void_mode_opponents_lose_life():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    decode = EOE_SPELLS["Decode Transmissions"]
+    decode = _PRINTINGS["Decode Transmissions"]
     state = _arena(
         p0_hand=[decode],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 3,
@@ -844,10 +815,9 @@ def test_decode_transmissions_void_mode_opponents_lose_life():
 def test_hymn_of_the_faller_base_mode():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    hymn = EOE_SPELLS["Hymn of the Faller"]
+    hymn = _PRINTINGS["Hymn of the Faller"]
     state = _arena(
         p0_hand=[hymn],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
@@ -872,10 +842,9 @@ def test_hymn_of_the_faller_base_mode():
 def test_hymn_of_the_faller_void_mode_draws_extra():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     import random
 
-    hymn = EOE_SPELLS["Hymn of the Faller"]
+    hymn = _PRINTINGS["Hymn of the Faller"]
     state = _arena(
         p0_hand=[hymn],
         p0_battlefield=[BASIC_LANDS["Swamp"]] * 2,
@@ -905,10 +874,10 @@ def test_hymn_of_the_faller_void_mode_draws_extra():
 
 def test_gravpack_monoist_dies_creates_tapped_robot_token():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
-    grav = EOE_CREATURES["Gravpack Monoist"]
+    grav = _PRINTINGS["Gravpack Monoist"]
     state = _arena(p0_battlefield=[grav])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="graveyard")
@@ -926,10 +895,10 @@ def test_gravpack_monoist_dies_creates_tapped_robot_token():
 
 def test_dies_trigger_does_not_fire_when_exiled_instead():
     """Being exiled isn't dying — dies triggers must not fire."""
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import move_off_battlefield
 
-    grav = EOE_CREATURES["Gravpack Monoist"]
+    grav = _PRINTINGS["Gravpack Monoist"]
     state = _arena(p0_battlefield=[grav])
     obj = state.battlefield[0]
     move_off_battlefield(state, obj, destination="exile")
@@ -943,10 +912,10 @@ def test_dies_trigger_does_not_fire_when_exiled_instead():
 
 def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     from mtg_bot.turn import state_based_actions
 
-    grav = EOE_CREATURES["Gravpack Monoist"]
+    grav = _PRINTINGS["Gravpack Monoist"]
     state = _arena(p0_battlefield=[grav])
     obj = state.battlefield[0]
     obj.damage = 2  # lethal for 2/1
@@ -963,11 +932,10 @@ def test_dies_trigger_fires_via_state_based_actions_lethal_damage():
 
 def test_dies_trigger_fires_in_combat_full_flow():
     from mtg_bot.actions import drain_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import resolve_combat_damage
     from mtg_bot.turn import state_based_actions
 
-    grav = EOE_CREATURES["Gravpack Monoist"]  # 2/1 flying
+    grav = _PRINTINGS["Gravpack Monoist"]  # 2/1 flying
     state = _arena(
         p0_battlefield=[grav],
         p1_battlefield=[SYNTHETIC_CREATURES["Scale Drake"]],  # 2/3 flying
@@ -1000,11 +968,10 @@ def test_dies_trigger_fires_in_combat_full_flow():
 
 
 def test_tannuk_grants_haste_to_other_creatures_you_control():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import eligible_attackers
     from mtg_bot.game import effective_keywords
 
-    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    tannuk = _PRINTINGS["Tannuk, Steadfast Second"]
     state = _arena(p0_battlefield=[tannuk, SYNTHETIC_CREATURES["Wild Bear"]])
     t_obj = next(o for o in state.battlefield if o.printing.name.startswith("Tannuk"))
     bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
@@ -1019,20 +986,18 @@ def test_tannuk_grants_haste_to_other_creatures_you_control():
 
 def test_tannuk_does_not_give_itself_haste():
     """The anthem says "Other creatures you control" — Tannuk is excluded."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords
 
-    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    tannuk = _PRINTINGS["Tannuk, Steadfast Second"]
     state = _arena(p0_battlefield=[tannuk])
     t_obj = state.battlefield[0]
     assert "haste" not in effective_keywords(state, t_obj)
 
 
 def test_tannuk_does_not_grant_haste_to_opponents_creatures():
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords
 
-    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    tannuk = _PRINTINGS["Tannuk, Steadfast Second"]
     state = _arena(
         p0_battlefield=[tannuk],
         p1_battlefield=[SYNTHETIC_CREATURES["Wild Bear"]],
@@ -1043,11 +1008,10 @@ def test_tannuk_does_not_grant_haste_to_opponents_creatures():
 
 def test_haste_anthem_stops_when_tannuk_leaves_the_battlefield():
     """Static abilities only apply while the source is on the battlefield."""
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_keywords
     from mtg_bot.turn import move_off_battlefield
 
-    tannuk = EOE_CREATURES["Tannuk, Steadfast Second"]
+    tannuk = _PRINTINGS["Tannuk, Steadfast Second"]
     state = _arena(p0_battlefield=[tannuk, SYNTHETIC_CREATURES["Wild Bear"]])
     t_obj = next(o for o in state.battlefield if o.printing.name.startswith("Tannuk"))
     bear = next(o for o in state.battlefield if o.printing.name == "Wild Bear")
@@ -1061,10 +1025,10 @@ def test_haste_anthem_stops_when_tannuk_leaves_the_battlefield():
 def test_samis_curiosity_gains_life_and_creates_lander():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+    from mtg_bot.cards import TOKEN_PRINTINGS
     import random
 
-    sami = EOE_SPELLS["Sami's Curiosity"]
+    sami = _PRINTINGS["Sami's Curiosity"]
     state = _arena(
         p0_hand=[sami],
         p0_battlefield=[BASIC_LANDS["Forest"]],
@@ -1142,11 +1106,10 @@ def test_lander_activation_not_legal_without_enough_mana():
 def test_dual_sun_adepts_activated_ability_pumps_allies():
     from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power
     import random
 
-    adepts = EOE_CREATURES["Dual-Sun Adepts"]
+    adepts = _PRINTINGS["Dual-Sun Adepts"]
     state = _arena(
         p0_battlefield=[adepts, SYNTHETIC_CREATURES["Wild Bear"]]
                         + [BASIC_LANDS["Plains"]] * 5,
@@ -1166,11 +1129,10 @@ def test_dual_sun_adepts_activated_ability_pumps_allies():
 def test_zealous_display_pumps_only_controllers_creatures():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_power
     import random
 
-    zeal = EOE_SPELLS["Zealous Display"]
+    zeal = _PRINTINGS["Zealous Display"]
     state = _arena(
         p0_hand=[zeal],
         p0_battlefield=[SYNTHETIC_CREATURES["Wild Bear"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"], BASIC_LANDS["Plains"]],
@@ -1191,11 +1153,10 @@ def test_zealous_display_pumps_only_controllers_creatures():
 
 def test_cleanup_wipes_eot_pumps():
     from mtg_bot.actions import ActivateAbility, resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_power
     from mtg_bot.turn import run_cleanup_step
 
-    adepts = EOE_CREATURES["Dual-Sun Adepts"]
+    adepts = _PRINTINGS["Dual-Sun Adepts"]
     state = _arena(
         p0_battlefield=[adepts] + [BASIC_LANDS["Plains"]] * 5,
     )
@@ -1221,7 +1182,6 @@ def test_illvoi_infiltrator_combat_damage_trigger_goes_on_stack():
     name the trigger so it's clear where the eventual draw came from.
     """
     from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.combat import _resolve_damage_step
 
     state = _arena()
@@ -1233,7 +1193,7 @@ def test_illvoi_infiltrator_combat_damage_trigger_goes_on_stack():
             )
         )
     inf = state.new_object(
-        EOE_CREATURES["Illvoi Infiltrator"], owner_id=0,
+        _PRINTINGS["Illvoi Infiltrator"], owner_id=0,
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(inf)

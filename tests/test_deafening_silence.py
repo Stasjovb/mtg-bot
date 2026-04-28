@@ -5,12 +5,14 @@ Oracle: Each player can't cast more than one noncreature spell each turn.
 
 from mtg_bot.actions import CastSpell, apply_action
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_SPELLS, SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -45,7 +47,7 @@ def _pile_white_mana(state: GameState, player_id: int, count: int):
 
 def _put_enchantment(state: GameState, player_id: int):
     obj = state.new_object(
-        SPECIAL_GUESTS_EOE["Deafening Silence"], player_id,
+        _PRINTINGS["Deafening Silence"], player_id,
         Zone.BATTLEFIELD,
     )
     state.battlefield.append(obj)
@@ -53,7 +55,7 @@ def _put_enchantment(state: GameState, player_id: int):
 
 
 def test_deafening_silence_is_wired_up():
-    ds = SPECIAL_GUESTS_EOE["Deafening Silence"]
+    ds = _PRINTINGS["Deafening Silence"]
     assert ds.mana_cost_str == "{W}"
     assert "Enchantment" in ds.card_types
     assert ds.restricts_noncreature_spells_to_one_per_turn is True
@@ -65,7 +67,7 @@ def test_noncreature_cast_increments_counter():
     state = _new_state()
     p = state.player_by_id(0)
 
-    sorcery = next(card for card in EOE_SPELLS.values() if card.is_sorcery)
+    sorcery = next(card for card in _PRINTINGS.values() if card.is_sorcery)
     c = state.new_object(sorcery, 0, Zone.HAND)
     p.hand.append(c)
     # Put enough mana on board to cover any reasonable sorcery.
@@ -113,7 +115,7 @@ def test_deafening_silence_blocks_second_noncreature_cast():
     # Already cast one noncreature this turn.
     p.noncreature_spells_cast_this_turn = 1
     # Put a sorcery in hand with plenty of mana.
-    sorcery = next(card for card in EOE_SPELLS.values() if card.is_sorcery)
+    sorcery = next(card for card in _PRINTINGS.values() if card.is_sorcery)
     sorc_card = state.new_object(sorcery, 0, Zone.HAND)
     p.hand.append(sorc_card)
     _pile_mana(state, 0, 10)
@@ -158,7 +160,7 @@ def test_first_noncreature_cast_is_still_legal():
     _put_enchantment(state, 0)
     p = state.player_by_id(0)
     assert p.noncreature_spells_cast_this_turn == 0
-    sorcery = next(card for card in EOE_SPELLS.values() if card.is_sorcery)
+    sorcery = next(card for card in _PRINTINGS.values() if card.is_sorcery)
     sorc_card = state.new_object(sorcery, 0, Zone.HAND)
     p.hand.append(sorc_card)
     _pile_mana(state, 0, 10)
@@ -183,7 +185,7 @@ def test_restriction_applies_globally_to_all_players():
     _put_enchantment(state, 1)  # DS under OPPONENT's control
     p = state.player_by_id(0)
     p.noncreature_spells_cast_this_turn = 1
-    sorcery = next(card for card in EOE_SPELLS.values() if card.is_sorcery)
+    sorcery = next(card for card in _PRINTINGS.values() if card.is_sorcery)
     sorc_card = state.new_object(sorcery, 0, Zone.HAND)
     p.hand.append(sorc_card)
     _pile_mana(state, 0, 10)
@@ -225,7 +227,7 @@ def test_no_restriction_without_deafening_silence():
     state = _new_state()
     p = state.player_by_id(0)
     p.noncreature_spells_cast_this_turn = 3  # high, but no DS in play
-    sorcery = next(card for card in EOE_SPELLS.values() if card.is_sorcery)
+    sorcery = next(card for card in _PRINTINGS.values() if card.is_sorcery)
     sorc_card = state.new_object(sorcery, 0, Zone.HAND)
     p.hand.append(sorc_card)
     _pile_mana(state, 0, 10)

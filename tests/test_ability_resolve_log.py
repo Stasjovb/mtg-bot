@@ -11,11 +11,13 @@ from mtg_bot.actions import (
     ActivateAbility, apply_action, drain_stack, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -61,12 +63,12 @@ def test_activated_ability_logs_as_activated_when_resolving():
     Equipment`` activated ability. Activate it, drain the stack, and
     confirm the log line says 'activated' (not 'triggered')."""
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     captain.summoning_sick = False
     # Stock library with at least one Equipment to fetch.
     p = state.players[0]
     p.library.append(state.new_object(
-        EOE_CREATURES["Auxiliary Boosters"], 0, Zone.LIBRARY,
+        _PRINTINGS["Auxiliary Boosters"], 0, Zone.LIBRARY,
     ))
     _mana_for(state, "{4}{W}{W}")
     apply_action(
@@ -105,7 +107,7 @@ def test_triggered_ability_still_logs_as_triggered():
     from mtg_bot.actions import _trigger_etb_abilities
 
     state = _new_state()
-    captain = _put(state, EOE_CREATURES["Honored Knight-Captain"])
+    captain = _put(state, _PRINTINGS["Honored Knight-Captain"])
     log_before = list(state.log)
     _trigger_etb_abilities(state, captain)
     drain_stack(state)

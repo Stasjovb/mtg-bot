@@ -3,7 +3,7 @@ creature + Void-conditional end-step sacrifice. Also exercises the new
 enchanted_creature_attacks trigger on auras."""
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
@@ -13,6 +13,10 @@ from mtg_bot.effects import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_end_step_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -82,7 +86,7 @@ def test_effect_describe():
 
 def test_sac_fires_when_void_inactive():
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Chorale of the Void"])
+    aura = _put(state, _PRINTINGS["Chorale of the Void"])
     state.resolving_source = aura
     try:
         SacrificeSelfUnlessVoidActive().resolve(state, 0, ())
@@ -93,7 +97,7 @@ def test_sac_fires_when_void_inactive():
 
 def test_sac_skips_when_void_active():
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Chorale of the Void"])
+    aura = _put(state, _PRINTINGS["Chorale of the Void"])
     state.permanent_left_battlefield_this_turn = True  # Void active
     state.resolving_source = aura
     try:
@@ -113,7 +117,7 @@ def test_aura_on_attacker_fires_enchanted_attacks_trigger():
     # P0's bear enchanted with Chorale.
     my_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     my_bear.summoning_sick = False
-    aura = _put(state, EOE_SPELLS["Chorale of the Void"], owner_id=0, attached_to=my_bear.id)
+    aura = _put(state, _PRINTINGS["Chorale of the Void"], owner_id=0, attached_to=my_bear.id)
     # Enemy has a creature in graveyard.
     enemy_bear = _put_in_graveyard(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     # My bear attacks → Chorale's trigger should reanimate enemy bear
@@ -130,7 +134,7 @@ def test_chorale_end_step_sacrifice_integration():
     state = _new_state()
     my_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     aura = _put(
-        state, EOE_SPELLS["Chorale of the Void"], owner_id=0,
+        state, _PRINTINGS["Chorale of the Void"], owner_id=0,
         attached_to=my_bear.id,
     )
     # Void inactive → end step sacrifices Chorale.
@@ -140,7 +144,7 @@ def test_chorale_end_step_sacrifice_integration():
 
 
 def test_chorale_printing_has_both_triggers():
-    c = EOE_SPELLS["Chorale of the Void"]
+    c = _PRINTINGS["Chorale of the Void"]
     triggers = {_legacy_or_inferred_key(ab, c) for ab in c.triggered_abilities}
     assert "enchanted_creature_attacks" in triggers
     assert "beginning_of_end_step" in triggers

@@ -3,10 +3,14 @@ grave-and-robots sac-self activated ability."""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import PinnacleStarcageETBEffect, PinnacleStarcageSacEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -29,13 +33,13 @@ def _put(state, printing, owner_id=0):
 
 def test_etb_exiles_small_creatures_and_artifacts():
     state = _new_state()
-    cage = _put(state, EOE_SPELLS["Pinnacle Starcage"])
+    cage = _put(state, _PRINTINGS["Pinnacle Starcage"])
     # MV 2 creature — will be exiled.
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     # MV 1 artifact — will be exiled.
-    block = _put(state, EOE_SPELLS["Nutrient Block"])
+    block = _put(state, _PRINTINGS["Nutrient Block"])
     # MV 4 artifact — will NOT be exiled.
-    vault = _put(state, EOE_SPELLS["Memorial Vault"])
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
     state.resolving_source = cage
     try:
         PinnacleStarcageETBEffect().resolve(state, 0, ())
@@ -48,7 +52,7 @@ def test_etb_exiles_small_creatures_and_artifacts():
 
 def test_etb_skips_lands_and_the_source_itself():
     state = _new_state()
-    cage = _put(state, EOE_SPELLS["Pinnacle Starcage"])
+    cage = _put(state, _PRINTINGS["Pinnacle Starcage"])
     from mtg_bot.cards import BASIC_LANDS
     forest = _put(state, BASIC_LANDS["Forest"])
     state.resolving_source = cage
@@ -72,7 +76,7 @@ def test_etb_describe():
 
 def test_sac_moves_exiled_to_graveyards_and_creates_robots():
     state = _new_state()
-    cage = _put(state, EOE_SPELLS["Pinnacle Starcage"])
+    cage = _put(state, _PRINTINGS["Pinnacle Starcage"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.resolving_source = cage
     try:
@@ -99,7 +103,7 @@ def test_starcage_cage_leaving_releases_exiled_back_to_battlefield():
     """If Starcage is destroyed (not sacrificed via the activated
     ability), the exiled-until-leaves bookkeeping returns cards."""
     state = _new_state()
-    cage = _put(state, EOE_SPELLS["Pinnacle Starcage"])
+    cage = _put(state, _PRINTINGS["Pinnacle Starcage"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.resolving_source = cage
     try:

@@ -13,12 +13,14 @@ the resolution order via ``choose_modes``.
 
 from mtg_bot.actions import CastSpell
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import ModalChooseOne
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -60,7 +62,7 @@ class _PickModes(Agent):
 
 
 def test_scour_for_scrap_is_wired_with_or_both():
-    pr = EOE_SPELLS["Scour for Scrap"]
+    pr = _PRINTINGS["Scour for Scrap"]
     assert pr.is_instant
     assert pr.mana_cost_str == "{3}{U}"
     assert isinstance(pr.spell_effect, ModalChooseOne)
@@ -71,7 +73,7 @@ def test_scour_for_scrap_is_wired_with_or_both():
 def test_scour_describe_uses_and_or_joiner():
     """``or_both=True`` modes describe as AND/OR rather than OR — surfaces
     the "or both" semantics in logs / UI."""
-    pr = EOE_SPELLS["Scour for Scrap"]
+    pr = _PRINTINGS["Scour for Scrap"]
     desc = pr.spell_effect.describe()
     assert "AND/OR" in desc
 
@@ -88,14 +90,14 @@ def test_pick_only_mode_0_resolves_only_search():
     state.players[0].agent = agent
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     artifact_in_gy = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact_in_gy)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(state, 0, ())
     assert artifact_in_lib in p.hand
     # Graveyard artifact stays in graveyard (mode 1 not chosen).
@@ -112,14 +114,14 @@ def test_pick_only_mode_1_resolves_only_graveyard_return():
     state.players[0].agent = agent
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     artifact_in_gy = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact_in_gy)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(
         state, 0, (("graveyard_artifact", artifact_in_gy.id),),
     )
@@ -142,14 +144,14 @@ def test_pick_both_modes_resolves_both_effects():
     state.players[0].agent = agent
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     artifact_in_gy = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact_in_gy)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(
         state, 0, (("graveyard_artifact", artifact_in_gy.id),),
     )
@@ -169,14 +171,14 @@ def test_agent_mode_order_preserved_at_resolution():
     state.players[0].agent = agent
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     artifact_in_gy = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact_in_gy)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(
         state, 0, (("graveyard_artifact", artifact_in_gy.id),),
     )
@@ -224,7 +226,7 @@ def test_legal_actions_exposes_scour_as_castable():
     p.mana_pool.append(ManaCoin(color="any"))
     p.mana_pool.append(ManaCoin(color="any"))
     p.mana_pool.append(ManaCoin(color="any"))
-    scour = state.new_object(EOE_SPELLS["Scour for Scrap"], 0, Zone.HAND)
+    scour = state.new_object(_PRINTINGS["Scour for Scrap"], 0, Zone.HAND)
     p.hand.append(scour)
     # Need a step that allows instants. Default new state is set up for
     # main-phase priority on the active player; verify by listing legal
@@ -247,7 +249,7 @@ def test_legal_actions_castable_with_empty_graveyard():
     state.priority_player_idx = 0
     for _ in range(4):
         p.mana_pool.append(ManaCoin(color="U" if _ == 0 else "any"))
-    scour = state.new_object(EOE_SPELLS["Scour for Scrap"], 0, Zone.HAND)
+    scour = state.new_object(_PRINTINGS["Scour for Scrap"], 0, Zone.HAND)
     p.hand.append(scour)
     # Empty graveyard — mode 1 has no legal target. Mode 0 still untargeted.
     actions = legal_actions(state, 0)
@@ -270,11 +272,11 @@ def test_pick_both_but_graveyard_target_missing_fizzles_only_that_mode():
     state.players[0].agent = agent
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     # No artifact in graveyard — pass empty target tuple.
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(state, 0, ())
     # Mode 0 still fired.
     assert artifact_in_lib in p.hand
@@ -298,10 +300,10 @@ def test_choose_modes_returns_invalid_indices_falls_back_to_mode_0():
     state.players[0].agent = GarbageAgent()
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(state, 0, ())
     # Default fallback to mode 0 (search).
     assert artifact_in_lib in p.hand
@@ -316,10 +318,10 @@ def test_choose_modes_dedupes_repeated_indices():
     p = state.players[0]
     # Two copies of an artifact in library — if mode 0 ran multiple times
     # it would fetch twice. With dedup it fetches once.
-    a1 = state.new_object(EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY)
-    a2 = state.new_object(EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY)
+    a1 = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY)
+    a2 = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY)
     p.library.extend([a1, a2])
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(state, 0, ())
     # Exactly one of them got fetched.
     fetched = [c for c in (a1, a2) if c in p.hand]
@@ -334,14 +336,14 @@ def test_resolve_with_no_agent_falls_back_to_mode_0():
     state.players[0].agent = None
     p = state.players[0]
     artifact_in_lib = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact_in_lib)
     artifact_in_gy = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact_in_gy)
-    scour = EOE_SPELLS["Scour for Scrap"]
+    scour = _PRINTINGS["Scour for Scrap"]
     scour.spell_effect.resolve(
         state, 0, (("graveyard_artifact", artifact_in_gy.id),),
     )
@@ -360,7 +362,7 @@ def test_resolve_with_no_agent_falls_back_to_mode_0():
 
 def test_or_both_target_count_range_for_scour():
     """Scour: mode 0 untargeted, mode 1 needs 1 target → (0, 1)."""
-    pr = EOE_SPELLS["Scour for Scrap"]
+    pr = _PRINTINGS["Scour for Scrap"]
     effect = pr.spell_effect
     assert effect.requires_target() is False
     assert effect.target_count_range() == (0, 1)

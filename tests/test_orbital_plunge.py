@@ -1,15 +1,15 @@
 """Tests for Orbital Plunge's excess-damage Lander rider."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     DealDamageToTargetCreatureWithExcessLanderRider,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -119,7 +119,7 @@ def test_orbital_plunge_legal_targets_includes_all_creatures():
 
 
 def test_orbital_plunge_card_printing_wired():
-    plunge = EOE_SPELLS["Orbital Plunge"]
+    plunge = _PRINTINGS["Orbital Plunge"]
     assert isinstance(
         plunge.spell_effect,
         DealDamageToTargetCreatureWithExcessLanderRider,

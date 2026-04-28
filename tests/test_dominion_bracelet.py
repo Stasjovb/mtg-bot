@@ -8,13 +8,14 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS, DOMINION_BRACELET_GRANTED_ABILITY, EOE_CREATURES, EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, DOMINION_BRACELET_GRANTED_ABILITY, SYNTHETIC_CREATURES
 from mtg_bot.effects import ControlTargetOpponentNextTurn
 from mtg_bot.game import GameState, Player, Zone, effective_activated_abilities
 from mtg_bot.turn import Step, run_cleanup_step, run_untap_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -51,7 +52,7 @@ def _put(state, printing, owner_id=0, attached_to=None):
 
 
 def test_bracelet_printing_metadata():
-    b = EOE_SPELLS["The Dominion Bracelet"]
+    b = _PRINTINGS["The Dominion Bracelet"]
     assert "Legendary" in b.supertypes
     assert b.equipment_bonuses[:2] == (1, 1)
     assert b.grants_control_opponent_ability_when_equipped is True
@@ -74,7 +75,7 @@ def test_granted_ability_shape():
 def test_equipped_creature_gains_granted_ability():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     abilities = effective_activated_abilities(state, bear)
     # Wild Bear has no printed abilities; the Bracelet appends one.
     assert len(abilities) == 1
@@ -84,7 +85,7 @@ def test_equipped_creature_gains_granted_ability():
 def test_unequipped_creature_does_not_gain_granted_ability():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    _put(state, EOE_SPELLS["The Dominion Bracelet"])  # not attached
+    _put(state, _PRINTINGS["The Dominion Bracelet"])  # not attached
     abilities = effective_activated_abilities(state, bear)
     assert all(a is not DOMINION_BRACELET_GRANTED_ABILITY for a in abilities)
 
@@ -97,7 +98,7 @@ def test_unequipped_creature_does_not_gain_granted_ability():
 def test_x_reduction_from_equipped_power_cuts_generic():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     eff = _effective_ability_mana_cost(
         state, bear, DOMINION_BRACELET_GRANTED_ABILITY,
     )
@@ -111,7 +112,7 @@ def test_x_reduction_never_below_zero():
     # Build a fake huge-power creature via counters so 15 - power < 0.
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.plus_one_counters = 100
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     eff = _effective_ability_mana_cost(
         state, bear, DOMINION_BRACELET_GRANTED_ABILITY,
     )
@@ -129,7 +130,7 @@ def test_ability_not_offered_at_instant_speed():
     state.priority_player_idx = 1
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.summoning_sick = False
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     for _ in range(20):
         _put(state, BASIC_LANDS["Forest"])
     actions = legal_moves(state)
@@ -146,7 +147,7 @@ def test_ability_offered_at_sorcery_speed_when_payable():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])  # 2/2
     bear.summoning_sick = False
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     # Need {15} - (2 printed + 1 bracelet) = {12} = 12 lands.
     for _ in range(12):
         _put(state, BASIC_LANDS["Forest"])
@@ -161,7 +162,7 @@ def test_ability_not_offered_when_insufficient_mana():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.summoning_sick = False
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id)
     # Only 5 lands; need 12 with Bear as source.
     for _ in range(5):
         _put(state, BASIC_LANDS["Forest"])
@@ -182,7 +183,7 @@ def test_activation_exiles_bracelet_and_schedules_override():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bear.summoning_sick = False
     bracelet = _put(
-        state, EOE_SPELLS["The Dominion Bracelet"], attached_to=bear.id,
+        state, _PRINTINGS["The Dominion Bracelet"], attached_to=bear.id,
     )
     for _ in range(12):
         _put(state, BASIC_LANDS["Forest"])
@@ -271,7 +272,7 @@ def test_effective_ability_cost_no_reduction_with_zero_power():
     zero = make_creature("Zero Power", "{G}", 0, 3)
     host = state.new_object(zero, 0, Zone.BATTLEFIELD)
     state.battlefield.append(host)
-    _put(state, EOE_SPELLS["The Dominion Bracelet"], attached_to=host.id)
+    _put(state, _PRINTINGS["The Dominion Bracelet"], attached_to=host.id)
     eff = _effective_ability_mana_cost(
         state, host, DOMINION_BRACELET_GRANTED_ABILITY,
     )
@@ -304,7 +305,7 @@ def test_ability_not_offered_when_bracelet_not_attached():
     bear.summoning_sick = False
     # Exile the bracelet straight to exile — no attachment.
     br = state.new_object(
-        EOE_SPELLS["The Dominion Bracelet"], 0, Zone.EXILE,
+        _PRINTINGS["The Dominion Bracelet"], 0, Zone.EXILE,
     )
     state.players[0].exile.append(br)
     for _ in range(15):

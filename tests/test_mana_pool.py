@@ -7,11 +7,15 @@ from mtg_bot.actions import (
     auto_tap_for_cost, can_pay_cost,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.cards import parse_mana_cost
 from mtg_bot.effects import AddManaToPool, AddNManaOfChosenColor
 from mtg_bot.game import GameState, ManaCoin, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -179,7 +183,7 @@ def test_cleanup_empties_mana_pool():
 
 def test_mana_ability_activation_adds_coin_immediately():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = False
     apply_action(state, 0, ActivateAbility(source_id=ss.id, ability_index=0))
     # Mana coin added; no stack item.
@@ -193,7 +197,7 @@ def test_mana_ability_activation_adds_coin_immediately():
 
 def test_mana_ability_not_offered_when_source_tapped():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = False
     ss.tapped = True
     actions = legal_moves(state)
@@ -210,14 +214,13 @@ def test_mana_ability_not_offered_when_source_tapped():
 
 def test_steelswarm_mana_pays_for_artifact_spell():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = False
     # Activate Steelswarm → {U} with artifact-spell restriction.
     apply_action(state, 0, ActivateAbility(source_id=ss.id, ability_index=0))
     # Put a Nutrient Block ({1}) in hand and a Forest (for generic).
     _put(state, BASIC_LANDS["Forest"])
-    from mtg_bot.cards import EOE_SPELLS
-    nutrient = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.HAND)
+    nutrient = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.HAND)
     state.players[0].hand.append(nutrient)
     # Nutrient Block is an artifact with CMC 1. Cost is {1} — need 1
     # generic. The Steelswarm {U} coin can pay for artifact spells, so
@@ -237,7 +240,7 @@ def test_steelswarm_mana_pays_for_artifact_spell():
 
 def test_steelswarm_mana_rejected_for_non_artifact_spell():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = False
     apply_action(state, 0, ActivateAbility(source_id=ss.id, ability_index=0))
     # Try to cast a non-artifact creature: Wild Bear {1}{G}. We need
@@ -251,7 +254,7 @@ def test_steelswarm_mana_rejected_for_non_artifact_spell():
 
 def test_all_fates_any_color_mana_pays_any_colored_cost():
     state = _new_state()
-    scroll = _put(state, EOE_SPELLS["All-Fates Scroll"])
+    scroll = _put(state, _PRINTINGS["All-Fates Scroll"])
     scroll.summoning_sick = False
     apply_action(
         state, 0, ActivateAbility(source_id=scroll.id, ability_index=0),
@@ -261,7 +264,7 @@ def test_all_fates_any_color_mana_pays_any_colored_cost():
 
 
 def test_steelswarm_printing_has_mana_ability():
-    ss = EOE_CREATURES["Steelswarm Operator"]
+    ss = _PRINTINGS["Steelswarm Operator"]
     # Steelswarm prints two mana abilities: {T}: Add {U} (artifact-
     # spell-restricted) and {T}: Add {U}{U} (artifact-activation-
     # restricted). Both share the {T} cost, so only one fires per
@@ -271,7 +274,7 @@ def test_steelswarm_printing_has_mana_ability():
 
 
 def test_steelswarm_printing_two_mana_abilities_have_correct_shapes():
-    ss = EOE_CREATURES["Steelswarm Operator"]
+    ss = _PRINTINGS["Steelswarm Operator"]
     a0, a1 = ss.activated_abilities
     # First: {T}: Add {U}, restricted to artifact_spell.
     assert a0.cost.tap_self is True
@@ -285,7 +288,7 @@ def test_steelswarm_printing_two_mana_abilities_have_correct_shapes():
 
 def test_steelswarm_second_ability_adds_two_blue_artifact_activation_coins():
     state = _new_state()
-    ss = _put(state, EOE_CREATURES["Steelswarm Operator"])
+    ss = _put(state, _PRINTINGS["Steelswarm Operator"])
     ss.summoning_sick = False
     apply_action(
         state, 0, ActivateAbility(source_id=ss.id, ability_index=1),

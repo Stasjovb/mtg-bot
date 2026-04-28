@@ -12,9 +12,13 @@ discount).
 """
 
 from mtg_bot.actions import apply_cost_reductions
-from mtg_bot.cards import EOE_CREATURES, ExternalCostReduction
+from mtg_bot.cards import ExternalCostReduction
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -39,7 +43,7 @@ def _put(state, printing, owner_id=0):
 
 
 def test_sami_printing_has_external_affinity_reduction():
-    p = EOE_CREATURES["Sami, Wildcat Captain"]
+    p = _PRINTINGS["Sami, Wildcat Captain"]
     assert p.is_legendary is True
     assert "double strike" in p.keywords
     assert "vigilance" in p.keywords
@@ -55,9 +59,9 @@ def test_sami_printing_has_external_affinity_reduction():
 
 def test_no_artifacts_means_no_discount():
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"])
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"])
     # Cast something else — Rayblade Trooper {2}{G}.
-    target = EOE_CREATURES["Rayblade Trooper"]
+    target = _PRINTINGS["Rayblade Trooper"]
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     # Sami herself isn't an artifact, so artifact_count = 0; full price.
     assert reduced.generic == target.mana_cost.generic
@@ -65,20 +69,20 @@ def test_no_artifacts_means_no_discount():
 
 def test_one_artifact_grants_one_less():
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"])
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"])
     # Drop one artifact: Auxiliary Boosters (a {4}{W} Equipment).
-    _put(state, EOE_CREATURES["Auxiliary Boosters"])
-    target = EOE_CREATURES["Rayblade Trooper"]  # base {2}{G}
+    _put(state, _PRINTINGS["Auxiliary Boosters"])
+    target = _PRINTINGS["Rayblade Trooper"]  # base {2}{G}
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == target.mana_cost.generic - 1
 
 
 def test_three_artifacts_grants_three_less():
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"])
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"])
     for _ in range(3):
-        _put(state, EOE_CREATURES["Auxiliary Boosters"])
-    target = EOE_CREATURES["Rayblade Trooper"]  # base {2}{G} — generic 2
+        _put(state, _PRINTINGS["Auxiliary Boosters"])
+    target = _PRINTINGS["Rayblade Trooper"]  # base {2}{G} — generic 2
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     # 2 generic - 3 reduction → clamped to 0 (colored pips unaffected).
     assert reduced.generic == 0
@@ -87,13 +91,13 @@ def test_three_artifacts_grants_three_less():
 
 def test_opponent_artifacts_do_not_count():
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], owner_id=0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], owner_id=0)
     # Opponent's artifacts shouldn't affect P0's discount.
     opp_artifact = state.new_object(
-        EOE_CREATURES["Auxiliary Boosters"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Auxiliary Boosters"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(opp_artifact)
-    target = EOE_CREATURES["Rayblade Trooper"]
+    target = _PRINTINGS["Rayblade Trooper"]
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == target.mana_cost.generic
 
@@ -103,8 +107,8 @@ def test_sami_off_battlefield_means_no_discount():
     state = _new_state()
     # Put two artifacts but no Sami.
     for _ in range(2):
-        _put(state, EOE_CREATURES["Auxiliary Boosters"])
-    target = EOE_CREATURES["Rayblade Trooper"]
+        _put(state, _PRINTINGS["Auxiliary Boosters"])
+    target = _PRINTINGS["Rayblade Trooper"]
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == target.mana_cost.generic
 
@@ -112,11 +116,11 @@ def test_sami_off_battlefield_means_no_discount():
 def test_other_players_sami_does_not_help_us():
     state = _new_state()
     sami = state.new_object(
-        EOE_CREATURES["Sami, Wildcat Captain"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Sami, Wildcat Captain"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(sami)
-    _put(state, EOE_CREATURES["Auxiliary Boosters"])  # P0 artifact
-    target = EOE_CREATURES["Rayblade Trooper"]
+    _put(state, _PRINTINGS["Auxiliary Boosters"])  # P0 artifact
+    target = _PRINTINGS["Rayblade Trooper"]
     # P0 is casting; their Sami is not on the battlefield, only P1's
     # is — externals only apply for the caster's own permanents.
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
@@ -125,10 +129,10 @@ def test_other_players_sami_does_not_help_us():
 
 def test_phased_out_sami_does_not_apply():
     state = _new_state()
-    sami = _put(state, EOE_CREATURES["Sami, Wildcat Captain"])
+    sami = _put(state, _PRINTINGS["Sami, Wildcat Captain"])
     sami.phased_out = True
-    _put(state, EOE_CREATURES["Auxiliary Boosters"])
-    target = EOE_CREATURES["Rayblade Trooper"]
+    _put(state, _PRINTINGS["Auxiliary Boosters"])
+    target = _PRINTINGS["Rayblade Trooper"]
     reduced = apply_cost_reductions(target, state, 0, target.mana_cost)
     assert reduced.generic == target.mana_cost.generic
 
@@ -143,12 +147,12 @@ def test_affinity_stacks_with_targets_own_reductions():
     in play, both apply. Sami's external is applied first (before any
     own-reduction)."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"])
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"])
     # Two artifacts → -2 from Sami's affinity.
     for _ in range(2):
-        _put(state, EOE_CREATURES["Auxiliary Boosters"])
+        _put(state, _PRINTINGS["Auxiliary Boosters"])
     # Gigastorm Titan has its own -3 reduction when conditions met.
-    titan = EOE_CREATURES["Gigastorm Titan"]
+    titan = _PRINTINGS["Gigastorm Titan"]
     state.players[0].spells_cast_this_turn = 0
     reduced = apply_cost_reductions(titan, state, 0, titan.mana_cost)
     # Titan's own reduction may or may not fire depending on state; we

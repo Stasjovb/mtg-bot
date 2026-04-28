@@ -2,13 +2,13 @@
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import FamishedWorldsireETBEffect
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _DevourAllAgent(Agent):
@@ -69,7 +69,7 @@ def test_famished_worldsire_devour_zero_lands_sacrificed():
     """With _NoDevourAgent, the creature enters with its printed P/T."""
     state = _new_state(_NoDevourAgent())
     ws = state.new_object(
-        EOE_SPELLS["Famished Worldsire"], 0, Zone.HAND,
+        _PRINTINGS["Famished Worldsire"], 0, Zone.HAND,
     )
     state.players[0].hand.append(ws)
     put_into_battlefield(state, ws, controller_id=0)
@@ -85,7 +85,7 @@ def test_famished_worldsire_devour_sacrifices_lands_adds_counters():
     f2 = state.new_object(BASIC_LANDS["Forest"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(f2)
     ws = state.new_object(
-        EOE_SPELLS["Famished Worldsire"], 0, Zone.HAND,
+        _PRINTINGS["Famished Worldsire"], 0, Zone.HAND,
     )
     p.hand.append(ws)
     put_into_battlefield(state, ws, controller_id=0)
@@ -96,7 +96,7 @@ def test_famished_worldsire_devour_sacrifices_lands_adds_counters():
 
 
 def test_famished_worldsire_has_devour_land_multiplier_three():
-    assert EOE_SPELLS["Famished Worldsire"].devour_land_multiplier == 3
+    assert _PRINTINGS["Famished Worldsire"].devour_land_multiplier == 3
 
 
 def test_famished_worldsire_etb_puts_library_lands_onto_battlefield():
@@ -112,7 +112,7 @@ def test_famished_worldsire_etb_puts_library_lands_onto_battlefield():
     p.library.append(bear)
     # Famished Worldsire on battlefield with power 6 (printed).
     ws = state.new_object(
-        EOE_SPELLS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(ws)
     state.resolving_source = ws
@@ -136,7 +136,7 @@ def test_famished_worldsire_etb_x_equals_power():
         p.library.append(land)
         lands.append(land)
     ws = state.new_object(
-        EOE_SPELLS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
     ws.plus_one_counters = 4  # effective power 10
     state.battlefield.append(ws)
@@ -159,7 +159,7 @@ def test_famished_worldsire_etb_no_source_noop():
 def test_famished_worldsire_etb_zero_power_noop():
     state = _new_state()
     ws = state.new_object(
-        EOE_SPELLS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
     # Override printed power via temp bonus to force 0.
     ws.temp_power_bonus = -6

@@ -20,7 +20,10 @@ from mtg_bot.cards.parser.land_builder import (
     _build_land_printing,
     _try_build_restricted_mana_land,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def test_eldrazi_temple_matches_static():
@@ -37,7 +40,7 @@ def test_eldrazi_temple_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Eldrazi Temple"]
+    assert parsed == _PRINTINGS["Eldrazi Temple"]
 
 
 def test_skips_unknown_restriction_phrase():

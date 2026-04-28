@@ -19,7 +19,10 @@ from mtg_bot.cards.parser.land_builder import (
     _build_land_printing,
     _try_build_tap_sac_utility_land,
 )
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _strip_mine_card() -> dict:
@@ -38,7 +41,7 @@ def _strip_mine_card() -> dict:
 def test_strip_mine_matches_static():
     parsed = _build_land_printing(_strip_mine_card())
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Strip Mine"]
+    assert parsed == _PRINTINGS["Strip Mine"]
 
 
 def test_petrified_field_matches_static():
@@ -55,7 +58,7 @@ def test_petrified_field_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Petrified Field"]
+    assert parsed == _PRINTINGS["Petrified Field"]
 
 
 def test_dust_bowl_matches_static():
@@ -71,7 +74,7 @@ def test_dust_bowl_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Dust Bowl"]
+    assert parsed == _PRINTINGS["Dust Bowl"]
 
 
 def test_high_market_matches_static():
@@ -87,7 +90,7 @@ def test_high_market_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["High Market"]
+    assert parsed == _PRINTINGS["High Market"]
 
 
 def test_scavenger_grounds_matches_static():
@@ -103,7 +106,7 @@ def test_scavenger_grounds_matches_static():
     }
     parsed = _build_land_printing(card)
     assert parsed is not None
-    assert parsed == STELLAR_SIGHTS_LANDS["Scavenger Grounds"]
+    assert parsed == _PRINTINGS["Scavenger Grounds"]
 
 
 def test_skips_unknown_sac_self_body():

@@ -1,12 +1,7 @@
 """Tests for The Seriema's 7+ tapped-legendary-indestructible static."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import StaticScope
 from mtg_bot.game import (
     GameState,
@@ -14,6 +9,10 @@ from mtg_bot.game import (
     Zone,
     effective_keywords,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -29,7 +28,7 @@ def _legendary_bear(state, controller_id):
     # me just use an EOE legendary creature. Dyadrine is {X}{G}{W} and
     # is Legendary Artifact Creature.
     return state.new_object(
-        EOE_SPELLS["Dyadrine, Synthesis Amalgam"], controller_id,
+        _PRINTINGS["Dyadrine, Synthesis Amalgam"], controller_id,
         Zone.BATTLEFIELD,
     )
 
@@ -37,7 +36,7 @@ def _legendary_bear(state, controller_id):
 def test_seriema_7plus_tier_grants_indestructible_to_tapped_legendaries():
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 7  # 7+ tier active
     state.battlefield.append(seriema)
@@ -51,7 +50,7 @@ def test_seriema_7plus_tier_grants_indestructible_to_tapped_legendaries():
 def test_seriema_tier_below_7_no_grant():
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 6
     state.battlefield.append(seriema)
@@ -65,7 +64,7 @@ def test_seriema_tier_below_7_no_grant():
 def test_seriema_doesnt_grant_to_untapped_legendaries():
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 7
     state.battlefield.append(seriema)
@@ -79,7 +78,7 @@ def test_seriema_doesnt_grant_to_untapped_legendaries():
 def test_seriema_doesnt_grant_to_non_legendaries():
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 7
     state.battlefield.append(seriema)
@@ -95,7 +94,7 @@ def test_seriema_doesnt_grant_to_self():
     """Source is excluded by the OTHER_* scope."""
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 7
     seriema.tapped = True
@@ -108,7 +107,7 @@ def test_seriema_doesnt_grant_to_self():
 def test_seriema_doesnt_grant_to_opponents_legendaries():
     state = _new_state()
     seriema = state.new_object(
-        EOE_CREATURES["The Seriema"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
     seriema.charge_counters = 7
     state.battlefield.append(seriema)

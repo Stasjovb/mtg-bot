@@ -2,18 +2,17 @@
 
 from mtg_bot.actions import ActivateAbility, _activate_ability, apply_action, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     ActivationCost,
     TapAnotherTargetCreature,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state_with_lands(num_plains: int = 0, num_forests: int = 0):
@@ -40,7 +39,7 @@ def test_tap_another_target_creature_excludes_self():
     """Starport Security's tap-another activated ability can't target itself."""
     state = _new_state_with_lands()
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(security)
     # Put another creature on the battlefield — the only legal target.
@@ -102,7 +101,7 @@ def test_starport_security_activation_only_legal_with_another_creature():
     state = _new_state_with_lands(num_plains=4)
     state.step = __import__("mtg_bot.turn", fromlist=["Step"]).Step.PRECOMBAT_MAIN
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     security.summoning_sick = False
     state.battlefield.append(security)
@@ -115,7 +114,7 @@ def test_starport_security_activation_legal_with_another_creature():
     state = _new_state_with_lands(num_plains=4)
     state.step = __import__("mtg_bot.turn", fromlist=["Step"]).Step.PRECOMBAT_MAIN
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     security.summoning_sick = False
     state.battlefield.append(security)
@@ -145,7 +144,7 @@ def test_sunstar_chaplain_activation_requires_counter_creature():
     state = _new_state_with_lands(num_plains=2)
     state.step = Step.PRECOMBAT_MAIN
     chaplain = state.new_object(
-        EOE_CREATURES["Sunstar Chaplain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Sunstar Chaplain"], 0, Zone.BATTLEFIELD,
     )
     chaplain.summoning_sick = False
     state.battlefield.append(chaplain)
@@ -194,7 +193,7 @@ def test_remove_plus_one_counter_cost_picks_from_options_with_agent():
     state.players[0].agent = PickFirstAgent()
     state.step = Step.PRECOMBAT_MAIN
     chaplain = state.new_object(
-        EOE_CREATURES["Sunstar Chaplain"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Sunstar Chaplain"], 0, Zone.BATTLEFIELD,
     )
     chaplain.summoning_sick = False
     chaplain.plus_one_counters = 3
@@ -233,7 +232,7 @@ def test_starport_security_full_cost_without_counter_creature():
 
     state = _new_state_with_lands(num_plains=3)
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(security)
     # Another creature on the battlefield, but no +1/+1 counters
@@ -256,7 +255,7 @@ def test_starport_security_reduced_cost_with_counter_creature():
 
     state = _new_state_with_lands()
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(security)
     bear = state.new_object(
@@ -279,7 +278,7 @@ def test_starport_security_reduction_only_counts_own_creatures():
 
     state = _new_state_with_lands()
     security = state.new_object(
-        EOE_CREATURES["Starport Security"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starport Security"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(security)
     # Opponent controls a creature with a counter. Should not reduce.

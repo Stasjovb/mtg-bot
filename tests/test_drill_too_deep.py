@@ -17,11 +17,7 @@ Covers:
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    EOE_SPELLS,
-    PLANET_LANDS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import PLANET_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.cards.base import make_artifact, make_spacecraft
 from mtg_bot.effects import (
     DestroyTargetArtifact,
@@ -29,6 +25,10 @@ from mtg_bot.effects import (
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ModeAgent(Agent):
@@ -68,7 +68,7 @@ def test_drill_too_deep_mode_0_charges_spacecraft():
     ship = state.new_object(_SPACECRAFT_PRINTING, 0, Zone.BATTLEFIELD)
     state.battlefield.append(ship)
 
-    spell = EOE_SPELLS["Drill Too Deep"]
+    spell = _PRINTINGS["Drill Too Deep"]
     spell.spell_effect.resolve(state, 0, (("permanent", ship.id),))
 
     assert ship.charge_counters == 5
@@ -84,7 +84,7 @@ def test_drill_too_deep_mode_0_charges_planet_land():
     state.battlefield.append(planet)
     assert "Planet" in planet.printing.subtypes
 
-    spell = EOE_SPELLS["Drill Too Deep"]
+    spell = _PRINTINGS["Drill Too Deep"]
     spell.spell_effect.resolve(state, 0, (("permanent", planet.id),))
 
     assert planet.charge_counters == 5
@@ -134,7 +134,7 @@ def test_drill_too_deep_mode_1_destroys_artifact():
     art = state.new_object(_OTHER_ARTIFACT, 1, Zone.BATTLEFIELD)
     state.battlefield.append(art)
 
-    spell = EOE_SPELLS["Drill Too Deep"]
+    spell = _PRINTINGS["Drill Too Deep"]
     spell.spell_effect.resolve(state, 0, (("permanent", art.id),))
 
     assert art not in state.battlefield
@@ -146,7 +146,7 @@ def test_drill_too_deep_mode_1_destroys_artifact():
 
 
 def test_drill_too_deep_modal_target_count_range_is_one_to_one():
-    spell = EOE_SPELLS["Drill Too Deep"]
+    spell = _PRINTINGS["Drill Too Deep"]
     effect = spell.spell_effect
     assert isinstance(effect, ModalChooseOne)
     assert effect.requires_target() is True
@@ -167,7 +167,7 @@ def test_drill_too_deep_modal_legal_targets_unions_both_pools():
     opp_art = state.new_object(_OTHER_ARTIFACT, 1, Zone.BATTLEFIELD)
     state.battlefield.append(opp_art)
 
-    spell = EOE_SPELLS["Drill Too Deep"]
+    spell = _PRINTINGS["Drill Too Deep"]
     legal = spell.spell_effect.legal_targets(state, 0)
     # Mode 0: own ship + own planet. Mode 1: any artifact (own ship is
     # an artifact too — Spacecraft is an artifact subtype).

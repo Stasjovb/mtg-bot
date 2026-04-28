@@ -2,7 +2,7 @@
 
 Each test verifies that ``OracleParserCardSource`` produces a
 ``CardPrinting`` identical to the one in the static registry
-(``STELLAR_SIGHTS_LANDS``).  Failure means the bespoke dispatch table in
+(``_PRINTINGS``).  Failure means the bespoke dispatch table in
 ``land_builder._BESPOKE_EOS_LANDS`` has drifted from the canonical
 ``make_utility_land`` call in ``stellar_sights.py``.
 
@@ -22,7 +22,10 @@ from __future__ import annotations
 
 from mtg_bot.cards.parser.land_builder import _build_land_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.stellar_sights import STELLAR_SIGHTS_LANDS
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 # ---------------------------------------------------------------------------
@@ -141,49 +144,49 @@ def test_cathedral_of_war_parity():
     """enters_tapped=True + exalted keyword — no activated abilities."""
     parsed = _build_land_printing(_cathedral_of_war_card())
     assert parsed is not None, "Cathedral of War was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Cathedral of War"]
+    assert parsed == _PRINTINGS["Cathedral of War"]
 
 
 def test_mutavault_parity():
     """{1}: becomes 2/2 with all creature types UEOT."""
     parsed = _build_land_printing(_mutavault_card())
     assert parsed is not None, "Mutavault was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Mutavault"]
+    assert parsed == _PRINTINGS["Mutavault"]
 
 
 def test_blinkmoth_nexus_parity():
     """Three abilities: animation, explicit tap-for-C, Blinkmoth pump."""
     parsed = _build_land_printing(_blinkmoth_nexus_card())
     assert parsed is not None, "Blinkmoth Nexus was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"]
+    assert parsed == _PRINTINGS["Blinkmoth Nexus"]
 
 
 def test_inkmoth_nexus_parity():
     """Animation with flying + infect keywords."""
     parsed = _build_land_printing(_inkmoth_nexus_card())
     assert parsed is not None, "Inkmoth Nexus was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Inkmoth Nexus"]
+    assert parsed == _PRINTINGS["Inkmoth Nexus"]
 
 
 def test_grove_of_the_burnwillows_parity():
     """Dual mana: colorless tap + R/G tap with opponent life-gain rider."""
     parsed = _build_land_printing(_grove_of_the_burnwillows_card())
     assert parsed is not None, "Grove of the Burnwillows was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"]
+    assert parsed == _PRINTINGS["Grove of the Burnwillows"]
 
 
 def test_swarmyard_parity():
     """{1},{T}: Regenerate typed creature (Insect/Rat/Spider/Squirrel/Snake)."""
     parsed = _build_land_printing(_swarmyard_card())
     assert parsed is not None, "Swarmyard was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Swarmyard"]
+    assert parsed == _PRINTINGS["Swarmyard"]
 
 
 def test_contested_war_zone_parity():
     """Combat-damage trigger + attacking-pump activation."""
     parsed = _build_land_printing(_contested_war_zone_card())
     assert parsed is not None, "Contested War Zone was not claimed"
-    assert parsed == STELLAR_SIGHTS_LANDS["Contested War Zone"]
+    assert parsed == _PRINTINGS["Contested War Zone"]
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +223,6 @@ def test_all_seven_match_static_via_parser_source():
     ]
     printings = OracleParserCardSource().get_printings()
     for name in names:
-        assert printings[name] == STELLAR_SIGHTS_LANDS[name], (
+        assert printings[name] == _PRINTINGS[name], (
             f"Parity failure for {name!r}"
         )

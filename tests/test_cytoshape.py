@@ -48,6 +48,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import Step, destroy, run_cleanup_step
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 class _PickFirst(Agent):
     def choose_target(self, state, player_id, legal_targets):
@@ -88,9 +92,8 @@ def test_cytoshape_printing_shape():
 
 
 def test_cytoshape_not_in_eoe_pool():
-    from mtg_bot.cards.registry import NONLAND_POOL, all_printings
-    assert "Cytoshape" not in NONLAND_POOL
-    assert "Cytoshape" not in all_printings()
+    assert "Cytoshape" not in _PRINTINGS
+    assert "Cytoshape" not in _PRINTINGS
 
 
 # ---------- Resolution ----------

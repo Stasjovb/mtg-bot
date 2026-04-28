@@ -6,15 +6,14 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import ExileTargetCreatureUntilSourceLeaves
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state_with_plains(n: int = 2):
@@ -84,7 +83,7 @@ def test_hardlight_containment_resolves_with_artifact_target():
     )
     state.battlefield.append(bear)
     aura_card = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.HAND,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.HAND,
     )
     p0.hand.append(aura_card)
     apply_action(state, 0, CastSpell(aura_card.id))
@@ -110,7 +109,7 @@ def test_hardlight_containment_releases_exiled_when_leaves():
     )
     state.battlefield.append(bear)
     aura_card = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.HAND,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.HAND,
     )
     p0.hand.append(aura_card)
     apply_action(state, 0, CastSpell(aura_card.id))
@@ -137,7 +136,7 @@ def test_hardlight_containment_fizzles_without_artifact_target():
     )
     state.battlefield.append(bear)
     aura_card = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.HAND,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.HAND,
     )
     p0.hand.append(aura_card)
     apply_action(state, 0, CastSpell(aura_card.id))
@@ -149,8 +148,7 @@ def test_hardlight_containment_fizzles_without_artifact_target():
 
 
 def test_hardlight_containment_aura_enchant_type_wired():
-    from mtg_bot.cards import EOE_SPELLS
-    p = EOE_SPELLS["Hardlight Containment"]
+    p = _PRINTINGS["Hardlight Containment"]
     assert p.is_aura
     assert p.aura_enchant_type == "artifact"
 
@@ -162,7 +160,7 @@ def test_hardlight_containment_aura_enchant_type_wired():
 
 def test_hardlight_containment_printing_grants_ward_one():
     """The printing carries the granted-ward field with the correct cost."""
-    p = EOE_SPELLS["Hardlight Containment"]
+    p = _PRINTINGS["Hardlight Containment"]
     assert p.attached_grants_ward_str == "{1}"
     assert p.attached_grants_ward_cost is not None
     assert p.attached_grants_ward_cost.generic == 1
@@ -182,7 +180,7 @@ def test_effective_ward_cost_grants_ward_to_enchanted_artifact():
     assert label == ""
     # Attach the Aura.
     aura = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
     )
     aura.attached_to = robot.id
     state.battlefield.append(aura)
@@ -201,7 +199,7 @@ def test_apply_ward_check_counters_opponent_spell_when_unpaid():
     robot = state.new_object(TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(robot)
     aura = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
     )
     aura.attached_to = robot.id
     state.battlefield.append(aura)
@@ -221,7 +219,7 @@ def test_apply_ward_check_autopays_when_opponent_has_mana():
     robot = state.new_object(TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(robot)
     aura = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
     )
     aura.attached_to = robot.id
     state.battlefield.append(aura)
@@ -250,7 +248,7 @@ def test_ward_grant_disappears_when_aura_leaves():
     )
     state.battlefield.append(bear)
     aura_card = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.HAND,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.HAND,
     )
     p0.hand.append(aura_card)
     apply_action(state, 0, CastSpell(aura_card.id))
@@ -285,7 +283,7 @@ def test_ward_grant_does_not_fire_for_owner_spells():
     robot = state.new_object(TOKEN_PRINTINGS["Robot"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(robot)
     aura = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
     )
     aura.attached_to = robot.id
     state.battlefield.append(aura)
@@ -300,20 +298,19 @@ def test_ward_grant_stacks_with_printed_ward():
     """If a permanent already has printed ward and an Aura grants more
     ward on top, both costs are required at cast time."""
     from mtg_bot.actions import _apply_ward_check
-    from mtg_bot.cards import EOE_CREATURES
     from mtg_bot.game import effective_ward_cost
 
     state = _new_state_with_plains(n=0)
     # Mouth of the Storm has printed ward {2}.
     mouth = state.new_object(
-        EOE_CREATURES["Mouth of the Storm"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Mouth of the Storm"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mouth)
     # Attach Hardlight Containment (granted ward {1}) directly. Note:
     # in real play the Aura only enchants artifacts; here we're just
     # exercising the ward-stacking helper, so we attach it manually.
     aura = state.new_object(
-        EOE_SPELLS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Hardlight Containment"], 0, Zone.BATTLEFIELD,
     )
     aura.attached_to = mouth.id
     state.battlefield.append(aura)
@@ -343,7 +340,6 @@ def test_apply_ward_check_skips_player_targets():
 def test_effective_ward_cost_skips_attached_non_ward_auras():
     """An Aura attached to the permanent that doesn't grant ward must
     not contribute anything to the effective ward cost."""
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import effective_ward_cost
 
     state = _new_state_with_plains(n=0)
@@ -354,7 +350,7 @@ def test_effective_ward_cost_skips_attached_non_ward_auras():
     # Tractor Beam is an Aura with NO ward grant — verify it doesn't
     # add anything when attached to a creature.
     tb = state.new_object(
-        EOE_SPELLS["Tractor Beam"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tractor Beam"], 0, Zone.BATTLEFIELD,
     )
     tb.attached_to = creature.id
     state.battlefield.append(tb)
