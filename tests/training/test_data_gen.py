@@ -291,9 +291,13 @@ def test_parallel_with_pimc_config_factory():
 
 import pytest  # noqa: E402
 
-from mtg_bot.cards import build_mono_color_deck  # noqa: E402
+from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.decks import Deck  # noqa: E402
 from mtg_bot.training.data_gen import _sample_decks_for_game  # noqa: E402
+
+
+def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
+    return get_active_source().build_mono_color_deck(color, seed=seed)
 
 
 def _two_player_pool() -> list[Deck]:

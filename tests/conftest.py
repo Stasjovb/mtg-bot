@@ -1,10 +1,9 @@
 """Session-scoped card-source swap driven by ``MTG_BOT_CARD_SOURCE``.
 
-Default (env var unset) leaves the production ``StaticCardSource``
-in place, so ``pytest`` runs unchanged. Set ``MTG_BOT_CARD_SOURCE=parser``
-to point the engine at the parser source for the session — most
-simulation tests will fail until parser coverage is complete; that's
-the intended acceptance gate.
+Default (env var unset) uses the production ``OracleParserCardSource``,
+so ``pytest`` runs unchanged. The env-var hook is preserved as a seam
+for any future alternative sources, but the parser source is the only
+production source today.
 """
 
 from __future__ import annotations

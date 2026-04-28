@@ -188,31 +188,43 @@ def test_on_snapshot_sees_draw_for_max_turns_game():
 
 import pytest  # noqa: E402
 
-from mtg_bot.cards import (  # noqa: E402
-    BASIC_LANDS, EOE_CREATURES, NONLAND_POOL, all_printings,
-    build_mono_color_deck,
-)
+from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.simulate import setup_game  # noqa: E402
+
+
+def build_mono_color_deck(color: str, seed: int | None = None) -> list[str]:
+    return get_active_source().build_mono_color_deck(color, seed=seed)
 
 
 def _two_color_deck(c1: str, c2: str) -> list[str]:
     """Build a 60-card deck with 12 of each basic land for c1/c2 +
-    36 nonland cards in either color (or colorless). Used to smoke-
-    test that 2-color mana payment works end-to-end through the
-    engine — the open question before adopting 17lands data."""
+    36 nonland cards split evenly across the two colors (12 each)
+    plus 12 colorless. Used to smoke-test that 2-color mana payment
+    works end-to-end through the engine — the open question before
+    adopting 17lands data."""
     color_to_basic = {"W": "Plains", "U": "Island", "B": "Swamp",
                       "R": "Mountain", "G": "Forest"}
-    cards = [
-        name for name, p in NONLAND_POOL.items()
-        if (c1 in p.mana_cost.colors
-            or c2 in p.mana_cost.colors
-            or not p.mana_cost.colors)
+    pool = get_active_source().get_printings()
+    c1_cards = [
+        name for name, p in pool.items()
+        if "Land" not in p.card_types and c1 in p.mana_cost.colors
     ]
-    if len(cards) < 18:
+    c2_cards = [
+        name for name, p in pool.items()
+        if "Land" not in p.card_types and c2 in p.mana_cost.colors
+    ]
+    colorless_cards = [
+        name for name, p in pool.items()
+        if "Land" not in p.card_types and not p.mana_cost.colors
+    ]
+    if not c1_cards or not c2_cards or not colorless_cards:
         raise AssertionError(
-            f"not enough {c1}/{c2} cards in NONLAND_POOL: {len(cards)}"
+            f"not enough {c1}/{c2}/colorless cards: "
+            f"{len(c1_cards)}/{len(c2_cards)}/{len(colorless_cards)}"
         )
-    deck = [cards[i % len(cards)] for i in range(36)]
+    deck = [c1_cards[i % len(c1_cards)] for i in range(12)]
+    deck.extend([c2_cards[i % len(c2_cards)] for i in range(12)])
+    deck.extend([colorless_cards[i % len(colorless_cards)] for i in range(12)])
     deck.extend([color_to_basic[c1]] * 12)
     deck.extend([color_to_basic[c2]] * 12)
     return deck

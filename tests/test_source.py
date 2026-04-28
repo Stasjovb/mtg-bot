@@ -71,11 +71,15 @@ def test_card_source_protocol_is_runtime_compatible():
     assert source.build_mono_color_deck("G") == []
 
 
-def test_card_source_from_env_default_is_static():
-    assert isinstance(card_source_from_env(None), StaticCardSource)
-    assert isinstance(card_source_from_env(""), StaticCardSource)
+def test_card_source_from_env_default_is_parser():
+    assert isinstance(card_source_from_env(None), OracleParserCardSource)
+    assert isinstance(card_source_from_env(""), OracleParserCardSource)
+    assert isinstance(card_source_from_env("parser"), OracleParserCardSource)
+    assert isinstance(card_source_from_env("PARSER"), OracleParserCardSource)
+
+
+def test_card_source_from_env_static_value_returns_static():
     assert isinstance(card_source_from_env("static"), StaticCardSource)
-    assert isinstance(card_source_from_env("STATIC"), StaticCardSource)
 
 
 def test_card_source_from_env_parser_returns_oracle_parser():

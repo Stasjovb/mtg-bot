@@ -12,6 +12,7 @@ every name in that tuple.
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 from mtg_bot.cards.base import CardPrinting
@@ -89,7 +90,29 @@ class OracleParserCardSource:
     def build_mono_color_deck(
         self, color: str, seed: int | None = None
     ) -> list[str]:
-        raise NotImplementedError(
-            "parser source does not yet implement deck building; "
-            "implement once it claims a deckable pool"
-        )
+        """60 cards: 24 basics of the chosen color + 36 non-land cards in that
+        color (or colorless, since colorless generic costs can be paid from any
+        basic land). Drawn from the parser's claimed pool."""
+        if color not in _COLOR_TO_BASIC:
+            raise ValueError(f"unknown color: {color}")
+        rng = random.Random(seed)
+        land_name = _COLOR_TO_BASIC[color]
+        candidates = [
+            name
+            for name, p in self._printings.items()
+            if "Land" not in p.card_types
+            and (color in p.mana_cost.colors or not p.mana_cost.colors)
+        ]
+        if not candidates:
+            raise ValueError(f"no creatures in color {color}")
+        deck: list[str] = [
+            candidates[i % len(candidates)] for i in range(36)
+        ]
+        deck.extend([land_name] * 24)
+        rng.shuffle(deck)
+        return deck
+
+
+_COLOR_TO_BASIC: dict[str, str] = {
+    "W": "Plains", "U": "Island", "B": "Swamp", "R": "Mountain", "G": "Forest",
+}

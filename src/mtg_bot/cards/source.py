@@ -58,7 +58,9 @@ class StaticCardSource:
         return build_mono_color_deck(color, seed=seed)
 
 
-_active_source: CardSource = StaticCardSource()
+from mtg_bot.cards.parser_source import OracleParserCardSource
+
+_active_source: CardSource = OracleParserCardSource()
 
 
 def get_active_source() -> CardSource:
@@ -83,12 +85,10 @@ def card_source_from_env(value: str | None) -> CardSource:
       fail until parser coverage is complete. That's the intended
       acceptance gate.
     """
-    normalized = (value or "static").lower()
+    normalized = (value or "parser").lower()
     if normalized == "static":
         return StaticCardSource()
     if normalized == "parser":
-        from mtg_bot.cards.parser_source import OracleParserCardSource
-
         return OracleParserCardSource()
     raise ValueError(
         f"unknown MTG_BOT_CARD_SOURCE value: {value!r} "
