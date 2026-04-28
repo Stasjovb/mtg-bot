@@ -178,11 +178,17 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Edge Rover: real card is an Artifact Creature (we don't model the
-        # dual-type difference — it's a 2/2 reach for our purposes).
+        # Edge Rover: 2/2 Artifact Creature — Robot Scout. Reach.
         # "When this creature dies, each player creates a Lander token."
+        # Artifact-creature dual type is now expressed via the
+        # ``artifact=True`` flag plus the printed Robot/Scout subtypes
+        # so parser parity holds (the parser's type-line slice fills
+        # both ``card_types`` and ``subtypes`` from the oracle type
+        # line directly — see ``parser.type_line``).
         make_creature(
             "Edge Rover", "{G}", 2, 2,
+            artifact=True,
+            subtypes=("Robot", "Scout"),
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2552,9 +2558,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Remnant Elemental: 0/4 Reach + Landfall +2/+0 UEOT self-pump.
+        # Remnant Elemental: 0/4 Elemental. Reach + Landfall +2/+0 UEOT
+        # self-pump. ``Elemental`` subtype matches the printed type
+        # line (parser-side fills it from the type-line slice).
         make_creature(
             "Remnant Elemental", "{1}{R}", 0, 4,
+            subtypes=("Elemental",),
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2563,9 +2572,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Icecave Crasher: 4/4 Trample + Landfall +1/+0 UEOT self-pump.
+        # Icecave Crasher: 4/4 Beast. Trample + Landfall +1/+0 UEOT
+        # self-pump. ``Beast`` subtype matches the printed type line
+        # (parser-side fills it from the type-line slice).
         make_creature(
             "Icecave Crasher", "{3}{G}", 4, 4,
+            subtypes=("Beast",),
             keywords={"trample"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2692,13 +2704,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Blooming Stinger: 2/2 Deathtouch. ETB grants another creature
-        # you control deathtouch UEOT. "Another" means not itself — we
-        # model target selection by excluding self via resolving_source
-        # isn't wired yet, so for simplicity a self-target is legal here;
-        # this is a minor simplification noted for future cleanup.
+        # Blooming Stinger: 2/2 Plant Scorpion. Deathtouch. ETB grants
+        # ANOTHER creature you control deathtouch UEOT — the printed
+        # "another" qualifier excludes the source from the legal-target
+        # pool, modeled via ``exclude_self=True`` on the engine class
+        # (which filters ``state.resolving_source`` out of
+        # ``legal_targets``). Subtypes match the printed type line
+        # (parser-side fills them from the type-line slice).
         make_creature(
             "Blooming Stinger", "{1}{G}", 2, 2,
+            subtypes=("Plant", "Scorpion"),
             keywords={"deathtouch"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2707,6 +2722,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                         power_bonus=0, toughness_bonus=0,
                         granted_keywords=frozenset({"deathtouch"}),
                         you_control_only=True,
+                        exclude_self=True,
                     ),
                 ),
             ),

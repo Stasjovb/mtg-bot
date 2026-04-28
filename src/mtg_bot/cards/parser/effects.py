@@ -37,10 +37,12 @@ from mtg_bot.cards.base import (
     ExileTargetCreature,
     GainLife,
     LoseLife,
+    MillTargetPlayer,
     OptionalDiscardCardThenDrawN,
     OptionalManaCostThenEffect,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    PumpSelfUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
@@ -394,6 +396,71 @@ _TAP_TARGET_ARTIFACT_OR_CREATURE = re.compile(
 _DISCARD_N_CARDS = re.compile(
     rf"^(?:you )?discard (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
+# "This creature gets +N/+M until end of turn" — source pumps itself
+# (no separate target). Surfaces on Skystinger's block trigger
+# ("Whenever this creature blocks a creature with flying, this
+# creature gets +5/+0 until end of turn") and the Landfall self-pump
+# family (Icecave Crasher +1/+0, Remnant Elemental +2/+0). Both signs
+# are accepted in case a future printing self-debuffs (the engine
+# class folds positive and negative bonuses through the same path),
+# matching the symmetry already documented for the
+# ``_PUMP_TARGET_CREATURE_UEOT`` regex above.
+#
+# Maps to ``PumpSelfUntilEOT(power_bonus=N, toughness_bonus=M)``.
+# Distinct from the ``put a +1/+1 counter on this creature`` shape
+# (which produces ``PutPlusOneCounterOnSelf``) — counters persist past
+# end of turn while the pump bonus clears at cleanup.
+_PUMP_SELF_UEOT = re.compile(
+    r"^this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "Another target creature you control gains <kw>[ and <kw2>...] until
+# end of turn." — pure keyword-grant variant with no P/T pump,
+# restricted to other creatures the controller controls (Blooming
+# Stinger's ETB grants deathtouch to another creature you control).
+# Maps to ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
+# granted_keywords=..., you_control_only=True, exclude_self=True)``.
+# Distinct from the existing ``_PUMP_AND_GAIN_KEYWORDS_UEOT`` regex
+# which requires a leading ``gets +N/+M and gains`` clause; this one
+# is for pure-grant phrases. The granted-keywords body is validated
+# against the keyword-line whitelist before the parsed effect is
+# returned, mirroring the behavior of the pump-and-gain primitive.
+_GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
+    r"^another target creature you control gains (.+) until end of turn$"
+)
+# "Target player mills cards equal to your life total" — Space-Time
+# Anomaly's printed form. Maps to
+# ``MillTargetPlayer(use_controller_life=True)``. The engine class's
+# ``use_controller_life`` flag substitutes the controller's current
+# life total for the bare ``amount`` field at resolve time, so no
+# numeric capture is needed here — the surface form is a literal
+# match.
+_MILL_TARGET_PLAYER_EQUAL_TO_YOUR_LIFE = re.compile(
+    r"^target player mills cards equal to your life total$"
+)
+# "Target player mills N cards" — bare-amount mill at a single
+# target player. Forward-looking surface form (no EoE card prints
+# this exact shape today; Space-Time Anomaly is the variable-amount
+# variant above), but the regex is included so a future printing of
+# ``target player mills three cards`` parses without further grammar
+# work. Tried AFTER the ``equal to your life total`` regex so the
+# more-specific shape wins on phrases that carry it.
+_MILL_TARGET_PLAYER_N_CARDS = re.compile(
+    rf"^target player mills (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
+)
+# "Each player creates a <Name> token" — bare-name token-creation
+# variant whose subject is each living player (every player creates
+# the token under their own control). Surfaces on Edge Rover's
+# dies trigger (``each player creates a Lander token``). Maps to
+# ``CreateToken(token_printing=..., count=N, each_player=True)``.
+# The captured groups mirror the shape of ``_CREATE_BARE_NAME_TOKEN``
+# below — count word/digit, optional ``tapped`` slot, and the bare
+# subtype name that doubles as the registry key — except the leading
+# subject is ``each player creates`` instead of the implicit
+# controller-creates default.
+_EACH_PLAYER_CREATE_BARE_NAME_TOKEN = re.compile(
+    rf"^each player creates ({_TOKEN_COUNT_PATTERN}) (tapped )?"
+    rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
+)
 
 
 def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
@@ -435,10 +502,11 @@ def _parse_token_count(token: str) -> int:
 
 def _parse_create_token_effect(phrase: str) -> Effect | None:
     """Try to parse ``phrase`` as a token-creation effect (either the
-    stat-bearing creature shape or the bare-name shape). Returns
-    ``None`` if neither shape matches OR if the resolved token name
-    has no ``TOKEN_PRINTINGS`` entry — the parser doesn't fabricate
-    new token printings on the fly.
+    stat-bearing creature shape, the bare-name shape, or the
+    each-player bare-name shape). Returns ``None`` if no shape
+    matches OR if the resolved token name has no ``TOKEN_PRINTINGS``
+    entry — the parser doesn't fabricate new token printings on
+    the fly.
     """
     m = _CREATE_CREATURE_TOKEN.match(phrase)
     if m is not None:
@@ -468,6 +536,26 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
             token_printing=TOKEN_PRINTINGS[name],
             count=count,
             tapped=tapped,
+        )
+    # ``each player creates a <Name> token`` — every living player
+    # creates the bare-name token under their own control. Surfaces
+    # on Edge Rover's dies trigger. The captured groups mirror the
+    # bare-name shape; the only difference is the leading ``each
+    # player creates`` subject (instead of the controller-implicit
+    # default) and the resulting ``each_player=True`` flag on the
+    # produced ``CreateToken`` engine class.
+    m = _EACH_PLAYER_CREATE_BARE_NAME_TOKEN.match(phrase)
+    if m is not None:
+        count = _parse_token_count(m.group(1))
+        tapped = m.group(2) is not None
+        name = m.group(3)
+        if name not in TOKEN_PRINTINGS:
+            return None
+        return CreateToken(
+            token_printing=TOKEN_PRINTINGS[name],
+            count=count,
+            tapped=tapped,
+            each_player=True,
         )
     return None
 
@@ -689,6 +777,58 @@ def _parse_effect(phrase: str) -> Effect | None:
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
         )
+    # ``this creature gets +N/+M until end of turn`` — source pumps
+    # itself UEOT. Tried AFTER the targeted ``target creature gets …
+    # UEOT`` regex above because the ``this creature`` subject is a
+    # different (source-self) primitive from a targeted bonus. Both
+    # signs accepted, mirroring the symmetry of the targeted variant.
+    m = _PUMP_SELF_UEOT.match(phrase)
+    if m is not None:
+        return PumpSelfUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+        )
+    # ``another target creature you control gains <kw>[ and <kw2>...]
+    # until end of turn`` — pure keyword grant to another creature you
+    # control (Blooming Stinger's ETB grants deathtouch). No P/T pump
+    # — only the keyword grant fires. Validated against the keyword-
+    # line whitelist via ``_parse_keyword_grant_body``; rejection
+    # returns ``None`` so an unknown keyword keeps the wrapping card
+    # unclaimed rather than silently dropping the grant.
+    m = _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT.match(
+        phrase
+    )
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(1))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=keywords,
+            you_control_only=True,
+            exclude_self=True,
+        )
+    if _MILL_TARGET_PLAYER_EQUAL_TO_YOUR_LIFE.match(phrase) is not None:
+        # ``target player mills cards equal to your life total`` —
+        # Space-Time Anomaly. Maps to the engine class's
+        # ``use_controller_life=True`` flag, which substitutes the
+        # controller's current life total for the bare amount at
+        # resolve time. Tried BEFORE the bare-amount mill regex so
+        # the more-specific shape wins; the bare-amount form would
+        # never match this surface anyway (its tail is a digit) but
+        # ordering more-specific before more-general is the
+        # convention here.
+        return MillTargetPlayer(use_controller_life=True)
+    m = _MILL_TARGET_PLAYER_N_CARDS.match(phrase)
+    if m is not None:
+        # ``target player mills N cards`` — bare-amount targeted
+        # mill. Forward-looking surface form (no EoE card prints
+        # this exact shape today; Space-Time Anomaly uses the
+        # variable form above), but the regex accepts digits and
+        # spelled-out small cardinals so a future printing parses
+        # without further grammar work.
+        return MillTargetPlayer(amount=_parse_amount(m.group(1)))
     m = _LOSE_N_LIFE.match(phrase)
     if m is not None:
         return LoseLife(amount=int(m.group(1)))
