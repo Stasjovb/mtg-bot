@@ -484,7 +484,11 @@ def create_session(
                 seed=seed,
                 max_turns=max_turns,
                 on_snapshot=lambda s: session.update_snapshot(enrich_fn(s)),
-                snapshot_granularity="step",
+                # "priority" so the board updates after every applied action
+                # and around stack resolutions, not only at end of step —
+                # otherwise plays-during-a-step look like no-ops in the UI
+                # until the step ends.
+                snapshot_granularity="priority",
             )
             session.mark_over({
                 "winner_id": state.winner_id,
