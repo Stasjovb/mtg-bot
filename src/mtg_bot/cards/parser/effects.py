@@ -18,6 +18,7 @@ import re
 from mtg_bot.cards.base import (
     AddManaToPool,
     CounterTargetSpell,
+    CreateLanderAndScheduleSacrifice,
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
@@ -67,6 +68,7 @@ from mtg_bot.cards.base import (
     Sequence,
     Surveil,
     TapTargetArtifactOrCreature,
+    TapTargetOpponentPermanentAndStunIt,
     TargetOpponentLosesLife,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
@@ -153,6 +155,20 @@ _PUT_ITS_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
     r"^put its counters on target creature you control$"
 )
 _DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
+# "Destroy up to one other target creature. If that creature wasn't
+# dealt damage this turn, its controller draws N cards." — Faller's
+# Faithful's ETB. Single primitive with an embedded follow-up
+# sentence; the captured amount lands on
+# ``DestroyTargetCreature(draw_if_undamaged_amount=N)`` along with
+# ``optional=True`` (the ``up to one`` fragment) and
+# ``exclude_self=True`` (the ``other`` fragment). The amount tail
+# accepts spelled-out small cardinals (``two`` is what Faller's
+# prints) plus bare digits for a future printing.
+_DESTROY_UP_TO_ONE_OTHER_TARGET_CREATURE_DRAW_IF_UNDAMAGED = re.compile(
+    rf"^destroy up to one other target creature\. "
+    rf"If that creature wasn't dealt damage this turn, "
+    rf"its controller draws (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
+)
 # "Destroy target creature or Spacecraft." — Embrace Oblivion's
 # destroy clause. Maps to ``DestroyTargetCreature(or_spacecraft=True)``
 # whose ``legal_targets`` extends the bare ``destroy target creature``
@@ -530,6 +546,18 @@ _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM = re.compile(
 _TAP_TARGET_ARTIFACT_OR_CREATURE = re.compile(
     r"^tap target artifact or creature$"
 )
+# "Tap target artifact or creature an opponent controls and put a stun
+# counter on it" — Mechanozoa's ETB. Single primitive (both clauses
+# apply to the same target) — the ``and`` in this surface is a
+# conjunction within ONE effect, not a compound joiner. Maps to
+# ``TapTargetOpponentPermanentAndStunIt()``. The compound-effect
+# splitter does try ``and`` first and produces two pieces, but
+# neither piece is a recognized standalone effect, so the splitter
+# rejects and we fall through to this single-effect regex.
+_TAP_TARGET_OPPONENT_PERMANENT_AND_STUN_IT = re.compile(
+    r"^tap target artifact or creature an opponent controls "
+    r"and put a stun counter on it$"
+)
 # "Discard a card" / "you discard a card" / "you discard N cards" —
 # controller-discards. The bare ``discard a card`` surface is what
 # appears post-compound-split for ``draw a card, then discard a card``
@@ -645,6 +673,25 @@ _MILL_TARGET_PLAYER_N_CARDS = re.compile(
 _EACH_PLAYER_CREATE_BARE_NAME_TOKEN = re.compile(
     rf"^each player creates ({_TOKEN_COUNT_PATTERN}) (tapped )?"
     rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
+)
+# "Create a Lander token. At the beginning of the end step on your
+# next turn, sacrifice that token." — Kav Landseeker's ETB. Single
+# primitive that creates a specific Lander then schedules a delayed-
+# trigger sac of that exact token at the controller's next end step.
+# The two-sentence surface form is captured as a single literal regex
+# — the second sentence's ``sacrifice that token`` references the
+# token created in the first, so they can't be split into independent
+# effects. Tried via the single-effect dispatcher AFTER the compound
+# splitter rejects (the splitter tries `` and `` first — there's no
+# ``and`` here — and falls through to the sentence-boundary split,
+# whose second piece ``at the beginning of the end step on your next
+# turn, sacrifice that token`` doesn't standalone-parse, so the
+# splitter rejects and the single-effect dispatcher claims the whole
+# phrase).
+_CREATE_LANDER_AND_SCHEDULE_SAC = re.compile(
+    r"^create a Lander token\. "
+    r"At the beginning of the end step on your next turn, "
+    r"sacrifice that token$"
 )
 
 
@@ -960,6 +1007,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``state.resolving_source.plus_one_counters`` at resolve time
         # and transfers them to the chosen target.
         return MoveSelfCountersToTargetCreatureYouControl()
+    # ``destroy up to one other target creature. If that creature
+    # wasn't dealt damage this turn, its controller draws N cards``
+    # — Faller's Faithful's ETB. Tried BEFORE the bare destroy regex
+    # below so the longer surface wins. The bare regex's ``$`` anchor
+    # would never match this surface anyway, but ordering more-
+    # specific before more-general is the convention here.
+    m = _DESTROY_UP_TO_ONE_OTHER_TARGET_CREATURE_DRAW_IF_UNDAMAGED.match(
+        phrase
+    )
+    if m is not None:
+        return DestroyTargetCreature(
+            optional=True,
+            exclude_self=True,
+            draw_if_undamaged_amount=_parse_amount(m.group(1)),
+        )
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
     # ``counter target artifact or enchantment spell`` — Annul. Tried
@@ -1015,6 +1077,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         token = m.group(1)
         count = 1 if token == "a" else _parse_amount(token)
         return EachOpponentDiscards(count=count)
+    # ``create a Lander token. At the beginning of the end step on
+    # your next turn, sacrifice that token`` — Kav Landseeker's ETB.
+    # Tried BEFORE the bare token-creation dispatcher because the
+    # bare ``create a Lander token`` regex would match the first half
+    # of this phrase if the compound splitter ran differently, but
+    # this single primitive captures the two-sentence body as one
+    # effect (the second sentence references the token created in
+    # the first, so they can't be split into independent effects).
+    if _CREATE_LANDER_AND_SCHEDULE_SAC.match(phrase) is not None:
+        return CreateLanderAndScheduleSacrifice()
     token_eff = _parse_create_token_effect(phrase)
     if token_eff is not None:
         return token_eff
@@ -1068,6 +1140,12 @@ def _parse_effect(phrase: str) -> Effect | None:
         # middle clause and any future card with the same surface.
         # No-op if the chosen target is already tapped at resolution.
         return TapTargetArtifactOrCreature()
+    if _TAP_TARGET_OPPONENT_PERMANENT_AND_STUN_IT.match(phrase) is not None:
+        # ``tap target artifact or creature an opponent controls and
+        # put a stun counter on it`` — Mechanozoa's ETB. Both clauses
+        # apply to the same chosen target — the ``and`` is an
+        # intra-effect conjunction, not a compound joiner.
+        return TapTargetOpponentPermanentAndStunIt()
     if _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM.match(
         phrase
     ) is not None:

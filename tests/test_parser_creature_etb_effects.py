@@ -523,3 +523,99 @@ def test_nova_hellkite_claimed_by_parser():
     # ``Flying, haste`` line is what blocked claiming Nova Hellkite
     # before the keyword fix).
     assert "Nova Hellkite" in _claimed_names()
+
+
+# ---------- destroy up to one other target creature, draw if undamaged ----------
+
+def test_parse_effect_recognizes_destroy_up_to_one_other_with_draw():
+    # Faller's Faithful's ETB. Single primitive with three flags:
+    # ``optional=True`` (``up to one``), ``exclude_self=True``
+    # (``other``), ``draw_if_undamaged_amount=2`` (the embedded
+    # follow-up sentence). The amount tail accepts spelled-out
+    # cardinals (``two``) and digits.
+    from mtg_bot.cards.base import DestroyTargetCreature
+
+    assert _parse_effect(
+        "destroy up to one other target creature. "
+        "If that creature wasn't dealt damage this turn, "
+        "its controller draws two cards"
+    ) == DestroyTargetCreature(
+        optional=True, exclude_self=True, draw_if_undamaged_amount=2,
+    )
+
+
+def test_parse_effect_does_not_collide_with_bare_destroy_target_creature():
+    # The bare ``destroy target creature`` regex has a ``$`` anchor
+    # so the longer Faller's surface doesn't accidentally match it.
+    from mtg_bot.cards.base import DestroyTargetCreature
+
+    bare = _parse_effect("destroy target creature")
+    fallers = _parse_effect(
+        "destroy up to one other target creature. "
+        "If that creature wasn't dealt damage this turn, "
+        "its controller draws two cards"
+    )
+    assert isinstance(bare, DestroyTargetCreature)
+    assert isinstance(fallers, DestroyTargetCreature)
+    assert bare.optional is False
+    assert bare.exclude_self is False
+    assert bare.draw_if_undamaged_amount == 0
+    assert fallers.optional is True
+    assert fallers.exclude_self is True
+    assert fallers.draw_if_undamaged_amount == 2
+
+
+def test_fallers_faithful_claimed_by_parser():
+    # Faller's Faithful `{2}{B}` 3/1 Human Wizard. ETB: destroy up
+    # to one other target creature; if undamaged, controller draws
+    # two cards. Unlocked by the new destroy-with-undamaged-rider
+    # primitive.
+    assert "Faller's Faithful" in _claimed_names()
+
+
+# ---------- tap target opponent permanent + stun ----------
+
+def test_parse_effect_recognizes_tap_opponent_permanent_and_stun():
+    # Mechanozoa's ETB. Both clauses apply to the same target — the
+    # ``and`` is intra-effect, not a compound joiner. The compound
+    # splitter does try the ``and`` joiner first but the two pieces
+    # don't standalone-parse, so the splitter rejects and the
+    # single-effect dispatcher claims the whole phrase.
+    from mtg_bot.cards.base import TapTargetOpponentPermanentAndStunIt
+
+    assert _parse_effect(
+        "tap target artifact or creature an opponent controls "
+        "and put a stun counter on it"
+    ) == TapTargetOpponentPermanentAndStunIt()
+
+
+def test_mechanozoa_claimed_by_parser():
+    # Mechanozoa `{4}{U}{U}` 5/5 Robot Jellyfish — Artifact Creature.
+    # Warp `{2}{U}`. ETB: tap target artifact or creature an
+    # opponent controls and put a stun counter on it. Unlocked by
+    # the new tap-and-stun primitive.
+    assert "Mechanozoa" in _claimed_names()
+
+
+# ---------- create Lander + delayed sacrifice ----------
+
+def test_parse_effect_recognizes_create_lander_and_schedule_sacrifice():
+    # Kav Landseeker's ETB. Two-sentence body where the second
+    # sentence references the token created in the first — they
+    # can't be split into independent effects, so the whole body
+    # is one primitive.
+    from mtg_bot.cards.base import CreateLanderAndScheduleSacrifice
+
+    assert _parse_effect(
+        "create a Lander token. "
+        "At the beginning of the end step on your next turn, "
+        "sacrifice that token"
+    ) == CreateLanderAndScheduleSacrifice()
+
+
+def test_kav_landseeker_claimed_by_parser():
+    # Kav Landseeker `{3}{R}` 4/3 Kavu Soldier — Menace. ETB: create
+    # a Lander token, sacrifice it at the beginning of the end step
+    # on your next turn. Unlocked by the new
+    # create-Lander-and-schedule-sac primitive.
+    assert "Kav Landseeker" in _claimed_names()

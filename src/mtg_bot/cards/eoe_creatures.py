@@ -831,6 +831,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # step.
         make_creature(
             "Kav Landseeker", "{3}{R}", 4, 3,
+            subtypes=("Kavu", "Soldier"),
             keywords={"menace"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -1690,6 +1691,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Mechanozoa", "{4}{U}{U}", 5, 5,
             artifact=True,
+            subtypes=("Robot", "Jellyfish"),
             warp="{2}{U}",
             triggered_abilities=(
                 TriggeredAbility(
@@ -2090,6 +2092,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # the battlefield at target-pick time, but oracle-faithful).
         make_creature(
             "Faller's Faithful", "{2}{B}", 3, 1,
+            subtypes=("Human", "Wizard"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
