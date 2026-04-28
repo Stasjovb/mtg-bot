@@ -38,8 +38,10 @@ from mtg_bot.cards.base import (
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,
     DrawCards,
+    DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
     EachOpponentLosesLife,
+    EachPlayerDraws,
     Effect,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
@@ -164,6 +166,21 @@ _DEAL_DAMAGE_TARGET_OPPONENT = re.compile(
 # effect's resolve signature.
 _DRAW_A_CARD = re.compile(r"^(?:you )?draw a card$")
 _DRAW_N_CARDS = re.compile(r"^(?:you )?draw (\d+) cards$")
+# "Draw that many cards" — the variable-amount form whose count is
+# resolved at fire time from ``state.resolving_combat_damage_amount``.
+# Surfaces inside a triggered-ability body whose CONDITION names a
+# combat-damage event; the ``that many`` pronoun is anaphoric to the
+# damage amount latched on the trigger source. Fear of Failed Tests
+# (Duskmourn) is the EoE/Duskmourn surface form: ``Whenever this
+# creature deals combat damage to a player, draw that many cards.``
+# Maps to the existing ``DrawCardsEqualToResolvingCombatDamage``
+# engine class — same primitive Starwinder uses via the bespoke
+# table. The optional ``you `` prefix mirrors the bare draw shapes
+# above (the carry-over from compound ``you draw`` sentences); no
+# Duskmourn printing today actually prints the ``you `` prefix on
+# this surface, but accepting it keeps the regex shape uniform with
+# its bare-amount sibling.
+_DRAW_THAT_MANY_CARDS = re.compile(r"^(?:you )?draw that many cards$")
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on target creature$"
@@ -271,6 +288,19 @@ _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST = re.compile(
 )
 _EACH_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^each opponent loses (\d+) life$"
+)
+# "Each player draws a card" / "Each player draws N cards" — every
+# player (active controller AND opponents) draws ``N`` cards.
+# Friendly Teddy's ``When this creature dies, each player draws a
+# card.`` is the EoE/Duskmourn surface form. ``a`` collapses to
+# amount=1; digits and spelled-out small cardinals go through
+# ``_parse_amount`` so a future ``each player draws three cards``
+# printing parses without further grammar work. Maps to
+# ``EachPlayerDraws(amount=N)`` whose ``resolve`` walks every living
+# player and calls ``draw_n_cards``.
+_EACH_PLAYER_DRAWS_N_CARDS = re.compile(
+    rf"^each player draws "
+    rf"(?:a card|(\d+|{_SMALL_CARDINAL_PATTERN}) cards)$"
 )
 # "Exile each opponent's graveyard" — untargeted graveyard wipe on
 # every opponent (Dauntless Scrapbot's ETB compound first half).
@@ -1317,6 +1347,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DRAW_N_CARDS.match(phrase)
     if m is not None:
         return DrawCards(amount=int(m.group(1)))
+    if _DRAW_THAT_MANY_CARDS.match(phrase) is not None:
+        # ``draw that many cards`` — the resolving-combat-damage form
+        # used by Fear of Failed Tests's combat-damage trigger body.
+        # Same engine class Starwinder uses via the bespoke table; the
+        # source's combat-damage amount is latched at trigger time and
+        # read at resolve time, so the engine class needs no
+        # parameters.
+        return DrawCardsEqualToResolvingCombatDamage()
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))
@@ -1453,6 +1491,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
+    m = _EACH_PLAYER_DRAWS_N_CARDS.match(phrase)
+    if m is not None:
+        # ``each player draws a card`` collapses to amount=1 (the
+        # ``a card`` alternative has no capture group, so group(1)
+        # is None); digits and spelled-out small cardinals on the
+        # plural arm go through ``_parse_amount``. Friendly Teddy's
+        # dies trigger uses the ``a card`` form; the plural arm is
+        # forward-looking grammar coverage.
+        token = m.group(1)
+        amount = 1 if token is None else _parse_amount(token)
+        return EachPlayerDraws(amount=amount)
     if _EXILE_EACH_OPPONENTS_GRAVEYARD.match(phrase) is not None:
         # ``exile each opponent's graveyard`` — Dauntless Scrapbot's
         # first-half compound ETB. Untargeted graveyard wipe on every

@@ -103,4 +103,31 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
             ),
         ),
     ),
+    # Treasure: the standard evergreen colorless artifact token. Single
+    # activated ability: "{T}, Sacrifice this token: Add one mana of
+    # any color." The mana ability is flagged ``is_mana_ability=True``
+    # so the engine bypasses the stack at activation per CR 605 — the
+    # same pattern Lander and Eldrazi Scion use for their
+    # sac-for-mana abilities. Modeled identically to the in-print
+    # printing on Scryfall: an artifact (no creature type), no P/T,
+    # no flavor text, exactly one ability.
+    "Treasure": CardPrinting(
+        name="Treasure",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Token Artifact — Treasure",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Treasure",),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    ),
 }
