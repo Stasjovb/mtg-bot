@@ -75,6 +75,46 @@ def test_terrain_generator_matches_static():
     assert parsed == STELLAR_SIGHTS_LANDS["Terrain Generator"]
 
 
+def test_bonders_enclave_matches_static():
+    """Body + activation-condition rider. The rider
+    ``Activate only if you control a creature with power 4 or greater``
+    surfaces as ``requires_own_creature_power_at_least=4`` on the
+    cost; the body is the bare ``Draw a card`` factory."""
+    card = {
+        "name": "Bonders' Enclave",
+        "type_line": "Land",
+        "oracle_text": (
+            "{T}: Add {C}.\n"
+            "{3}, {T}: Draw a card. Activate only if you control a "
+            "creature with power 4 or greater."
+        ),
+        "produced_mana": ["C"],
+        "set": "eos",
+    }
+    parsed = _build_land_printing(card)
+    assert parsed is not None
+    assert parsed == STELLAR_SIGHTS_LANDS["Bonders' Enclave"]
+
+
+def test_skips_unknown_rider_with_known_body():
+    """A rider phrase outside the whitelist must skip — the recognizer
+    can't bind the unknown activation condition to a flag, so building
+    a printing without it would lose oracle semantics."""
+    card = {
+        "name": "Hypothetical Strange Rider",
+        "type_line": "Land",
+        "oracle_text": (
+            "{T}: Add {C}.\n"
+            "{3}, {T}: Draw a card. Activate only during your turn."
+        ),
+        "produced_mana": ["C"],
+        "set": "eos",
+    }
+    assert _try_build_paid_effect_utility_land(
+        card, card["oracle_text"], (), (),
+    ) is None
+
+
 def test_skips_unknown_body():
     """A body outside the whitelist must NOT be claimed — parity would
     fail because the parser would have no effect to bind."""

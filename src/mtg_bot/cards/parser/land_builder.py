@@ -39,6 +39,7 @@ from mtg_bot.cards.base import (
     CardPrinting,
     DealDamageToControllerAndAddMana,
     DestroyTargetLand,
+    DrawCards,
     Effect,
     ExileTargetAttackingCreatureUntilEndStep,
     GainLife,
@@ -828,16 +829,20 @@ def _try_build_paid_fancy_mana_land(
 # Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
 # is the strict two-line shape:
 #   1. ``{T}: Add {C}.``
-#   2. ``<MANA-COST>, {T}: <BODY>.``
+#   2. ``<MANA-COST>, {T}: <BODY>.[ <RIDER>.]``
 # where ``<MANA-COST>`` is a generic-mana cost (e.g. ``{1}``, ``{2}``,
 # ``{4}``) and ``<BODY>`` is on a per-card body whitelist that maps to
 # a single bespoke ``Effect`` instance. The static side wraps that
 # effect in a single ``ActivatedAbility`` whose cost carries the parsed
-# mana plus ``tap_self=True``.
+# mana plus ``tap_self=True``. The optional trailing ``<RIDER>`` is a
+# fixed activation-condition phrase parsed off ``_PAID_EFFECT_RIDERS``
+# and surfaced as an extra flag on the ``ActivationCost``.
 #
 # Distinct from the tap-and-sac branch (those costs include a sac
 # clause) and the paid-fancy-mana branch (those bodies produce mana).
 # Currently claims:
+# - Bonders' Enclave — ``{3}, {T}: Draw a card. Activate only if you
+#   control a creature with power 4 or greater.``
 # - Deserted Temple — ``{1}, {T}: Untap target land.``
 # - Mystifying Maze — ``{4}, {T}: Exile target attacking creature an
 #   opponent controls. At the beginning of the next end step, return
@@ -851,7 +856,7 @@ def _try_build_paid_fancy_mana_land(
 # returns a fresh ``Effect`` instance. Bodies / cost shapes outside
 # the table fall through to the silent-skip path.
 _PAID_EFFECT_RE = re.compile(
-    r"^(?P<cost>(?:\{\d+\})+), \{T\}: (?P<body>.+)\.$"
+    r"^(?P<cost>(?:\{\d+\})+), \{T\}: (?P<rest>.+)\.$"
 )
 
 
@@ -867,6 +872,10 @@ def _paid_effect_put_basic_from_hand_tapped() -> Effect:
     return PutBasicLandFromHandOntoBattlefieldTapped()
 
 
+def _paid_effect_draw_a_card() -> Effect:
+    return DrawCards(amount=1)
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -876,6 +885,22 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "You may put a basic land card from your hand onto the "
     "battlefield tapped":
         _paid_effect_put_basic_from_hand_tapped,
+    "Draw a card": _paid_effect_draw_a_card,
+}
+
+
+# Activation-condition rider phrases. Each entry maps an exact phrase
+# (no trailing period) to a callable that mutates an
+# ``ActivationCost`` keyword-arg dict in place. Riders outside the
+# table fall through to the silent-skip path; bodies without a rider
+# also pass through — the recognizer treats the rider as optional.
+def _rider_creature_power_four_or_greater(kwargs: dict) -> None:
+    kwargs["requires_own_creature_power_at_least"] = 4
+
+
+_PAID_EFFECT_RIDERS: dict[str, "callable"] = {
+    "Activate only if you control a creature with power 4 or greater":
+        _rider_creature_power_four_or_greater,
 }
 
 
@@ -887,13 +912,20 @@ def _try_build_paid_effect_utility_land(
 ) -> CardPrinting | None:
     """Return a generic-paid single-effect utility ``CardPrinting`` if
     ``text`` matches the strict two-line ``{T}: Add {C}.`` +
-    ``<MANA>, {T}: <BODY>.`` shape with a body on
-    ``_PAID_EFFECT_BODIES``, else ``None``.
+    ``<MANA>, {T}: <BODY>.[ <RIDER>.]`` shape with a body on
+    ``_PAID_EFFECT_BODIES`` (and rider, if present, on
+    ``_PAID_EFFECT_RIDERS``), else ``None``.
 
     Plain ``Land`` only (no supertypes, no subtypes). The mana-cost
     capture is restricted to all-generic pips (``{1}``, ``{2}``, …) —
     cards with colored or hybrid pips on the activation cost would
     need a different cost shape and don't fit the current set.
+
+    The optional rider is a fixed activation-condition phrase (e.g.
+    Bonders' Enclave's ``Activate only if you control a creature
+    with power 4 or greater``) that maps to an ``ActivationCost``
+    flag. Bodies / cost shapes / riders outside their tables fall
+    through silently.
     """
     if supertypes:
         return None
@@ -907,7 +939,19 @@ def _try_build_paid_effect_utility_land(
     paid_match = _PAID_EFFECT_RE.match(lines[1])
     if paid_match is None:
         return None
-    body = paid_match.group("body")
+    rest = paid_match.group("rest")
+    # Try to peel off a recognized rider sentence first; matching is
+    # exact on the trailing ``. <RIDER>`` slice. Whichever known rider
+    # the body ends with wins (``startswith`` checks pin the body to
+    # the front of ``rest`` after trimming the rider).
+    body = rest
+    cost_extra: dict = {}
+    for rider, mutator in _PAID_EFFECT_RIDERS.items():
+        suffix = ". " + rider
+        if rest.endswith(suffix):
+            body = rest[: -len(suffix)]
+            mutator(cost_extra)
+            break
     factory = _PAID_EFFECT_BODIES.get(body)
     if factory is None:
         return None
@@ -920,6 +964,7 @@ def _try_build_paid_effect_utility_land(
                     mana=parse_mana_cost(cost_str),
                     mana_str=cost_str,
                     tap_self=True,
+                    **cost_extra,
                 ),
                 effect=factory(),
             ),
