@@ -285,6 +285,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if paid_effect is not None:
         return paid_effect
+    restricted_mana = _try_build_restricted_mana_land(
+        card, text, supertypes, subtypes,
+    )
+    if restricted_mana is not None:
+        return restricted_mana
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -967,6 +972,98 @@ def _try_build_paid_effect_utility_land(
                     **cost_extra,
                 ),
                 effect=factory(),
+            ),
+        ),
+    )
+
+
+# Restricted-mana lands.
+#
+# Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
+# is the strict two-line shape:
+#   1. ``{T}: Add {C}.``
+#   2. ``{T}: Add <MANA>. <RESTRICTION-PHRASE>.``
+# The first line is modeled as an explicit ``AddManaToPool`` mana
+# ability (NOT dropped to the auto-tap-for-cost fallback) — restricted
+# lands carry both abilities on the static side because the
+# unrestricted coin from line 1 is independently spendable. The second
+# line's restriction phrase is on a small whitelist that maps to
+# ``AddManaToPool.spend_restriction`` tag values; the engine's
+# ``_coin_satisfies_context`` consults the tag during cost-pay.
+#
+# Currently claims:
+# - Eldrazi Temple — ``{T}: Add {C}{C}.`` + colorless-Eldrazi
+#   restriction ("Spend this mana only to cast colorless Eldrazi
+#   spells or activate abilities of colorless Eldrazi.").
+#
+# Adding a new restriction is a one-line table extension keyed on the
+# exact phrase (no trailing period). Adding a new produced-mana shape
+# (e.g. ``{T}: Add {U}{U}``) needs the second-line regex to
+# accommodate the colored pip set; today's only printing produces
+# all-colorless.
+_RESTRICTED_MANA_LINE_RE = re.compile(
+    r"^\{T\}: Add (?P<mana>(?:\{[CWUBRG]\})+)\. (?P<phrase>.+)\.$"
+)
+
+
+_RESTRICTED_MANA_PHRASES: dict[str, str] = {
+    "Spend this mana only to cast colorless Eldrazi spells or "
+    "activate abilities of colorless Eldrazi": "colorless_eldrazi",
+}
+
+
+def _try_build_restricted_mana_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a restricted-mana ``CardPrinting`` if ``text`` matches
+    the strict two-line ``{T}: Add {C}.`` + ``{T}: Add <MANA>.
+    <PHRASE>.`` shape with a phrase on ``_RESTRICTED_MANA_PHRASES``,
+    else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The mana line
+    must be all-colorless ``{C}+``. Both abilities are modeled
+    explicitly on the printing's ``activated_abilities`` (the first
+    is the unrestricted base coin; the second carries the
+    restriction tag).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _TAP_FOR_C_LINE:
+        return None
+    m = _RESTRICTED_MANA_LINE_RE.match(lines[1])
+    if m is None:
+        return None
+    mana_str = m.group("mana")
+    pips = re.findall(r"\{([CWUBRG])\}", mana_str)
+    if not pips or any(p != "C" for p in pips):
+        return None
+    phrase = m.group("phrase")
+    tag = _RESTRICTED_MANA_PHRASES.get(phrase)
+    if tag is None:
+        return None
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("C", len(pips)),),
+                    spend_restriction=tag,
+                ),
+                is_mana_ability=True,
             ),
         ),
     )
