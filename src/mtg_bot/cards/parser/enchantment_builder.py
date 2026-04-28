@@ -29,6 +29,7 @@ Aura enchantments (EoE):
 
 Aura enchantments (DSK):
 - Duskmourn's Domination ``{4}{U}{U}``
+- Frantic Strength ``{1}{R}`` (Flash + +2/+2 + trample)
 """
 
 from __future__ import annotations
@@ -315,6 +316,38 @@ def _build_pain_for_all() -> CardPrinting:
 # Duskmourn (DSK) Aura factories
 # ---------------------------------------------------------------------------
 
+def _build_frantic_strength() -> CardPrinting:
+    """Frantic Strength ``{1}{R}``: Enchantment — Aura.
+
+    Oracle text:
+        Flash
+        Enchant creature
+        Enchanted creature gets +2/+2 and has trample.
+
+    Maps onto the existing ``make_aura`` flag set with the new
+    ``keywords`` kwarg carrying Flash on the Aura itself:
+    - ``keywords=frozenset({"flash"})`` for instant-speed casting (the
+      ``CardPrinting.keywords`` field is what ``legal.py`` reads to
+      surface a permanent spell at instant speed).
+    - ``power_bonus=2, toughness_bonus=2`` and
+      ``granted_keywords=frozenset({"trample"})`` for the static
+      ``Enchanted creature gets +2/+2 and has trample.`` rider —
+      same shared ``equipment_bonuses`` machinery the rest of the
+      EoE/DSK Auras already ride.
+
+    No new engine fields are needed: Flash on permanents already
+    gates instant-speed casting via the existing
+    ``"flash" in printing.keywords`` check, the pump and granted
+    keyword ride the existing aura-attached effective-PT layer.
+    """
+    return make_aura(
+        "Frantic Strength", "{1}{R}",
+        power_bonus=2, toughness_bonus=2,
+        granted_keywords=frozenset({"trample"}),
+        keywords=frozenset({"flash"}),
+    )
+
+
 def _build_duskmourns_domination() -> CardPrinting:
     """Duskmourn's Domination ``{4}{U}{U}``: Enchantment — Aura.
 
@@ -368,6 +401,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Pain for All": _build_pain_for_all,
     # Duskmourn (DSK) Auras
     "Duskmourn's Domination": _build_duskmourns_domination,
+    "Frantic Strength": _build_frantic_strength,
 }
 
 

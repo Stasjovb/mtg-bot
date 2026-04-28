@@ -1236,6 +1236,7 @@ def make_aura(
     power_bonus: int = 0,
     toughness_bonus: int = 0,
     granted_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     aura_enchant_type: str = "creature",
     attached_prevents_untap: bool = False,
@@ -1252,6 +1253,11 @@ def make_aura(
     continuous bonus granted to the enchanted creature; we reuse the
     Equipment bonus machinery (equipment_bonuses) so effective_* helpers
     pick them up automatically.
+
+    ``keywords`` are on the Aura ITSELF (e.g. Flash on Frantic Strength /
+    Shardmage's Rescue / Growing Dread). Mirrors ``make_equipment``'s
+    same-named kwarg and routes through the same ``CardPrinting.keywords``
+    field that gates instant-speed casting in ``legal.py``.
 
     ``attached_grants_ward`` (e.g. ``"{1}"``) wires the "Enchanted
     permanent has ward {cost}" rider — Hardlight Containment.
@@ -1273,6 +1279,7 @@ def make_aura(
         card_types=card_types,
         subtypes=subtypes,
         triggered_abilities=tuple(triggered_abilities),
+        keywords=frozenset(keywords),
         equipment_bonuses=(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),

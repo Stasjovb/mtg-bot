@@ -270,3 +270,61 @@ def test_final_vengeance_additional_cost_accepts_enchantment_sacrifice():
         battlefield=[ench_obj],
     )
     assert _additional_costs_payable(state, 0, card_obj) is True
+
+
+# ---------- Frantic Strength: Aura with keywords (Flash) ----------
+
+def test_make_aura_accepts_keywords_kwarg():
+    # New ``keywords`` kwarg on ``make_aura`` mirrors the equipment
+    # builder's same-named field. The frozen-set lands on the
+    # ``CardPrinting.keywords`` field that ``legal.py`` reads to
+    # surface a permanent spell at instant speed.
+    from mtg_bot.cards.base import make_aura
+
+    aura = make_aura(
+        "Test Aura", "{1}{U}",
+        power_bonus=1, toughness_bonus=1,
+        keywords=frozenset({"flash"}),
+    )
+    assert "flash" in aura.keywords
+    assert aura.equipment_bonuses == (1, 1, frozenset())
+
+
+def test_make_aura_keywords_default_empty():
+    # Backward-compat sanity: the new kwarg defaults to an empty set,
+    # so existing call sites that don't pass ``keywords=`` keep their
+    # previous behavior (no keywords on the Aura itself).
+    from mtg_bot.cards.base import make_aura
+
+    aura = make_aura("Plain Aura", "{U}")
+    assert aura.keywords == frozenset()
+
+
+def test_frantic_strength_claimed_by_parser():
+    # Frantic Strength ``{1}{R}`` Aura — Flash + Enchant creature +
+    # +2/+2 + trample. Claimed via the name-keyed
+    # ``_ENCHANTMENT_BUILDERS`` dispatch in
+    # ``parser.enchantment_builder``.
+    assert "Frantic Strength" in _claimed_names()
+
+
+def test_frantic_strength_carries_aura_fields():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the three hooks the static side ships:
+    # - Flash on the Aura itself (``keywords`` containing ``flash``);
+    # - +2/+2 in the ``equipment_bonuses`` triple;
+    # - trample as a granted keyword on the enchanted creature.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Frantic Strength"]
+    assert "flash" in p.keywords
+    assert p.equipment_bonuses == (2, 2, frozenset({"trample"}))
+
+
+def test_frantic_strength_is_aura_subtype():
+    # Sanity that the Aura-builder route is what claimed it (not the
+    # spell-builder or some other path) — the Aura subtype must be
+    # present on the printing.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Frantic Strength"]
+    assert p.is_aura is True
+    assert p.aura_enchant_type == "creature"
