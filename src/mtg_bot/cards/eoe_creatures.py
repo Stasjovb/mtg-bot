@@ -24,6 +24,7 @@ from mtg_bot.effects.predicates import (
     IsNontoken,
     IsPlayer,
     IsSelf,
+    OpponentControlsMoreLandsThanYou,
     SpellsCastThisTurn,
 )
 
@@ -1955,14 +1956,14 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # more lands than you.
         make_creature(
             "Sunstar Expansionist", "{1}{W}", 2, 3,
+            subtypes=("Human", "Knight"),
             triggered_abilities=(
                 TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ConditionalIfOpponentHasMoreLands(
-                        effect=CreateToken(
-                            token_printing=TOKEN_PRINTINGS["Lander"],
-                            count=1,
-                        ),
+                    event=Event.ENTERS,
+                    predicate=IsSelf() & OpponentControlsMoreLandsThanYou(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
                     ),
                 ),
                 TriggeredAbility(

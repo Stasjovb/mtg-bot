@@ -2774,9 +2774,10 @@ def test_sunstar_expansionist_etb_triggers_only_when_behind():
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(se)
-    etb = next(
-        ab for ab in se.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
-    )
+    # The "behind" intervening-if gate now lives on the predicate
+    # rather than wrapping the effect (per CR 603.4 semantics).
+    etb = se.printing.triggered_abilities[0]
+    assert etb.predicate.matches(state, {"obj": se}, se) is True
     state.resolving_source = se
     etb.effect.resolve(state, 0)
     landers = [o for o in state.battlefield if o.printing.name == "Lander"]
@@ -2803,11 +2804,10 @@ def test_sunstar_expansionist_etb_skipped_when_ahead():
         zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(se)
-    etb = next(
-        ab for ab in se.printing.triggered_abilities if _matches_legacy_key(ab, "etb")
-    )
-    state.resolving_source = se
-    etb.effect.resolve(state, 0)
+    # Caster is ahead → the predicate gate fails so the trigger
+    # never goes on the stack and no Lander is created.
+    etb = se.printing.triggered_abilities[0]
+    assert etb.predicate.matches(state, {"obj": se}, se) is False
     landers = [o for o in state.battlefield if o.printing.name == "Lander"]
     assert len(landers) == 0
 
