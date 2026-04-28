@@ -7,9 +7,16 @@ line, with optional parenthesized reminder text. The argument
 round-trips into the ``make_creature`` ``warp=`` / ``ward=`` /
 ``devour_land_multiplier=`` kwarg.
 
-Riders (``Warp—{B}, Pay 2 life.`` em-dash variants, ``Ward — Discard
-a card.`` etc.) are out of scope — they intentionally don't match
-and cause the enclosing card to be skipped.
+Two ``Ward`` non-mana-cost rider shapes are also recognized: the
+em-dash discard-cost variants ``Ward—Discard a card.`` and
+``Ward—Discard a card at random.`` (Sunset Saboteur and Alpharael
+Stonechosen respectively). Each produces a sentinel return value
+that the creature builder maps to the matching
+``ward_discard_chosen=True`` / ``ward_discard_random=True`` kwarg
+on ``make_creature``. Other riders (``Warp—{B}, Pay 2 life.``
+additional-life-cost variants etc.) remain out of scope — they
+intentionally don't match and cause the enclosing card to be
+skipped.
 """
 
 from __future__ import annotations
@@ -47,6 +54,37 @@ def _parse_ward_line(line: str) -> str | None:
     if m is None:
         return None
     return m.group(1)
+
+
+# ``Ward—Discard a card.`` / ``Ward—Discard a card at random.`` —
+# em-dash discard-cost ward riders. Scryfall prints both variants
+# verbatim with no surrounding reminder text. The two variants are
+# distinguished only by the trailing ``at random`` qualifier; the
+# function below returns a tagged string (``"chosen"`` or
+# ``"random"``) so the creature builder can map it to the matching
+# ``make_creature`` boolean kwarg without re-parsing.
+_WARD_DISCARD_LINE = re.compile(
+    r"^Ward—Discard a card(?P<random> at random)?\.$"
+)
+
+
+def _parse_ward_discard_line(line: str) -> str | None:
+    """Return ``"chosen"`` for ``Ward—Discard a card.``, ``"random"``
+    for ``Ward—Discard a card at random.``, or ``None`` if the line
+    doesn't match either em-dash discard-cost ward shape.
+
+    Two variants only — Scryfall consistently prints these exact
+    surface forms; any other discard-cost ward (a future ``Ward—
+    Discard two cards.`` printing, say) would land its own entry
+    rather than parameterizing this one. Keeping the surface→tag
+    mapping 1:1 with the engine's ``ward_discard_chosen`` /
+    ``ward_discard_random`` boolean fields preserves parser/static
+    parity by construction.
+    """
+    m = _WARD_DISCARD_LINE.match(line.strip())
+    if m is None:
+        return None
+    return "random" if m.group("random") else "chosen"
 
 
 _DEVOUR_LINE = re.compile(

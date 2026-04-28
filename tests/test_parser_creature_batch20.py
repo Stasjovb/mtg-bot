@@ -28,6 +28,19 @@ Extended primitives:
   spell out the source explicitly parse. Used by Weftstalker
   Ardent's another-creature-or-artifact ETB trigger.
 
+New printing-keyword grammar:
+
+* ``Ward—Discard a card.`` / ``Ward—Discard a card at random.`` —
+  em-dash discard-cost ward riders. Tagged return string from
+  ``_parse_ward_discard_line`` (``"chosen"`` / ``"random"``) maps
+  1:1 to the matching ``make_creature`` boolean kwarg
+  (``ward_discard_chosen`` / ``ward_discard_random``). Unlocks
+  Sunset Saboteur (chosen variant) — the random variant is
+  forward-looking grammar coverage; the only EoE printing that
+  carries it (Alpharael, Stonechosen) is unclaimable today for
+  unrelated reasons (the Void-rider trigger-effect grammar isn't
+  yet wired for half-life-loss).
+
 New trigger-condition phrases:
 
 * ``this creature or another creature or artifact you control dies``
@@ -70,6 +83,13 @@ Newly-claimed creatures:
   Susurian static in favor of the parser-produced ``Sequence`` —
   same gameplay outcome, no new effect class. Subtypes
   ``Vampire Soldier`` are added per the parser-is-right rule.
+
+* **Sunset Saboteur** — ``Menace. Ward—Discard a card. Whenever
+  this creature attacks, put a +1/+1 counter on target creature
+  an opponent controls.`` All three lines were previously
+  recognized except the em-dash ward-discard rider; the new
+  ``_parse_ward_discard_line`` shape unblocks the printing.
+  Subtypes ``Human Rogue`` are added per the parser-is-right rule.
 """
 
 from __future__ import annotations
@@ -87,6 +107,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
+from mtg_bot.cards.parser.printing_keywords import _parse_ward_discard_line
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import (
     _parse_collapsed_predicate_trigger_phrase,
@@ -273,3 +294,38 @@ def test_susurian_voidborn_trigger_line_end_to_end():
 
 def test_susurian_voidborn_claimed_by_parser():
     assert "Susurian Voidborn" in _claimed_names()
+
+
+# ---------- Sunset Saboteur (Ward—Discard rider) ----------
+
+def test_parse_ward_discard_line_chosen():
+    # Sunset Saboteur's printed Ward rider — chosen-discard variant.
+    # The recognizer returns the tag string ``"chosen"`` so the
+    # caller can map straight to the matching ``make_creature``
+    # kwarg. Trailing period is required (matches Scryfall's
+    # punctuation convention for printing-level keyword lines).
+    assert _parse_ward_discard_line("Ward—Discard a card.") == "chosen"
+
+
+def test_parse_ward_discard_line_random():
+    # Forward-looking — the random-discard variant prints on
+    # Alpharael, Stonechosen. The grammar-level recognizer should
+    # accept both shapes even though Stonechosen itself isn't
+    # claimable today (the Void-rider effect grammar gap).
+    assert _parse_ward_discard_line(
+        "Ward—Discard a card at random."
+    ) == "random"
+
+
+def test_parse_ward_discard_line_rejects_other_shapes():
+    # Bare ``Ward {2}`` — that's the mana-cost shape handled by
+    # ``_parse_ward_line``; the discard recognizer must NOT claim
+    # it. A future ``Ward—Pay 2 life.`` printing also stays out of
+    # scope (only the discard variants are wired).
+    assert _parse_ward_discard_line("Ward {2}") is None
+    assert _parse_ward_discard_line("Ward—Pay 2 life.") is None
+    assert _parse_ward_discard_line("Ward—Discard two cards.") is None
+
+
+def test_sunset_saboteur_claimed_by_parser():
+    assert "Sunset Saboteur" in _claimed_names()

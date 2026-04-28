@@ -2182,11 +2182,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Sunset Saboteur: {1}{B} 4/1 Menace. Ward—Discard a card
-        # (chosen). Attacks-trigger puts a +1/+1 counter on a creature
-        # an opponent controls (unusual flavor — buffing their threat).
+        # Sunset Saboteur: {1}{B} 4/1 Human Rogue. Menace. Ward—Discard
+        # a card (chosen). Attacks-trigger puts a +1/+1 counter on a
+        # creature an opponent controls (unusual flavor — buffing
+        # their threat).
         make_creature(
             "Sunset Saboteur", "{1}{B}", 4, 1,
+            subtypes=("Human", "Rogue"),
             keywords={"menace"},
             ward_discard_chosen=True,
             triggered_abilities=(

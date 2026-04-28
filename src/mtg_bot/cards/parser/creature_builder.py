@@ -24,6 +24,7 @@ from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
+    _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
 )
@@ -54,6 +55,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     cost_reductions: list[CostReduction] = []
     warp: str | None = None
     ward: str | None = None
+    ward_discard_chosen = False
+    ward_discard_random = False
     devour: int = 0
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
@@ -78,6 +81,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             ward = ward_cost
+            continue
+        ward_discard_kind = _parse_ward_discard_line(line)
+        if ward_discard_kind is not None:
+            # Em-dash discard-cost ward riders. The tag string from the
+            # parser ("chosen" or "random") maps 1:1 to the matching
+            # boolean kwarg on ``make_creature``. As with the bare
+            # ``Ward {cost}`` clause above, a single card carries at
+            # most one Ward and parity against the static registry
+            # catches any drift; we keep the last-seen marker if a
+            # malformed printing somehow listed two.
+            if ward_discard_kind == "random":
+                ward_discard_random = True
+            else:
+                ward_discard_chosen = True
             continue
         devour_n = _parse_devour_line(line)
         if devour_n is not None:
@@ -140,5 +157,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         artifact="Artifact" in card_types,
         warp=warp,
         ward=ward,
+        ward_discard_chosen=ward_discard_chosen,
+        ward_discard_random=ward_discard_random,
         devour_land_multiplier=devour,
     )

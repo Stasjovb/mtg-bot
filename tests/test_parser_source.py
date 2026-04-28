@@ -1209,16 +1209,21 @@ def test_parse_ward_line_rejects_pay_life_rider():
 
 
 def test_parse_ward_line_rejects_discard_random_rider():
-    """``Ward — Discard a card at random.`` (em-dash + non-mana cost)
-    is out of scope this batch — Alpharael, Stonechosen has this
-    shape and must remain unclaimed."""
+    """``_parse_ward_line`` only matches the bare ``Ward {cost}``
+    mana-cost shape; the em-dash discard-cost variants
+    (Alpharael Stonechosen / Sunset Saboteur) are recognized by a
+    separate ``_parse_ward_discard_line`` recognizer added in batch
+    20. The bare-mana-cost recognizer must still reject the
+    discard-rider shape so the two recognizers stay orthogonal —
+    each shape goes through exactly one builder branch."""
     assert _parse_ward_line("Ward—Discard a card at random.") is None
 
 
 def test_parse_ward_line_rejects_discard_chosen_rider():
-    """``Ward — Discard a card.`` (em-dash + non-mana cost) is out of
-    scope this batch — Sunset Saboteur has this shape and must remain
-    unclaimed."""
+    """Mirror of the random-discard test above for the chosen-discard
+    variant. Sunset Saboteur's ``Ward—Discard a card.`` line goes
+    through ``_parse_ward_discard_line`` — not this bare-mana-cost
+    recognizer — so we keep the rejection here."""
     assert _parse_ward_line("Ward—Discard a card.") is None
 
 
@@ -1308,9 +1313,10 @@ def test_build_creature_printing_skips_ward_with_pay_life_rider():
     assert _build_creature_printing(card) is None
 
 
-def test_build_creature_printing_skips_ward_with_discard_rider():
-    """``Ward—Discard a card.`` (Sunset Saboteur's shape) is out of
-    scope and the creature must not be claimed."""
+def test_build_creature_printing_handles_ward_with_discard_rider():
+    """Batch-20 wired ``Ward—Discard a card.`` (Sunset Saboteur's
+    shape). The em-dash discard-cost ward rider produces a printing
+    with ``ward_discard_chosen=True`` set, no ``ward_cost``."""
     card = {
         "name": "Test Discard Ward",
         "mana_cost": "{1}{B}",
@@ -1319,21 +1325,48 @@ def test_build_creature_printing_skips_ward_with_discard_rider():
         "toughness": "1",
         "oracle_text": "Ward—Discard a card.",
     }
-    assert _build_creature_printing(card) is None
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.ward_discard_chosen is True
+    assert printing.ward_discard_random is False
+    assert printing.ward_cost is None
+
+
+def test_build_creature_printing_handles_ward_with_random_discard_rider():
+    """Batch-20 wired the random-discard variant too. Forward-looking
+    grammar coverage — the only EoE printing carrying it (Alpharael,
+    Stonechosen) is still unclaimable for an unrelated reason (the
+    Void-rider effect grammar gap), but the keyword recognizer
+    accepts both variants."""
+    card = {
+        "name": "Test Random Discard Ward",
+        "mana_cost": "{1}{B}",
+        "type_line": "Creature — Human Cleric",
+        "power": "1",
+        "toughness": "1",
+        "oracle_text": "Ward—Discard a card at random.",
+    }
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.ward_discard_random is True
+    assert printing.ward_discard_chosen is False
 
 
 def test_source_does_not_claim_alpharael_stonechosen():
-    """Alpharael's ``Ward—Discard a card at random.`` rider is out of
-    scope this batch — the card must remain unclaimed."""
+    """Alpharael's Void-rider trigger effect (``defending player loses
+    half their life, rounded up``) is out of scope, so the card
+    remains unclaimed even after batch 20 wired the
+    ``Ward—Discard a card at random.`` keyword shape."""
     source = OracleParserCardSource()
     assert "Alpharael, Stonechosen" not in source.claimed_names
 
 
-def test_source_does_not_claim_sunset_saboteur():
-    """Sunset Saboteur's ``Ward—Discard a card.`` rider is out of
-    scope this batch — the card must remain unclaimed."""
+def test_source_claims_sunset_saboteur():
+    """Batch 20 wired ``Ward—Discard a card.`` (chosen variant). With
+    that grammar in place Sunset Saboteur's Menace + Ward + attacks
+    trigger all flow through cleanly."""
     source = OracleParserCardSource()
-    assert "Sunset Saboteur" not in source.claimed_names
+    assert "Sunset Saboteur" in source.claimed_names
 
 
 def test_source_does_not_claim_harmonious_grovestrider():
