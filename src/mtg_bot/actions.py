@@ -97,6 +97,36 @@ class CastSpell(Action):
     # creature" line — flipping ``use_impending`` selects which arm
     # runs.
     use_impending: bool = False
+    # DSK Rooms: when casting a Room card, the controller picks one of
+    # the two half-names; the Room is cast for that half's mana cost
+    # and enters with that half unlocked. ``None`` for non-Room
+    # spells. legal_actions emits one ``CastSpell(card_id,
+    # cast_room_half=name)`` per half whose cost is payable.
+    cast_room_half: "str | None" = None
+
+
+@dataclass(frozen=True)
+class UnlockRoomHalf(Action):
+    """Pay a Room's locked-half mana cost to unlock it (sorcery speed).
+
+    Per CR 715.3-4: "As a sorcery, the controller of an unlocked Room
+    on the battlefield with at least one locked door may unlock a
+    locked door of that Room by paying its mana cost as though they
+    were casting an enchantment spell." This is NOT a spell — the
+    unlock action doesn't go on the stack. The mana cost is paid the
+    same way; on apply, the named half is added to ``unlocked_halves``
+    on the Room permanent and any newly-active triggered abilities on
+    the entering half (e.g. "When you unlock this door, ..." — modeled
+    as ENTERS predicates with ``room_half`` filter) fire as the half
+    becomes unlocked.
+
+    Future: Eerie observers ("Whenever you fully unlock a Room, ...")
+    look for the transition to a fully-unlocked state — for now we
+    only emit a ``"Room fully unlocked"`` log line at that transition.
+    """
+
+    card_id: int
+    half_name: str
 
 
 @dataclass(frozen=True)
@@ -1036,7 +1066,11 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_warp=action.use_warp, kicked=action.kicked,
             cast_for_free=action.cast_for_free,
             use_impending=action.use_impending,
+            cast_room_half=action.cast_room_half,
         )
+        return
+    if isinstance(action, UnlockRoomHalf):
+        _unlock_room_half(state, player_id, action.card_id, action.half_name)
         return
     if isinstance(action, DeclareAttackers):
         _declare_attackers(state, player_id, action.attacker_ids)
@@ -1372,6 +1406,7 @@ def _cast_spell(
     use_warp: bool = False, kicked: bool = False,
     cast_for_free: bool = False,
     use_impending: bool = False,
+    cast_room_half: "str | None" = None,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -1386,7 +1421,17 @@ def _cast_spell(
     cast_from_outside_hand = False
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
-        if use_impending:
+        # Cost selection cascade: Room half wins first (Rooms are always
+        # cast for one half's cost, never the printing's combined
+        # mana_cost). Then Impending alt-cost (DSK Overlord cycle).
+        # Then Warp alt-cost (EoE). Default is the normal mana_cost.
+        if cast_room_half is not None and card.printing.is_room:
+            half = next(
+                h for h in card.printing.room_halves
+                if h.name == cast_room_half
+            )
+            cost = half.mana_cost
+        elif use_impending:
             cost = card.printing.impending_cost
         elif use_warp:
             cost = card.printing.warp_cost
@@ -1688,9 +1733,12 @@ def _cast_spell(
             countered=countered, x_value=x_value, kicked=kicked,
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
+            cast_room_half=cast_room_half,
         )
     )
     mode = " (warp)" if use_warp else ""
+    if cast_room_half is not None:
+        mode = f" ({cast_room_half})"
     state.log.append(
         f"P{player_id} casts {card.printing.name}{mode}"
         + _format_log_targets(state, targets)
@@ -2220,6 +2268,98 @@ def _activate_station(
     )
 
 
+def _unlock_room_half(
+    state: GameState, player_id: int, card_id: int, half_name: str,
+) -> None:
+    """Pay the named half's mana cost and unlock it on the Room.
+
+    CR 715.3-4: unlocking is NOT a spell — the unlock action doesn't
+    use the stack. Pay the cost the same way as casting (auto-tap
+    lands), then add the half to ``unlocked_halves`` and fire any
+    ``"When you unlock this door"`` triggers (which we model as
+    ENTERS-event triggers tagged with the half-name; we re-dispatch
+    ENTERS for the source so those gates fire).
+
+    Silently no-ops on invalid inputs (not a Room, half already
+    unlocked, not the controller, etc.) — legal_actions has gated
+    these.
+    """
+    p = state.player_by_id(player_id)
+    obj = next((o for o in state.battlefield if o.id == card_id), None)
+    if obj is None or obj.controller_id != player_id:
+        return
+    if not obj.printing.is_room:
+        return
+    if half_name in obj.unlocked_halves:
+        return
+    half = next(
+        (h for h in obj.printing.room_halves if h.name == half_name), None,
+    )
+    if half is None:
+        return
+    if not can_pay_cost(state, player_id, half.mana_cost):
+        return
+    auto_tap_for_cost(state, player_id, half.mana_cost)
+    obj.unlocked_halves = obj.unlocked_halves | {half_name}
+    state.log.append(
+        f"P{player_id} unlocks {obj.printing.name}: door {half_name}"
+    )
+    if len(obj.unlocked_halves) == len(obj.printing.room_halves):
+        state.log.append(
+            f"{obj.printing.name}: Room fully unlocked"
+        )
+    # Fire any triggers gated to this newly-unlocked half. We model
+    # "When you unlock this door, ..." as TriggeredAbility entries
+    # with ``room_half=<half-name>`` and a self-targeting gate; the
+    # ``effective_triggered_abilities`` iterator filters to the
+    # currently-unlocked set, so a now-unlocked half's triggers
+    # become reachable here. We dispatch a synthetic ENTERS event
+    # over only the just-unlocked half's triggers so unrelated
+    # ENTERS observers (other Rooms, ETB anthems) aren't re-fired.
+    from mtg_bot.effects.predicates import Event as _Event
+    _fire_unlock_door_triggers(state, obj, half_name)
+
+
+def _fire_unlock_door_triggers(
+    state: GameState, obj: "GameObject", half_name: str,
+) -> None:
+    """Fire triggered abilities tagged with ``room_half=half_name`` on
+    ``obj``. Used by the unlock-action and by spell-resolution to
+    fire "When you unlock this door, ..." triggers when a Room enters
+    with a half pre-unlocked.
+
+    Each matching trigger goes on the stack via
+    ``push_triggered_ability`` so it gets a normal response window.
+    """
+    from mtg_bot.effects.predicates import Event as _Event
+    from mtg_bot.game import effective_triggered_abilities
+
+    # Build the ability index over the FULL printing (matches the
+    # index space ``effective_triggered_abilities`` produces) so the
+    # once-per-turn ledger and other index-keyed bookkeeping stay
+    # consistent with the rest of the engine.
+    abilities = effective_triggered_abilities(state, obj)
+    for idx, ab in enumerate(abilities):
+        if getattr(ab, "room_half", None) != half_name:
+            continue
+        # Only ENTERS-event triggers represent "When you unlock this
+        # door" — other event types (DIES, ATTACKS, ...) should fire
+        # only on their actual events and not at unlock time.
+        if ab.event != _Event.ENTERS:
+            continue
+        # Self-target gate (the trigger is "when ~ enters" / "when you
+        # unlock this door" — the subject is the source itself). We
+        # fire with subject=obj.
+        push_triggered_ability(
+            state,
+            source=obj,
+            ability=ab,
+            ability_index=idx,
+            controller_id=obj.controller_id,
+            label=f"unlock-{half_name}",
+        )
+
+
 def _declare_attackers(
     state: GameState, player_id: int, attacker_ids: frozenset[int]
 ) -> None:
@@ -2417,6 +2557,17 @@ def resolve_top_of_stack(state: GameState) -> None:
                 if card.printing.enters_as_copy_of_creature:
                     apply_clone_enters_as_copy_replacement(
                         state, card, item.controller_id,
+                    )
+                # DSK Rooms: the half cast determines which half is
+                # unlocked when the Room enters. Set it BEFORE
+                # ``put_into_battlefield`` so any "When you unlock
+                # this door" trigger (modeled as ENTERS w/
+                # room_half=A) sees the correct unlocked-set.
+                if card.printing.is_room and item.cast_room_half is not None:
+                    card.unlocked_halves = frozenset({item.cast_room_half})
+                    state.log.append(
+                        f"{card.printing.name}: unlocked door "
+                        f"{item.cast_room_half}"
                     )
             put_into_battlefield(state, card, item.controller_id)
             return
@@ -2953,6 +3104,16 @@ def dispatch_event(
             source.printing.triggered_abilities
         ):
             if not ability.matches_event(event, subjects, source, state):
+                continue
+            # DSK Rooms: an ability tagged with a room_half is only
+            # active when that half is in the source's
+            # ``unlocked_halves``. Locked halves' triggers never
+            # observe events. (Non-Room abilities have ``room_half ==
+            # None`` and are never gated.)
+            if (
+                ability.room_half is not None
+                and ability.room_half not in source.unlocked_halves
+            ):
                 continue
             firings = (
                 etb_trigger_multiplier(state, source.controller_id)

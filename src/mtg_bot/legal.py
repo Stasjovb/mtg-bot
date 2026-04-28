@@ -10,6 +10,7 @@ from mtg_bot.actions import (
     PassPriority,
     PlayLand,
     TurnFaceUp,
+    UnlockRoomHalf,
     can_pay_cost,
 )
 from mtg_bot.cards import ManaCost
@@ -276,6 +277,20 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             continue
         if card.printing.is_instant:
             continue
+        # DSK Rooms: a Room is cast for the chosen half's mana cost,
+        # not the printing's combined cost. Surface one CastSpell per
+        # half whose cost is payable; skip the generic cast block
+        # below (the Room has no single "mana_cost" cast site).
+        if card.printing.is_room:
+            for half in card.printing.room_halves:
+                if _can_cast(
+                    state, player_id, card,
+                    _effective_cost(card, half.mana_cost),
+                ):
+                    actions.append(
+                        CastSpell(card.id, cast_room_half=half.name)
+                    )
+            continue
         if _is_sorcery_speed_spell(card):
             if _can_cast(
                 state, player_id, card, _effective_cost(card, card.printing.mana_cost),
@@ -425,6 +440,24 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 state, player_id, top, _effective_cost(top, top.printing.mana_cost),
             ) and _targets_are_satisfiable(state, player_id, top):
                 actions.append(CastSpell(top.id))
+
+    # DSK Rooms: ``UnlockRoomHalf`` is sorcery-speed only (CR 715.4).
+    # Surface one action per Room the controller controls + locked
+    # half whose mana cost is currently payable. The unlock action is
+    # NOT a spell (no spell_kinds context), but the same coin-pool
+    # check applies via ``can_pay_cost`` with the default tag.
+    for obj in state.battlefield:
+        if obj.controller_id != player_id:
+            continue
+        if not obj.printing.is_room:
+            continue
+        for half in obj.printing.room_halves:
+            if half.name in obj.unlocked_halves:
+                continue
+            if can_pay_cost(state, player_id, half.mana_cost):
+                actions.append(
+                    UnlockRoomHalf(card_id=obj.id, half_name=half.name)
+                )
 
     # Activated abilities on permanents this player controls.
     for obj in state.battlefield:

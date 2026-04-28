@@ -263,6 +263,18 @@ class GameObject:
     # at the moment a card becomes a face-down permanent; cleared by
     # the ``TurnFaceUp`` action.
     face_down: bool = False
+    # DSK Rooms: set of half-names currently unlocked on this Room
+    # permanent. When a Room is cast for half A's mana cost, the
+    # entering permanent has ``unlocked_halves = frozenset({A})``;
+    # ``UnlockRoomHalf`` adds the named half to the set. Locked
+    # halves' abilities are filtered out by the effective-ability
+    # iterators (``effective_triggered_abilities`` /
+    # ``effective_activated_abilities`` / static iteration). When
+    # ``len(unlocked_halves) == len(printing.room_halves)``, the Room
+    # is fully unlocked — the cast/unlock sites log "Room fully
+    # unlocked" so a future Eerie hook can observe it (Eerie itself
+    # isn't wired yet). Empty frozenset for non-Room objects.
+    unlocked_halves: frozenset[str] = field(default_factory=frozenset)
 
 
 def is_void_active(state: GameState) -> bool:
@@ -272,6 +284,26 @@ def is_void_active(state: GameState) -> bool:
         state.permanent_left_battlefield_this_turn
         or state.spell_warped_this_turn
     )
+
+
+def _active_static_abilities(source: GameObject) -> list:
+    """Return ``source.printing.static_abilities`` filtered for DSK
+    Room half-locking: a static tagged with a ``room_half`` is inert
+    while that half is locked (not in ``source.unlocked_halves``).
+    Non-Room statics (``room_half is None``) pass through unchanged.
+
+    Engine call sites that walk static abilities (anthem layer 7c
+    pump, layer-6 keyword grants) route through this helper so a
+    locked-half anthem (Lecture Hall's "Other permanents you control
+    have hexproof") doesn't apply while its half is locked.
+    """
+    if not source.printing.is_room:
+        return list(source.printing.static_abilities)
+    return [
+        a for a in source.printing.static_abilities
+        if getattr(a, "room_half", None) is None
+        or a.room_half in source.unlocked_halves
+    ]
 
 
 def reveal_to(obj: GameObject, *player_ids: int) -> None:
@@ -432,7 +464,7 @@ def _static_bonuses(
     granted: set[str] = set()
     for source in state.battlefield:
         wiped = _source_layer6_wiped(state, source)
-        for ability in source.printing.static_abilities:
+        for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
                 continue
             granted |= ability.granted_keywords
@@ -531,7 +563,7 @@ def _layer6_entries_for(
     ]
     # Static-anthem keyword grants from sources on the battlefield.
     for source in state.battlefield:
-        for ability in source.printing.static_abilities:
+        for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
                 continue
             for kw in ability.granted_keywords:
@@ -1158,7 +1190,18 @@ def effective_activated_abilities(
     ):
         return ()
 
-    base = list(obj.printing.activated_abilities)
+    # DSK Rooms: filter out activated abilities whose ``room_half``
+    # is not in ``obj.unlocked_halves`` — those halves are locked,
+    # so their abilities are inert. Non-Room abilities (room_half ==
+    # None) are never filtered.
+    if obj.printing.is_room:
+        base = [
+            a for a in obj.printing.activated_abilities
+            if getattr(a, "room_half", None) is None
+            or a.room_half in obj.unlocked_halves
+        ]
+    else:
+        base = list(obj.printing.activated_abilities)
     if obj.printing.is_artifact:
         seen_ragost = False
         seen_mmnemon = False
@@ -1236,7 +1279,18 @@ def effective_triggered_abilities(
     re-adds the granted trigger; a newer lose-all-abilities wipes
     everything that came before within layer 6.
     """
-    base = list(obj.printing.triggered_abilities)
+    # DSK Rooms: filter out triggered abilities whose ``room_half``
+    # is not in ``obj.unlocked_halves`` — those halves are locked,
+    # so their abilities are inert. Non-Room abilities (room_half ==
+    # None) are never filtered.
+    if obj.printing.is_room:
+        base = [
+            a for a in obj.printing.triggered_abilities
+            if getattr(a, "room_half", None) is None
+            or a.room_half in obj.unlocked_halves
+        ]
+    else:
+        base = list(obj.printing.triggered_abilities)
     if obj.temp_triggered_abilities:
         base.extend(obj.temp_triggered_abilities)
     layer6 = sorted(
@@ -1620,6 +1674,11 @@ class StackItem:
     # ModalChooseOne.resolve can read the pre-picked choice instead
     # of prompting the agent again at resolve time.
     chosen_modes: tuple[int, ...] = ()
+    # DSK Rooms: when a Room spell is cast, the half-name the
+    # controller chose to cast for. Resolved into
+    # ``GameObject.unlocked_halves`` when the Room enters the
+    # battlefield. ``None`` for non-Room spells.
+    cast_room_half: "str | None" = None
 
 
 @dataclass

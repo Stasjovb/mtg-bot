@@ -321,6 +321,36 @@ def parse_mana_cost(s: str) -> ManaCost:
 
 
 @dataclass(frozen=True)
+class RoomHalf:
+    """One door/half of a Duskmourn Room card (CR 207.2g + 715).
+
+    A Room is an enchantment with two halves; each has its own name,
+    mana cost, and abilities. When a Room spell is cast, it's cast for
+    one half's mana cost — that half enters unlocked, the other locked.
+    The owner can later unlock the locked half at sorcery speed by
+    paying its mana cost (see ``UnlockRoomHalf`` action).
+
+    Locked halves' abilities are inert. The
+    ``effective_triggered_abilities`` / ``effective_activated_abilities``
+    iterators filter out abilities whose ``room_half`` name is not in
+    the source's ``GameObject.unlocked_halves``. The static-ability
+    iterator does the same.
+
+    The ``triggered_abilities`` / ``static_abilities`` /
+    ``activated_abilities`` here are also flattened onto the parent
+    ``CardPrinting`` (with ``room_half`` set on each) so the existing
+    ability iterators work without per-call-site special-casing.
+    """
+
+    name: str
+    mana_cost_str: str
+    mana_cost: ManaCost
+    triggered_abilities: tuple["TriggeredAbility", ...] = ()
+    static_abilities: tuple["StaticAbility", ...] = ()
+    activated_abilities: tuple["ActivatedAbility", ...] = ()
+
+
+@dataclass(frozen=True)
 class CardPrinting:
     name: str
     mana_cost_str: str
@@ -747,6 +777,18 @@ class CardPrinting:
     # combat.can_block — when True on the blocker's printing, the
     # blocker may only declare blocks against attackers with flying.
     can_only_block_creatures_with_flying: bool = False
+    # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
+    # is a Room. Empty for non-Room cards. The Room's overall
+    # ``mana_cost`` mirrors one half's cost at print time, but at cast
+    # time the caster picks WHICH half to cast (and pays that half's
+    # cost). The Room enters with that half ``unlocked``; the other is
+    # locked. ``UnlockRoomHalf`` later pays the second half's cost to
+    # unlock it. Each half's abilities are also flattened onto this
+    # printing's ``triggered_abilities`` / ``static_abilities`` /
+    # ``activated_abilities`` with each ability's ``room_half`` field
+    # set to the half-name, so the existing iterators (filtered through
+    # ``effective_*_abilities``) gate them by ``unlocked_halves``.
+    room_halves: tuple[RoomHalf, ...] = ()
 
     @property
     def is_land(self) -> bool:
@@ -806,6 +848,11 @@ class CardPrinting:
     @property
     def is_planeswalker(self) -> bool:
         return "Planeswalker" in self.card_types
+
+    @property
+    def is_room(self) -> bool:
+        """A Duskmourn Room (Enchantment — Room) — has two halves."""
+        return bool(self.room_halves)
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
@@ -1299,6 +1346,79 @@ def make_enchantment(
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         wipes_all_creature_abilities=wipes_all_creature_abilities,
         sets_all_creature_pt_to_1_1=sets_all_creature_pt_to_1_1,
+    )
+
+
+def make_room(
+    half_a: RoomHalf,
+    half_b: RoomHalf,
+    legendary: bool = False,
+) -> CardPrinting:
+    """Build a Duskmourn Room card (``Enchantment — Room // Enchantment — Room``).
+
+    The combined-card name is ``"<A.name> // <B.name>"`` (Scryfall
+    convention). The printing-level ``mana_cost`` and ``mana_cost_str``
+    are the SUM of the two halves' costs — used only for things like
+    ``cmc`` reporting; cast time uses the chosen half's cost via
+    ``CastSpell``-with-half resolution. Each half's abilities are
+    flattened onto the printing's ``triggered_abilities`` /
+    ``static_abilities`` / ``activated_abilities`` tuples with
+    ``room_half`` tagged so the engine's effective-ability iterators
+    can gate them on ``unlocked_halves``.
+
+    Simplification: the cast flow takes the controller's chosen half's
+    cost; the half-choice is wired in ``_cast_spell`` via the
+    ``cast_room_half`` argument on ``CastSpell``.
+    """
+    name = f"{half_a.name} // {half_b.name}"
+    prefix = "Legendary " if legendary else ""
+    type_line = f"{prefix}Enchantment — Room"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    # Tag each half's abilities with its ``room_half`` name and flatten
+    # them onto the parent printing. Use ``dataclasses.replace`` so the
+    # frozen dataclass instances on the half (which the half itself
+    # also retains, untagged) get a tagged copy on the parent.
+    from dataclasses import replace as _dc_replace
+
+    triggered: list[TriggeredAbility] = []
+    static: list[StaticAbility] = []
+    activated: list[ActivatedAbility] = []
+    for half in (half_a, half_b):
+        for t in half.triggered_abilities:
+            triggered.append(_dc_replace(t, room_half=half.name))
+        for s in half.static_abilities:
+            static.append(_dc_replace(s, room_half=half.name))
+        for a in half.activated_abilities:
+            activated.append(_dc_replace(a, room_half=half.name))
+    # Combined mana cost: stored as a string of the two halves joined
+    # by ``//`` (matches Scryfall's printed form). The parsed
+    # ``mana_cost`` uses the COMBINED cost (sum of the two halves) so
+    # any caller that asks for printing.mana_cost.total gets the
+    # full-card mana value. Cast-time payment doesn't touch this
+    # printing-level cost — it uses the chosen half's cost directly.
+    combined_str = f"{half_a.mana_cost_str} // {half_b.mana_cost_str}"
+    summed_generic = half_a.mana_cost.generic + half_b.mana_cost.generic
+    summed_colored: dict[str, int] = {}
+    for color, n in half_a.mana_cost.colored:
+        summed_colored[color] = summed_colored.get(color, 0) + n
+    for color, n in half_b.mana_cost.colored:
+        summed_colored[color] = summed_colored.get(color, 0) + n
+    summed_cost = ManaCost(
+        generic=summed_generic,
+        colored=tuple(sorted(summed_colored.items())),
+    )
+    return CardPrinting(
+        name=name,
+        mana_cost_str=combined_str,
+        mana_cost=summed_cost,
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered),
+        static_abilities=tuple(static),
+        activated_abilities=tuple(activated),
+        room_halves=(half_a, half_b),
     )
 
 

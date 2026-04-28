@@ -258,6 +258,13 @@ class ActivatedAbility:
     # Torpedo's "this ability costs {3} less to activate if you
     # attacked with a Spacecraft this turn."
     cost_reductions: tuple["CostReduction", ...] = ()
+    # DSK Rooms: when this ability lives on a Room half, this is the
+    # half-name (matches a key in ``CardPrinting.room_halves``).
+    # ``effective_activated_abilities`` filters out abilities whose
+    # ``room_half`` is not in the source's ``unlocked_halves``; the
+    # half is locked, so its abilities are inert. ``None`` for
+    # non-Room abilities — they're always active.
+    room_half: "str | None" = None
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"
@@ -318,6 +325,11 @@ class StaticAbility:
     # the ability to apply. 0 means "always on". Matches EoE's
     # "as long as you've cast two or more spells this turn" riders.
     requires_spells_cast_this_turn: int = 0
+    # DSK Rooms: when this static lives on a Room half, this is the
+    # half-name (matches a key in ``CardPrinting.room_halves``). While
+    # the half is locked (not in ``unlocked_halves``), the ability is
+    # inert. ``None`` for non-Room statics — always active.
+    room_half: "str | None" = None
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
@@ -453,6 +465,12 @@ class TriggeredAbility:
     # predicate path.
     event: "Event | None" = None
     predicate: "Predicate | None" = None
+    # DSK Rooms: when this triggered ability lives on a Room half,
+    # this is the half-name (matches a key in
+    # ``CardPrinting.room_halves``). While the half is locked (not in
+    # ``unlocked_halves``), the ability is inert and won't fire.
+    # ``None`` for non-Room triggers — always active.
+    room_half: "str | None" = None
 
     def __post_init__(self) -> None:
         if self.event is not None and self.trigger:
