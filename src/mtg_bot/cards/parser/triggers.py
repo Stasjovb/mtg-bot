@@ -587,8 +587,39 @@ def _parse_predicate_trigger_phrase(
     return _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
 
 
+def _substitute_self_name(line: str, name: str) -> str:
+    """Replace the printing's own name (and the short-form name for
+    legendary commas) with ``"this creature"`` inside the line.
+
+    Scryfall oracle text refers to a legendary creature's source by
+    its short name (the substring before the first comma — ``Haliya``
+    on Haliya, Ascendant Cadet, ``Syr Vondam`` on Syr Vondam, the
+    Lucent). Non-legendary printings refer to themselves either as
+    ``"this creature"`` (the canonical form already accepted by every
+    trigger-phrase table) or by their full printed name. This helper
+    rewrites both the full and short forms uniformly, so the
+    downstream condition / effect grammar only needs the canonical
+    surface.
+
+    The substitution is whole-word (regex word-boundary anchored) so
+    a substring match inside another token can't fire — e.g. a
+    hypothetical name ``"Sami"`` doesn't accidentally match inside
+    ``"sample"``. The full name is tried before the short form so a
+    printing whose full name appears verbatim in the oracle text
+    (rare; usually the short form is used) still picks up the more-
+    specific replacement first.
+    """
+    full_pattern = r"\b" + re.escape(name) + r"\b"
+    line = re.sub(full_pattern, "this creature", line)
+    short = name.split(",", 1)[0]
+    if short and short != name:
+        short_pattern = r"\b" + re.escape(short) + r"\b"
+        line = re.sub(short_pattern, "this creature", line)
+    return line
+
+
 def _parse_triggered_ability_line(
-    line: str,
+    line: str, *, name: str | None = None,
 ) -> TriggeredAbility | tuple[TriggeredAbility, ...] | None:
     """Parse a single triggered-ability oracle line.
 
@@ -599,10 +630,24 @@ def _parse_triggered_ability_line(
     ``When this creature enters or dies``), or ``None`` if no shape
     matches.
 
+    ``name``, when supplied, is the card's own printed name. Name
+    references in the oracle text — both the full printed name and
+    the short form (the substring before the first comma, used for
+    legendary creatures) — are rewritten to the canonical
+    ``"this creature"`` form before condition / effect lookup, so a
+    printing whose oracle text reads ``"Whenever Haliya enters or
+    attacks, …"`` flows through the same trigger-phrase table as
+    the un-named ``"Whenever this creature enters or attacks, …"``
+    surface. Cards that print themselves only as ``"this creature"``
+    pass through unchanged (the substitution is a no-op when the
+    name doesn't appear in the line).
+
     The clause layer (``_parse_clause``) normalizes both shapes into
     the ``triggers`` tuple on ``_ParsedClause`` so callers downstream
     don't need to special-case the compound path.
     """
+    if name is not None:
+        line = _substitute_self_name(line, name)
     line = _strip_ability_word_prefix(line)
     # ETB-replacement-style ``This creature enters with …`` line. This
     # surface shape doesn't carry a ``When``/``Whenever`` keyword and so

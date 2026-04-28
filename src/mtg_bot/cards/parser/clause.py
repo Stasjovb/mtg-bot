@@ -76,15 +76,28 @@ class _ParsedClause:
         return None
 
 
-def _parse_clause(line: str) -> _ParsedClause | None:
+def _parse_clause(
+    line: str, *, name: str | None = None,
+) -> _ParsedClause | None:
     """Return a ``_ParsedClause`` for a recognized line, or ``None``
     if the parser doesn't know how to handle it. ``None`` causes the
-    enclosing card to be skipped."""
+    enclosing card to be skipped.
+
+    ``name`` is the card's own printed name; when supplied the
+    triggered-ability parser substitutes name references in
+    trigger-condition phrases with the canonical ``"this creature"``
+    form before lookup, so a printing whose oracle text reads
+    ``"Whenever Haliya enters or attacks, …"`` parses through the
+    same condition table as ``"Whenever this creature enters or
+    attacks, …"``. Other clause grammars (keywords / activated /
+    static) don't reference the source's name today so they ignore
+    the parameter.
+    """
     line = line.strip()
     keywords = _parse_keyword_line(line)
     if keywords is not None:
         return _ParsedClause(keywords=keywords)
-    triggered = _parse_triggered_ability_line(line)
+    triggered = _parse_triggered_ability_line(line, name=name)
     if triggered is not None:
         # Single-condition trigger — wrap in a 1-tuple. Compound-
         # condition triggers (``enters or dies``) take a different

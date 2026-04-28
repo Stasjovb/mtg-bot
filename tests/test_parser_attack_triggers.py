@@ -344,6 +344,129 @@ def test_mass_pump_rejects_unknown_granted_keyword():
     ) is None
 
 
+# ---------- named-self substitution in trigger lines ----------
+
+
+def test_substitute_self_name_short_form_replaces_legendary_short():
+    # Haliya, Ascendant Cadet's printed trigger uses the short-form
+    # name. After substitution, the line is in the canonical
+    # ``"this creature"`` shape that the trigger-condition tables key
+    # off of.
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+    assert _substitute_self_name(
+        "Whenever Haliya enters or attacks, draw a card.",
+        "Haliya, Ascendant Cadet",
+    ) == "Whenever this creature enters or attacks, draw a card."
+
+
+def test_substitute_self_name_full_form_replaces_full():
+    # Forward-looking shape — a printing whose oracle text uses the
+    # full name verbatim (rare but possible). The full name is tried
+    # before the short form so the more-specific replacement wins.
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+    assert _substitute_self_name(
+        "Whenever Haliya, Ascendant Cadet attacks, draw a card.",
+        "Haliya, Ascendant Cadet",
+    ) == "Whenever this creature attacks, draw a card."
+
+
+def test_substitute_self_name_non_legendary_passthrough():
+    # A non-legendary printing's name has no comma-separated short
+    # form; a printing whose oracle text doesn't reference itself by
+    # name passes through unchanged.
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+    assert _substitute_self_name(
+        "Whenever this creature attacks, draw a card.",
+        "Sunset Saboteur",
+    ) == "Whenever this creature attacks, draw a card."
+
+
+def test_substitute_self_name_word_boundary_safe():
+    # The substitution is whole-word anchored (regex word-boundary)
+    # so a substring match inside a longer token can't accidentally
+    # fire. Pin the boundary behavior with a synthetic line where the
+    # short name appears as a substring of an unrelated word.
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+    assert _substitute_self_name(
+        "Whenever this creature attacks, sample text Haliya alone.",
+        "Haliya, Ascendant Cadet",
+    ) == "Whenever this creature attacks, sample text this creature alone."
+
+
+def test_parse_triggered_ability_line_with_name_substitutes_short():
+    # End-to-end: a trigger line that uses the printing's short-form
+    # name parses to the same TriggeredAbility shape as the canonical
+    # ``"this creature"`` form when ``name`` is supplied.
+    parsed = _parse_triggered_ability_line(
+        "Whenever Haliya enters or attacks, "
+        "put a +1/+1 counter on target creature.",
+        name="Haliya, Ascendant Cadet",
+    )
+    assert parsed == (
+        TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=PutPlusOneCounterOnTargetCreature(amount=1),
+        ),
+        TriggeredAbility(
+            event=Event.ATTACKS, predicate=IsSelf(),
+            effect=PutPlusOneCounterOnTargetCreature(amount=1),
+        ),
+    )
+
+
+def test_parse_triggered_ability_line_without_name_keeps_named_self():
+    # Without ``name`` the substitution doesn't run, so a named-self
+    # trigger line stays unrecognized — there's no trigger-condition
+    # phrase keyed on the literal ``"Haliya enters or attacks"``.
+    # Earlier batches' callers (``_parse_clause`` invocations from
+    # other builders) don't supply ``name``, so this preserves their
+    # existing behavior.
+    assert _parse_triggered_ability_line(
+        "Whenever Haliya enters or attacks, "
+        "put a +1/+1 counter on target creature.",
+    ) is None
+
+
+def test_parse_triggered_ability_line_with_name_passthrough_for_canonical():
+    # When the line already uses the canonical ``"this creature"``
+    # form, supplying ``name`` is a no-op — the substitution helper
+    # only fires on actual name occurrences. Pin a single-arm
+    # canonical-form trigger to confirm the no-name and with-name
+    # paths produce identical output for a name-free line.
+    canonical = TriggeredAbility(
+        event=Event.ATTACKS, predicate=IsSelf(),
+        effect=PutPlusOneCounterOnSelf(amount=1),
+    )
+    assert _parse_triggered_ability_line(
+        "Whenever this creature attacks, "
+        "put a +1/+1 counter on this creature.",
+        name="Sunset Saboteur",
+    ) == canonical
+    assert _parse_triggered_ability_line(
+        "Whenever this creature attacks, "
+        "put a +1/+1 counter on this creature.",
+    ) == canonical
+
+
+def test_syr_vondam_the_lucent_claims_end_to_end():
+    # Syr Vondam, the Lucent's enters-or-attacks trigger uses the
+    # short-form ``"Syr Vondam"`` for both arms; the new name-
+    # substitution path lifts both arms onto the canonical
+    # ``"this creature enters or attacks"`` compound predicate. Pair
+    # this with the mass-pump-and-gain effect grammar from this
+    # batch and the printing claims end-to-end.
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.cards.source import StaticCardSource
+
+    parser_printings = OracleParserCardSource().get_printings()
+    static_printings = StaticCardSource().get_printings()
+    assert "Syr Vondam, the Lucent" in parser_printings
+    assert (
+        parser_printings["Syr Vondam, the Lucent"]
+        == static_printings["Syr Vondam, the Lucent"]
+    )
+
+
 def test_glacier_godmaw_claims_end_to_end():
     # Glacier Godmaw was the first EoE printing to claim end-to-end on
     # the new mass-pump-and-gain grammar. Its landfall trigger fires

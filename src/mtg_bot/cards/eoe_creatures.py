@@ -1520,6 +1520,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Syr Vondam, the Lucent", "{2}{W}{B}{B}", 4, 4,
             legendary=True,
+            subtypes=("Human", "Knight"),
             keywords={"deathtouch", "lifelink"},
             triggered_abilities=(
                 TriggeredAbility(

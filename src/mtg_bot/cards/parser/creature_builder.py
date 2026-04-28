@@ -103,7 +103,12 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 return None
             activated[-1] = replace(activated[-1], sorcery_speed=True)
             continue
-        parsed = _parse_clause(line)
+        # Pass the printing's own name to the clause dispatcher so the
+        # triggered-ability layer can substitute name references
+        # (``Haliya``, ``Syr Vondam``, etc.) with the canonical
+        # ``this creature`` surface before condition / effect lookup.
+        # Non-trigger clause types ignore the parameter today.
+        parsed = _parse_clause(line, name=card["name"])
         if parsed is None:
             return None
         keywords.update(parsed.keywords)
