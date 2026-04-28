@@ -18,6 +18,15 @@ New effect-grammar primitives (``parser.effects``):
   Extinguisher Battleship's ETB sequence in EoE — was missing only
   this surface form.
 
+* ``target creature gains <kw>[ and <kw2>...] until end of turn`` →
+  ``PumpTargetCreatureUntilEOT(granted_keywords=...)``. Pure-keyword-
+  grant variant on a bare creature target with no P/T pump and no
+  control restriction. Distinct from the existing
+  ``another target creature you control gains …`` variant (Blooming
+  Stinger) — that one carries the ``you control`` + ``another``
+  qualifiers; this one is for phrases without any qualifier (Horrid
+  Vigor's printed body).
+
 New whole-spell exact-text dispatch entries
 (``_WHOLE_SPELL_EXACT_TEXT`` in ``parser.spell_builder``):
 
@@ -46,6 +55,10 @@ Cards newly claimed via the new primitive:
   whole-spell exact-text dispatch entry above.
 * **Duskmourn's Domination** ``{4}{U}{U}`` Aura — claimed via the new
   name-keyed dispatch entry above.
+* **Horrid Vigor** ``{1}{G}`` Instant — single-line ``Target creature
+  gains deathtouch and indestructible until end of turn.``. Parses
+  through the standard single-effect path now that the bare-target
+  keyword-grant primitive is in place.
 """
 
 from __future__ import annotations
@@ -175,3 +188,64 @@ def test_duskmourns_domination_carries_aura_fields():
     assert p.attached_grants_control is True
     assert p.attached_grants_lose_all_abilities is True
     assert p.equipment_bonuses == (-3, 0, frozenset())
+
+
+# ---------- bare-target keyword grant primitive (Horrid Vigor) ----------
+
+def test_parse_target_creature_gains_keywords_ueot_single():
+    # Single-keyword grant on a bare creature target. Distinct from
+    # the existing ``you control`` / ``opponent controls`` / ``another
+    # target creature you control`` variants — this primitive is for
+    # phrases without those qualifiers (Horrid Vigor's bare-target
+    # shape in DSK).
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    eff = _parse_effect("target creature gains flying until end of turn")
+    assert eff == PumpTargetCreatureUntilEOT(
+        power_bonus=0, toughness_bonus=0,
+        granted_keywords=frozenset({"flying"}),
+    )
+
+
+def test_parse_target_creature_gains_keywords_ueot_multi():
+    # Two-keyword grant — ``deathtouch and indestructible`` is exactly
+    # Horrid Vigor's printed body. Validates the keyword-line
+    # whitelist runs across the comma-joined surface (here joined by
+    # ``and``, validated by ``_parse_keyword_grant_body``).
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    eff = _parse_effect(
+        "target creature gains deathtouch and indestructible "
+        "until end of turn"
+    )
+    assert eff == PumpTargetCreatureUntilEOT(
+        power_bonus=0, toughness_bonus=0,
+        granted_keywords=frozenset({"deathtouch", "indestructible"}),
+    )
+
+
+def test_parse_target_creature_gains_unknown_keyword_returns_none():
+    # An unrecognized keyword fails the keyword-line whitelist
+    # validation in ``_parse_keyword_grant_body`` and returns ``None``
+    # — so a card that printed an unknown keyword would stay unclaimed
+    # rather than silently dropping the grant.
+    assert _parse_effect(
+        "target creature gains unicornsplosion until end of turn"
+    ) is None
+
+
+def test_horrid_vigor_claimed_by_parser():
+    # Horrid Vigor ``{1}{G}`` Instant — single-line ``Target creature
+    # gains deathtouch and indestructible until end of turn.``. End-
+    # to-end via the new bare-target keyword-grant primitive.
+    assert "Horrid Vigor" in _claimed_names()
+
+
+def test_horrid_vigor_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the right keyword set and zero bonuses (no control restriction).
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Horrid Vigor"]
+    assert p.spell_effect == PumpTargetCreatureUntilEOT(
+        power_bonus=0, toughness_bonus=0,
+        granted_keywords=frozenset({"deathtouch", "indestructible"}),
+    )

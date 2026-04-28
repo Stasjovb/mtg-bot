@@ -922,6 +922,22 @@ _PUMP_SELF_UEOT = re.compile(
 _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
     r"^another target creature you control gains (.+) until end of turn$"
 )
+# "Target creature gains <kw>[ and <kw2>...] until end of turn." —
+# pure keyword-grant variant with no P/T pump and no control
+# restriction (Horrid Vigor's ``Target creature gains deathtouch and
+# indestructible until end of turn.`` in DSK). Maps to
+# ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
+# granted_keywords=...)`` — bare-target legal pool, same engine class
+# as the pump-and-gain shape just with zero bonuses. Tried AFTER the
+# more-specific ``you control``/``opponent controls`` variants so the
+# qualified shapes win on phrases that carry their qualifiers; this
+# bare-target shape only claims phrases without such qualifiers. The
+# granted-keywords body is validated against the keyword-line
+# whitelist before the parsed effect is returned, mirroring the
+# behavior of the other grant-keywords primitives.
+_GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT = re.compile(
+    r"^target creature gains (.+) until end of turn$"
+)
 # "Target artifact or creature gains <kw>[ and <kw2>...] until end of
 # turn." — pure keyword-grant on a permanent target whose legal pool
 # spans both artifacts and creatures (Reroute Systems mode 0). Maps to
@@ -1813,6 +1829,28 @@ def _parse_effect(phrase: str) -> Effect | None:
             granted_keywords=keywords,
             you_control_only=True,
             exclude_self=True,
+        )
+    # ``target creature gains <kw>[ and <kw2>...] until end of turn`` —
+    # pure keyword grant on a bare creature target (Horrid Vigor's
+    # ``Target creature gains deathtouch and indestructible until end
+    # of turn.`` in DSK). No control restriction, no P/T pump — only
+    # the keyword grant fires. Tried AFTER the ``another target
+    # creature you control gains …`` shape above so the more-specific
+    # qualifier wins; this bare-target shape only claims phrases that
+    # don't carry the ``you control`` / ``another`` / ``an opponent
+    # controls`` qualifiers. The keyword body is parsed via
+    # ``_parse_keyword_grant_body`` and validated against the
+    # keyword-line whitelist; rejection returns ``None`` so an
+    # unknown keyword keeps the wrapping spell unclaimed.
+    m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(1))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=keywords,
         )
     # ``target artifact or creature gains <kw>[ and <kw2>...] until
     # end of turn`` — pure keyword grant on a permanent target whose
