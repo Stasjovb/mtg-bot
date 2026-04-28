@@ -42,7 +42,9 @@ import re
 from mtg_bot.cards.base import (
     BiosynthicBurstEffect,
     CardPrinting,
+    CloseEncounterEffect,
     ConditionalIfVoid,
+    ConsultTheStarChartsEffect,
     CostReduction,
     CreateToken,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
@@ -188,6 +190,23 @@ _SPELL_KEYWORD_PREAMBLE_RE = re.compile(
 )
 
 
+# Kicker preamble: a leading clause of the form
+# ``Kicker <cost> (You may pay an additional <cost> as you cast this
+# spell.)``. The preamble itself contributes no ``Effect`` — its cost
+# is wired onto the ``CardPrinting`` via the ``kicker`` kwarg, which
+# the engine uses to allow the caster to pay the additional cost at
+# cast time and the spell-effect to read ``state.resolving_kicked``
+# at resolve time. The cost is captured as a mana-cost string (e.g.
+# ``"{1}{U}"``) and threaded onto the printing verbatim.
+#
+# This shape is its own preamble (separate from the
+# ``_SPELL_PREAMBLE_KEYWORDS`` whitelist) because Kicker carries a
+# parameter (the cost), unlike Convoke which is a bare keyword.
+_KICKER_PREAMBLE_RE = re.compile(
+    r"^Kicker (?P<cost>(?:\{[^}]+\})+) \(.+\)\.?$"
+)
+
+
 # Additional-cost preamble: a leading clause of the form
 # ``As an additional cost to cast this spell, <cost-clause>.``. The
 # preamble itself contributes no ``Effect`` — its behavior is wired via
@@ -211,6 +230,10 @@ _ADDITIONAL_COST_PREAMBLE_RE = re.compile(
 _ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
     "sacrifice an artifact or creature": {
         "additional_cost_sacrifice_creature_or_artifact": True,
+    },
+    "choose a creature you control or a warped creature card "
+    "you own in exile": {
+        "additional_cost_choose_your_creature": True,
     },
 }
 
@@ -251,6 +274,32 @@ def _is_spell_keyword_preamble(clause: str) -> bool:
     rest of the spell. See ``_SPELL_PREAMBLE_KEYWORDS`` for the
     whitelist."""
     return _SPELL_KEYWORD_PREAMBLE_RE.match(clause.strip()) is not None
+
+
+def _is_kicker_preamble(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a Kicker preamble of the form
+    ``Kicker <cost> (You may pay an additional <cost> as you cast this
+    spell.)``. The caller drops these preamble clauses before parsing
+    the rest of the spell. The cost is extracted separately by
+    ``_kicker_cost`` and threaded onto the resulting ``CardPrinting``
+    via the ``kicker`` kwarg.
+    """
+    return _KICKER_PREAMBLE_RE.match(clause.strip()) is not None
+
+
+def _kicker_cost(clause: str) -> str | None:
+    """Return the kicker cost string (e.g. ``"{1}{U}"``) for a
+    recognized Kicker preamble ``clause``, or ``None`` if the clause
+    isn't a Kicker preamble. The cost is the verbatim mana-cost
+    string captured between ``Kicker `` and the parenthesized reminder
+    — the engine accepts the same surface form on the
+    ``CardPrinting.kicker_cost_str`` field, so no further parsing is
+    needed here.
+    """
+    m = _KICKER_PREAMBLE_RE.match(clause.strip())
+    if m is None:
+        return None
+    return m.group("cost")
 
 
 def _parse_void_damage_replacement(
@@ -677,6 +726,42 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "You choose a nonland card from it. "
         "That player discards that card."
     ): TargetOpponentDiscardsCasterChoice(),
+    # Consult the Star Charts: variable-X library look + kicker-gated
+    # extra card kept. The static ships ``ConsultTheStarChartsEffect()``
+    # (no parameters; the bespoke class handles the X-formula and the
+    # kicked vs unkicked branch by reading ``state.resolving_kicked``).
+    # The leading Kicker preamble line is detected separately by
+    # ``_detect_kicker_cost`` and threaded onto the printing via the
+    # ``kicker`` kwarg; the dispatcher returns only the spell-effect.
+    # The dispatch key carries the full text including the Kicker
+    # preamble — the dispatcher hits BEFORE the per-clause preamble-
+    # stripping pass, so the key has to mirror the printed text
+    # verbatim.
+    (
+        "Kicker {1}{U}\n"
+        "Look at the top X cards of your library, where X is the "
+        "number of lands you control. Put one of those cards into "
+        "your hand. If this spell was kicked, put two of those cards "
+        "into your hand instead. Put the rest on the bottom of your "
+        "library in a random order."
+    ): ConsultTheStarChartsEffect(),
+    # Close Encounter: directed power-as-damage burn whose source-of-
+    # power is chosen as an additional cost to casting (a creature you
+    # control or a warped creature card you own in exile). The static
+    # ships ``CloseEncounterEffect()`` with the
+    # ``additional_cost_choose_your_creature`` printing flag; the flag
+    # is detected separately via ``_detect_additional_cost_flags``,
+    # which routes the body phrase through ``_ADDITIONAL_COST_BODY_
+    # FLAGS``. The dispatch key includes the full additional-cost
+    # preamble line — the dispatcher hits BEFORE the per-clause
+    # preamble-stripping pass, so the key has to mirror the printed
+    # text verbatim.
+    (
+        "As an additional cost to cast this spell, choose a creature "
+        "you control or a warped creature card you own in exile.\n"
+        "Close Encounter deals damage equal to the power of the "
+        "chosen creature or card to target creature."
+    ): CloseEncounterEffect(),
     # Lithobraking: create-Lander + reflexive-trigger optional sac.
     # The static ships ``Sequence(CreateToken(Lander),
     # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``.
@@ -769,6 +854,12 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # preamble in place; the spell will fail to parse downstream and
     # stay unclaimed rather than silently dropping the cost.
     while clauses and _is_additional_cost_preamble(clauses[0]):
+        clauses = clauses[1:]
+    # Drop a leading Kicker preamble. The kicker cost is threaded onto
+    # the ``CardPrinting`` separately via ``_detect_kicker_cost``
+    # (called from ``_build_spell_printing``); the preamble line
+    # itself contributes no ``Effect``.
+    while clauses and _is_kicker_preamble(clauses[0]):
         clauses = clauses[1:]
     # Now drop per-clause parenthesized reminder text. Empty results
     # (a clause that was nothing but a parenthetical) are filtered out.
@@ -935,6 +1026,28 @@ def _detect_shuffle_self_flags(text: str, name: str) -> dict:
     return {}
 
 
+def _detect_kicker_cost(text: str) -> str | None:
+    """Return the Kicker cost string (e.g. ``"{1}{U}"``) if ``text``
+    has a leading Kicker preamble, else ``None``. Mirrors the
+    preamble-stripping in ``_parse_spell_oracle_text``: walks past
+    the existing keyword (Convoke) and additional-cost preambles —
+    today no card stacks Kicker behind another preamble, but the
+    walk keeps the dispatcher order-insensitive should a future card
+    do so. Returns the cost of the FIRST recognized Kicker preamble;
+    multi-Kicker spells (which would carry stacked Kicker lines)
+    aren't a printed shape.
+    """
+    for clause in [c.strip() for c in text.split("\n") if c.strip()]:
+        if _is_spell_keyword_preamble(clause):
+            continue
+        if _is_additional_cost_preamble(clause):
+            continue
+        if _is_kicker_preamble(clause):
+            return _kicker_cost(clause)
+        break
+    return None
+
+
 def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     """Return every cost-reduction rule implied by ``text``'s recognized
     ``This spell costs {N} less to cast if <condition>.`` clauses, in
@@ -975,6 +1088,10 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     if effect is None:
         return None
     factory = make_instant if "Instant" in card_types else make_sorcery
+    kicker = _detect_kicker_cost(text)
+    kwargs: dict = {}
+    if kicker is not None:
+        kwargs["kicker"] = kicker
     return factory(
         name=card["name"],
         cost=card["mana_cost"],
@@ -983,4 +1100,5 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         **_detect_preamble_flags(text),
         **_detect_additional_cost_flags(text),
         **_detect_shuffle_self_flags(text, card["name"]),
+        **kwargs,
     )

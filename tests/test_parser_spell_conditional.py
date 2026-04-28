@@ -172,15 +172,17 @@ def test_plasma_bolt_still_parses_to_conditional_if_void():
 
 # ---------- negative end-to-end ----------
 
-def test_consult_the_star_charts_still_unclaimed():
-    # Consult the Star Charts has a Kicker preamble (NOT on the
-    # whitelist) plus an inner effect the unified grammar can't
-    # handle. The parser must still decline the card; dropping the
-    # Kicker preamble would be wrong because the static side DOES
-    # carry Kicker as a separate cost (kicker="{1}{U}" on its
-    # make_instant call).
+def test_consult_the_star_charts_claimed_with_kicker_threaded():
+    # Consult the Star Charts has a Kicker preamble plus a 4-sentence
+    # body with a bespoke effect (``ConsultTheStarChartsEffect``).
+    # The Kicker preamble parser captures the cost ("{1}{U}") and
+    # threads it onto the printing via ``kicker``; the body lands as
+    # a whole-spell exact-text dispatch entry. End-to-end, the parser
+    # produces a printing matching the static side exactly.
     card = _eoe_card("Consult the Star Charts")
-    assert _build_spell_printing(card) is None
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.kicker_cost_str == "{1}{U}"
 
 
 def test_synthetic_spell_with_only_a_preamble_returns_none():

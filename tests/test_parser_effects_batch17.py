@@ -38,6 +38,8 @@ Each spell is exercised by:
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    CloseEncounterEffect,
+    ConsultTheStarChartsEffect,
     CreateToken,
     DealNDamageToEachCreature,
     OptionalSacArtifactForEffect,
@@ -48,7 +50,10 @@ from mtg_bot.cards.base import (
     TargetOpponentDiscardsCasterChoice,
 )
 from mtg_bot.cards.parser.spell_builder import (
+    _detect_kicker_cost,
     _detect_shuffle_self_flags,
+    _is_kicker_preamble,
+    _kicker_cost,
     _try_whole_spell_exact_text,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -235,3 +240,110 @@ def test_dispatch_temporal_intervention_returns_engine_class():
         "That player discards that card."
     )
     assert eff == TargetOpponentDiscardsCasterChoice()
+
+
+# ---------- Close Encounter and Consult the Star Charts ----------
+
+def test_close_encounter_claimed_by_parser():
+    # Close Encounter ``{1}{G}`` Instant — power-as-damage burn whose
+    # source is chosen as an additional cost (a creature you control
+    # or a warped creature card you own in exile). The static ships
+    # ``CloseEncounterEffect()`` plus the
+    # ``additional_cost_choose_your_creature`` printing flag; the
+    # whole-spell dispatcher returns the effect and
+    # ``_detect_additional_cost_flags`` threads the flag.
+    assert "Close Encounter" in _claimed_names()
+
+
+def test_dispatch_close_encounter_returns_engine_class():
+    eff = _try_whole_spell_exact_text(
+        "As an additional cost to cast this spell, choose a creature "
+        "you control or a warped creature card you own in exile.\n"
+        "Close Encounter deals damage equal to the power of the "
+        "chosen creature or card to target creature."
+    )
+    assert eff == CloseEncounterEffect()
+
+
+def test_consult_the_star_charts_claimed_by_parser():
+    # Consult the Star Charts ``{1}{U}`` Instant with Kicker ``{1}{U}``.
+    # The Kicker preamble is detected and threaded onto the printing
+    # via the ``kicker`` kwarg; the 4-sentence body lands as a
+    # whole-spell exact-text dispatch entry mapping to
+    # ``ConsultTheStarChartsEffect()``.
+    assert "Consult the Star Charts" in _claimed_names()
+
+
+def test_dispatch_consult_the_star_charts_returns_engine_class():
+    # The dispatch key uses the post-reminder-stripping form: the
+    # parenthesized Kicker reminder ``(You may pay an additional ...)``
+    # is stripped before lookup, leaving just ``Kicker {1}{U}`` on
+    # the first line.
+    eff = _try_whole_spell_exact_text(
+        "Kicker {1}{U}\n"
+        "Look at the top X cards of your library, where X is the "
+        "number of lands you control. Put one of those cards into "
+        "your hand. If this spell was kicked, put two of those cards "
+        "into your hand instead. Put the rest on the bottom of your "
+        "library in a random order."
+    )
+    assert eff == ConsultTheStarChartsEffect()
+
+
+# ---------- Kicker preamble detector ----------
+
+def test_is_kicker_preamble_recognizes_canonical_shape():
+    # Canonical Kicker preamble: keyword + cost + parenthesized
+    # reminder describing the additional cost.
+    assert _is_kicker_preamble(
+        "Kicker {1}{U} (You may pay an additional {1}{U} as you cast "
+        "this spell.)"
+    )
+
+
+def test_is_kicker_preamble_rejects_non_kicker_lines():
+    # Plain effect lines, Convoke (handled by the keyword whitelist),
+    # and additional-cost preambles all fall through.
+    assert not _is_kicker_preamble("Counter target spell.")
+    assert not _is_kicker_preamble(
+        "Convoke (Your creatures can help cast this spell.)"
+    )
+    assert not _is_kicker_preamble(
+        "As an additional cost to cast this spell, sacrifice an "
+        "artifact or creature."
+    )
+
+
+def test_kicker_cost_extracts_mana_string():
+    # The cost capture group returns the verbatim mana-cost string
+    # (with braces preserved). The engine accepts this surface form
+    # on ``CardPrinting.kicker_cost_str``.
+    cost = _kicker_cost(
+        "Kicker {1}{U} (You may pay an additional {1}{U} as you cast "
+        "this spell.)"
+    )
+    assert cost == "{1}{U}"
+
+
+def test_kicker_cost_returns_none_for_non_kicker():
+    assert _kicker_cost("Counter target spell.") is None
+
+
+def test_detect_kicker_cost_walks_past_other_preambles():
+    # The detector skips past Convoke and additional-cost preambles
+    # when looking for the Kicker line — keeps the dispatcher order-
+    # insensitive should a future card stack preambles. Today no card
+    # does, but the walk is cheap and defensive.
+    text = (
+        "Convoke (Your creatures can help cast this spell.)\n"
+        "Kicker {2}{R} (You may pay an additional {2}{R} as you cast "
+        "this spell.)\n"
+        "Do something."
+    )
+    assert _detect_kicker_cost(text) == "{2}{R}"
+
+
+def test_detect_kicker_cost_returns_none_when_absent():
+    assert _detect_kicker_cost(
+        "Counter target spell. You draw a card."
+    ) is None

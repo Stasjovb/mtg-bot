@@ -595,13 +595,13 @@ def test_source_claims_gravpack_monoist():
 
 def test_source_skips_cards_with_unsupported_clauses():
     """A card whose oracle text uses any clause beyond what the parser
-    supports must not be claimed. Consult the Star Charts has a Kicker
-    preamble (unrecognized — only Convoke is on the spell-keyword
-    preamble whitelist) AND a multi-clause body whose ``Look at the
-    top X cards`` shape isn't a primitive in the unified grammar, so
-    the whole spell is skipped."""
+    supports must not be claimed. Pull Through the Weft is a two-target
+    sequence (graveyard → hand AND graveyard → battlefield) whose
+    static-side simplification ships a SINGLE-target return; per the
+    parser-is-right rule we don't claim spells whose static is a
+    deliberate downgrade of the printed effect."""
     source = OracleParserCardSource()
-    assert "Consult the Star Charts" not in source.claimed_names
+    assert "Pull Through the Weft" not in source.claimed_names
 
 
 def test_source_get_printings_returns_only_claimed():
@@ -1549,23 +1549,18 @@ def test_build_spell_printing_handles_honor():
 def test_build_spell_printing_skips_multi_line_with_unparseable_clause():
     """A multi-line spell whose first clause is fine but second is an
     unsupported shape is skipped — the all-or-nothing rule from the
-    creature builder applies to spells too. Consult the Star Charts'
-    Kicker preamble would be dropped if it were on the recognized
-    spell-keyword whitelist (it isn't, only Convoke is), and even
-    if it were, the body's ``Look at the top X cards`` shape has no
-    primitive in the unified grammar, so the spell is skipped."""
+    creature builder applies to spells too. The synthetic test card
+    here has a recognized first clause (a generic counter spell) plus
+    a second clause whose ``unique-and-imaginary-effect-shape`` is not
+    a primitive in the unified grammar; the parser drops the whole
+    spell rather than half-implement it."""
     card = {
-        "name": "Consult the Star Charts",
+        "name": "Synthetic Two-Clause Test",
         "mana_cost": "{1}{U}",
         "type_line": "Instant",
         "oracle_text": (
-            "Kicker {1}{U} (You may pay an additional {1}{U} as you "
-            "cast this spell.)\n"
-            "Look at the top X cards of your library, where X is the "
-            "number of lands you control. Put one of those cards into "
-            "your hand. If this spell was kicked, put two of those "
-            "cards into your hand instead. Put the rest on the "
-            "bottom of your library in a random order."
+            "Counter target spell.\n"
+            "Then divine the future from the entrails of a starfish."
         ),
     }
     assert _build_spell_printing(card) is None
