@@ -74,12 +74,20 @@ post-reminder-strip oracle line:
   ``{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the
   number of differently named lands you control.`` activation →
   ``AllFatesScrollDrawEffect``.
+* **The Endstone** (Legendary) — two literal-matched trigger lines:
+  the composite ``Whenever you play a land or cast a spell, draw a
+  card.`` fans out into two ``TriggeredAbility`` primitives (one per
+  event — IS_CAST and PLAYS_LAND, both gated on
+  ``Controlled(YOU, subject="controller")``), and ``At the beginning
+  of your end step, your life total becomes half your starting life
+  total, rounded up.`` maps to ``SetLifeToHalfStartingRoundedUp``.
+  Same per-arm fan-out shape Cryogen Relic uses for its compound
+  enters-or-leaves trigger.
 
-Pinnacle Starcage, The Endstone, and Thrumming Hivepool still fall
-through — their oracles use shapes (``until this artifact leaves the
-battlefield`` exile, composite play-land-or-cast-spell triggers,
-``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the parser
-doesn't yet model.
+Pinnacle Starcage and Thrumming Hivepool still fall through — their
+oracles use shapes (``until this artifact leaves the battlefield``
+exile, ``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the
+parser doesn't yet model.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
@@ -98,8 +106,10 @@ from mtg_bot.cards.base import (
     ActivationCost,
     AllFatesScrollDrawEffect,
     CardPrinting,
+    DrawCards,
     MemorialVaultActivatedEffect,
     RequiemMonolithActivatedEffect,
+    SetLifeToHalfStartingRoundedUp,
     StaticAbility,
     TriggeredAbility,
     make_artifact,
@@ -108,6 +118,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.predicates import Controlled, Event, YOU
 
 
 # Literal oracle lines whose bespoke effect class lives in
@@ -202,6 +213,58 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
 }
 
 
+# Literal trigger-line dispatch. Same shape as
+# ``_LITERAL_ACTIVATED_LINES`` but emits a tuple of ``TriggeredAbility``
+# (one or more arms) instead of a single ``ActivatedAbility``. Used for
+# trigger lines whose surface form falls outside the unified
+# ``_parse_clause`` grammar (composite ``play a land or cast a spell``
+# events, bespoke effect bodies that can't be expressed as primitives).
+def _endstone_play_or_cast_triggers() -> tuple[TriggeredAbility, ...]:
+    """The Endstone's composite play-land-or-cast-spell trigger fans
+    out into two ``TriggeredAbility`` primitives — same per-arm shape
+    Cryogen Relic uses for its compound enters-or-leaves trigger and
+    the static registry uses for The Endstone (one IS_CAST arm, one
+    PLAYS_LAND arm). The legacy ``cast_spell_or_play_land`` fused
+    trigger key is intentionally not introduced; predicate vocabulary
+    stays primitive (one event per ability)."""
+    return (
+        TriggeredAbility(
+            event=Event.IS_CAST,
+            predicate=Controlled(YOU, subject="controller"),
+            effect=DrawCards(amount=1),
+        ),
+        TriggeredAbility(
+            event=Event.PLAYS_LAND,
+            predicate=Controlled(YOU, subject="controller"),
+            effect=DrawCards(amount=1),
+        ),
+    )
+
+
+def _endstone_end_step_set_life_trigger() -> tuple[TriggeredAbility, ...]:
+    """The Endstone's beginning-of-end-step "life = half starting,
+    rounded up" trigger. Bespoke ``SetLifeToHalfStartingRoundedUp``
+    effect class — the body isn't a unified-grammar primitive."""
+    return (
+        TriggeredAbility(
+            event=Event.BEGINNING_OF_END_STEP,
+            predicate=Controlled(YOU),
+            effect=SetLifeToHalfStartingRoundedUp(),
+        ),
+    )
+
+
+_LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
+    # The Endstone — composite play-land-or-cast-spell trigger.
+    "Whenever you play a land or cast a spell, draw a card.":
+        _endstone_play_or_cast_triggers,
+    # The Endstone — bespoke "life = half starting, rounded up" body.
+    "At the beginning of your end step, your life total becomes "
+    "half your starting life total, rounded up.":
+        _endstone_end_step_set_life_trigger,
+}
+
+
 def _build_artifact_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a pure-Artifact ``card`` (a
     Scryfall record). Returns ``None`` if the card is not a pure
@@ -245,16 +308,20 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         if not line:
             continue
         # Literal-line dispatch for bespoke single-card effect bodies
-        # (Memorial Vault, Requiem Monolith, All-Fates Scroll). Tried
-        # FIRST so the bespoke effect class survives — the unified
-        # ``_parse_clause`` would either reject the body (no matching
-        # primitive) or, in pathological cases, claim a near-miss
-        # primitive that doesn't match the static side. Same pattern as
-        # ``equipment_builder``'s Hylderblade / Robe of Stars literal
-        # match.
-        literal_factory = _LITERAL_ACTIVATED_LINES.get(line)
-        if literal_factory is not None:
-            activated.append(literal_factory())
+        # (Memorial Vault, Requiem Monolith, All-Fates Scroll, The
+        # Endstone). Tried FIRST so the bespoke effect class survives —
+        # the unified ``_parse_clause`` would either reject the body
+        # (no matching primitive) or, in pathological cases, claim a
+        # near-miss primitive that doesn't match the static side. Same
+        # pattern as ``equipment_builder``'s Hylderblade / Robe of
+        # Stars literal match.
+        literal_activated_factory = _LITERAL_ACTIVATED_LINES.get(line)
+        if literal_activated_factory is not None:
+            activated.append(literal_activated_factory())
+            continue
+        literal_trigger_factory = _LITERAL_TRIGGER_LINES.get(line)
+        if literal_trigger_factory is not None:
+            triggers.extend(literal_trigger_factory())
             continue
         clause = _parse_clause(line)
         if clause is None:
