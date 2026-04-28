@@ -485,6 +485,19 @@ _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
 _PUMP_TARGET_CREATURE_UEOT = re.compile(
     r"^target creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
+# "Up to one target creature gets ±N/±M until end of turn" — optional
+# pump/debuff with no fizzle when the battlefield has no creatures.
+# Surfaces on Dubious Delicacy's ETB ("up to one target creature gets
+# -3/-3 until end of turn"). Maps to
+# ``PumpTargetCreatureUntilEOT(power_bonus=N, toughness_bonus=M,
+# optional=True)`` — the ``optional`` flag flips the engine class's
+# ``target_count_range`` to ``(0, 1)`` and ``requires_target`` to
+# False, so a no-target resolution is a clean no-op rather than a
+# fizzle.
+_PUMP_UP_TO_ONE_TARGET_CREATURE_UEOT = re.compile(
+    r"^up to one target creature gets ([+-]\d+)/([+-]\d+) "
+    r"until end of turn$"
+)
 # "Target creature an opponent controls gets -N/-M until end of turn" —
 # pump variant restricted to opposing creatures (Sinister Cryologist's
 # ETB debuff). Maps to ``PumpTargetCreatureUntilEOT(opponents_only=True)``
@@ -1458,6 +1471,21 @@ def _parse_effect(phrase: str) -> Effect | None:
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
             you_control_only=True,
+        )
+    # ``up to one target creature gets ±N/±M until end of turn`` —
+    # optional pump/debuff (Dubious Delicacy's ETB ``-3/-3``). The
+    # ``up to one`` qualifier flips the engine class's
+    # ``target_count_range`` to ``(0, 1)`` and ``requires_target`` to
+    # False, so a no-target resolution is a clean no-op rather than a
+    # fizzle. Tried BEFORE the bare-pump regex because that bare regex's
+    # ``$`` anchor wouldn't match the ``up to one`` prefix anyway, but
+    # ordering more-specific before more-general is the convention here.
+    m = _PUMP_UP_TO_ONE_TARGET_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            optional=True,
         )
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:

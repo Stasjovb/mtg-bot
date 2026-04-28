@@ -40,13 +40,15 @@ Today the EoE pure-artifacts the unified clause grammar claims are:
   trigger drawing a card on each arm, plus a ``{1}{U}, Sacrifice this
   artifact`` activation that puts a stun counter on up to one tapped
   creature.
+* **Dubious Delicacy** — Flash, an ``up to one`` optional ETB debuff
+  ``-3/-3 UEOT``, and two ``{2}, {T}, Sacrifice this artifact``
+  activations (gain 3 life / target opponent loses 3 life).
 
 Other EoE pure artifacts carry custom effects (Pinnacle Starcage,
 Requiem Monolith, Memorial Vault, All-Fates Scroll, The Endstone,
 Thrumming Hivepool) or grammar shapes the unified parser doesn't yet
 model (Nutrient Block's ``"is put into a graveyard"`` zone-change
-trigger, Dubious Delicacy's ``up to one`` optional negative pump),
-and fall through.
+trigger), and fall through.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
