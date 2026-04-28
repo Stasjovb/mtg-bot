@@ -32,6 +32,9 @@ import re
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    AddManaToPool,
+    AddOneManaFromControlledLandsProductions,
+    AddOneManaOfChosenPermanentColor,
     BecomeLandCreatureUEOT,
     CardPrinting,
     DestroyTargetLand,
@@ -257,6 +260,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if tap_sac is not None:
         return tap_sac
+    fancy_mana = _try_build_fancy_mana_land(
+        card, text, supertypes, subtypes,
+    )
+    if fancy_mana is not None:
+        return fancy_mana
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -553,6 +561,87 @@ def _try_build_tap_sac_utility_land(
         )
 
     return None
+
+
+# Fancy-mana single-ability lands.
+#
+# Plain ``Land`` cards (no supertypes, no subtypes) whose entire
+# oracle text is a single activated mana ability that produces an
+# any-color or chosen-color coin (rather than a fixed colorless or
+# dual-color coin). Each card pairs an exact oracle line with a
+# factory that returns the matching ``(cost, effect)`` pair.
+#
+# Distinct from the manland branch (lands that animate into
+# creatures) and the tap-and-sac branch (lands that pay self-sac
+# costs). The ``produces`` set is empty in the static — mana-source
+# tracking treats "any" coins as untyped at compile time.
+def _fancy_pay_one_life_any_color() -> tuple:
+    return (
+        ActivationCost(tap_self=True, pay_life=1),
+        AddManaToPool(produces=(("any", 1),), spend_restriction=None),
+    )
+
+
+def _fancy_chosen_permanent_color() -> tuple:
+    return (
+        ActivationCost(tap_self=True),
+        AddOneManaOfChosenPermanentColor(),
+    )
+
+
+def _fancy_controlled_lands_productions() -> tuple:
+    return (
+        ActivationCost(tap_self=True),
+        AddOneManaFromControlledLandsProductions(),
+    )
+
+
+_FANCY_MANA_BODIES: dict[str, "callable"] = {
+    "{T}, Pay 1 life: Add one mana of any color.":
+        _fancy_pay_one_life_any_color,
+    "{T}: Choose a color of a permanent you control. "
+    "Add one mana of that color.":
+        _fancy_chosen_permanent_color,
+    "{T}: Add one mana of any type that a land you "
+    "control could produce.":
+        _fancy_controlled_lands_productions,
+}
+
+
+def _try_build_fancy_mana_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a fancy-mana single-ability ``CardPrinting`` if the
+    card's entire oracle text matches an entry in
+    ``_FANCY_MANA_BODIES`` and the type line is plain ``Land``,
+    else ``None``.
+
+    Currently claims Mana Confluence (``{T}, Pay 1 life``),
+    Meteor Crater (chosen-permanent-color), and Reflecting Pool
+    (any-from-controlled-lands). Each is a single line whose
+    factory returns the canonical static ``(cost, effect)`` pair.
+    Future entries are one-liners: add the surface form and a
+    factory.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    factory = _FANCY_MANA_BODIES.get(text.strip())
+    if factory is None:
+        return None
+    cost, effect = factory()
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=cost, effect=effect, is_mana_ability=True,
+            ),
+        ),
+    )
 
 
 def _try_build_colorless_utility_land(
