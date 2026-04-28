@@ -37,6 +37,7 @@ from mtg_bot.cards.base import (
     AddOneManaOfChosenPermanentColor,
     BecomeLandCreatureUEOT,
     CardPrinting,
+    DealDamageToControllerAndAddMana,
     DestroyTargetLand,
     Effect,
     GainLife,
@@ -265,6 +266,16 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if fancy_mana is not None:
         return fancy_mana
+    ancient_tomb = _try_build_pain_two_mana_land(
+        card, text, supertypes, subtypes,
+    )
+    if ancient_tomb is not None:
+        return ancient_tomb
+    paid_fancy = _try_build_paid_fancy_mana_land(
+        card, text, supertypes, subtypes,
+    )
+    if paid_fancy is not None:
+        return paid_fancy
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -639,6 +650,166 @@ def _try_build_fancy_mana_land(
         activated_abilities=(
             ActivatedAbility(
                 cost=cost, effect=effect, is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Ancient-Tomb-shape "pain land" — single-line plain Land whose
+# ``{T}`` mana ability fuses an Add-N-mana production with a
+# damage-to-controller rider on the same activation. Currently the
+# only EoE printing matching this shape is Ancient Tomb itself; the
+# regex captures the produced colorless count and damage amount so a
+# future printing of similar shape (e.g. ``Add {C}{C}{C}. This land
+# deals 3 damage to you.``) can claim by table extension rather than
+# code change. The effect class
+# (``DealDamageToControllerAndAddMana``) is the bespoke engine
+# primitive the static side already uses; the parser only constructs
+# it from the parsed values.
+_PAIN_TWO_MANA_LINE_RE = re.compile(
+    r"^\{T\}: Add (?P<mana>(?:\{[CWUBRG]\})+)\. "
+    r"This land deals (?P<damage>\d+) damage to you\.$"
+)
+
+
+def _try_build_pain_two_mana_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a CardPrinting for a single-line pain-shape mana land
+    matching the Ancient Tomb pattern, else None.
+
+    Constraint: plain ``Land`` (no supertypes, no subtypes) whose entire
+    oracle text is one line whose mana production is an all-colorless
+    ``{C}+`` chain (one or more ``{C}`` braces). Other color
+    combinations would need a per-color tally; today's only printing
+    produces colorless, and adding colored variants is a one-line regex
+    relaxation when the day comes.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    line = text.strip()
+    m = _PAIN_TWO_MANA_LINE_RE.match(line)
+    if m is None:
+        return None
+    mana_str = m.group("mana")
+    pips = re.findall(r"\{([CWUBRG])\}", mana_str)
+    if not pips or any(p != "C" for p in pips):
+        return None
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=DealDamageToControllerAndAddMana(
+                    damage=int(m.group("damage")),
+                    produces=(("C", len(pips)),),
+                ),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# "Paid fancy mana" lands: plain ``Land`` whose oracle text is
+# (optionally) an evergreen-keyword line, then ``{T}: Add {C}.`` (the
+# basic tap-for-colorless ability — *not* modeled on the static side;
+# the engine's auto-tap-for-cost generic-mana fallback covers it),
+# then a single ``<COST>, {T}: <BODY>.`` paid-mana activation whose
+# body is on a per-shape whitelist.
+#
+# Currently claims:
+# - Crystal Quarry: ``{5}, {T}: Add {W}{U}{B}{R}{G}.``
+# - Cascading Cataracts: ``{5}, {T}: Add five mana in any combination
+#   of colors.`` plus the ``Indestructible`` keyword line.
+_KEYWORD_LINE_RE = re.compile(r"^([A-Z][a-z]+)$")
+_DROPPED_TAP_FOR_C_LINE = "{T}: Add {C}."
+_PAID_FANCY_MANA_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}: (?P<body>.+)\.$"
+)
+
+
+def _add_wubrg_factory() -> Effect:
+    return AddManaToPool(
+        produces=(
+            ("W", 1), ("U", 1), ("B", 1), ("R", 1), ("G", 1),
+        ),
+    )
+
+
+def _add_five_any_factory() -> Effect:
+    return AddManaToPool(produces=(("any", 5),))
+
+
+_PAID_FANCY_MANA_BODIES: dict[str, "callable"] = {
+    "Add {W}{U}{B}{R}{G}": _add_wubrg_factory,
+    "Add five mana in any combination of colors": _add_five_any_factory,
+}
+
+
+_LAND_KEYWORD_WHITELIST = frozenset({"indestructible"})
+
+
+def _try_build_paid_fancy_mana_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a paid-fancy-mana CardPrinting if ``text`` matches the
+    optional-keyword + dropped-{T}:{C} + paid-mana shape, else None.
+
+    The leading optional-keyword line, when present, must be a single
+    capitalized word on the keyword whitelist (today: ``Indestructible``
+    for Cascading Cataracts). The static side carries this keyword as
+    a frozenset on the ``CardPrinting``; the parser threads it through.
+    The middle line ``{T}: Add {C}.`` is intentionally dropped — the
+    static-side ``make_utility_land`` doesn't add an explicit ability
+    for it, relying on the engine's auto-tap-for-cost fallback.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) not in (2, 3):
+        return None
+    keywords: frozenset[str] = frozenset()
+    if len(lines) == 3:
+        kw_match = _KEYWORD_LINE_RE.match(lines[0])
+        if kw_match is None:
+            return None
+        kw = kw_match.group(1).lower()
+        if kw not in _LAND_KEYWORD_WHITELIST:
+            return None
+        keywords = frozenset({kw})
+        lines = lines[1:]
+    if lines[0] != _DROPPED_TAP_FOR_C_LINE:
+        return None
+    paid_match = _PAID_FANCY_MANA_RE.match(lines[1])
+    if paid_match is None:
+        return None
+    body = paid_match.group("body")
+    factory = _PAID_FANCY_MANA_BODIES.get(body)
+    if factory is None:
+        return None
+    cost_str = paid_match.group("cost")
+    return make_utility_land(
+        card["name"],
+        keywords=keywords,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(cost_str),
+                    mana_str=cost_str,
+                    tap_self=True,
+                ),
+                effect=factory(),
+                is_mana_ability=True,
             ),
         ),
     )
