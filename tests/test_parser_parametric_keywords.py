@@ -246,10 +246,12 @@ def test_source_does_not_claim_survey_mechan():
     assert "Survey Mechan" not in source.claimed_names
 
 
-def test_source_does_not_claim_nutrient_block():
-    """Nutrient Block is an Artifact — Food, not a creature, and the
-    parser has no artifact builder yet. Adding ``Indestructible`` to
-    ``_KEYWORD_LINES`` doesn't change that — the card is rejected by
-    every per-type builder and never enters ``claimed_names``."""
+def test_source_claims_nutrient_block():
+    """Nutrient Block is now claimed by the artifact builder via the
+    ``"this artifact is put into a graveyard from the battlefield"``
+    trigger phrase (mapped to LEAVES_BATTLEFIELD per the static
+    simplification) plus the indestructible keyword and the
+    ``{2}, {T}, Sacrifice this artifact: You gain 3 life.`` activated
+    ability — the unified clause grammar covers every line."""
     source = OracleParserCardSource()
-    assert "Nutrient Block" not in source.claimed_names
+    assert "Nutrient Block" in source.claimed_names

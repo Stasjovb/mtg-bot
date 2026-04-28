@@ -392,6 +392,20 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "this creature leaves the battlefield": (
         Event.LEAVES_BATTLEFIELD, IsSelf(),
     ),
+    # ``When this artifact is put into a graveyard from the
+    # battlefield`` (Nutrient Block). Per CR 700-series the
+    # graveyard-from-battlefield zone change is a strict subset of
+    # LEAVES_BATTLEFIELD (the latter also fires on exile / hand /
+    # library returns). The static-registry ``Nutrient Block`` entry
+    # already simplifies the printed graveyard-zone trigger to
+    # LEAVES_BATTLEFIELD with the documented "slightly looser — also
+    # fires if exiled" caveat; the parser mirrors that simplification
+    # so per-card parity holds. The type-blind ``IsSelf()`` predicate
+    # handles the artifact identity check — same shape as the
+    # ``this creature leaves the battlefield`` entry above.
+    "this artifact is put into a graveyard from the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
     # ``Whenever this creature attacks`` — the source's own attack
     # (Spacecraft attack triggers, Stellar Sights creatures, etc.).
     # ``Event.ATTACKS`` carries a single subject ``"attacker"``;
