@@ -1187,6 +1187,21 @@ const elsI = {
 
 elsI.form.addEventListener('submit', (ev) => { ev.preventDefault(); startInteractiveGame(); });
 
+// Space = pass priority, Enter = confirm (attackers / blockers).
+window.addEventListener('keydown', (ev) => {
+  if (!iplay) return;
+  const tag = (ev.target && ev.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (ev.key === ' ' || ev.key === 'Enter') {
+    const btn = elsI.options.querySelector(
+      ev.key === ' '
+        ? '.action-btn-pass'
+        : '.action-btn-confirm',
+    );
+    if (btn) { ev.preventDefault(); btn.click(); }
+  }
+});
+
 async function startInteractiveGame() {
   stopInteractiveGame();
   const humanPlayer = parseInt(elsI.playerId.value, 10);
@@ -1374,164 +1389,231 @@ function renderDecision(pending) {
 // choose_action: button row at the bottom (inline, not modal)
 // ---------------------------------------------------------------------------
 
+// MTGO-like board-click renderers: instead of a button row, the player
+// interacts directly with cards on the rendered board. The click handlers
+// are attached after each renderSnapshot call (since renderSnapshot rebuilds
+// the DOM and would otherwise wipe them).
+
 function renderChooseAction(pending) {
-  elsI.prompt.textContent = 'Your turn — choose an action:';
-  elsI.options.replaceChildren();
+  // Group options by the object they affect so a single click on one card
+  // maps to one or more candidate actions.
+  const byCardId = new Map();    // hand-card id  -> [opt, ...]
+  const byPermId = new Map();    // battlefield id -> [opt, ...]
+  let passOpt = null;
 
-  const passOpts   = pending.options.filter(o => o.type === 'pass');
-  const actionOpts = pending.options.filter(o => o.type !== 'pass');
-
-  // Action buttons
-  const row = document.createElement('div');
-  row.className = 'action-row';
-
-  actionOpts.forEach(opt => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'action-btn action-btn-' + opt.type;
-    btn.textContent = opt.label;
-    if (opt.scryfall_id) {
-      btn.style.backgroundImage = `url('/card_image/${opt.scryfall_id}/small')`;
-      btn.classList.add('has-art');
+  pending.options.forEach(opt => {
+    if (opt.type === 'pass') { passOpt = opt; return; }
+    if (opt.type === 'play_land' || opt.type === 'cast_spell') {
+      const list = byCardId.get(opt.card_id) || [];
+      list.push(opt);
+      byCardId.set(opt.card_id, list);
+    } else if (opt.type === 'activate') {
+      const list = byPermId.get(opt.source_id) || [];
+      list.push(opt);
+      byPermId.set(opt.source_id, list);
+    } else if (opt.type === 'station') {
+      const list = byPermId.get(opt.spacecraft_id) || [];
+      list.push(opt);
+      byPermId.set(opt.spacecraft_id, list);
     }
-    btn.addEventListener('click', () => submitAction({ idx: opt.idx }));
-    row.appendChild(btn);
   });
 
-  // Pass button (separate, de-emphasised)
-  passOpts.forEach(opt => {
+  // Bottom panel: status + Pass button. Cards / permanents are clickable
+  // in-place on the board.
+  const playableCount = byCardId.size + byPermId.size;
+  elsI.prompt.textContent =
+    playableCount === 0
+      ? 'You have priority — pass to continue.'
+      : 'Click a card to play, a permanent to activate, or pass priority.';
+  elsI.options.replaceChildren();
+  if (passOpt) {
+    const passBtn = document.createElement('button');
+    passBtn.type = 'button';
+    passBtn.className = 'action-btn action-btn-pass';
+    passBtn.textContent = 'Pass priority (Space)';
+    passBtn.addEventListener('click', () => submitAction({ idx: passOpt.idx }));
+    elsI.options.appendChild(passBtn);
+  }
+
+  // Highlight clickable cards in hand.
+  byCardId.forEach((opts, cid) => {
+    document.querySelectorAll(`.hand .card[data-obj-id="${cid}"]`).forEach(el => {
+      el.classList.add('actionable');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        chooseFromOptions(el, opts);
+      });
+    });
+  });
+
+  // Highlight clickable permanents on battlefield.
+  byPermId.forEach((opts, oid) => {
+    document.querySelectorAll(`.battlefield .card[data-obj-id="${oid}"]`).forEach(el => {
+      el.classList.add('actionable');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        chooseFromOptions(el, opts);
+      });
+    });
+  });
+}
+
+// Click on a card with multiple available actions: pop a small menu
+// next to the card. Single-action: submit directly.
+function chooseFromOptions(anchorEl, opts) {
+  if (opts.length === 1) {
+    submitAction({ idx: opts[0].idx });
+    return;
+  }
+  const menu = document.createElement('div');
+  menu.className = 'options-popover';
+  opts.forEach(opt => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'action-btn action-btn-pass';
-    btn.textContent = 'Pass';
-    btn.addEventListener('click', () => submitAction({ idx: opt.idx }));
-    row.appendChild(btn);
+    btn.className = 'options-popover-item';
+    btn.textContent = opt.label;
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      menu.remove();
+      submitAction({ idx: opt.idx });
+    });
+    menu.appendChild(btn);
   });
 
-  elsI.options.appendChild(row);
+  // Position the popover near the clicked card.
+  const r = anchorEl.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.left = `${r.left}px`;
+  menu.style.top  = `${r.bottom + 4}px`;
+  document.body.appendChild(menu);
+
+  // Dismiss on outside click.
+  setTimeout(() => {
+    const dismiss = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener('click', dismiss);
+      }
+    };
+    document.addEventListener('click', dismiss);
+  }, 0);
 }
 
 // ---------------------------------------------------------------------------
-// declare_attackers: toggle cards on the board OR inline list
+// declare_attackers: click your creatures on the board to toggle them
 // ---------------------------------------------------------------------------
 
 function renderDeclareAttackers(pending) {
-  openDecisionModal('Declare Attackers', () => {
-    const selected = new Set();
-    const body = elsI.modalBody;
-    body.replaceChildren();
+  iplay.attackerSet = new Set();
 
-    if (!pending.eligible || pending.eligible.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'decision-empty';
-      p.textContent = 'No eligible attackers.';
-      body.appendChild(p);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'modal-confirm';
-      btn.textContent = 'Confirm (no attackers)';
-      btn.addEventListener('click', () => submitAction({ ids: [] }));
-      body.appendChild(btn);
-      return;
-    }
+  elsI.prompt.textContent =
+    'Declare attackers — click your creatures to toggle, then confirm.';
+  elsI.options.replaceChildren();
 
-    const hint = document.createElement('p');
-    hint.className = 'decision-hint';
-    hint.textContent = 'Click creatures to toggle them as attackers, then confirm.';
-    body.appendChild(hint);
+  const confirmBtn = document.createElement('button');
+  confirmBtn.type = 'button';
+  confirmBtn.className = 'action-btn action-btn-confirm';
+  confirmBtn.textContent = 'Confirm attackers (0)';
+  confirmBtn.addEventListener('click', () => {
+    submitAction({ ids: Array.from(iplay.attackerSet) });
+  });
+  elsI.options.appendChild(confirmBtn);
 
-    const grid = document.createElement('div');
-    grid.className = 'decision-card-grid';
-    pending.eligible.forEach(opt => {
-      const el = makeSelectableCard(opt, selected, opt.id);
-      grid.appendChild(el);
+  pending.eligible.forEach(creature => {
+    document.querySelectorAll(`.battlefield .card[data-obj-id="${creature.id}"]`).forEach(el => {
+      el.classList.add('actionable');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (iplay.attackerSet.has(creature.id)) {
+          iplay.attackerSet.delete(creature.id);
+          document.querySelectorAll(`[data-obj-id="${creature.id}"]`).forEach(e =>
+            e.classList.remove('attacker-pending'));
+        } else {
+          iplay.attackerSet.add(creature.id);
+          document.querySelectorAll(`[data-obj-id="${creature.id}"]`).forEach(e =>
+            e.classList.add('attacker-pending'));
+        }
+        confirmBtn.textContent = `Confirm attackers (${iplay.attackerSet.size})`;
+      });
     });
-    body.appendChild(grid);
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'modal-confirm';
-    btn.textContent = 'Confirm attackers';
-    btn.addEventListener('click', () => submitAction({ ids: Array.from(selected) }));
-    body.appendChild(btn);
   });
 }
 
 // ---------------------------------------------------------------------------
-// declare_blockers: per-attacker assignment UI
+// declare_blockers: click blocker → click attacker → assigned. Click blocker
+// again to unassign / select a different attacker.
 // ---------------------------------------------------------------------------
 
 function renderDeclareBlockers(pending) {
-  openDecisionModal('Declare Blockers', () => {
-    const assignments = {};  // blocker_id -> attacker_id
-    const body = elsI.modalBody;
-    body.replaceChildren();
+  iplay.blockerAssignments = {};
+  iplay.selectedBlocker = null;
 
-    if (!pending.eligible || pending.eligible.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'decision-empty';
-      p.textContent = 'No eligible blockers.';
-      body.appendChild(p);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'modal-confirm';
-      btn.textContent = 'Confirm (no blockers)';
-      btn.addEventListener('click', () => submitAction({ assignments: {} }));
-      body.appendChild(btn);
-      return;
-    }
+  elsI.prompt.textContent =
+    'Declare blockers — click your blocker, then click the attacker it blocks. Click the blocker again to unassign.';
+  elsI.options.replaceChildren();
 
-    const hint = document.createElement('p');
-    hint.className = 'decision-hint';
-    hint.textContent = 'Assign each blocker to an attacker (or leave unassigned).';
-    body.appendChild(hint);
+  const confirmBtn = document.createElement('button');
+  confirmBtn.type = 'button';
+  confirmBtn.className = 'action-btn action-btn-confirm';
+  confirmBtn.textContent = 'Confirm blockers (0)';
+  confirmBtn.addEventListener('click', () => {
+    submitAction({ assignments: iplay.blockerAssignments });
+  });
+  elsI.options.appendChild(confirmBtn);
 
-    const table = document.createElement('table');
-    table.className = 'blocker-table';
-    const thead = document.createElement('thead');
-    thead.innerHTML = '<tr><th>Blocker</th><th>Blocks</th></tr>';
-    table.appendChild(thead);
-    const tbody = document.createElement('tbody');
+  const updateConfirmCount = () => {
+    const n = Object.keys(iplay.blockerAssignments).length;
+    confirmBtn.textContent = `Confirm blockers (${n})`;
+  };
 
-    pending.eligible.forEach(blocker => {
-      const tr = document.createElement('tr');
-      const tdName = document.createElement('td');
-      tdName.className = 'blocker-name';
-      tdName.textContent = blocker.name;
-
-      const tdSel = document.createElement('td');
-      const sel = document.createElement('select');
-      sel.className = 'blocker-select';
-      const opt0 = document.createElement('option');
-      opt0.value = '';
-      opt0.textContent = '— no block —';
-      sel.appendChild(opt0);
-      (pending.attackers || []).forEach(atk => {
-        const o = document.createElement('option');
-        o.value = String(atk.id);
-        o.textContent = atk.name;
-        sel.appendChild(o);
-      });
-      sel.addEventListener('change', () => {
-        if (sel.value === '') {
-          delete assignments[blocker.id];
+  // Eligible blockers (the human's creatures).
+  pending.eligible.forEach(blocker => {
+    document.querySelectorAll(`.battlefield .card[data-obj-id="${blocker.id}"]`).forEach(el => {
+      el.classList.add('actionable');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // Toggle: if already assigned, unassign. If selected, deselect.
+        // Otherwise select for assignment.
+        if (iplay.blockerAssignments[blocker.id] !== undefined) {
+          delete iplay.blockerAssignments[blocker.id];
+          document.querySelectorAll(`[data-obj-id="${blocker.id}"]`).forEach(e =>
+            e.classList.remove('blocker-committed'));
+          updateConfirmCount();
+        } else if (iplay.selectedBlocker === blocker.id) {
+          iplay.selectedBlocker = null;
+          document.querySelectorAll(`[data-obj-id="${blocker.id}"]`).forEach(e =>
+            e.classList.remove('blocker-selected'));
         } else {
-          assignments[blocker.id] = parseInt(sel.value, 10);
+          if (iplay.selectedBlocker !== null) {
+            document.querySelectorAll(`[data-obj-id="${iplay.selectedBlocker}"]`).forEach(e =>
+              e.classList.remove('blocker-selected'));
+          }
+          iplay.selectedBlocker = blocker.id;
+          document.querySelectorAll(`[data-obj-id="${blocker.id}"]`).forEach(e =>
+            e.classList.add('blocker-selected'));
         }
       });
-      tdSel.appendChild(sel);
-      tr.append(tdName, tdSel);
-      tbody.appendChild(tr);
     });
-    table.appendChild(tbody);
-    body.appendChild(table);
+  });
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'modal-confirm';
-    btn.textContent = 'Confirm blockers';
-    btn.addEventListener('click', () => submitAction({ assignments }));
-    body.appendChild(btn);
+  // Attackers (the opponent's creatures that are attacking this player).
+  // Clicking commits the currently-selected blocker to this attacker.
+  pending.attackers.forEach(attacker => {
+    document.querySelectorAll(`.battlefield .card[data-obj-id="${attacker.id}"]`).forEach(el => {
+      el.classList.add('actionable-target');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (iplay.selectedBlocker === null) return;
+        const bid = iplay.selectedBlocker;
+        iplay.blockerAssignments[bid] = attacker.id;
+        document.querySelectorAll(`[data-obj-id="${bid}"]`).forEach(e => {
+          e.classList.remove('blocker-selected');
+          e.classList.add('blocker-committed');
+        });
+        iplay.selectedBlocker = null;
+        updateConfirmCount();
+      });
+    });
   });
 }
 

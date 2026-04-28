@@ -624,3 +624,119 @@ body { display: grid; grid-template-columns: 1fr 280px;
                   cursor: pointer; font-weight: 700; font-size: 1em; }
 .mana-color-btn:hover { border-color: var(--ink); }
 
+/* ============================================================
+   MTGO-like board interaction
+   ============================================================ */
+
+/* Cards / permanents the player can act on get a yellow glow + pointer. */
+.card.actionable {
+  cursor: pointer;
+  outline: 2px solid var(--active-glow);
+  outline-offset: 1px;
+  box-shadow: 0 0 12px rgba(212, 196, 106, 0.55);
+  animation: actionable-pulse 2s ease-in-out infinite;
+}
+.card.actionable:hover {
+  outline-width: 3px;
+  filter: brightness(1.15);
+}
+@keyframes actionable-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(212, 196, 106, 0.4); }
+  50%      { box-shadow: 0 0 16px rgba(212, 196, 106, 0.75); }
+}
+
+/* Cards that act as click-targets for the currently-selected blocker
+   (i.e. the opponent's attackers during declare_blockers). */
+.card.actionable-target {
+  cursor: crosshair;
+  outline: 2px solid #ff9852;
+  outline-offset: 1px;
+  box-shadow: 0 0 12px rgba(255, 152, 82, 0.55);
+}
+.card.actionable-target:hover {
+  outline-width: 3px;
+  filter: brightness(1.15);
+}
+
+/* Attackers tentatively selected during declare_attackers. */
+.card.attacker-pending {
+  outline: 3px solid #ff9852;
+  box-shadow: 0 0 16px rgba(255, 152, 82, 0.8);
+}
+.card.attacker-pending::after {
+  content: 'ATK';
+  position: absolute;
+  top: 4px; right: 4px;
+  background: #ff9852;
+  color: #1a0d05;
+  font-size: 0.7em;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+/* Blocker currently picked, waiting for the player to click an attacker. */
+.card.blocker-selected {
+  outline: 3px solid #6fa8ff;
+  box-shadow: 0 0 16px rgba(111, 168, 255, 0.85);
+  animation: blocker-pulse 1s ease-in-out infinite;
+}
+@keyframes blocker-pulse {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+
+/* Blocker that has been committed to an attacker (assignment recorded,
+   pending Confirm). */
+.card.blocker-committed {
+  outline: 3px solid var(--accent);
+  box-shadow: 0 0 12px rgba(111, 168, 255, 0.6);
+}
+.card.blocker-committed::after {
+  content: 'BLK';
+  position: absolute;
+  top: 4px; right: 4px;
+  background: var(--accent);
+  color: #0b1730;
+  font-size: 0.7em;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+/* Confirm button (attackers / blockers) — green, distinct from pass. */
+.action-btn-confirm {
+  background: #2a4a2a;
+  color: var(--win);
+  border: 1px solid #3a6a3a;
+  font-weight: 700;
+}
+.action-btn-confirm:hover { filter: brightness(1.2); }
+
+/* Popover menu for cards with multiple available actions. */
+.options-popover {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  min-width: 160px;
+}
+.options-popover-item {
+  background: var(--panel-edge);
+  color: var(--ink);
+  border: none;
+  border-radius: 3px;
+  padding: 0.4em 0.7em;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85em;
+}
+.options-popover-item:hover { filter: brightness(1.3); }
+
