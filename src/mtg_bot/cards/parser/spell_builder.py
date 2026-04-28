@@ -59,6 +59,7 @@ from mtg_bot.cards.base import (
     LoseLife,
     ModalChooseOne,
     MutinousMassacreEffect,
+    PreventAllCombatDamageThisTurn,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     ReturnTargetCreatureToOwnersHand,
@@ -68,6 +69,7 @@ from mtg_bot.cards.base import (
     SingularityRuptureEffect,
     Surveil,
     SystemsOverrideEffect,
+    TakeExtraTurnAfterThisOne,
     ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
@@ -375,6 +377,16 @@ def _parse_modal_choose_one(
 # one character won't match — by design, since this tier is for
 # named one-offs, not a reusable shape.
 _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
+    # Darkness: prevent all combat damage that would be dealt this turn.
+    # Single-sentence spell — the whole-spell tier matches it directly
+    # because no per-clause primitive for "prevent all combat damage"
+    # is meaningful elsewhere in the EoE pool. The
+    # ``PreventAllCombatDamageThisTurn`` engine class sets the
+    # ``state.prevent_combat_damage_this_turn`` flag, which combat's
+    # damage step honors and which clears at end-of-turn cleanup.
+    (
+        "Prevent all combat damage that would be dealt this turn."
+    ): PreventAllCombatDamageThisTurn(),
     # Cut Propulsion: target creature self-damages by its power; if
     # it has flying, it self-damages twice that amount instead.
     (
