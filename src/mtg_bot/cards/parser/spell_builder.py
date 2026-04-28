@@ -44,11 +44,13 @@ from mtg_bot.cards.base import (
     CardPrinting,
     ConditionalIfVoid,
     CostReduction,
+    CreateToken,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     CutPropulsionEffect,
     DealDamageAnyTarget,
     DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
+    DealNDamageToEachCreature,
     DepressurizeEffect,
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
@@ -59,6 +61,7 @@ from mtg_bot.cards.base import (
     LoseLife,
     ModalChooseOne,
     MutinousMassacreEffect,
+    OptionalSacArtifactForEffect,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
@@ -71,6 +74,7 @@ from mtg_bot.cards.base import (
     Surveil,
     SystemsOverrideEffect,
     TakeExtraTurnAfterThisOne,
+    TargetOpponentDiscardsCasterChoice,
     ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
@@ -79,6 +83,7 @@ from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
 # Modal spell headers: ``Choose one —`` (single-mode pick) or
@@ -649,6 +654,48 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         ConditionalIfVoid(
             then_effect=DrawCards(amount=1),
             else_effect=None,
+        ),
+    )),
+    # Temporal Intervention: 3-sentence directed-discard plus a Void-
+    # prefixed cost-reduction rider on its own line. The static ships
+    # the discard via ``TargetOpponentDiscardsCasterChoice`` and wires
+    # the cost reduction via ``cost_reductions=(CostReduction(amount=2,
+    # condition="void_active"),)`` on the printing. The cost-reduction
+    # rider is detected and threaded separately by ``_detect_cost_
+    # reductions`` (which now recognizes the ``Void — `` prefix);
+    # the dispatcher returns only the spell-effect engine class.
+    # The leading Void-rider line stays in the dispatch key — the
+    # cost-reduction stripping pass that runs LATER (per-clause, in
+    # ``_parse_spell_oracle_text``) is bypassed by hitting the
+    # whole-spell tier first, so the key must include every line of
+    # the printed text.
+    (
+        "Void — This spell costs {2} less to cast "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn.\n"
+        "Target opponent reveals their hand. "
+        "You choose a nonland card from it. "
+        "That player discards that card."
+    ): TargetOpponentDiscardsCasterChoice(),
+    # Lithobraking: create-Lander + reflexive-trigger optional sac.
+    # The static ships ``Sequence(CreateToken(Lander),
+    # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``.
+    # The "Then you may sacrifice an artifact. When you do, ... "
+    # compound is a fixed surface form that the per-clause grammar
+    # doesn't carve up (the reflexive trigger inside the optional sac
+    # has no standalone primitive); the whole-spell tier matches the
+    # verbatim text and returns the static-side composite. The
+    # trailing parenthesized Lander reminder text is stripped before
+    # dispatch.
+    (
+        "Create a Lander token. Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature."
+    ): Sequence(effects=(
+        CreateToken(
+            token_printing=TOKEN_PRINTINGS["Lander"], count=1,
+        ),
+        OptionalSacArtifactForEffect(
+            inner_effect=DealNDamageToEachCreature(amount=2),
         ),
     )),
 }

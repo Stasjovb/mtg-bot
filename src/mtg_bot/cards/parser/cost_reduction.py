@@ -52,11 +52,26 @@ from mtg_bot.cards.base import CostReduction
 # separate makes the lookup against the closed set explicit.
 # ``N`` is restricted to one or more digits; the ``{X}``/per-land-group
 # variants don't match and fall through to the static side.
+#
+# A leading ``Void — `` prefix on the rider (Temporal Intervention) is
+# stripped via a third regex variant; the body's ``if`` clause body is
+# the canonical Void-state phrase, which the recognizer maps to the
+# ``void_active`` engine condition key. The Void-prefix variant is its
+# own regex (rather than letting the ``if`` clause body match a
+# free-form Void description) because the prefix and the engine key
+# are tightly coupled — a future Void-prefixed cost-reduction with a
+# different body would still want the ``void_active`` mapping, since
+# every Void rider gates on the same state.
 _COST_REDUCTION_LINE = re.compile(
     r"^This spell costs \{(\d+)\} less to cast if (?P<condition>.+)\.$"
 )
 _COST_REDUCTION_LINE_NO_IF = re.compile(
     r"^This spell costs \{(\d+)\} less to cast (?P<condition>.+)\.$"
+)
+_COST_REDUCTION_LINE_VOID_PREFIX = re.compile(
+    r"^Void — This spell costs \{(\d+)\} less to cast "
+    r"if a nonland permanent left the battlefield this turn "
+    r"or a spell was warped this turn\.$"
 )
 
 
@@ -89,17 +104,31 @@ _COST_REDUCTION_CONDITIONS_NO_IF: dict[str, str] = {
 
 def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     """Return a ``CostReduction`` for a single oracle-text line of the
-    shape ``This spell costs {N} less to cast if <condition>.`` or
+    shape ``This spell costs {N} less to cast if <condition>.``,
     ``This spell costs {N} less to cast <connector>.`` (Mental
-    Modulation's ``...less to cast during your turn.``), or ``None``
-    if the line shape doesn't match or the condition phrase isn't on
-    the recognized whitelist.
+    Modulation's ``...less to cast during your turn.``), or
+    ``Void — This spell costs {N} less to cast if a nonland
+    permanent left the battlefield this turn or a spell was warped
+    this turn.`` (Temporal Intervention), or ``None`` if the line
+    shape doesn't match or the condition phrase isn't on the
+    recognized whitelist.
 
     The caller is responsible for stripping reminder text and trimming
     surrounding whitespace before calling this helper, matching the
     convention used elsewhere in the parser.
     """
     stripped = line.strip()
+    # Void-prefix shape (Temporal Intervention). Tried first because
+    # the ``Void — `` prefix is a unique gate; recognizing the whole
+    # rider in one shot keeps the canonical Void-state mapping
+    # adjacent to the prefix detection. The ``if`` clause body is
+    # part of the regex literal so a non-canonical body wouldn't
+    # silently map to ``void_active``.
+    m = _COST_REDUCTION_LINE_VOID_PREFIX.match(stripped)
+    if m is not None:
+        return CostReduction(
+            amount=int(m.group(1)), condition="void_active",
+        )
     m = _COST_REDUCTION_LINE.match(stripped)
     if m is not None:
         condition_phrase = m.group("condition").strip()

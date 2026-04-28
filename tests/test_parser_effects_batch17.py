@@ -38,14 +38,20 @@ Each spell is exercised by:
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    CreateToken,
+    DealNDamageToEachCreature,
+    OptionalSacArtifactForEffect,
     PreventAllCombatDamageThisTurn,
     SearchLibraryForGreenCreatureWithMVAtMostX,
+    Sequence,
     TakeExtraTurnAfterThisOne,
+    TargetOpponentDiscardsCasterChoice,
 )
 from mtg_bot.cards.parser.spell_builder import (
     _detect_shuffle_self_flags,
     _try_whole_spell_exact_text,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
 
@@ -173,3 +179,59 @@ def test_detect_shuffle_self_flags_wrong_name():
         "instead."
     )
     assert _detect_shuffle_self_flags(text, "Some Other Card") == {}
+
+
+# ---------- Lithobraking and Temporal Intervention ----------
+
+def test_lithobraking_claimed_by_parser():
+    # Lithobraking ``{2}{R}`` Instant — create-Lander + reflexive-
+    # trigger optional sac. The static ships ``Sequence(CreateToken,
+    # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``;
+    # the per-clause grammar can't carve up the reflexive trigger
+    # (``Then you may sacrifice an artifact. When you do, ...``)
+    # because no standalone primitive captures the rider's "When you
+    # do" follow-on, so the spell is claimed via the whole-spell
+    # exact-text dispatcher.
+    assert "Lithobraking" in _claimed_names()
+
+
+def test_dispatch_lithobraking_returns_sequence():
+    eff = _try_whole_spell_exact_text(
+        "Create a Lander token. Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature."
+    )
+    assert eff == Sequence(effects=(
+        CreateToken(
+            token_printing=TOKEN_PRINTINGS["Lander"], count=1,
+        ),
+        OptionalSacArtifactForEffect(
+            inner_effect=DealNDamageToEachCreature(amount=2),
+        ),
+    ))
+
+
+def test_temporal_intervention_claimed_by_parser():
+    # Temporal Intervention ``{2}{B}`` Sorcery — 3-sentence directed
+    # discard plus a Void-prefixed cost-reduction rider. The
+    # cost-reduction parser's Void-prefix variant emits
+    # ``CostReduction(2, "void_active")``; the body effect is claimed
+    # via the whole-spell exact-text dispatcher
+    # (``TargetOpponentDiscardsCasterChoice``).
+    assert "Temporal Intervention" in _claimed_names()
+
+
+def test_dispatch_temporal_intervention_returns_engine_class():
+    # The dispatch key includes BOTH the leading Void-rider line and
+    # the trailing 3-sentence directed-discard line, separated by a
+    # literal newline. The dispatcher returns only the spell-effect
+    # engine class; the cost-reduction rider is detected separately
+    # via ``_detect_cost_reductions``.
+    eff = _try_whole_spell_exact_text(
+        "Void — This spell costs {2} less to cast "
+        "if a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn.\n"
+        "Target opponent reveals their hand. "
+        "You choose a nonland card from it. "
+        "That player discards that card."
+    )
+    assert eff == TargetOpponentDiscardsCasterChoice()

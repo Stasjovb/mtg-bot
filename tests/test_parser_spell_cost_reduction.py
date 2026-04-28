@@ -203,16 +203,33 @@ def test_recognizer_rejects_activated_ability_rider():
     assert _parse_cost_reduction_line(line) is None
 
 
-def test_recognizer_rejects_void_em_dash_prefix():
+def test_recognizer_accepts_void_em_dash_prefix():
     # Temporal Intervention's surface form prefixes the rider with
-    # ``Void —``. The recognizer expects the literal ``This spell``
-    # opener, so the prefixed shape doesn't match. The card stays
-    # unclaimed (its body effect isn't in the grammar either), which
-    # is the same behavior as before this branch.
+    # ``Void —``. The recognizer's Void-prefix variant matches the
+    # canonical Void-state body verbatim and emits a CostReduction
+    # with the ``void_active`` engine condition, the same key the
+    # static side ships on Temporal Intervention's printing.
     line = (
         "Void — This spell costs {2} less to cast if a nonland "
         "permanent left the battlefield this turn or a spell was "
         "warped this turn."
+    )
+    assert _parse_cost_reduction_line(line) == CostReduction(
+        amount=2, condition="void_active",
+    )
+
+
+def test_recognizer_rejects_void_em_dash_prefix_with_different_body():
+    # The Void-prefix variant requires the canonical Void-state body
+    # verbatim. A Void-prefixed rider with a different body isn't
+    # recognized — both because no real card ships such a body and
+    # because mapping arbitrary Void bodies to ``void_active`` would
+    # silently diverge from the static side. The fall-through then
+    # tries the bare ``This spell costs ...`` regex which doesn't
+    # anchor at start either, so the line stays unmatched.
+    line = (
+        "Void — This spell costs {2} less to cast if you've cast "
+        "another spell this turn."
     )
     assert _parse_cost_reduction_line(line) is None
 
@@ -480,12 +497,20 @@ def test_dark_endurance_now_fully_claimed_with_pump_and_gains_body():
     )
 
 
-def test_temporal_intervention_still_unclaimed_due_to_void_prefix():
-    # Temporal Intervention's rider is prefixed with ``Void —``, which
-    # the recognizer doesn't accept (different surface form), and its
-    # body effect isn't in the grammar either. Doubly unclaimed.
+def test_temporal_intervention_claimed_via_void_prefix_and_whole_spell():
+    # Temporal Intervention's rider is prefixed with ``Void —``; the
+    # recognizer's Void-prefix variant maps it to the ``void_active``
+    # engine condition. The body effect (3-sentence directed discard)
+    # is claimed via the whole-spell exact-text dispatch tier
+    # (``TargetOpponentDiscardsCasterChoice``). Both halves combine
+    # to form a fully-parsed printing matching the static side.
     card = _eoe_card("Temporal Intervention")
-    assert _build_spell_printing(card) is None
+    printing = _build_spell_printing(card)
+    assert printing is not None
+    assert printing.name == "Temporal Intervention"
+    assert printing.cost_reductions == (
+        CostReduction(amount=2, condition="void_active"),
+    )
 
 
 def test_fungal_colossus_still_unclaimed_due_to_x_rider_shape():
