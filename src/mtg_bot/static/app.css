@@ -186,6 +186,10 @@ body { display: grid; grid-template-columns: 1fr 280px;
         border-radius: 4px; }
 .bf-row { display: flex; gap: 0.2em; flex-wrap: wrap; min-height: calc(var(--card-h) + 10px); }
 .bf-row.lands { opacity: 0.95; }
+/* Thin vertical rule separating the lands section from non-land non-creatures
+   in the shared back row. */
+.back-row-sep { width: 1px; align-self: stretch; background: var(--panel-edge);
+                margin: 0 0.35em; flex-shrink: 0; }
 .row-label { position: absolute; color: var(--muted); font-size: 0.7em;
              text-transform: uppercase; letter-spacing: 0.1em; }
 
