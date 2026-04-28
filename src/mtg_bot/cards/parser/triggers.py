@@ -197,6 +197,32 @@ _TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
 )
 
 
+# Trailing-if shape: ``When/Whenever <condition>, <effect> if <gate>.``
+# Mechanically equivalent to the middle-clause intervening-if shape
+# above (CR 603.4) — the gate sits AFTER the effect rather than
+# between the trigger condition and the effect, but the trigger-time
+# game-state check is the same. The Delirium "tail-rider" surface
+# (``... if you have four or more card types among cards in your
+# graveyard.``) is the canonical example; future trailing gates can
+# add entries to the gate phrasebook without touching this regex.
+#
+# The condition capture is non-greedy to stop at the first ``, ``
+# boundary; the effect capture is non-greedy too because the gate
+# clause is identified by its leading `` if `` and trailing period.
+# We anchor the gate at `` if `` (with surrounding word boundaries
+# in the spelling — leading space, trailing period) so an ``if``
+# inside the effect itself (as part of e.g. a sub-clause future
+# extension) doesn't accidentally trigger this branch.
+#
+# Tried AFTER the middle-clause intervening-if regex so any line
+# carrying both ``, if <gate>,`` AND ``... if <gate>.`` claims via
+# the more-specific middle shape first. No DSK printing today
+# combines the two; this ordering is purely defensive.
+_TRIGGERED_ABILITY_TRAILING_IF_LINE = re.compile(
+    r"^(?:When|Whenever) (.+?), (.+?) if (.+)\.$"
+)
+
+
 # Turn-structure trigger line shape: ``At the beginning of <when>,
 # <effect>.`` Distinct from the ``When``/``Whenever`` shape above
 # because the trigger word is ``At`` and the condition body is a
@@ -758,8 +784,36 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
 }
 
 
+# Trailing-if gate phrases — the gate clause that follows the effect
+# in the ``When/Whenever <condition>, <effect> if <gate>.`` shape.
+# Distinct from ``_INTERVENING_IF_PHRASES`` (middle-clause gates)
+# because the printed phrasing differs: middle-clause gates lead
+# with an existential subject (``there are four or more card
+# types``), trailing gates lead with the controller's pronoun
+# (``you have four or more card types``). The predicate semantics
+# are identical — both trigger-time checks delegate to the same
+# ``Delirium()`` evaluation — but the surface text doesn't reuse,
+# so we keep separate phrasebooks rather than registering both
+# phrasings under one entry and risking a maintainer assuming
+# every middle-clause phrase has a trailing twin (it doesn't —
+# Void / opponent-more-lands gates have no printed trailing form).
+_TRAILING_IF_PHRASES: dict[str, Predicate] = {
+    "you have four or more card types among cards in your graveyard": (
+        Delirium()
+    ),
+}
+
+
 def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
     return _INTERVENING_IF_PHRASES.get(phrase.strip())
+
+
+def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
+    """Look up ``phrase`` (a trailing-``if`` gate clause from the
+    ``... if <gate>.`` tail) in ``_TRAILING_IF_PHRASES``. Returns the
+    matching ``Predicate`` or ``None`` when the phrase isn't claimed.
+    """
+    return _TRAILING_IF_PHRASES.get(phrase.strip())
 
 
 # Ability-word prefix on a triggered-ability line. An ability word is
@@ -1058,6 +1112,47 @@ def _parse_triggered_ability_line(
             effect=effect,
             once_per_turn=once_per_turn,
         )
+    # Trailing-if shape: ``When/Whenever <condition>, <effect> if
+    # <gate>.`` Mechanically equivalent to the middle-clause
+    # intervening-if path above — same predicate AND-ed onto the same
+    # base trigger predicate. The Delirium "tail-rider" surface
+    # (``... if you have four or more card types among cards in your
+    # graveyard.``) is the canonical example. Tried AFTER the middle-
+    # clause path so a line carrying both forms claims the more-
+    # specific middle shape first; an unrecognized trailing gate
+    # rejects the whole line (same don't-silently-drop-the-gate
+    # discipline as the middle path).
+    tif_match = _TRIGGERED_ABILITY_TRAILING_IF_LINE.match(line)
+    if tif_match is not None:
+        condition = tif_match.group(1)
+        effect_phrase = tif_match.group(2)
+        gate_phrase = tif_match.group(3)
+        gate_pred = _parse_trailing_if_phrase(gate_phrase)
+        if gate_pred is not None:
+            effect = _parse_effect_phrase(effect_phrase)
+            if effect is None:
+                return None
+            pred_match = _parse_predicate_trigger_phrase(condition)
+            if pred_match is None:
+                return None
+            event, base_predicate = pred_match
+            return TriggeredAbility(
+                event=event,
+                predicate=base_predicate & gate_pred,
+                effect=effect,
+                once_per_turn=once_per_turn,
+            )
+        # The trailing-if regex over-matches: any trigger line whose
+        # effect contains a sub-clause beginning `` if `` (e.g. an ``if
+        # you do, …`` rider on a future printing) will land here even
+        # though the trailing-``if`` interpretation isn't intended. If
+        # the gate phrase isn't claimed by the trailing-if phrasebook
+        # we fall through to the bare ``_TRIGGERED_ABILITY_LINE``
+        # parse below rather than rejecting outright — distinct from
+        # the middle-clause path's reject-on-unknown-gate discipline,
+        # because the middle-clause regex anchors on `` if `` flanked
+        # by `` , `` boundaries that are far less likely to appear
+        # incidentally inside an effect body.
     m = _TRIGGERED_ABILITY_LINE.match(line)
     if m is None:
         return None

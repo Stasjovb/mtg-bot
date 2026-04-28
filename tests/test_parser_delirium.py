@@ -34,10 +34,12 @@ from dataclasses import dataclass, field
 from mtg_bot.cards.base import DrawCards, TriggeredAbility
 from mtg_bot.cards.parser.triggers import (
     _INTERVENING_IF_PHRASES,
+    _TRAILING_IF_PHRASES,
     _parse_intervening_if_phrase,
+    _parse_trailing_if_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import Delirium, Event, IsSelf
+from mtg_bot.effects.predicates import Delirium, Event, IsSelf, Predicate
 
 
 # ---------- _parse_intervening_if_phrase: positive lookups ----------
@@ -122,6 +124,127 @@ def test_intervening_if_delirium_ability_word_prefix_on_etb():
     )
 
 
+# ---------- _parse_trailing_if_phrase / trailing-``if`` shape ----------
+
+
+def test_trailing_if_phrasebook_includes_delirium():
+    # The trailing-rider phrasing differs from the middle-clause
+    # phrasing — ``you have ...`` instead of ``there are ...`` — but
+    # the predicate is the same.
+    phrase = "you have four or more card types among cards in your graveyard"
+    assert _parse_trailing_if_phrase(phrase) == Delirium()
+
+
+def test_trailing_if_phrasebook_strips_surrounding_whitespace():
+    phrase = (
+        "  you have four or more card types among cards in your "
+        "graveyard  "
+    )
+    assert _parse_trailing_if_phrase(phrase) == Delirium()
+
+
+def test_trailing_if_phrasebook_rejects_unknown_phrase():
+    assert _parse_trailing_if_phrase("the moons of endor are aligned") is None
+
+
+def test_trailing_if_delirium_attack_predicate():
+    # Tail-rider shape: ``Whenever <cond>, <effect> if <gate>.``
+    # Mechanically equivalent to the middle-clause intervening-if
+    # form but with the gate after the effect.
+    line = (
+        "Whenever this creature attacks, draw a card if you have "
+        "four or more card types among cards in your graveyard."
+    )
+    assert _parse_triggered_ability_line(line) == TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf() & Delirium(),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_trailing_if_delirium_etb_predicate():
+    line = (
+        "When this creature enters, draw a card if you have four or "
+        "more card types among cards in your graveyard."
+    )
+    assert _parse_triggered_ability_line(line) == TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf() & Delirium(),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_trailing_if_delirium_with_ability_word_prefix():
+    # The ``Delirium —`` ability-word strips through the existing
+    # generic helper before the trailing-if regex runs.
+    line = (
+        "Delirium — Whenever this creature attacks, draw a card "
+        "if you have four or more card types among cards in your "
+        "graveyard."
+    )
+    assert _parse_triggered_ability_line(line) == TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf() & Delirium(),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_trailing_if_unknown_gate_falls_through():
+    # The trailing-if regex over-matches (any trigger line with a
+    # sub-clause beginning `` if `` will hit it). When the gate phrase
+    # isn't in ``_TRAILING_IF_PHRASES`` we fall through to the bare
+    # ``_TRIGGERED_ABILITY_LINE`` rather than rejecting outright —
+    # distinct from the middle-clause discipline. Here we feed a line
+    # whose ``if`` is part of an effect body that the bare path also
+    # can't claim, and check it returns None (rather than raising).
+    line = (
+        "Whenever this creature attacks, draw a card if the moons "
+        "of endor are aligned."
+    )
+    assert _parse_triggered_ability_line(line) is None
+
+
+def test_trailing_if_unknown_condition_rejected():
+    # Recognized gate but unknown trigger condition — same rejection
+    # discipline as the middle-clause path. A future regression that
+    # accidentally builds a trigger with ``event=None`` would surface
+    # here.
+    line = (
+        "Whenever this creature waltzes, draw a card if you have "
+        "four or more card types among cards in your graveyard."
+    )
+    assert _parse_triggered_ability_line(line) is None
+
+
+def test_trailing_if_unparseable_effect_rejected():
+    # Recognized gate AND recognized trigger condition — but the
+    # effect body doesn't claim. Reject; don't synthesize a
+    # half-resolved trigger.
+    line = (
+        "Whenever this creature attacks, do something undefined "
+        "if you have four or more card types among cards in your "
+        "graveyard."
+    )
+    assert _parse_triggered_ability_line(line) is None
+
+
+def test_middle_clause_takes_precedence_over_trailing():
+    # A line with BOTH a middle-clause ``, if <gate>,`` AND a tail
+    # ``... if <other-gate>.`` claims through the middle-clause path
+    # first (regex order in ``_parse_triggered_ability_line``). This
+    # combination doesn't appear in print today; the test guards the
+    # ordering invariant.
+    line = (
+        "When this creature enters, if there are four or more card "
+        "types among cards in your graveyard, draw a card."
+    )
+    assert _parse_triggered_ability_line(line) == TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf() & Delirium(),
+        effect=DrawCards(amount=1),
+    )
+
+
 # ---------- phrasebook integrity ----------
 
 
@@ -129,6 +252,22 @@ def test_delirium_phrase_lives_in_intervening_if_table():
     phrase = "there are four or more card types among cards in your graveyard"
     assert phrase in _INTERVENING_IF_PHRASES
     assert _INTERVENING_IF_PHRASES[phrase] == Delirium()
+
+
+def test_delirium_phrase_lives_in_trailing_if_table():
+    phrase = "you have four or more card types among cards in your graveyard"
+    assert phrase in _TRAILING_IF_PHRASES
+    assert _TRAILING_IF_PHRASES[phrase] == Delirium()
+
+
+def test_trailing_if_phrasebook_keys_map_to_predicates():
+    # Defensive integrity check — mirrors the equivalent assertion on
+    # the intervening-if phrasebook. A future addition that
+    # accidentally lands a tuple or string in the table fails here.
+    for phrase, pred in _TRAILING_IF_PHRASES.items():
+        assert isinstance(pred, Predicate), (
+            f"trailing phrase {phrase!r} maps to non-Predicate {pred!r}"
+        )
 
 
 # ---------- predicate evaluation ----------
