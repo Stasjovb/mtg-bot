@@ -43,11 +43,14 @@ from mtg_bot.cards.base import (
     CardPrinting,
     ConditionalIfVoid,
     CostReduction,
+    CutPropulsionEffect,
     DealDamageAnyTarget,
     Effect,
     ModalChooseOne,
+    MutinousMassacreEffect,
     PumpTargetCreatureUntilEOT,
     Sequence,
+    SingularityRuptureEffect,
     make_instant,
     make_sorcery,
 )
@@ -333,6 +336,64 @@ def _parse_modal_choose_one(
     return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
 
 
+# Whole-spell exact-text dispatch table. Each key is the full oracle
+# text after reminder-text stripping (parenthesized reminder tail
+# removed) but BEFORE sentence splitting — i.e. exactly what a single
+# oracle-text line looks like once parentheticals are gone. The value
+# is the engine-class instance that the static registry uses for that
+# card.
+#
+# This tier exists for spells whose oracle text is a single sentence-
+# block that the static registry models with a one-off engine class
+# (no reusable primitive is meaningful). The per-clause grammar
+# couldn't claim these because at least one of their internal
+# sentences (e.g. ``If that creature has flying, it deals twice that
+# much damage to itself instead.``) doesn't parse as a standalone
+# effect — and matching the per-sentence grammar to those forms
+# would yield primitives no other card uses.
+#
+# Entries here must be exact verbatim oracle text (post reminder
+# stripping). A future printing whose oracle text differs by even
+# one character won't match — by design, since this tier is for
+# named one-offs, not a reusable shape.
+_WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
+    # Cut Propulsion: target creature self-damages by its power; if
+    # it has flying, it self-damages twice that amount instead.
+    (
+        "Target creature deals damage to itself equal to its power. "
+        "If that creature has flying, "
+        "it deals twice that much damage to itself instead."
+    ): CutPropulsionEffect(),
+    # Mutinous Massacre: parity-of-mana-value wrath + steal-and-haste
+    # all-creatures rider. Reminder tail ``(Zero is even.)`` is
+    # stripped before lookup.
+    (
+        "Choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creatures until end of turn. "
+        "Untap them. They gain haste until end of turn."
+    ): MutinousMassacreEffect(),
+    # Singularity Rupture: wrath + opt-in mass mill of half-library.
+    (
+        "Destroy all creatures, then any number of target players "
+        "each mill half their library, rounded down."
+    ): SingularityRuptureEffect(),
+}
+
+
+def _try_whole_spell_exact_text(text: str) -> Effect | None:
+    """If ``text`` (post reminder-text stripping) exactly matches a
+    whole-spell entry in ``_WHOLE_SPELL_EXACT_TEXT``, return the
+    associated engine-class instance; otherwise ``None``.
+
+    Tried at the top of ``_parse_spell_oracle_text`` BEFORE the
+    per-clause grammar runs. Each key is exact-match, so the
+    dispatch is O(1) per spell — no risk of accidentally catching
+    spells whose text overlaps a key.
+    """
+    return _WHOLE_SPELL_EXACT_TEXT.get(text.strip())
+
+
 def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     """Parse a spell's full oracle text into a single ``Effect``.
 
@@ -362,6 +423,17 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     a printing that put each sentence on its own ``\\n``-separated
     line. Returns ``None`` if any surviving clause fails to parse.
     """
+    # Whole-spell exact-text dispatch: try a one-off engine-class
+    # match against the full reminder-stripped oracle text BEFORE
+    # any clause-level processing. Reserved for cards whose oracle
+    # text is a single sentence-block modeled by a dedicated engine
+    # class with no parameters — see ``_WHOLE_SPELL_EXACT_TEXT`` for
+    # the full table.
+    stripped_full = _strip_reminder_text(text)
+    if stripped_full:
+        whole = _try_whole_spell_exact_text(stripped_full)
+        if whole is not None:
+            return whole
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
     # stripping. The preamble shape (``"Convoke (...)"``) is recognized

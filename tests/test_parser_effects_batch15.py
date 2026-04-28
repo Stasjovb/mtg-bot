@@ -579,6 +579,85 @@ def test_parse_effect_does_not_collide_with_bare_destroy_creature():
     assert spacecraft.or_spacecraft is True
 
 
+# ---------- whole-spell exact-text dispatch ----------
+
+def test_cut_propulsion_claimed_by_parser():
+    # Cut Propulsion `{2}{R}` Instant — target creature self-damages
+    # by its power; flying targets self-damage twice. The whole oracle
+    # text is one sentence-block that the static models with the
+    # dedicated ``CutPropulsionEffect`` engine class. Unlocked by the
+    # whole-spell exact-text dispatcher.
+    assert "Cut Propulsion" in _claimed_names()
+
+
+def test_mutinous_massacre_claimed_by_parser():
+    # Mutinous Massacre `{3}{B}{B}{R}{R}` Sorcery — odd/even parity
+    # wrath + steal-and-haste-all-creatures rider. The reminder tail
+    # ``(Zero is even.)`` is stripped before lookup. Unlocked by the
+    # whole-spell exact-text dispatcher.
+    assert "Mutinous Massacre" in _claimed_names()
+
+
+def test_singularity_rupture_claimed_by_parser():
+    # Singularity Rupture `{3}{U}{B}{B}` Sorcery — wrath + opt-in
+    # mass mill of half-library. Unlocked by the whole-spell exact-
+    # text dispatcher.
+    assert "Singularity Rupture" in _claimed_names()
+
+
+def test_whole_spell_exact_match_returns_none_for_unrelated_text():
+    # The dispatcher is exact-match, so unrelated oracle text never
+    # accidentally claims a spell. Sanity-check via a paraphrased
+    # version of one of the table keys — even one-character differences
+    # reject.
+    from mtg_bot.cards.parser.spell_builder import (
+        _try_whole_spell_exact_text,
+    )
+
+    # Same shape as Singularity Rupture but with a typo in
+    # ``creatures`` — the exact-match dispatcher rejects.
+    assert _try_whole_spell_exact_text(
+        "Destroy all creature, then any number of target players "
+        "each mill half their library, rounded down."
+    ) is None
+
+
+def test_whole_spell_exact_match_returns_engine_class_for_match():
+    # Direct lookup against the dispatcher with the exact verbatim
+    # Singularity Rupture text. The returned engine class is the
+    # static-side primitive (no parameters).
+    from mtg_bot.cards.parser.spell_builder import (
+        _try_whole_spell_exact_text,
+    )
+
+    eff = _try_whole_spell_exact_text(
+        "Destroy all creatures, then any number of target players "
+        "each mill half their library, rounded down."
+    )
+    from mtg_bot.cards.base import SingularityRuptureEffect
+    assert eff == SingularityRuptureEffect()
+
+
+def test_whole_spell_exact_match_strips_mutinous_massacre_reminder():
+    # End-to-end through ``_parse_spell_oracle_text``: Mutinous
+    # Massacre's printed oracle text carries a ``(Zero is even.)``
+    # reminder tail; the parser must strip that reminder before
+    # the dispatcher lookup. Verify the full oracle text (with
+    # reminder intact) lands as the dedicated engine class.
+    from mtg_bot.cards.base import MutinousMassacreEffect
+
+    text = (
+        "Choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creatures until end of turn. "
+        "Untap them. They gain haste until end of turn. "
+        "(Zero is even.)"
+    )
+    assert _parse_spell_oracle_text(text, "Mutinous Massacre") == (
+        MutinousMassacreEffect()
+    )
+
+
 def test_void_pump_rider_does_not_perturb_plasma_bolt():
     # Plasma Bolt's existing Void rider (damage-replacement) must
     # still claim Plasma Bolt unchanged after adding the pump-
