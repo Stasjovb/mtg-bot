@@ -62,6 +62,19 @@ self-scope condition phrasebook is therefore not consulted. If a future
 printing combines the two we would extend the anthem regex rather than
 the self-scope regex (the two surface families have already diverged
 enough that a single combined grammar would be hard to read).
+
+**Counter-gated anthem** lines name a per-creature counter filter as
+part of the subject rather than as an ``As long as`` condition:
+
+* ``Each creature you control with a +1/+1 counter on it has
+  <keyword>.`` → ``StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER``
+  with the keyword grant. Drix Fatemaker prints in this shape. The
+  scope itself is what carries the "filter to creatures with a
+  +1/+1 counter" semantics — the engine's ``applies_to`` checks
+  ``target.plus_one_counters > 0`` for this scope. Subject is
+  ``Each creature`` (singular, no ``Other`` variant in EoE today)
+  and the verb is therefore ``has`` rather than the plural-anthem
+  ``have``.
 """
 
 from __future__ import annotations
@@ -170,6 +183,20 @@ _ANTHEM_KEYWORD_LINE = re.compile(
 )
 
 
+# Counter-gated anthem: ``Each creature you control with a +1/+1
+# counter on it has <keyword>.`` — singular subject ("Each creature")
+# pinned by the regex, no ``During your turn,`` rider in EoE today
+# (the rider would be unambiguously parseable but no card prints it,
+# so we keep this regex narrow to the surface form actually seen).
+# Scope is fixed: every match maps to
+# ``StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER``, so we don't need
+# a subject-to-scope mapping like the plural anthems use.
+_COUNTER_GATED_ANTHEM_LINE = re.compile(
+    r"^Each creature you control with a \+1/\+1 counter on it has "
+    r"(?P<keyword>[A-Za-z ]+)\.$"
+)
+
+
 def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     """Return a ``StaticAbility`` for an anthem-shape static line, or
     ``None`` if the surface form doesn't match, the subject isn't a
@@ -223,6 +250,35 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     )
 
 
+def _parse_counter_gated_anthem_line(line: str) -> StaticAbility | None:
+    """Return a ``StaticAbility`` for a counter-gated anthem line, or
+    ``None`` if the line doesn't match or the granted keyword isn't a
+    known evergreen.
+
+    Recognizes the singular-subject shape ``Each creature you control
+    with a +1/+1 counter on it has <keyword>.`` (Drix Fatemaker). The
+    scope is fixed at ``StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER``
+    — the engine's ``applies_to`` walks every creature the source's
+    controller owns and admits only those with at least one +1/+1
+    counter, which is exactly the surface filter.
+
+    P/T grants and the ``and has`` combined tail are not supported
+    today: every counter-gated print in EoE is keyword-only, and
+    pulling the P/T branch in here speculatively would require deciding
+    its surface spelling without an example to anchor it.
+    """
+    m = _COUNTER_GATED_ANTHEM_LINE.match(line.strip())
+    if m is None:
+        return None
+    engine_keyword = _KEYWORD_LINES.get(m.group("keyword").strip().capitalize())
+    if engine_keyword is None:
+        return None
+    return StaticAbility(
+        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
+        granted_keywords=frozenset({engine_keyword}),
+    )
+
+
 def _parse_static_ability_line(line: str) -> StaticAbility | None:
     """Return a ``StaticAbility`` for a single static-ability line, or
     ``None`` if no surface form matches.
@@ -233,22 +289,29 @@ def _parse_static_ability_line(line: str) -> StaticAbility | None:
     (``_parse_anthem_static_line``) which covers ``Creatures you
     control [get|have] ...`` and ``Other creatures you control
     [get|have] ...`` lines, optionally with a ``During your turn,``
-    rider.
+    rider. Finally the counter-gated anthem grammar
+    (``_parse_counter_gated_anthem_line``) is tried for the
+    ``Each creature you control with a +1/+1 counter on it has
+    <keyword>.`` shape.
 
-    The two grammar families are mutually exclusive on their subject
-    noun phrase (``this creature`` vs. ``[Other ]Creatures you
-    control``), so the order of fallthrough doesn't matter for
-    correctness — self-scope is tried first only because every
-    ``StaticAbility`` produced by the parser before the anthem
-    grammar landed was self-scoped, and keeping that path first
-    minimizes diff churn for the existing test corpus.
+    The grammar families are mutually exclusive on their subject noun
+    phrase (``this creature`` vs. ``[Other ]Creatures you control``
+    vs. ``Each creature you control with a +1/+1 counter on it``), so
+    the order of fallthrough doesn't matter for correctness — self-
+    scope is tried first only because every ``StaticAbility`` produced
+    by the parser before the anthem grammar landed was self-scoped,
+    and keeping that path first minimizes diff churn for the existing
+    test corpus.
     """
     stripped = line.strip()
     m = _STATIC_ABILITY_LINE.match(stripped)
     if m is None:
         m = _STATIC_ABILITY_LINE_TRAILING.match(stripped)
     if m is None:
-        return _parse_anthem_static_line(stripped)
+        anthem = _parse_anthem_static_line(stripped)
+        if anthem is not None:
+            return anthem
+        return _parse_counter_gated_anthem_line(stripped)
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:

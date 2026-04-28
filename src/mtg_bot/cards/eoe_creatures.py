@@ -2817,9 +2817,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Drix Fatemaker: {3}{G} 3/2. ETB +1/+1 counter on target
         # creature; creatures you control with a +1/+1 counter have
         # trample. Ships with Warp {1}{G} to match the printed card.
+        # Subtypes match the printed type line (``Creature — Drix
+        # Wizard``); the parser reads them off ``type_line`` so the
+        # registry must declare them for structural parity.
         make_creature(
             "Drix Fatemaker", "{3}{G}", 3, 2,
             warp="{1}{G}",
+            subtypes=("Drix", "Wizard"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
