@@ -83,6 +83,7 @@ from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
     AddManaToPool,
+    CostReduction,
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
@@ -366,6 +367,44 @@ def _normalize_activated_effect_phrase(phrase: str) -> str:
 _INLINE_SORCERY_RIDER_SUFFIX = " Activate only as a sorcery."
 
 
+# Inline cost-reduction rider for activated abilities:
+# ``This ability costs {N} less to activate if <condition>.`` glued to
+# the end of the activation line, with a single space separator after
+# the effect's terminating period. The first EoE printing is Starport
+# Security's ``{3}{W}, {T}: Tap another target creature. This ability
+# costs {2} less to activate if you control a creature with a +1/+1
+# counter on it.``
+#
+# The captured ``N`` is the digit reduction; the condition phrase
+# (everything after ``activate if`` and before the trailing period)
+# must appear in the closed ``_ACTIVATED_COST_REDUCTION_CONDITIONS``
+# whitelist to produce a recognized rule. An unknown condition phrase
+# falls through and the whole line stays unrecognized — never silently
+# producing a no-op rule the engine ignores. The rider never appears
+# without a condition (every EoE printing today gates the reduction
+# on something), so the regex requires it.
+_INLINE_COST_REDUCTION_RIDER = re.compile(
+    r" This ability costs \{(\d+)\} less to activate if (.+)\.$"
+)
+
+
+# Surface phrase → engine condition-key mapping for the activated-
+# ability cost-reduction rider. Each engine key MUST have a matching
+# branch in ``mtg_bot.actions.apply_cost_reductions`` /
+# ``_evaluate_cost_reduction``; otherwise the parser would silently
+# produce a rule the engine ignores, diverging from the static side.
+# Mirrors the per-spell whitelist in
+# ``mtg_bot.cards.parser.cost_reduction`` but lives here because the
+# activated-ability rider has its own surface shape (``... to activate
+# if ...`` rather than ``... to cast if ...``) and condition vocabulary
+# (no overlap with EoE printings observed today).
+_ACTIVATED_COST_REDUCTION_CONDITIONS: dict[str, str] = {
+    "you control a creature with a +1/+1 counter on it": (
+        "control_creature_with_plus_one_counter"
+    ),
+}
+
+
 def _is_mana_ability_effect(effect) -> bool:
     """Return True iff ``effect`` is a mana ability for the purposes of
     CR 605: it produces mana and does not target.
@@ -404,6 +443,14 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     rider is stripped, the remainder is parsed as a normal activation,
     and the resulting ability is marked ``sorcery_speed=True``.
 
+    Inline cost-reduction rider variant
+    ``{cost}: <effect>. This ability costs {N} less to activate if
+    <condition>.`` is also accepted: the rider is stripped, the
+    captured ``N`` and condition phrase are translated into a
+    ``CostReduction`` attached to the ability's ``cost_reductions``
+    tuple. An unknown condition phrase rejects the whole line so the
+    card stays unclaimed rather than silently dropping the gate.
+
     If the parsed effect is a mana ability (see
     ``_is_mana_ability_effect``), the returned ``ActivatedAbility`` is
     marked ``is_mana_ability=True`` so the engine bypasses the stack
@@ -416,6 +463,31 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         # the standard ``{cost}: <effect>.`` shape still matches.
         stripped = stripped[: -len(_INLINE_SORCERY_RIDER_SUFFIX)]
         sorcery_speed = True
+    cost_reductions: tuple[CostReduction, ...] = ()
+    rider_match = _INLINE_COST_REDUCTION_RIDER.search(stripped)
+    if rider_match is not None:
+        condition_phrase = rider_match.group(2).strip()
+        engine_key = _ACTIVATED_COST_REDUCTION_CONDITIONS.get(
+            condition_phrase
+        )
+        if engine_key is None:
+            # Unknown condition phrase — reject the whole line rather
+            # than silently dropping a gate the static registry does
+            # honor. A future EoE printing with a new condition phrase
+            # surfaces a parser miss until the whitelist is extended.
+            return None
+        cost_reductions = (
+            CostReduction(
+                amount=int(rider_match.group(1)),
+                condition=engine_key,
+            ),
+        )
+        # Strip the rider — the rider regex's leading literal space
+        # comes RIGHT AFTER the effect's terminating period, so the
+        # remaining prefix already ends with the period and the
+        # standard ``{cost}: <effect>.`` shape still matches without
+        # any further fix-up.
+        stripped = stripped[: rider_match.start()]
     m = _ACTIVATED_ABILITY_LINE.match(stripped)
     if m is None:
         return None
@@ -426,7 +498,8 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     if effect is None:
         return None
     ability = ActivatedAbility(
-        cost=cost, effect=effect, sorcery_speed=sorcery_speed
+        cost=cost, effect=effect, sorcery_speed=sorcery_speed,
+        cost_reductions=cost_reductions,
     )
     if _is_mana_ability_effect(effect):
         ability = replace(ability, is_mana_ability=True)

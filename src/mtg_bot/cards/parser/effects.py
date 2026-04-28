@@ -68,6 +68,7 @@ from mtg_bot.cards.base import (
     SelfMill,
     Sequence,
     Surveil,
+    TapAnotherTargetCreature,
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
     TargetOpponentLosesLife,
@@ -630,6 +631,18 @@ _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM = re.compile(
 # already tapped at resolution.
 _TAP_TARGET_ARTIFACT_OR_CREATURE = re.compile(
     r"^tap target artifact or creature$"
+)
+# "Tap another target creature." — Starport Security's activated
+# ability. ``another`` excludes the source creature (reads
+# ``state.resolving_source`` to filter). Maps to
+# ``TapAnotherTargetCreature()``. No-op if the chosen target is already
+# tapped at resolution. Tried as a separate primitive from the
+# ``tap target artifact or creature`` shape because the engine class
+# differs (creature-only legal pool, source-self exclusion) and the
+# surface tail (no ``artifact or`` qualifier, ``another`` self-exclusion
+# fragment) is also distinct.
+_TAP_ANOTHER_TARGET_CREATURE = re.compile(
+    r"^tap another target creature$"
 )
 # "Tap target artifact or creature an opponent controls and put a stun
 # counter on it" — Mechanozoa's ETB. Single primitive (both clauses
@@ -1220,6 +1233,13 @@ def _parse_effect(phrase: str) -> Effect | None:
         # claims phrases that actually carry the ``or tapped
         # creature`` tail.
         return DestroyTargetArtifactOrTappedCreature()
+    # ``tap another target creature`` — Starport Security's activated
+    # ability. Tried BEFORE the ``tap target artifact or creature``
+    # regex below because the bare regex's ``$`` anchor wouldn't match
+    # the ``another`` qualifier anyway, but ordering more-specific
+    # before more-general is the convention here.
+    if _TAP_ANOTHER_TARGET_CREATURE.match(phrase) is not None:
+        return TapAnotherTargetCreature()
     if _TAP_TARGET_ARTIFACT_OR_CREATURE.match(phrase) is not None:
         # ``tap target artifact or creature`` — Mental Modulation's
         # middle clause and any future card with the same surface.

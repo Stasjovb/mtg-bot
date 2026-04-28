@@ -1647,6 +1647,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Starport Security", "{W}", 1, 1,
             artifact=True,
+            subtypes=("Robot", "Soldier"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=cost(mana="{3}{W}", tap_self=True),
