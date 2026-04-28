@@ -24,16 +24,26 @@ from dataclasses import replace
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
+    AnticausalVestigeLeavesEffect,
+    AstelliReclaimerETBEffect,
     CardPrinting,
     CostReduction,
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
+    ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
+    LookAtTopNRevealOrCounter,
     ModalChooseOne,
+    PerigeeBeckonerDiesReturnTappedEffect,
+    PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnEachCreatureYouControl,
+    SearchLibraryForCard,
+    SearchLibraryForEquipmentToBattlefield,
     StaticAbility,
+    TerritorialBruntarLandfallEffect,
     TriggeredAbility,
     CreateToken,
+    cost,
     make_creature,
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
@@ -53,6 +63,7 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     IsCreature,
+    IsLand,
     IsPlayer,
     IsSelf,
     SpellsCastThisTurn,
@@ -187,6 +198,187 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             warp="{B}",
             warp_additional_life_cost=2,
             warp_castable_from_graveyard=True,
+        ),
+        # ── Batch 22a ──────────────────────────────────────────────────
+        # Starfield Shepherd {3}{W}{W} 3/2 Angel — flying, warp {1}{W}.
+        # ETB modal: tutor a creature with MV ≤ 1 OR a basic Plains.
+        "Starfield Shepherd": make_creature(
+            "Starfield Shepherd", "{3}{W}{W}", 3, 2,
+            keywords={"flying"},
+            warp="{1}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ModalChooseOne(modes=(
+                        SearchLibraryForCard(
+                            filter_name="creature_small",
+                            max_mv=1,
+                            may_fail=False,
+                        ),
+                        SearchLibraryForCard(
+                            filter_name="basic_plains",
+                            may_fail=False,
+                        ),
+                    )),
+                ),
+            ),
+        ),
+        # Astelli Reclaimer {3}{W}{W} 5/4 Angel Warrior — flying,
+        # warp {2}{W}. ETB return noncreature/nonland from graveyard
+        # with MV ≤ mana spent.
+        "Astelli Reclaimer": make_creature(
+            "Astelli Reclaimer", "{3}{W}{W}", 5, 4,
+            keywords={"flying"},
+            warp="{2}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=AstelliReclaimerETBEffect(),
+                ),
+            ),
+        ),
+        # Exalted Sunborn {3}{W}{W} 4/5 Angel Wizard — flying, lifelink,
+        # warp {1}{W}. Static: token doubler.
+        "Exalted Sunborn": make_creature(
+            "Exalted Sunborn", "{3}{W}{W}", 4, 5,
+            subtypes=("Angel", "Wizard"),
+            keywords={"flying", "lifelink"},
+            warp="{1}{W}",
+            is_token_doubler=True,
+        ),
+        # Territorial Bruntar {4}{R}{R} 6/6 Beast — reach.
+        # Landfall: exile top until nonland, may cast this turn.
+        "Territorial Bruntar": make_creature(
+            "Territorial Bruntar", "{4}{R}{R}", 6, 6,
+            keywords={"reach"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                    effect=TerritorialBruntarLandfallEffect(),
+                ),
+            ),
+        ),
+        # All-Fates Stalker {3}{W} 2/3 Drix Assassin — warp {1}{W}.
+        # ETB exile target non-Assassin creature until Stalker leaves.
+        "All-Fates Stalker": make_creature(
+            "All-Fates Stalker", "{3}{W}", 2, 3,
+            warp="{1}{W}",
+            subtypes=("Drix", "Assassin"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ExileTargetCreatureUntilSourceLeaves(
+                        excluded_subtypes=frozenset({"Assassin"}),
+                    ),
+                ),
+            ),
+        ),
+        # Anticausal Vestige {6} 7/5 Eldrazi — warp {4}.
+        # When it leaves the battlefield: draw + may put permanent to bf.
+        "Anticausal Vestige": make_creature(
+            "Anticausal Vestige", "{6}", 7, 5,
+            subtypes=("Eldrazi",),
+            warp="{4}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
+                    effect=AnticausalVestigeLeavesEffect(),
+                ),
+            ),
+        ),
+        # Fungal Colossus {6}{G} 5/5 Fungus Beast.
+        # Costs {1} less per differently-named land you control.
+        "Fungal Colossus": make_creature(
+            "Fungal Colossus", "{6}{G}", 5, 5,
+            cost_reductions=(
+                CostReduction(
+                    amount=1,
+                    condition="per_differently_named_land",
+                    per_land_group=True,
+                ),
+            ),
+        ),
+        # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
+        # ETB: another creature you control gets +2/+0 and gains
+        # "when this creature dies, return it to bf tapped".
+        "Perigee Beckoner": make_creature(
+            "Perigee Beckoner", "{4}{B}", 4, 5,
+            warp="{1}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=2, toughness_bonus=0,
+                        you_control_only=True,
+                        exclude_self=True,
+                        granted_triggered_ability=TriggeredAbility(
+                            event=Event.DIES, predicate=IsSelf(),
+                            effect=PerigeeBeckonerDiesReturnTappedEffect(),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        # Honored Knight-Captain {1}{W} 1/1.
+        # ETB create 1/1 Human Soldier token.
+        # Activated: {4}{W}{W}, sacrifice self → search for Equipment.
+        "Honored Knight-Captain": make_creature(
+            "Honored Knight-Captain", "{1}{W}", 1, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
+                        count=1,
+                    ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{4}{W}{W}", sacrifice_self=True),
+                    effect=SearchLibraryForEquipmentToBattlefield(),
+                ),
+            ),
+        ),
+        # Starfield Vocalist {3}{U} 3/4 — warp {1}{U}.
+        # Static: ETB-triggered abilities trigger an additional time
+        # (extra_etb_trigger=1).
+        "Starfield Vocalist": make_creature(
+            "Starfield Vocalist", "{3}{U}", 3, 4,
+            warp="{1}{U}",
+            extra_etb_trigger=1,
+        ),
+        # Elegy Acolyte {2}{B}{B} 4/4 Human Cleric — lifelink.
+        # Void trigger: at beginning of end step, if void is active,
+        # create a 1/1 Robot token. (Combat-damage trigger dropped.)
+        "Elegy Acolyte": make_creature(
+            "Elegy Acolyte", "{2}{B}{B}", 4, 4,
+            keywords={"lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
+                    requires_void=True,
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        count=1,
+                    ),
+                ),
+            ),
+        ),
+        # Pulsar Squadron Ace {1}{W} 1/2 Human Pilot.
+        # ETB: look at top 5, may reveal Spacecraft → hand; if not,
+        # put a +1/+1 counter on this creature.
+        "Pulsar Squadron Ace": make_creature(
+            "Pulsar Squadron Ace", "{1}{W}", 1, 2,
+            subtypes=("Human", "Pilot"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=LookAtTopNRevealOrCounter(
+                        n=5, filter_name="spacecraft",
+                    ),
+                ),
+            ),
         ),
     }
 

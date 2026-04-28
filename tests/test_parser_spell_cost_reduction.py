@@ -513,8 +513,11 @@ def test_temporal_intervention_claimed_via_void_prefix_and_whole_spell():
     )
 
 
-def test_fungal_colossus_still_unclaimed_due_to_x_rider_shape():
-    # Fungal Colossus uses ``{X}``-amount + per-land-group semantics —
-    # not on this slice's whitelist. Card must remain unclaimed.
+def test_fungal_colossus_claimed_via_bespoke():
+    # Fungal Colossus is now claimed via the bespoke dispatch table
+    # (per_differently_named_land CostReduction with per_land_group=True).
+    # _build_creature_printing must return its canonical printing, not None.
     card = _eoe_card("Fungal Colossus")
-    assert _build_creature_printing(card) is None
+    printing = _build_creature_printing(card)
+    assert printing is not None
+    assert printing.name == "Fungal Colossus"
