@@ -99,7 +99,101 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.combinators import Sequence
+from mtg_bot.effects.generic import (
+    DealDamageToOpponentCreatureByArtifactCount,
+    DealDamageToTargetCreature,
+    DiscardSelf,
+    DrawCards,
+    EachOpponentSacrificesCreature,
+    PutPlusOneCounterOnEachCreatureYouControl,
+)
 from mtg_bot.effects.predicates import Event, IsSelf
+
+
+# ---------------------------------------------------------------------------
+# Bespoke dispatch table — cards whose ETB effects are outside the general
+# Station grammar's effect-phrase coverage. Built eagerly at module load
+# (same pattern as ``special_guests_builder``). ``_build_spacecraft_printing``
+# checks this table FIRST: if the card name is here and the type line says
+# Spacecraft, the pre-built ``CardPrinting`` is returned immediately.
+#
+# Every entry mirrors the corresponding ``make_spacecraft(...)`` call in
+# ``eoe_creatures.py`` exactly — same cost, power, toughness, thresholds,
+# frozenset keywords, and trigger tuple.
+# ---------------------------------------------------------------------------
+_BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
+    c.name: c
+    for c in [
+        # Atmospheric Greenhouse: ETB puts a +1/+1 counter on each creature
+        # you control, 8+ flying + trample.
+        make_spacecraft(
+            "Atmospheric Greenhouse", "{4}{G}", 5, 4,
+            station_threshold=8,
+            stationed_keywords={"flying", "trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
+                ),
+            ),
+        ),
+        # Pinnacle Kill-Ship: ETB deals 10 damage to up to one target creature,
+        # 7+ flying.
+        make_spacecraft(
+            "Pinnacle Kill-Ship", "{7}", 7, 7,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DealDamageToTargetCreature(amount=10, optional=True),
+                ),
+            ),
+        ),
+        # Susurian Dirgecraft: ETB each opponent sacrifices a nontoken
+        # creature of their choice, 7+ flying.
+        make_spacecraft(
+            "Susurian Dirgecraft", "{4}{B}", 4, 3,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=EachOpponentSacrificesCreature(),
+                ),
+            ),
+        ),
+        # Uthros Scanship: ETB draw two cards then discard a card, 8+ flying.
+        make_spacecraft(
+            "Uthros Scanship", "{3}{U}", 4, 4,
+            station_threshold=8,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=1),
+                    )),
+                ),
+            ),
+        ),
+        # Warmaker Gunship: ETB deals damage equal to artifact count to target
+        # creature an opponent controls, 6+ flying.
+        make_spacecraft(
+            "Warmaker Gunship", "{2}{R}", 4, 3,
+            station_threshold=6,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DealDamageToOpponentCreatureByArtifactCount(),
+                ),
+            ),
+        ),
+    ]
+}
 
 
 # The Station reminder line. Scryfall prints it as a single line:
@@ -189,6 +283,15 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         return None
     if "Spacecraft" not in subtypes:
         return None
+
+    # Bespoke table: cards whose ETB effects aren't covered by the
+    # general Station grammar. Check name FIRST — if the card is
+    # present here the pre-built ``CardPrinting`` is returned
+    # immediately, skipping the grammar entirely.
+    name = card.get("name", "")
+    if name in _BESPOKE_SPACECRAFT:
+        return _BESPOKE_SPACECRAFT[name]
+
     legendary = "Legendary" in supertypes
     try:
         power = int(card["power"])
