@@ -692,12 +692,25 @@ els.zoneModal.addEventListener('click', (ev) => {
 function battlefieldEl(p, isTop) {
   const bf = document.createElement('div');
   bf.className = 'battlefield';
-  const lands = p.battlefield.filter(o => o.is_land);
-  const nonlands = p.battlefield.filter(o => !o.is_land);
-  const creaturesRow = rowOfCards(groupBattlefield(nonlands), 'bf-row creatures', true);
-  const landsRow = rowOfCards(groupBattlefield(lands), 'bf-row lands', true);
-  // Lands rendered behind/further from the stack for both players:
-  bf.append(isTop ? landsRow : creaturesRow, isTop ? creaturesRow : landsRow);
+  const lands    = p.battlefield.filter(o =>  o.is_land);
+  const others   = p.battlefield.filter(o => !o.is_land && !o.is_creature_now);
+  const creatures = p.battlefield.filter(o => !o.is_land &&  o.is_creature_now);
+
+  const creaturesRow = rowOfCards(groupBattlefield(creatures), 'bf-row creatures', true);
+
+  // Back row: lands on the left, non-land non-creatures on the right.
+  const backRow = document.createElement('div');
+  backRow.className = 'bf-row back';
+  groupBattlefield(lands).forEach(c => backRow.appendChild(cardEl(c, { permanent: true })));
+  if (lands.length > 0 && others.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'back-row-sep';
+    backRow.appendChild(sep);
+  }
+  groupBattlefield(others).forEach(c => backRow.appendChild(cardEl(c, { permanent: true })));
+
+  // Back row is furthest from the stack; creatures row is closest.
+  bf.append(isTop ? backRow : creaturesRow, isTop ? creaturesRow : backRow);
   return bf;
 }
 

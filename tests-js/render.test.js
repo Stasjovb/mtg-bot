@@ -811,3 +811,101 @@ describe('renderLog warp cast badge', () => {
     });
   });
 });
+
+
+// ---------------------------------------------------------------------
+// battlefieldEl — three-zone layout: back row (lands | others), front
+// row (creatures)
+// ---------------------------------------------------------------------
+
+describe('battlefieldEl', () => {
+  function basePerm(overrides = {}) {
+    return {
+      id: 1, name: 'Card', type_line: '',
+      is_creature: false, is_creature_now: false,
+      is_land: false, is_token: false, is_spacecraft: false,
+      is_planeswalker: false, is_stationed: false,
+      effective_power: null, effective_toughness: null,
+      station_threshold: null, charge_counters: 0,
+      tapped: false, summoning_sick: false,
+      attacking: false, blocking: null,
+      plus_one_counters: 0, damage: 0, stun_counters: 0,
+      loyalty_counters: 0, attached_to: null,
+      scryfall_id: null, warped: false,
+      ...overrides,
+    };
+  }
+
+  function player(battlefield) {
+    return { id: 0, battlefield, hand: [], hand_size: 0 };
+  }
+
+  it('puts creatures in the front row and lands in the back row (bottom player)', () => {
+    const p = player([
+      basePerm({ id: 1, is_land: true,         name: 'Forest' }),
+      basePerm({ id: 2, is_creature_now: true,  name: 'Bear' }),
+    ]);
+    const bf = battlefieldEl(p, /* isTop */ false);
+    const rows = bf.querySelectorAll('.bf-row');
+    expect(rows).toHaveLength(2);
+    // isTop=false: creaturesRow first (top of element = closer to stack), backRow second.
+    expect(rows[0].classList.contains('creatures')).toBe(true);
+    expect(rows[1].classList.contains('back')).toBe(true);
+    expect(rows[0].querySelector('[data-obj-id="2"]')).not.toBeNull();
+    expect(rows[1].querySelector('[data-obj-id="1"]')).not.toBeNull();
+  });
+
+  it('puts creatures in the front row and back row last (top/opponent player)', () => {
+    const p = player([
+      basePerm({ id: 1, is_land: true,         name: 'Forest' }),
+      basePerm({ id: 2, is_creature_now: true,  name: 'Bear' }),
+    ]);
+    const bf = battlefieldEl(p, /* isTop */ true);
+    const rows = bf.querySelectorAll('.bf-row');
+    expect(rows[0].classList.contains('back')).toBe(true);
+    expect(rows[1].classList.contains('creatures')).toBe(true);
+  });
+
+  it('places non-land non-creatures in the back row to the right of lands', () => {
+    const p = player([
+      basePerm({ id: 1, is_land: true,  name: 'Island' }),
+      basePerm({ id: 2, is_land: false, is_creature_now: false, name: 'Artifact' }),
+    ]);
+    const bf = battlefieldEl(p, false);
+    const backRow = bf.querySelector('.bf-row.back');
+    const cards = Array.from(backRow.querySelectorAll('.card'));
+    // Island should appear before the Artifact in DOM order.
+    const island = backRow.querySelector('[data-obj-id="1"]');
+    const artifact = backRow.querySelector('[data-obj-id="2"]');
+    expect(island).not.toBeNull();
+    expect(artifact).not.toBeNull();
+    expect(cards.indexOf(island)).toBeLessThan(cards.indexOf(artifact));
+  });
+
+  it('renders a .back-row-sep only when both lands and others are present', () => {
+    // Both present → separator.
+    const p1 = player([
+      basePerm({ id: 1, is_land: true, name: 'Plains' }),
+      basePerm({ id: 2, is_land: false, is_creature_now: false, name: 'Sol Ring' }),
+    ]);
+    expect(battlefieldEl(p1, false).querySelector('.back-row-sep')).not.toBeNull();
+
+    // Only lands → no separator.
+    const p2 = player([
+      basePerm({ id: 3, is_land: true, name: 'Plains' }),
+    ]);
+    expect(battlefieldEl(p2, false).querySelector('.back-row-sep')).toBeNull();
+
+    // Only others → no separator.
+    const p3 = player([
+      basePerm({ id: 4, is_land: false, is_creature_now: false, name: 'Sol Ring' }),
+    ]);
+    expect(battlefieldEl(p3, false).querySelector('.back-row-sep')).toBeNull();
+  });
+
+  it('renders an empty battlefield with no cards', () => {
+    const bf = battlefieldEl(player([]), false);
+    expect(bf.querySelectorAll('.card')).toHaveLength(0);
+    expect(bf.querySelectorAll('.bf-row')).toHaveLength(2);
+  });
+});
