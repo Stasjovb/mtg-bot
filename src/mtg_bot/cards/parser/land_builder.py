@@ -75,6 +75,19 @@ _MANLAND_ANIMATE_RE = re.compile(
     r"(?P<c2word>white|blue|black|red|green) Elemental creature "
     r"with (?P<keywords>[^.]+)\. It's still a land\.$"
 )
+# Tar-Pit-shape variant: same as the standard manland line but the
+# keyword tail is replaced with the literal ``It can't be blocked
+# this turn.`` rider after ``It's still a land.``. Maps to
+# ``BecomeLandCreatureUEOT(unblockable=True)`` with no
+# ``granted_keywords``. Currently the only Stellar Sights manland
+# matching this shape is Creeping Tar Pit.
+_MANLAND_ANIMATE_UNBLOCKABLE_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+): Until end of turn, this land becomes a "
+    r"(?P<power>\d+)/(?P<toughness>\d+) "
+    r"(?P<c1word>white|blue|black|red|green) and "
+    r"(?P<c2word>white|blue|black|red|green) Elemental creature\. "
+    r"It's still a land\. It can't be blocked this turn\.$"
+)
 
 
 def _parse_manland_keywords(text: str) -> frozenset[str] | None:
@@ -232,15 +245,21 @@ def _try_build_manland(
     if tap_match is None:
         return None
     animate_match = _MANLAND_ANIMATE_RE.match(lines[2])
-    if animate_match is None:
-        return None
+    keywords: frozenset[str] = frozenset()
+    unblockable = False
+    if animate_match is not None:
+        keywords = _parse_manland_keywords(animate_match.group("keywords"))
+        if keywords is None:
+            return None
+    else:
+        animate_match = _MANLAND_ANIMATE_UNBLOCKABLE_RE.match(lines[2])
+        if animate_match is None:
+            return None
+        unblockable = True
     c1, c2 = tap_match.group(1), tap_match.group(2)
     c1_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c1word")]
     c2_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c2word")]
     if {c1, c2} != {c1_animate, c2_animate}:
-        return None
-    keywords = _parse_manland_keywords(animate_match.group("keywords"))
-    if keywords is None:
         return None
     cost_str = animate_match.group("cost")
     return make_utility_land(
@@ -257,6 +276,7 @@ def _try_build_manland(
                     power=int(animate_match.group("power")),
                     toughness=int(animate_match.group("toughness")),
                     granted_keywords=keywords,
+                    unblockable=unblockable,
                 ),
             ),
         ),

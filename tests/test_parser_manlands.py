@@ -88,11 +88,11 @@ def test_all_six_simple_manlands_claimed_with_parity():
         assert parsed[name] == STELLAR_SIGHTS_LANDS[name]
 
 
-def test_skips_creeping_tar_pit_unblockable_rider():
-    """Creeping Tar Pit's third line ends with ``It's still a land. It
-    can't be blocked this turn.`` instead of ``with <KEYWORDS>``. The
-    parser must NOT claim it via the simple-manland path — modeling
-    the unblockable rider needs the dedicated builder."""
+def test_creeping_tar_pit_matches_static():
+    """Creeping Tar Pit's third line replaces the keyword tail with
+    the ``It can't be blocked this turn.`` rider. The unblockable
+    variant of ``_try_build_manland`` claims it with
+    ``unblockable=True`` and no granted keywords."""
     card = {
         "name": "Creeping Tar Pit",
         "type_line": "Land",
@@ -106,7 +106,9 @@ def test_skips_creeping_tar_pit_unblockable_rider():
         "produced_mana": ["B", "U"],
         "set": "eos",
     }
-    assert _try_build_manland(card, card["oracle_text"], (), ()) is None
+    parsed = _build_land_printing(card)
+    assert parsed is not None
+    assert parsed == STELLAR_SIGHTS_LANDS["Creeping Tar Pit"]
 
 
 def test_skips_when_color_pair_mismatches_animate_line():
