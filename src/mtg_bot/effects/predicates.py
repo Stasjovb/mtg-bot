@@ -801,6 +801,42 @@ class Delirium(Predicate):
 
 
 @dataclass(frozen=True)
+class HasPowerAtMost(Predicate):
+    """The named subject's effective power is less than or equal to ``n``.
+
+    Models the "with power N or less" qualifier in triggers like
+    Vicious Clown's ``Whenever another creature you control with power
+    2 or less enters, …`` and Irreverent Gremlin's same condition.
+    Reads through ``effective_power(state, obj)`` so a creature whose
+    base power is reduced or boosted by counters / pump / anthems is
+    measured by its current power, matching the printed surface.
+
+    Non-creature subjects (lands, players) and subjects without a
+    measurable power evaluate false — the qualifier only makes sense
+    on a creature subject and the parser composes ``IsCreature() &
+    HasPowerAtMost(n=2)`` to gate the trigger to creatures specifically.
+    """
+
+    n: int
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        if not hasattr(obj, "printing"):
+            # Players don't have a power.
+            return False
+        from mtg_bot.game import effective_power
+
+        try:
+            power = effective_power(state, obj)
+        except Exception:
+            return False
+        return power <= self.n
+
+
+@dataclass(frozen=True)
 class SpellsCastThisTurn(Predicate):
     """Game-state predicate: the named subject's controller has cast
     exactly ``n`` spells this turn (counted via

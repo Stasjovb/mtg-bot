@@ -86,6 +86,7 @@ from mtg_bot.effects.predicates import (
     Event,
     HasCounter,
     HasKeyword,
+    HasPowerAtMost,
     IsArtifact,
     IsCreature,
     IsEnchantment,
@@ -701,6 +702,21 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # attacker count, so the per-pass dispatch is the right semantic
     # for the printed phrasing.
     "you attack": (Event.YOU_ATTACK, Controlled(YOU)),
+    # ``Whenever another creature you control with power 2 or less
+    # enters`` — Vicious Clown's pump-self trigger and Irreverent
+    # Gremlin's discard-and-draw trigger both print this exact
+    # condition phrase. The predicate filters the entering subject to
+    # creatures the source's controller controls whose effective power
+    # is at most 2, with ``~IsSelf()`` excluding the source itself
+    # (the ``another`` qualifier). The threshold is parameterized via
+    # ``HasPowerAtMost(n=2)`` so a future printing with a different
+    # threshold (``power 3 or less`` etc.) lands as a separate phrase
+    # entry rather than a regex-driven dispatch — same pattern as
+    # the existing fixed-text trigger phrasebook.
+    "another creature you control with power 2 or less enters": (
+        Event.ENTERS,
+        IsCreature() & Controlled(YOU) & HasPowerAtMost(n=2) & ~IsSelf(),
+    ),
 }
 
 
