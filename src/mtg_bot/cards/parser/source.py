@@ -23,14 +23,20 @@ from mtg_bot.cards.parser.spacecraft_builder import _build_spacecraft_printing
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
 
 
-_DATA_PATH = (
-    Path(__file__).resolve().parents[4] / "data" / "edge_of_eternities.json"
+_DATA_DIR = Path(__file__).resolve().parents[4] / "data"
+_DATA_PATHS: tuple[Path, ...] = (
+    _DATA_DIR / "edge_of_eternities.json",
+    _DATA_DIR / "stellar_sights.json",
+    _DATA_DIR / "special_guests_eoe.json",
 )
 
 
 def _load_scryfall_data() -> list[dict]:
-    with _DATA_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    cards: list[dict] = []
+    for path in _DATA_PATHS:
+        with path.open("r", encoding="utf-8") as f:
+            cards.extend(json.load(f))
+    return cards
 
 
 class OracleParserCardSource:

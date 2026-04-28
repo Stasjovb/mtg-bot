@@ -30,12 +30,77 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
+    BecomeLandCreatureUEOT,
     CardPrinting,
     make_basic_land,
     make_colorless_land,
     make_shock_land,
+    make_utility_land,
+    parse_mana_cost,
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
+
+
+_COLOR_WORD_TO_LETTER: dict[str, str] = {
+    "white": "W",
+    "blue": "U",
+    "black": "B",
+    "red": "R",
+    "green": "G",
+}
+
+
+# Manlands ("creature lands") share a fixed three-line oracle shape:
+#   1. "This land enters tapped."
+#   2. "{T}: Add {<C1>} or {<C2>}."
+#   3. "<COST>: Until end of turn, this land becomes a <P>/<T>
+#      <c1word> and <c2word> Elemental creature with <KEYWORDS>.
+#      It's still a land."
+# The "Elemental" type-grant on the animated creature isn't modeled
+# (matches the static side, which only passes power/toughness and
+# granted_keywords to BecomeLandCreatureUEOT). Variants without the
+# trailing ``with <KEYWORDS>`` clause (Creeping Tar Pit's "It can't
+# be blocked this turn." rider) are handled separately and don't
+# match this pattern.
+_MANLAND_TAPPED_LINE = "This land enters tapped."
+_MANLAND_TAP_FOR_DUAL_RE = re.compile(
+    r"^\{T\}: Add \{([WUBRG])\} or \{([WUBRG])\}\.$"
+)
+_MANLAND_ANIMATE_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+): Until end of turn, this land becomes a "
+    r"(?P<power>\d+)/(?P<toughness>\d+) "
+    r"(?P<c1word>white|blue|black|red|green) and "
+    r"(?P<c2word>white|blue|black|red|green) Elemental creature "
+    r"with (?P<keywords>[^.]+)\. It's still a land\.$"
+)
+
+
+def _parse_manland_keywords(text: str) -> frozenset[str] | None:
+    """Parse the ``with <X>[, <Y>][, and <Z>]`` keyword tail of a
+    manland animation line into a normalized frozenset.
+
+    The Stellar Sights manlands grant simple keywords whose oracle
+    surface form matches their printing-keyword name verbatim (flying,
+    vigilance, deathtouch, hexproof, double strike, lifelink, reach).
+    Returns ``None`` if any token doesn't look like a known keyword
+    surface — keeps the parser conservative; unrecognized shapes fall
+    through to the silent-skip path.
+    """
+    parts = re.split(r",\s+|\s+and\s+", text.strip())
+    cleaned = [p.strip() for p in parts if p.strip()]
+    if not cleaned:
+        return None
+    allowed = {
+        "flying", "vigilance", "deathtouch", "hexproof",
+        "double strike", "lifelink", "reach", "trample",
+        "first strike", "menace", "haste", "defender",
+    }
+    for kw in cleaned:
+        if kw not in allowed:
+            return None
+    return frozenset(cleaned)
 
 
 # Basic-land reminder text. Scryfall always prints the produced color in
@@ -94,6 +159,9 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:
         return shock
+    manland = _try_build_manland(card, text, supertypes, subtypes)
+    if manland is not None:
+        return manland
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -130,6 +198,71 @@ def _try_build_shock_land(
     )
 
 
+def _try_build_manland(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a manland (creature-land) ``CardPrinting`` if ``text``
+    matches the standard 3-line manland shape, else ``None``.
+
+    Shape:
+      1. "This land enters tapped."
+      2. "{T}: Add {<C1>} or {<C2>}."
+      3. "<COST>: Until end of turn, this land becomes a <P>/<T>
+          <c1word> and <c2word> Elemental creature with <KEYWORDS>.
+          It's still a land."
+
+    The colors named in the type-2 mana ability must match the colors
+    named in the type-3 animation line (after color-word translation).
+    Variants with extra abilities, X-cost activations, attacks
+    triggers, or "It can't be blocked this turn." riders fall through.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 3:
+        return None
+    if lines[0] != _MANLAND_TAPPED_LINE:
+        return None
+    tap_match = _MANLAND_TAP_FOR_DUAL_RE.match(lines[1])
+    if tap_match is None:
+        return None
+    animate_match = _MANLAND_ANIMATE_RE.match(lines[2])
+    if animate_match is None:
+        return None
+    c1, c2 = tap_match.group(1), tap_match.group(2)
+    c1_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c1word")]
+    c2_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c2word")]
+    if {c1, c2} != {c1_animate, c2_animate}:
+        return None
+    keywords = _parse_manland_keywords(animate_match.group("keywords"))
+    if keywords is None:
+        return None
+    cost_str = animate_match.group("cost")
+    return make_utility_land(
+        card["name"],
+        produces=frozenset({c1, c2}),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(cost_str),
+                    mana_str=cost_str,
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=int(animate_match.group("power")),
+                    toughness=int(animate_match.group("toughness")),
+                    granted_keywords=keywords,
+                ),
+            ),
+        ),
+    )
+
+
 def _try_build_colorless_utility_land(
     card: dict,
     text: str,
@@ -150,10 +283,21 @@ def _try_build_colorless_utility_land(
     record) to contain only colorless. This blocks accidentally
     matching a hypothetical colored-utility land whose first line
     happens to be ``{T}: Add {C}.``.
+
+    Set-gate: skips cards from the Stellar Sights (``eos``) and
+    Special Guests (``spg``) bonus sheets. Those reprints have their
+    activated abilities fully modeled in the static registry via
+    ``make_utility_land`` (and per-card bespoke effects), so the
+    simplification would produce a parity mismatch. They are claimed
+    via dedicated builders (e.g. ``_try_build_manland``) or skipped
+    silently. Synthetic test fixtures and EoE main set cards (no set
+    or ``set == "eoe"``) fall through normally.
     """
     if supertypes:
         return None
     if subtypes:
+        return None
+    if card.get("set") in {"eos", "spg"}:
         return None
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     if not lines:
