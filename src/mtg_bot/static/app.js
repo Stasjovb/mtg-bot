@@ -1311,6 +1311,43 @@ async function submitAction(response) {
 
 function renderDecision(pending) {
   const type = pending.type;
+
+  // Auto-submit when there is only one possible choice — no point making the
+  // player click through it (most common case: solo PassPriority).
+  if (type === 'choose_action' && pending.options.length === 1) {
+    submitAction({ idx: 0 }); return;
+  }
+  if (type === 'choose_target' && pending.options.length === 1 && !pending.can_decline) {
+    submitAction({ idx: 0 }); return;
+  }
+  if (type === 'choose_discard' && pending.cards && pending.cards.length === 1) {
+    submitAction({ id: pending.cards[0].id }); return;
+  }
+  if (type === 'choose_sacrifice' && pending.objects && pending.objects.length === 1) {
+    submitAction({ id: pending.objects[0].id }); return;
+  }
+  if (type === 'choose_mode' && pending.modes && pending.modes.length === 1) {
+    submitAction({ idx: 0 }); return;
+  }
+  if (type === 'choose_modes' && pending.modes && pending.modes.length === 1) {
+    submitAction({ indices: [0] }); return;
+  }
+  if (type === 'choose_card' && pending.cards && pending.cards.length === 1 && !pending.can_decline) {
+    submitAction({ id: pending.cards[0].id }); return;
+  }
+  if (type === 'choose_one_id' && pending.objects && pending.objects.length === 1) {
+    submitAction({ id: pending.objects[0].id }); return;
+  }
+  if (type === 'choose_mana_color' && pending.options && pending.options.length === 1) {
+    submitAction({ color: pending.options[0] }); return;
+  }
+  if (type === 'declare_attackers' && (!pending.eligible || pending.eligible.length === 0)) {
+    submitAction({ ids: [] }); return;
+  }
+  if (type === 'declare_blockers' && (!pending.eligible || pending.eligible.length === 0)) {
+    submitAction({ assignments: {} }); return;
+  }
+
   switch (type) {
     case 'choose_action':     renderChooseAction(pending);    break;
     case 'declare_attackers': renderDeclareAttackers(pending); break;
@@ -1877,5 +1914,4 @@ async function postJSON(url, body) {
     throw new Error(`${r.status} ${text}`);
   }
   return r.json();
-}
 }
