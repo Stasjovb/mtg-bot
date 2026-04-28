@@ -3260,6 +3260,61 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class GrantUnblockableUEOT(Effect):
+    """Target creature can't be blocked this turn.
+
+    Bare unblockable-UEOT primitive on a creature target. Sets
+    ``temp_unblockable=True`` on the chosen target; the flag is read by
+    ``combat.eligible_blockers`` at block-declaration time and cleared
+    at cleanup with the rest of the temp_* fields.
+
+    Distinct from the larger pump-with-unblockable-rider shapes (e.g.
+    ``BecomeLandCreatureUEOT(unblockable=True)`` on Creeping Tar Pit
+    and the bespoke ``AtomicMicrosizerAttackEffect``): this primitive
+    does only the unblockable grant, with no P/T pump and no granted
+    keywords. Matches Enter the Enigma's ``Target creature can't be
+    blocked this turn.`` prefix.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (1, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature or o.temp_is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        obj.temp_unblockable = True
+        state.log.append(
+            f"{obj.printing.name} can't be blocked this turn"
+        )
+
+    def describe(self) -> str:
+        return "target creature can't be blocked this turn"
+
+
+@dataclass(frozen=True)
 class GrantTriggeredAbilityUEOT(Effect):
     """Grant a triggered ability to target creature until end of turn.
 

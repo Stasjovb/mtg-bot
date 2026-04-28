@@ -48,6 +48,7 @@ from mtg_bot.cards.base import (
     ExileEachOpponentsGraveyard,
     ExileTargetCreature,
     GainLife,
+    GrantUnblockableUEOT,
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     ManifestDread,
@@ -745,6 +746,17 @@ _PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
 _DOUBLE_TARGET_CREATURE_YOU_CONTROL_POWER_UEOT = re.compile(
     r"^double the power of target creature you control until end of "
     r"turn$"
+)
+# "Target creature can't be blocked this turn." — bare unblockable-
+# UEOT grant on a creature target. Distinct from the larger pump-with-
+# unblockable-rider shapes (Atomic Microsizer's attack trigger,
+# manland animation's optional unblockable rider) — this primitive
+# is the bare make-unblockable surface, with no P/T pump and no
+# granted keywords. Matches Enter the Enigma's ``Target creature
+# can't be blocked this turn.`` prefix; reusable for any future card
+# that prints the same surface.
+_TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN = re.compile(
+    r"^target creature can't be blocked this turn$"
 )
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
@@ -1564,6 +1576,12 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
+    # ``target creature can't be blocked this turn`` — bare unblockable
+    # grant. Pure UEOT primitive on a creature target; sets
+    # ``temp_unblockable=True`` at resolve time. Enter the Enigma is
+    # the EoE/Duskmourn surface form that introduced this primitive.
+    if _TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN.match(phrase) is not None:
+        return GrantUnblockableUEOT()
     # ``counter target artifact or enchantment spell`` — Annul. Tried
     # BEFORE the bare ``counter target spell`` regex so the more
     # specific filter-typed shape wins. Both shapes return the same

@@ -43,7 +43,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.generic import CreateToken
+from mtg_bot.effects.generic import CreateToken, GrantUnblockableUEOT
 
 
 def _claimed_names() -> frozenset[str]:
@@ -328,3 +328,105 @@ def test_frantic_strength_is_aura_subtype():
     p = parser.get_printings()["Frantic Strength"]
     assert p.is_aura is True
     assert p.aura_enchant_type == "creature"
+
+
+# ---------- target creature can't be blocked this turn ----------
+
+def test_parse_target_creature_cant_be_blocked_this_turn():
+    # New primitive: bare unblockable-UEOT grant on a creature target.
+    # Distinct from the pump-with-unblockable-rider shapes already in
+    # the grammar (Atomic Microsizer's attack trigger); this is the
+    # bare make-unblockable shape — Enter the Enigma's prefix.
+    eff = _parse_effect("target creature can't be blocked this turn")
+    assert eff == GrantUnblockableUEOT()
+
+
+def test_grant_unblockable_ueot_legal_targets_lists_creatures_only():
+    # The new primitive's ``legal_targets`` returns ("creature", id)
+    # tuples for every battlefield creature (and animated land that
+    # is currently a creature). Non-creature permanents are excluded.
+    from mtg_bot.cards.base import (
+        make_creature,
+        make_enchantment,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    ench_pr = make_enchantment("Tome", "{1}{U}")
+    bear_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    ench_obj = GameObject(
+        id=2, printing=ench_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear_obj, ench_obj],
+    )
+    legal = GrantUnblockableUEOT().legal_targets(state, controller_id=0)
+    assert ("creature", 1) in legal
+    assert ("creature", 2) not in legal
+    assert ("enchantment", 2) not in legal
+
+
+def test_grant_unblockable_ueot_resolve_sets_temp_unblockable():
+    # End-to-end resolve sanity: pick a target creature, run resolve,
+    # verify the target's ``temp_unblockable`` flag is set. The flag
+    # is what ``combat.eligible_blockers`` reads at block time.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear_obj],
+    )
+    eff = GrantUnblockableUEOT()
+    assert bear_obj.temp_unblockable is False
+    eff.resolve(state, controller_id=0, targets=(("creature", 1),))
+    assert bear_obj.temp_unblockable is True
+
+
+def test_grant_unblockable_ueot_resolve_no_target_is_no_op():
+    # The primitive requires a target — but a fizzled resolve (target
+    # gone, or empty target tuple) must be a silent no-op without
+    # crashing.
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[],
+    )
+    eff = GrantUnblockableUEOT()
+    # Empty targets — nothing to do.
+    eff.resolve(state, controller_id=0, targets=())
+    # Wrong-kind target — also a no-op (defensive against the
+    # ``("enchantment", id)`` widening on DestroyTargetCreature; the
+    # bare unblockable primitive only works against creatures).
+    eff.resolve(state, controller_id=0, targets=(("enchantment", 99),))
+
+
+def test_enter_the_enigma_claimed_by_parser():
+    # Enter the Enigma ``{2}{U}`` Sorcery — ``Target creature can't be
+    # blocked this turn. Draw a card.`` Two-sentence body that
+    # combines the new bare-make-unblockable primitive with the
+    # existing ``draw a card`` primitive, composed via Sequence by
+    # the spell-effect parser's sentence-split path.
+    assert "Enter the Enigma" in _claimed_names()
+
+
+def test_enter_the_enigma_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the right Sequence shape (unblockable-UEOT, then draw 1).
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Enter the Enigma"]
+    assert p.spell_effect == Sequence(effects=(
+        GrantUnblockableUEOT(),
+        DrawCards(amount=1),
+    ))

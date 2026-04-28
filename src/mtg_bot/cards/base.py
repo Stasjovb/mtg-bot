@@ -31,6 +31,7 @@ from mtg_bot.effects import (
     ExileAllGraveyards,
     ExileTargetAttackingCreatureUntilEndStep,
     GrantLifeToEachOpponent,
+    GrantUnblockableUEOT,
     PutBasicLandFromHandOntoBattlefieldTapped,
     ReturnTargetLandFromGraveyardToHand,
     SacrificeNLandsYouControl,
