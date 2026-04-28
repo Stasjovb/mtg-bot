@@ -117,14 +117,17 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
             # a printing with silently-dropped abilities.
             return None
         # ``_ParsedClause`` populates exactly one of
-        # ``keywords``/``trigger``/``activated``/``static`` per line.
+        # ``keywords``/``triggers``/``activated``/``static`` per line.
         # We sort each into its own bucket; ``make_artifact`` consumes
-        # them as four parallel kwargs.
+        # them as four parallel kwargs. Multi-trigger lines (compound
+        # ``enters or dies``-style conditions) fan out into the
+        # builder's ``triggers`` list — same shape as the per-arm
+        # static-registry layout.
         if clause.keywords:
             keywords.update(clause.keywords)
             continue
-        if clause.trigger is not None:
-            triggers.append(clause.trigger)
+        if clause.triggers:
+            triggers.extend(clause.triggers)
             continue
         if clause.activated is not None:
             activated.append(clause.activated)

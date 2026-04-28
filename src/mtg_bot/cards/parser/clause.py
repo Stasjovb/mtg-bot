@@ -31,15 +31,20 @@ class _ParsedClause:
     """One oracle-text clause that successfully parsed.
 
     Fields are mutually exclusive — a clause contributes either one
-    or more keyword strings, a triggered ability, an activated
-    ability, or a static ability, never more than one. A keyword-only
-    line that lists several keywords joined by ``, `` parses to a
-    single ``_ParsedClause`` whose ``keywords`` tuple holds every
-    keyword on that line.
+    or more keyword strings, one or more triggered abilities, an
+    activated ability, or a static ability, never more than one
+    category. A keyword-only line that lists several keywords joined
+    by ``, `` parses to a single ``_ParsedClause`` whose ``keywords``
+    tuple holds every keyword on that line. A triggered-ability line
+    with a compound condition (e.g. ``When this creature enters or
+    dies, …``) parses to a single ``_ParsedClause`` whose ``triggers``
+    tuple holds one ``TriggeredAbility`` per condition arm — the
+    builder treats them as if each arm appeared on its own oracle
+    line.
     """
 
     keywords: tuple[str, ...] = ()
-    trigger: TriggeredAbility | None = None
+    triggers: tuple[TriggeredAbility, ...] = ()
     activated: ActivatedAbility | None = None
     static: StaticAbility | None = None
 
@@ -53,6 +58,23 @@ class _ParsedClause:
             return self.keywords[0]
         return None
 
+    @property
+    def trigger(self) -> TriggeredAbility | None:
+        """Back-compat shim for callers that still want a single
+        triggered ability. Returns ``None`` if no triggers or more
+        than one — multi-trigger clauses (compound conditions like
+        ``enters or dies``) must be consumed via ``triggers``.
+
+        Builders that only model single-trigger clauses (artifact,
+        spacecraft) can keep using ``.trigger``: a multi-trigger line
+        will surface as ``None`` here, matching the "out of scope"
+        semantics those builders already apply when a clause's
+        trigger field doesn't carry exactly what they expect.
+        """
+        if len(self.triggers) == 1:
+            return self.triggers[0]
+        return None
+
 
 def _parse_clause(line: str) -> _ParsedClause | None:
     """Return a ``_ParsedClause`` for a recognized line, or ``None``
@@ -64,7 +86,15 @@ def _parse_clause(line: str) -> _ParsedClause | None:
         return _ParsedClause(keywords=keywords)
     triggered = _parse_triggered_ability_line(line)
     if triggered is not None:
-        return _ParsedClause(trigger=triggered)
+        # Single-condition trigger — wrap in a 1-tuple. Compound-
+        # condition triggers (``enters or dies``) take a different
+        # path inside ``_parse_triggered_ability_line`` and surface
+        # as a tuple of ``TriggeredAbility`` instances; we normalize
+        # both shapes here so downstream consumers see a uniform
+        # ``triggers`` field.
+        if isinstance(triggered, tuple):
+            return _ParsedClause(triggers=triggered)
+        return _ParsedClause(triggers=(triggered,))
     activated = _parse_activated_ability_line(line)
     if activated is not None:
         return _ParsedClause(activated=activated)

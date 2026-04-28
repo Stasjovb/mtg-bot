@@ -107,8 +107,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         if parsed is None:
             return None
         keywords.update(parsed.keywords)
-        if parsed.trigger is not None:
-            triggers.append(parsed.trigger)
+        # ``triggers`` is a tuple — one entry per condition arm. A
+        # standard single-condition line yields a 1-tuple; a compound
+        # condition like ``When this creature enters or dies, …`` yields
+        # a 2-tuple (one ``TriggeredAbility`` per event). The builder
+        # treats each arm as if it were its own oracle line, mirroring
+        # the static-registry shape (Thawbringer's static carries two
+        # ``TriggeredAbility`` entries for its single oracle line).
+        triggers.extend(parsed.triggers)
         if parsed.activated is not None:
             activated.append(parsed.activated)
         if parsed.static is not None:
