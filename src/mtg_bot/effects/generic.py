@@ -2821,6 +2821,65 @@ class ManifestDread(Effect):
 
 
 @dataclass(frozen=True)
+class ManifestDreadThenPutPlusOneCountersOnIt(Effect):
+    """Manifest dread, then put ``counter_amount`` +1/+1 counter(s) on
+    that creature.
+
+    Matches the door triggers on Slimy Aquarium ("manifest dread, then
+    put a +1/+1 counter on that creature" — counter_amount=1) and
+    Weight Room ("manifest dread, then put three +1/+1 counters on
+    that creature" — counter_amount=3) on Duskmourn Rooms.
+
+    "That creature" refers to the just-manifested face-down 2/2 — the
+    other examined card goes to the graveyard per ``ManifestDread``'s
+    semantics. To track which permanent receives the counter we
+    snapshot the battlefield ids before the manifest and pick the
+    single id that wasn't there before. With fewer than two cards
+    left in the library ``ManifestDread`` may manifest one or zero
+    cards — the counter step then either lands on the lone manifested
+    face-down (one new id) or no-ops (no new id).
+    """
+
+    counter_amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import add_plus_one_counters
+
+        pre_ids = {o.id for o in state.battlefield}
+        ManifestDread(count=1).resolve(state, controller_id, ())
+        new_ids = [o.id for o in state.battlefield if o.id not in pre_ids]
+        if not new_ids:
+            return
+        # Manifest dread enters exactly one face-down creature when it
+        # successfully resolves, so pick that single new id.
+        manifested_id = new_ids[-1]
+        manifested = next(
+            (o for o in state.battlefield if o.id == manifested_id), None,
+        )
+        if manifested is None:
+            return
+        add_plus_one_counters(state, manifested, self.counter_amount)
+        state.log.append(
+            f"{manifested.printing.name or 'manifested face-down creature'}"
+            f" gets {self.counter_amount} +1/+1 counter(s) "
+            f"(now {manifested.plus_one_counters})"
+        )
+
+    def describe(self) -> str:
+        if self.counter_amount == 1:
+            return (
+                "manifest dread, then put a +1/+1 counter on that creature"
+            )
+        return (
+            f"manifest dread, then put {self.counter_amount} +1/+1 "
+            f"counters on that creature"
+        )
+
+
+@dataclass(frozen=True)
 class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original
