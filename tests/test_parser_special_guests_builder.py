@@ -41,6 +41,21 @@ def test_deafening_silence_matches_static():
     assert parsed == SPECIAL_GUESTS_EOE["Deafening Silence"]
 
 
+def test_burgeoning_matches_static():
+    card = {
+        "name": "Burgeoning",
+        "type_line": "Enchantment",
+        "oracle_text": (
+            "Whenever an opponent plays a land, you may put a land "
+            "card from your hand onto the battlefield."
+        ),
+        "set": "spg",
+    }
+    parsed = _build_special_guest_printing(card)
+    assert parsed is not None
+    assert parsed == SPECIAL_GUESTS_EOE["Burgeoning"]
+
+
 def test_skips_non_spg_set():
     """Defensive: a same-named card from a non-spg set must not
     claim — the Special Guest dispatch is gated on set code."""

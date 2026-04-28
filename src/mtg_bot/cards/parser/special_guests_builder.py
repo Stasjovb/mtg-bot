@@ -31,8 +31,14 @@ Currently claimed:
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import CardPrinting, parse_mana_cost
+from mtg_bot.cards.base import (
+    CardPrinting,
+    OptionalPutLandFromHandOntoBattlefield,
+    TriggeredAbility,
+    parse_mana_cost,
+)
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.predicates import Controlled, Event, _Controller
 
 
 def _build_magus_of_the_moon() -> CardPrinting:
@@ -69,6 +75,30 @@ def _build_deafening_silence() -> CardPrinting:
     )
 
 
+def _build_burgeoning() -> CardPrinting:
+    type_line = "Enchantment"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    mana_str = "{G}"
+    return CardPrinting(
+        name="Burgeoning",
+        mana_cost_str=mana_str,
+        mana_cost=parse_mana_cost(mana_str),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.PLAYS_LAND,
+                predicate=Controlled(
+                    by=_Controller.OPPONENT, subject="controller",
+                ),
+                effect=OptionalPutLandFromHandOntoBattlefield(),
+            ),
+        ),
+    )
+
+
 # Name → (expected oracle text, factory). The oracle text check is a
 # defensive sanity belt: if Scryfall ever changes a printed wording
 # the parser falls through to the silent-skip path rather than
@@ -81,6 +111,11 @@ _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
     "Deafening Silence": (
         "Each player can't cast more than one noncreature spell each turn.",
         _build_deafening_silence,
+    ),
+    "Burgeoning": (
+        "Whenever an opponent plays a land, you may put a land card from "
+        "your hand onto the battlefield.",
+        _build_burgeoning,
     ),
 }
 
