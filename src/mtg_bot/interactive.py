@@ -158,8 +158,14 @@ class InteractiveAgent(Agent):
 
     name = "human"
 
-    def __init__(self, n2id: dict[str, str]):
+    def __init__(self, n2id: dict[str, str], state_callback=None):
+        """``state_callback`` (optional) is invoked with the live ``GameState``
+        immediately before the agent blocks on each decision. Used by the
+        Flask layer to refresh the session's snapshot so the browser always
+        sees the *current* step / priority player when picking an action,
+        not whatever step happened to fire the most recent ``on_snapshot``."""
         self._n2id = n2id
+        self._state_callback = state_callback
         self._lock = threading.Lock()
         self._pending: Optional[dict] = None
         self._response_event = threading.Event()
@@ -170,7 +176,9 @@ class InteractiveAgent(Agent):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ask(self, pending: dict) -> Any:
+    def _ask(self, state: GameState, pending: dict) -> Any:
+        if self._state_callback is not None:
+            self._state_callback(state)
         with self._lock:
             self._pending = pending
             self._response_event.clear()
@@ -201,7 +209,7 @@ class InteractiveAgent(Agent):
             {"idx": i, **_serialize_action(state, a, self._n2id)}
             for i, a in enumerate(legal)
         ]
-        resp = self._ask({"type": "choose_action", "options": options})
+        resp = self._ask(state, {"type": "choose_action", "options": options})
         idx = int(resp["idx"])
         if not 0 <= idx < len(legal):
             raise ValueError(f"choose_action idx {idx} out of range 0..{len(legal)-1}")
@@ -213,11 +221,11 @@ class InteractiveAgent(Agent):
              "scryfall_id": self._n2id.get(o.printing.name)}
             for o in eligible
         ]
-        resp = self._ask({"type": "declare_attackers", "eligible": options})
+        resp = self._ask(state, {"type": "declare_attackers", "eligible": options})
         return [int(x) for x in resp.get("ids", [])]
 
     def declare_blockers(self, state, player_id, eligible, attackers):
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "declare_blockers",
             "eligible": [
                 {"id": o.id, "name": o.printing.name,
@@ -247,7 +255,7 @@ class InteractiveAgent(Agent):
                 obj = _find_obj(state, tid)
                 label = obj.printing.name if obj else f"Permanent #{tid}"
             options.append({"kind": kind, "id": tid, "label": label})
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_target",
             "options": options,
             "can_decline": False,
@@ -261,22 +269,22 @@ class InteractiveAgent(Agent):
 
     def choose_discard(self, state, player_id, hand_card_ids):
         cards = [_card_opt(state, cid, self._n2id) for cid in hand_card_ids]
-        resp = self._ask({"type": "choose_discard", "cards": cards})
+        resp = self._ask(state, {"type": "choose_discard", "cards": cards})
         return int(resp["id"])
 
     def choose_surveil(self, state, player_id, top_card_id):
         card = _card_opt(state, top_card_id, self._n2id)
-        resp = self._ask({"type": "choose_surveil", "card": card})
+        resp = self._ask(state, {"type": "choose_surveil", "card": card})
         return bool(resp.get("mill", False))
 
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         objects = [_bf_opt(state, oid, self._n2id) for oid in legal_object_ids]
-        resp = self._ask({"type": "choose_sacrifice", "objects": objects})
+        resp = self._ask(state, {"type": "choose_sacrifice", "objects": objects})
         return int(resp["id"])
 
     def choose_mode(self, state, player_id, mode_descriptions):
         modes = [{"idx": i, "description": d} for i, d in enumerate(mode_descriptions)]
-        resp = self._ask({"type": "choose_mode", "modes": modes})
+        resp = self._ask(state, {"type": "choose_mode", "modes": modes})
         idx = int(resp["idx"])
         if not 0 <= idx < len(mode_descriptions):
             raise ValueError(f"choose_mode idx {idx} out of range")
@@ -284,14 +292,14 @@ class InteractiveAgent(Agent):
 
     def choose_modes(self, state, player_id, mode_descriptions):
         modes = [{"idx": i, "description": d} for i, d in enumerate(mode_descriptions)]
-        resp = self._ask({"type": "choose_modes", "modes": modes})
+        resp = self._ask(state, {"type": "choose_modes", "modes": modes})
         indices = [int(i) for i in resp.get("indices", [0])]
         if not indices:
             indices = [0]
         return indices
 
     def choose_pay_shock_life(self, state, player_id, life_cost):
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_yes_no",
             "prompt": f"Pay {life_cost} life to enter untapped?",
             "life_cost": life_cost,
@@ -300,7 +308,7 @@ class InteractiveAgent(Agent):
 
     def choose_card_from_opponent_hand(self, state, player_id, opponent_hand_ids):
         cards = [_card_opt(state, cid, self._n2id) for cid in opponent_hand_ids]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_card",
             "prompt": "Choose a card from opponent's hand",
             "cards": cards,
@@ -312,7 +320,7 @@ class InteractiveAgent(Agent):
         if not option_ids:
             return None
         cards = [_card_opt(state, cid, self._n2id) for cid in option_ids]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_card",
             "prompt": "Search your library — choose a card",
             "cards": cards,
@@ -323,7 +331,7 @@ class InteractiveAgent(Agent):
         return int(resp["id"])
 
     def choose_x(self, state, player_id, card_name, upper_bound):
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_x",
             "card_name": card_name,
             "upper_bound": upper_bound,
@@ -333,7 +341,7 @@ class InteractiveAgent(Agent):
 
     def choose_devour_lands(self, state, player_id, land_ids):
         objects = [_bf_opt(state, oid, self._n2id) for oid in land_ids]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_multi_ids",
             "prompt": "Choose lands to sacrifice (Devour)",
             "objects": objects,
@@ -342,20 +350,20 @@ class InteractiveAgent(Agent):
         return [int(x) for x in resp.get("ids", [])]
 
     def choose_mana_color(self, state, player_id, options):
-        resp = self._ask({"type": "choose_mana_color", "options": list(options)})
+        resp = self._ask(state, {"type": "choose_mana_color", "options": list(options)})
         color = resp.get("color", options[0])
         if color not in options:
             return options[0]
         return color
 
     def choose_yes_no(self, state, player_id, prompt):
-        resp = self._ask({"type": "choose_yes_no", "prompt": prompt})
+        resp = self._ask(state, {"type": "choose_yes_no", "prompt": prompt})
         return bool(resp.get("yes", True))
 
     def choose_convoke_creatures(self, state, player_id, candidates,
                                   remaining_generic, remaining_colored):
         objects = [_bf_opt(state, oid, self._n2id) for oid in candidates]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_multi_ids",
             "prompt": "Choose creatures to tap for Convoke",
             "objects": objects,
@@ -366,7 +374,7 @@ class InteractiveAgent(Agent):
     def choose_sac_for_mana(self, state, player_id, candidates,
                              remaining_generic, remaining_colored):
         objects = [_bf_opt(state, oid, self._n2id) for oid, _produces in candidates]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_multi_ids",
             "prompt": "Choose permanents to sacrifice for mana",
             "objects": objects,
@@ -376,7 +384,7 @@ class InteractiveAgent(Agent):
 
     def choose_legend_keep(self, state, player_id, legend_object_ids):
         objects = [_bf_opt(state, oid, self._n2id) for oid in legend_object_ids]
-        resp = self._ask({
+        resp = self._ask(state, {
             "type": "choose_one_id",
             "prompt": "Legend rule — choose which to keep",
             "objects": objects,
@@ -461,7 +469,15 @@ def create_session(
     from mtg_bot.simulate import simulate_game
 
     session_id = uuid4().hex
-    human_agent = InteractiveAgent(n2id)
+    # Forward declaration: the callback closes over `session`, but the agent
+    # is constructed before the session, so reference it lazily through a list.
+    session_box: list = []
+
+    def _refresh_snapshot(state):
+        if session_box:
+            session_box[0].update_snapshot(enrich_fn(state))
+
+    human_agent = InteractiveAgent(n2id, state_callback=_refresh_snapshot)
     bot_agent = RandomAgent()
 
     if human_player_id == 0:
@@ -475,6 +491,7 @@ def create_session(
         human_agent=human_agent,
         game_thread=threading.Thread(target=None, daemon=True),  # replaced below
     )
+    session_box.append(session)
 
     def run() -> None:
         try:
