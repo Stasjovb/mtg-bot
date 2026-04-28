@@ -646,17 +646,28 @@ body { display: grid; grid-template-columns: 1fr 280px;
 }
 
 /* Cards that act as click-targets for the currently-selected blocker
-   (i.e. the opponent's attackers during declare_blockers). */
-.card.actionable-target {
+   (i.e. the opponent's attackers during declare_blockers) or as legal
+   targets during choose_target. */
+.card.actionable-target,
+.life.actionable-target,
+.stack-item.actionable-target {
   cursor: crosshair;
   outline: 2px solid #ff9852;
   outline-offset: 1px;
   box-shadow: 0 0 12px rgba(255, 152, 82, 0.55);
+  animation: target-pulse 1.4s ease-in-out infinite;
 }
-.card.actionable-target:hover {
+.card.actionable-target:hover,
+.life.actionable-target:hover,
+.stack-item.actionable-target:hover {
   outline-width: 3px;
   filter: brightness(1.15);
 }
+@keyframes target-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 152, 82, 0.45); }
+  50%      { box-shadow: 0 0 18px rgba(255, 152, 82, 0.85); }
+}
+.life.actionable-target { border-radius: 4px; padding: 0 6px; }
 
 /* Attackers tentatively selected during declare_attackers. */
 .card.attacker-pending {

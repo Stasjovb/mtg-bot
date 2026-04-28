@@ -559,6 +559,7 @@ function sidePanel(p, snap) {
   else if (p.life >= 25) lifeCls += ' high';
   life.className = lifeCls;
   life.textContent = p.life;
+  life.dataset.playerId = p.id;
   side.appendChild(life);
 
   const zones = document.createElement('div');
@@ -949,7 +950,11 @@ function renderStack(root, snap) {
   label.className = 'muted';
   label.textContent = `Stack (${snap.stack.length}):`;
   root.appendChild(label);
-  snap.stack.forEach(item => root.appendChild(stackItemEl(item)));
+  snap.stack.forEach((item, idx) => {
+    const el = stackItemEl(item);
+    el.dataset.stackIdx = idx;
+    root.appendChild(el);
+  });
 }
 
 function stackItemEl(item) {
@@ -1622,28 +1627,57 @@ function renderDeclareBlockers(pending) {
 // ---------------------------------------------------------------------------
 
 function renderChooseTarget(pending) {
-  openDecisionModal('Choose a Target', () => {
-    const body = elsI.modalBody;
-    body.replaceChildren();
-    const list = document.createElement('div');
-    list.className = 'decision-list';
-    (pending.options || []).forEach((opt, idx) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'decision-list-item';
-      btn.textContent = opt.label;
-      btn.addEventListener('click', () => submitAction({ idx }));
-      list.appendChild(btn);
-    });
-    if (pending.can_decline) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'decision-list-item decision-decline';
-      btn.textContent = 'Decline (no target)';
-      btn.addEventListener('click', () => submitAction({ decline: true }));
-      list.appendChild(btn);
+  // Inline panel: status + decline button (when applicable). Targets are
+  // clicked directly on the board.
+  elsI.prompt.textContent =
+    'Choose a target — click a highlighted card or life total.';
+  elsI.options.replaceChildren();
+  if (pending.can_decline) {
+    const declineBtn = document.createElement('button');
+    declineBtn.type = 'button';
+    declineBtn.className = 'action-btn action-btn-pass';
+    declineBtn.textContent = 'Decline (no target)';
+    declineBtn.addEventListener('click', () => submitAction({ decline: true }));
+    elsI.options.appendChild(declineBtn);
+  }
+
+  // Highlight each legal target in-place. opt.kind identifies what to
+  // search for; opt.id is interpreted by kind. Player kind targets the
+  // life total; stack kind targets the stack item at that index;
+  // everything else is a battlefield permanent (or anything with the
+  // matching data-obj-id).
+  const tagged = [];  // elements that need cleanup if user re-renders
+  pending.options.forEach((opt, idx) => {
+    const submit = (ev) => {
+      ev.stopPropagation();
+      submitAction({ idx });
+    };
+    if (opt.kind === 'player') {
+      const life = document.querySelector(`.life[data-player-id="${opt.id}"]`);
+      if (life) {
+        life.classList.add('actionable-target');
+        life.style.cursor = 'crosshair';
+        life.title = `Target ${opt.label}`;
+        life.addEventListener('click', submit);
+        tagged.push(life);
+      }
+    } else if (opt.kind === 'stack') {
+      const item = document.querySelector(`.stack-item[data-stack-idx="${opt.id}"]`);
+      if (item) {
+        item.classList.add('actionable-target');
+        item.style.cursor = 'crosshair';
+        item.title = `Target ${opt.label}`;
+        item.addEventListener('click', submit);
+        tagged.push(item);
+      }
+    } else {
+      document.querySelectorAll(`.card[data-obj-id="${opt.id}"]`).forEach(el => {
+        el.classList.add('actionable-target');
+        el.title = `Target ${opt.label}`;
+        el.addEventListener('click', submit);
+        tagged.push(el);
+      });
     }
-    body.appendChild(list);
   });
 }
 
