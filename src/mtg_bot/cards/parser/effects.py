@@ -981,6 +981,37 @@ _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
 _PUMP_SELF_UEOT = re.compile(
     r"^this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
+# "This creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
+# turn" — source pumps itself AND grants itself one or more evergreen
+# keywords UEOT. Surfaces on Duskmourn Eerie creatures (Dashing
+# Bloodsucker — ``this creature gets +2/+0 and gains lifelink until
+# end of turn``). Maps to
+# ``PumpSelfUntilEOT(power_bonus=N, toughness_bonus=M,
+# granted_keywords=...)`` — same engine class as the bare self-pump,
+# with the keyword-grant rider. The granted-keywords body is parsed
+# via ``_parse_keyword_grant_body`` and validated against the
+# keyword-line whitelist; rejection returns ``None`` so an unknown
+# keyword keeps the wrapping card unclaimed (mirrors the discipline
+# of every other grant-keywords primitive).
+#
+# Tried BEFORE the bare ``_PUMP_SELF_UEOT`` regex (its ``$`` anchor
+# rejects the ``and gains …`` tail anyway, but ordering more-specific
+# before more-general is the convention here).
+_PUMP_AND_GAIN_KEYWORDS_SELF_UEOT = re.compile(
+    r"^this creature gets ([+-]\d+)/([+-]\d+) and gains "
+    r"(.+) until end of turn$"
+)
+# "This creature gains <kw>[ and <kw2>...] until end of turn" — pure
+# self-grant (no P/T pump). Surfaces on Duskmourn Eerie creatures
+# (Cult Healer — ``this creature gains lifelink until end of turn``).
+# Maps to ``PumpSelfUntilEOT(power_bonus=0, toughness_bonus=0,
+# granted_keywords=...)`` — same engine class as the pump-and-gain
+# shape just with zero bonuses, mirroring the
+# ``_GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT`` precedent for the
+# targeted variant. Validated via ``_parse_keyword_grant_body``.
+_GAIN_KEYWORDS_SELF_UEOT = re.compile(
+    r"^this creature gains (.+) until end of turn$"
+)
 # "Another target creature you control gains <kw>[ and <kw2>...] until
 # end of turn." — pure keyword-grant variant with no P/T pump,
 # restricted to other creatures the controller controls (Blooming
@@ -1882,6 +1913,27 @@ def _parse_effect(phrase: str) -> Effect | None:
             toughness_bonus=int(m.group(2)),
             until_caster_next_turn=(m.group(3) == "your next turn"),
         )
+    # ``this creature gets +N/+M and gains <kw>[ and <kw2>...] until
+    # end of turn`` — self-pump combined with a self keyword grant
+    # (Dashing Bloodsucker's Eerie body: ``this creature gets +2/+0
+    # and gains lifelink until end of turn``). Tried BEFORE the bare
+    # ``_PUMP_SELF_UEOT`` regex so the more-specific compound shape
+    # wins; the bare regex's ``$`` anchor would reject the
+    # ``and gains …`` tail anyway, but ordering more-specific before
+    # more-general is the convention here. The keyword body is parsed
+    # via ``_parse_keyword_grant_body`` and validated against the
+    # keyword-line whitelist; rejection returns ``None`` so an unknown
+    # keyword keeps the wrapping card unclaimed.
+    m = _PUMP_AND_GAIN_KEYWORDS_SELF_UEOT.match(phrase)
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(3))
+        if keywords is None:
+            return None
+        return PumpSelfUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            granted_keywords=keywords,
+        )
     # ``this creature gets +N/+M until end of turn`` — source pumps
     # itself UEOT. Tried AFTER the targeted ``target creature gets …
     # UEOT`` regex above because the ``this creature`` subject is a
@@ -1892,6 +1944,27 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PumpSelfUntilEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
+        )
+    # ``this creature gains <kw>[ and <kw2>...] until end of turn`` —
+    # pure self-grant (no P/T pump). Cult Healer's Eerie body
+    # (``this creature gains lifelink until end of turn``). Maps to
+    # ``PumpSelfUntilEOT(power_bonus=0, toughness_bonus=0,
+    # granted_keywords=...)`` — same engine class as the self-pump-
+    # and-gain shape just with zero bonuses. Tried AFTER both self-
+    # pump shapes so a phrase carrying a P/T pump prefix wins, and
+    # AFTER the targeted bare-grant regexes (which all carry their
+    # own ``target creature`` / ``another target creature you
+    # control`` subject — the bare ``this creature`` subject doesn't
+    # collide). Validated via ``_parse_keyword_grant_body``.
+    m = _GAIN_KEYWORDS_SELF_UEOT.match(phrase)
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(1))
+        if keywords is None:
+            return None
+        return PumpSelfUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=keywords,
         )
     # ``another target creature you control gets +X/+X until end of
     # turn, where X is this creature's power`` — Hemosymbic Mite's

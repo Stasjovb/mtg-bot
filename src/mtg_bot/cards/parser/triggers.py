@@ -88,6 +88,7 @@ from mtg_bot.effects.predicates import (
     HasKeyword,
     IsArtifact,
     IsCreature,
+    IsEnchantment,
     IsLand,
     IsNontoken,
     IsPlayer,
@@ -743,6 +744,34 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters or leaves the battlefield": (
         (Event.ENTERS, IsSelf()),
         (Event.LEAVES_BATTLEFIELD, IsSelf()),
+    ),
+    # Duskmourn "Eerie" ability-word trigger — fires both when an
+    # enchantment under your control enters AND when you fully unlock
+    # a Room. The ``Eerie — `` ability-word prefix strips through the
+    # generic ``_strip_ability_word_prefix`` helper before this lookup
+    # runs (no Eerie-specific prefix code needed; ability words have
+    # no rules consequence per CR 207.2c). The printed surface joins
+    # the two arms with ``and whenever`` rather than ``or`` —
+    # mechanically a single oracle line produces two independent
+    # ``TriggeredAbility`` entries (one per event) that share the
+    # same effect, mirroring the existing Thawbringer ``enters or
+    # dies`` precedent.
+    #
+    # Arm 1 (ENTERS): ``IsEnchantment() & Controlled(YOU)`` — any
+    # enchantment under the source's controller entering, including
+    # Rooms (which carry ``"Enchantment"`` in ``card_types``) and the
+    # source itself if it's an Enchantment Creature (Fear of Infinity).
+    # No ``~IsSelf()`` because the printed text is "an enchantment you
+    # control enters" with no "another" qualifier.
+    #
+    # Arm 2 (ROOM_FULLY_UNLOCKED): ``Controlled(YOU, subject="room")``
+    # — the Room that just transitioned to all-halves-unlocked is
+    # under the source's controller. The dispatch fires from
+    # ``_unlock_room_half`` at the unlock-action transition; the
+    # event subject ``"room"`` is the Room ``GameObject`` itself.
+    "an enchantment you control enters and whenever you fully unlock a Room": (
+        (Event.ENTERS, IsEnchantment() & Controlled(YOU)),
+        (Event.ROOM_FULLY_UNLOCKED, Controlled(YOU, subject="room")),
     ),
 }
 
