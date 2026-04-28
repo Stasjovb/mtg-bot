@@ -488,15 +488,29 @@ _PUMP_OPPONENT_CREATURES_UEOT = re.compile(
     r"^creatures your opponents control get ([+-]\d+)/([+-]\d+) "
     r"until (end of turn|your next turn)$"
 )
-# "Creatures you control get +N/+M until end of turn" — anthem-style
-# mass pump on every creature the controller controls (Dual-Sun Adepts'
-# ``{5}`` activated ability). Maps to
-# ``PumpCreaturesYouControlUntilEOT(power_bonus=N, toughness_bonus=M)``.
-# Both signs accepted for symmetry with the targeted/opponent-mass
-# regexes; no EoE printing uses a negative self-mass pump today but the
-# uniform shape parses one without further grammar work.
+# "[Other ]creatures you control get +N/+M[ and gain <kw>[ and <kw2>...]]
+# until end of turn" — anthem-style mass pump with optional
+# source-self exclusion (``other``) and optional grant-keywords rider
+# (``and gain <kw>``). Maps to ``PumpCreaturesYouControlUntilEOT``
+# with ``exclude_source`` flipped by group-1 capture and
+# ``granted_keywords`` populated from the body parsed by
+# ``_parse_keyword_grant_body`` against the keyword-line whitelist.
+#
+# Surface coverage today:
+#   * bare ``creatures you control get +N/+M until end of turn`` —
+#     Dual-Sun Adepts' ``{5}`` mass pump (no exclusion, no grants).
+#   * ``other creatures you control get +1/+0 and gain deathtouch
+#     until end of turn`` — Syr Vondam, the Lucent's enters/attacks
+#     trigger (exclude_source + granted_keywords={'deathtouch'}).
+#
+# Both signs accepted for the bonuses (no EoE printing uses negative
+# self-mass pump today, but the uniform shape parses one without
+# further grammar work). The ``other`` and ``and gain <kw>`` clauses
+# are independently optional — every combination flows through the
+# same engine class with the corresponding flags/fields populated.
 _PUMP_YOUR_CREATURES_UEOT = re.compile(
-    r"^creatures you control get ([+-]\d+)/([+-]\d+) until end of turn$"
+    r"^(other )?creatures you control get ([+-]\d+)/([+-]\d+)"
+    r"(?: and gain (.+))? until end of turn$"
 )
 # "Target creature you control gets +N/+M until end of turn" —
 # you-control-only single-target pump (Zookeeper Mechan's ``{6}{R}``
@@ -1405,15 +1419,32 @@ def _parse_effect(phrase: str) -> Effect | None:
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
         )
-    # ``creatures you control get ±N/±M until end of turn`` — anthem-
-    # style mass pump on every creature the controller controls
-    # (Dual-Sun Adepts' ``{5}`` activated ability). Maps to
-    # ``PumpCreaturesYouControlUntilEOT``.
+    # ``[other ]creatures you control get ±N/±M[ and gain <kw>...]
+    # until end of turn`` — anthem-style mass pump on every creature
+    # the controller controls, with optional source-self exclusion
+    # (``other``) and optional grant-keywords rider. The bare form is
+    # Dual-Sun Adepts' ``{5}`` activated ability; the
+    # exclude-source-and-grant-keywords form is Syr Vondam, the
+    # Lucent's enters/attacks trigger ("other creatures you control
+    # get +1/+0 and gain deathtouch until end of turn"). An
+    # unrecognized granted-keyword body rejects the whole phrase
+    # (returns ``None`` so the caller can fall through) — mirrors the
+    # ``_PUMP_AND_GAIN_KEYWORDS_UEOT`` precedent: a missing grant is
+    # never silently dropped.
     m = _PUMP_YOUR_CREATURES_UEOT.match(phrase)
     if m is not None:
+        granted_body = m.group(4)
+        granted_keywords: frozenset[str] = frozenset()
+        if granted_body is not None:
+            parsed_keywords = _parse_keyword_grant_body(granted_body)
+            if parsed_keywords is None:
+                return None
+            granted_keywords = parsed_keywords
         return PumpCreaturesYouControlUntilEOT(
-            power_bonus=int(m.group(1)),
-            toughness_bonus=int(m.group(2)),
+            power_bonus=int(m.group(2)),
+            toughness_bonus=int(m.group(3)),
+            exclude_source=m.group(1) is not None,
+            granted_keywords=granted_keywords,
         )
     # ``creatures your opponents control get ±N/±M until end of turn`` /
     # ``... until your next turn`` — mass debuff/pump on every creature

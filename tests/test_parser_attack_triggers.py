@@ -253,3 +253,108 @@ def test_self_attack_trigger_pump_self_smoke():
         event=Event.ATTACKS, predicate=IsSelf(),
         effect=PutPlusOneCounterOnSelf(amount=1),
     )
+
+
+# ---------- mass anthem: other / and-gain extensions ----------
+
+
+def test_mass_pump_your_creatures_bare_form_unchanged():
+    # The pre-existing bare ``creatures you control get +N/+M until end
+    # of turn`` form (Dual-Sun Adepts) keeps producing the same engine
+    # class with no exclude-source / no granted-keywords flags set —
+    # the regex extension is backward-compatible.
+    from mtg_bot.cards.base import PumpCreaturesYouControlUntilEOT
+    assert _parse_effect(
+        "creatures you control get +1/+1 until end of turn"
+    ) == PumpCreaturesYouControlUntilEOT(
+        power_bonus=1, toughness_bonus=1,
+        exclude_source=False, granted_keywords=frozenset(),
+    )
+
+
+def test_mass_pump_other_creatures_you_control_sets_exclude_source():
+    # The ``other`` qualifier flips ``exclude_source=True`` — the
+    # mass-pump skips the resolving source. Forward-looking shape; no
+    # printed EoE card uses bare-other-no-grant, but the symmetry with
+    # Syr Vondam's longer body keeps the grammar uniform.
+    from mtg_bot.cards.base import PumpCreaturesYouControlUntilEOT
+    assert _parse_effect(
+        "other creatures you control get +1/+0 until end of turn"
+    ) == PumpCreaturesYouControlUntilEOT(
+        power_bonus=1, toughness_bonus=0,
+        exclude_source=True, granted_keywords=frozenset(),
+    )
+
+
+def test_mass_pump_creatures_you_control_with_granted_keyword():
+    # Bare-no-other form with a single granted keyword. Forward-
+    # looking; not on any current EoE printing but parses uniformly
+    # with the other-and-gain shape below.
+    from mtg_bot.cards.base import PumpCreaturesYouControlUntilEOT
+    assert _parse_effect(
+        "creatures you control get +1/+0 and gain trample until end of turn"
+    ) == PumpCreaturesYouControlUntilEOT(
+        power_bonus=1, toughness_bonus=0,
+        exclude_source=False,
+        granted_keywords=frozenset({"trample"}),
+    )
+
+
+def test_mass_pump_other_creatures_with_granted_keyword():
+    # Syr Vondam, the Lucent's enters/attacks-trigger payload — the
+    # canonical attack-trigger surface for this batch. ``other``
+    # flips exclude_source; ``and gain deathtouch`` populates
+    # granted_keywords. Mirrors the static registry's Syr Vondam,
+    # the Lucent pump effect verbatim.
+    from mtg_bot.cards.base import PumpCreaturesYouControlUntilEOT
+    assert _parse_effect(
+        "other creatures you control get +1/+0 and gain deathtouch "
+        "until end of turn"
+    ) == PumpCreaturesYouControlUntilEOT(
+        power_bonus=1, toughness_bonus=0,
+        exclude_source=True,
+        granted_keywords=frozenset({"deathtouch"}),
+    )
+
+
+def test_mass_pump_with_multi_keyword_grant():
+    # Glacier Godmaw's landfall-trigger payload — bare ``creatures you
+    # control`` with multiple granted keywords (vigilance and haste).
+    # The grant body splits on `` and `` and validates each piece
+    # against the keyword-line whitelist.
+    from mtg_bot.cards.base import PumpCreaturesYouControlUntilEOT
+    assert _parse_effect(
+        "creatures you control get +1/+1 and gain vigilance and haste "
+        "until end of turn"
+    ) == PumpCreaturesYouControlUntilEOT(
+        power_bonus=1, toughness_bonus=1,
+        exclude_source=False,
+        granted_keywords=frozenset({"vigilance", "haste"}),
+    )
+
+
+def test_mass_pump_rejects_unknown_granted_keyword():
+    # An unknown keyword in the grant body rejects the WHOLE phrase
+    # rather than silently dropping the unknown. Mirrors the
+    # ``_PUMP_AND_GAIN_KEYWORDS_UEOT`` precedent: a missing grant is
+    # never silently dropped, and the wrapping card stays unclaimed.
+    assert _parse_effect(
+        "other creatures you control get +1/+0 and gain pajamas "
+        "until end of turn"
+    ) is None
+
+
+def test_glacier_godmaw_claims_end_to_end():
+    # Glacier Godmaw was the first EoE printing to claim end-to-end on
+    # the new mass-pump-and-gain grammar. Its landfall trigger fires
+    # ``creatures you control get +1/+1 and gain vigilance and haste
+    # until end of turn`` — the bare-no-other multi-keyword shape.
+    # Pin parser/static parity here so a regression in either layer
+    # surfaces as a focused failure rather than a general parity sweep.
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.cards.source import StaticCardSource
+
+    parser_printings = OracleParserCardSource().get_printings()
+    static_printings = StaticCardSource().get_printings()
+    assert "Glacier Godmaw" in parser_printings
+    assert parser_printings["Glacier Godmaw"] == static_printings["Glacier Godmaw"]

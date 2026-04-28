@@ -289,6 +289,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Glacier Godmaw", "{5}{G}{G}", 6, 6,
             keywords={"trample"},
+            subtypes=("Leviathan",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
