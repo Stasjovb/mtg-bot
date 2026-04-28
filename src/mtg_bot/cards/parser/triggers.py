@@ -230,6 +230,42 @@ _AT_THE_BEGINNING_OF_LINE = re.compile(
 )
 
 
+# Void ability-word prefix specifically — when the trigger line starts
+# with ``Void — At the beginning of <when>, …`` the prefix is a marker
+# that the produced ``TriggeredAbility`` must carry
+# ``requires_void=True`` (mirroring the static-registry layout — see
+# Insatiable Skittermaw, Voidforged Titan, Kavaron Skywarden,
+# Hylderblade in ``cards/eoe_creatures.py``). The body of every Void
+# ``At the beginning of <when>`` line in the EoE pool also carries the
+# matching ``if a nonland permanent left the battlefield this turn or
+# a spell was warped this turn, `` middle clause; that clause is
+# elided here because the engine's ``requires_void`` flag is the
+# canonical gate (the gate phrase and the flag are 1:1 by
+# construction — every Void rider in print today uses the same gate
+# wording).
+#
+# The standard ``_strip_ability_word_prefix`` helper only strips an
+# ability-word prefix in front of ``When``/``Whenever`` (its lookahead
+# guards against accidental matches in type-line strings), so the
+# ``Void — At …`` shape doesn't flow through it. Detecting the prefix
+# explicitly here keeps the Void-flag handling local to the new line
+# shape — extending the generic helper would also mean coupling its
+# strip semantics to a new "this prefix sets a flag" side effect,
+# which is harder to keep readable.
+_VOID_PREFIX = "Void — "
+
+
+# Void-rider middle clause — the "intervening-if" surface text on a
+# Void ``At the beginning of <when>`` line. The body parser strips
+# this prefix when it follows a ``Void — `` line marker; the
+# ``requires_void=True`` flag on the produced ``TriggeredAbility``
+# replaces the gate's predicate-side semantics.
+_VOID_GATE_PREFIX = (
+    "if a nonland permanent left the battlefield this turn or "
+    "a spell was warped this turn, "
+)
+
+
 # Tapped-creatures effect-wrapper prefix on the body of an
 # ``At the beginning of <when>, <body>.`` line. When the body starts
 # with this exact phrase, the inner effect (the tail after the comma)
@@ -709,6 +745,7 @@ def _substitute_self_name(line: str, name: str) -> str:
 
 def _parse_at_the_beginning_of_line(
     match: "re.Match[str]",
+    requires_void: bool = False,
 ) -> TriggeredAbility | None:
     """Body parser for ``At the beginning of <when>, <effect>.`` lines.
 
@@ -722,7 +759,17 @@ def _parse_at_the_beginning_of_line(
     body uses, so the unified effect grammar stays the single source
     of truth).
 
-    Returns ``None`` if either piece doesn't parse — the line has no
+    ``requires_void`` is True when the calling site already detected a
+    leading ``Void — `` prefix on the original line. In that case the
+    body MUST start with the verbatim ``_VOID_GATE_PREFIX`` middle
+    clause — the gate phrase is elided (the engine's
+    ``requires_void`` flag is the canonical gate) and the remaining
+    inner effect parses through the unified grammar. A void-flagged
+    line whose body does NOT carry the matching gate is rejected
+    outright: the printed Void rider is always paired with the gate
+    phrase, and a missing gate would mean we're misreading the line.
+
+    Returns ``None`` if any piece doesn't parse — the line has no
     other valid interpretation (unlike the When/Whenever shape, which
     has multiple line-level fallbacks); rejecting here propagates as a
     parse failure for the whole oracle line so the surrounding card
@@ -733,6 +780,28 @@ def _parse_at_the_beginning_of_line(
         return None
     event, predicate = when_match
     body = match.group(2)
+    # Void rider — the line was preceded by a ``Void — `` prefix. The
+    # body must carry the verbatim void-gate middle clause; strip it
+    # and parse the remainder as a bare effect. The
+    # ``requires_void=True`` flag on the produced ``TriggeredAbility``
+    # is the canonical gate — mirrors the static-registry layout for
+    # Insatiable Skittermaw / Voidforged Titan / Kavaron Skywarden /
+    # Hylderblade exactly. Tried BEFORE the tapped-creatures wrapper
+    # below because the two prefixes are disjoint (no printing today
+    # combines a Void rider with a tapped-creatures gate), but
+    # ordering ``requires_void`` first keeps the Void path's
+    # "elide gate, set flag" handling local.
+    if requires_void:
+        if not body.startswith(_VOID_GATE_PREFIX):
+            return None
+        inner_phrase = body[len(_VOID_GATE_PREFIX):]
+        inner = _parse_effect_phrase(inner_phrase)
+        if inner is None:
+            return None
+        return TriggeredAbility(
+            event=event, predicate=predicate, effect=inner,
+            requires_void=True,
+        )
     # Tapped-creatures effect-wrapper variant: ``if you control two or
     # more tapped creatures, <inner-effect>``. Detect the prefix, parse
     # the inner-effect tail through the unified effect grammar, and
@@ -832,9 +901,38 @@ def _parse_triggered_ability_line(
     # When/Whenever paths below (a future ``At ...`` shape that doesn't
     # parse here would still get a chance via the bare regex if it
     # happened to fit, though no such surface exists today).
-    at_match = _AT_THE_BEGINNING_OF_LINE.match(line)
+    #
+    # A leading ``Void — `` prefix is detected here and stripped before
+    # the regex match so the body parser can see the bare ``At the
+    # beginning of …`` shape. The flag is threaded through to the body
+    # parser, which sets ``requires_void=True`` on the produced
+    # ``TriggeredAbility`` and elides the matching void-gate middle
+    # clause from the effect body. The standard
+    # ``_strip_ability_word_prefix`` helper above only strips ability-
+    # word prefixes in front of ``When``/``Whenever`` (its lookahead
+    # guards against accidental matches in type-line strings), so the
+    # ``Void —`` strip for ``At …`` shapes lives here instead.
+    at_line = line
+    requires_void = False
+    # Only consume the ``Void — `` prefix if it's followed by an
+    # ``At the beginning of`` body — the parser still needs the
+    # prefix in place for the When/Whenever Void paths handled below
+    # (those go through the generic ``_strip_ability_word_prefix``
+    # which has already run; in the When/Whenever case the prefix is
+    # already gone by the time we get here, but if a future helper
+    # rearranges that order this guard keeps the two paths from
+    # stealing each other's lines).
+    if (
+        at_line.startswith(_VOID_PREFIX)
+        and at_line[len(_VOID_PREFIX):].startswith("At the beginning of ")
+    ):
+        at_line = at_line[len(_VOID_PREFIX):]
+        requires_void = True
+    at_match = _AT_THE_BEGINNING_OF_LINE.match(at_line)
     if at_match is not None:
-        parsed = _parse_at_the_beginning_of_line(at_match)
+        parsed = _parse_at_the_beginning_of_line(
+            at_match, requires_void=requires_void,
+        )
         if parsed is not None:
             return parsed
         return None

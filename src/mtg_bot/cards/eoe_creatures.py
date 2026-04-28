@@ -153,6 +153,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # a +1/+1 counter on this creature."
         make_creature(
             "Insatiable Skittermaw", "{2}{B}", 2, 2,
+            subtypes=("Insect", "Horror"),
             keywords={"menace"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -1237,6 +1238,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # dependent draw doesn't fire ("If you do, draw two cards").
         make_creature(
             "Vaultguard Trooper", "{4}{R}", 5, 5,
+            subtypes=("Kavu", "Soldier"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -2062,6 +2064,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # creature" clause via state.resolving_source.
         make_creature(
             "Dawnstrike Vanguard", "{5}{W}", 4, 5,
+            subtypes=("Human", "Knight"),
             keywords={"lifelink"},
             triggered_abilities=(
                 TriggeredAbility(
@@ -2190,12 +2193,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Voidforged Titan: 5/4 Robot Warrior. "Void — At the beginning of
-        # your end step, if [void active], you draw a card and lose 1 life."
-        # We model artifact-ness as a plain creature (same shortcut as Edge
-        # Rover) because nothing currently implemented cares.
+        # Voidforged Titan: 5/4 Artifact Creature — Robot Warrior. "Void —
+        # At the beginning of your end step, if [void active], you draw a
+        # card and lose 1 life." Subtypes mirror Scryfall's printed type
+        # line (parser-is-right rule — the parser surfaces both ``Robot``
+        # and ``Warrior`` from the type-line slice and the static must
+        # match for parity).
         make_creature(
             "Voidforged Titan", "{4}{B}", 5, 4,
+            artifact=True,
+            subtypes=("Robot", "Warrior"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -2580,6 +2587,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # +1/+1 counter on this creature.
         make_creature(
             "Kavaron Skywarden", "{4}{R}", 4, 5,
+            subtypes=("Kavu", "Soldier"),
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(

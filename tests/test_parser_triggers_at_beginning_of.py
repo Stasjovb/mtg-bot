@@ -244,6 +244,111 @@ def test_at_beginning_of_with_tapped_creatures_gate_unparseable_inner_rejected()
     assert parsed is None
 
 
+# ---------- Void prefix variant ----------
+
+
+def test_at_beginning_of_void_prefix_sets_requires_void_flag():
+    # Insatiable Skittermaw / Kavaron Skywarden's printed Void rider.
+    # The leading ``Void — `` is consumed and the matching middle
+    # clause ``if a nonland permanent left the battlefield this turn
+    # or a spell was warped this turn,`` is elided — both replaced by
+    # the ``requires_void=True`` flag on the produced
+    # ``TriggeredAbility``. The trigger predicate stays at
+    # ``Controlled(YOU)``; the gate is NOT modeled as a ``VoidActive()``
+    # predicate AND because the static-registry layout uses the
+    # ``requires_void`` flag instead — parity here is structural.
+    parsed = _parse_triggered_ability_line(
+        "Void — At the beginning of your end step, "
+        "if a nonland permanent left the battlefield this turn or "
+        "a spell was warped this turn, "
+        "put a +1/+1 counter on this creature."
+    )
+    assert parsed == TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU),
+        effect=PutPlusOneCounterOnSelf(amount=1),
+        requires_void=True,
+    )
+
+
+def test_at_beginning_of_void_prefix_with_compound_effect():
+    # Voidforged Titan-style body — the inner effect is a compound
+    # ``draw a card and lose 1 life`` Sequence. Pairs the Void rider
+    # with whatever the unified effect grammar produces; if the inner
+    # tail doesn't parse the whole line is rejected, but a recognized
+    # compound resolves through the standard compound-split path.
+    from mtg_bot.cards.base import LoseLife, Sequence
+
+    parsed = _parse_triggered_ability_line(
+        "Void — At the beginning of your end step, "
+        "if a nonland permanent left the battlefield this turn or "
+        "a spell was warped this turn, "
+        "draw a card and lose 1 life."
+    )
+    assert parsed == TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU),
+        effect=Sequence(effects=(
+            DrawCards(amount=1),
+            LoseLife(amount=1),
+        )),
+        requires_void=True,
+    )
+
+
+def test_at_beginning_of_void_prefix_missing_gate_rejected():
+    # The Void prefix is paired with the verbatim void-gate middle
+    # clause in every printing — a Void-prefixed line whose body
+    # starts with something else is unrecognized. Reject outright
+    # rather than producing a Void-flagged trigger with no gate (which
+    # would over-fire at non-Void moments).
+    parsed = _parse_triggered_ability_line(
+        "Void — At the beginning of your end step, draw a card."
+    )
+    assert parsed is None
+
+
+def test_at_beginning_of_void_prefix_unparseable_inner_rejected():
+    # Recognized Void prefix and gate, but the inner-effect tail isn't
+    # in the unified effect grammar — reject the whole line. The
+    # wrapping card stays unclaimed rather than silently dropping the
+    # Void rider's consequence.
+    parsed = _parse_triggered_ability_line(
+        "Void — At the beginning of your end step, "
+        "if a nonland permanent left the battlefield this turn or "
+        "a spell was warped this turn, "
+        "win the game."
+    )
+    assert parsed is None
+
+
+def test_void_prefix_does_not_strip_when_followed_by_when_whenever():
+    # The Void-strip in the ``At …`` dispatch only fires when the
+    # remainder starts with ``At the beginning of`` — ``Void — Whenever
+    # this creature attacks, …`` (Alpharael, Stonechosen) flows
+    # through the existing generic ability-word strip + intervening-
+    # if path instead, producing a predicate-AND ``VoidActive()``
+    # trigger (separately tested in ``test_parser_intervening_if``).
+    # Defensive: if the at-shape Void strip ever stole this line, the
+    # produced trigger would have ``requires_void=True`` AND no event
+    # match, which is broken; this test guards against that
+    # regression by asserting the When/Whenever path still claims the
+    # line.
+    from mtg_bot.effects.predicates import IsSelf, VoidActive
+
+    parsed = _parse_triggered_ability_line(
+        "Void — Whenever this creature attacks, "
+        "if a nonland permanent left the battlefield this turn or "
+        "a spell was warped this turn, "
+        "draw a card."
+    )
+    assert parsed == TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf() & VoidActive(),
+        effect=DrawCards(amount=1),
+    )
+
+
 def test_at_beginning_of_each_end_step_with_tapped_creatures_gate():
     # The tapped-creatures wrapper composes with the ``each end step``
     # predicate too. No EoE printing today combines ``each`` with the
