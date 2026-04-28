@@ -482,3 +482,44 @@ def test_weftblade_enhancer_claimed_by_parser():
     # creatures. Unlocked by the new multi-target counter-spread
     # primitive.
     assert "Weftblade Enhancer" in _claimed_names()
+
+
+# ---------- multi-keyword sentence-case (Flying, haste) ----------
+
+def test_parse_keyword_line_accepts_sentence_case_multi_keyword():
+    # Scryfall's printed convention for multi-keyword lines is
+    # sentence-case: only the first piece is capitalized, every
+    # subsequent piece starts lowercase. ``"Flying, haste"`` is the
+    # printed form on Nova Hellkite, Frenzied Baloth, etc.; the
+    # parser normalizes the second piece's first letter to upper-
+    # case before lookup so the sentence-case form parses.
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+    assert _parse_keyword_line("Flying, haste") == ("flying", "haste")
+    assert _parse_keyword_line("Trample, haste") == ("trample", "haste")
+    assert _parse_keyword_line("Vigilance, menace") == (
+        "vigilance", "menace",
+    )
+
+
+def test_parse_keyword_line_still_rejects_lowercase_first_piece():
+    # The first piece is matched as-is (case-sensitive) — a fully
+    # lowercase line like ``"hexproof"`` or ``"flying, haste"``
+    # doesn't match because lowercase keyword names only appear
+    # mid-sentence (not as a printed keyword line). Regression
+    # guard for the existing single-keyword case-sensitivity
+    # contract.
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+    assert _parse_keyword_line("hexproof") is None
+    assert _parse_keyword_line("flying, haste") is None
+
+
+def test_nova_hellkite_claimed_by_parser():
+    # Nova Hellkite `{3}{R}{R}` 4/5 Dragon — Flying, haste. Warp
+    # `{2}{R}`. ETB: deals 1 damage to target creature an opponent
+    # controls. Unlocked by the new opponent-creature damage
+    # primitive AND the keyword-line sentence-case fix (the
+    # ``Flying, haste`` line is what blocked claiming Nova Hellkite
+    # before the keyword fix).
+    assert "Nova Hellkite" in _claimed_names()

@@ -372,6 +372,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         ),
         make_creature(
             "Nova Hellkite", "{3}{R}{R}", 4, 5,
+            subtypes=("Dragon",),
             keywords={"flying", "haste"},
             triggered_abilities=(
                 TriggeredAbility(

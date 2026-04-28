@@ -37,8 +37,24 @@ def _parse_keyword_line(line: str) -> tuple[str, ...] | None:
     ``("flash", "flying")``. Returns ``None`` if any piece is not a
     recognized keyword — the caller may then try other clause
     patterns (e.g. triggered abilities).
+
+    Scryfall's printing convention for multi-keyword lines is
+    sentence-case: only the FIRST piece is capitalized, every
+    subsequent piece starts lowercase (``"Flying, haste"``,
+    ``"Trample, haste"``, ``"Vigilance, menace"`` etc.). We
+    normalize the first letter of every piece AFTER the first to
+    upper-case before the ``_KEYWORD_LINES`` lookup so the printed
+    sentence-case form parses. The first piece is matched as-is
+    (case-sensitive) — a lowercase single keyword like
+    ``"hexproof"`` doesn't match because lowercase keyword names
+    only appear mid-sentence, not as a printed keyword line.
     """
     pieces = [p.strip() for p in line.split(", ")]
-    if not all(p in _KEYWORD_LINES for p in pieces):
+    if not pieces:
         return None
-    return tuple(_KEYWORD_LINES[p] for p in pieces)
+    normalized = [pieces[0]] + [
+        p[:1].upper() + p[1:] if p else p for p in pieces[1:]
+    ]
+    if not all(p in _KEYWORD_LINES for p in normalized):
+        return None
+    return tuple(_KEYWORD_LINES[p] for p in normalized)
