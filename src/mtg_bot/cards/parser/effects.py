@@ -59,10 +59,12 @@ from mtg_bot.cards.base import (
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutStunCounterOnTappedCreature,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnOpponentsCreature,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
@@ -75,6 +77,7 @@ from mtg_bot.cards.base import (
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
     TargetOpponentLosesLife,
+    UntapTargetOtherPermanent,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -734,6 +737,47 @@ _PUT_STUN_COUNTER_UP_TO_ONE_TAPPED = re.compile(
 _DISCARD_N_CARDS = re.compile(
     rf"^(?:you )?discard (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
+# "Untap another target permanent" — Nanoform Sentinel's becomes-tapped
+# trigger. The ``another`` qualifier excludes the source permanent from
+# the legal target pool — the engine class
+# ``UntapTargetOtherPermanent`` reads ``state.resolving_source`` at
+# resolve time to filter the chosen target. Maps to
+# ``UntapTargetOtherPermanent()`` with no parameters (the engine class's
+# semantics fully specify the legal-target predicate).
+_UNTAP_ANOTHER_TARGET_PERMANENT = re.compile(
+    r"^untap another target permanent$"
+)
+# "Another target creature you control gets +X/+X until end of turn,
+# where X is this creature's power" — Hemosymbic Mite's becomes-tapped
+# trigger. The variable-X bonus is fixed at "the source's effective
+# power at resolve time" — both the regex and the engine class hardcode
+# the source-power semantics; future cards with a different X-source
+# (e.g. "where X is the number of artifacts you control") would land
+# their own primitive. Maps to
+# ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()`` with no
+# parameters — every aspect of the effect (target restriction to other
+# creatures the controller controls, X-source from
+# ``state.resolving_source``) is encoded by the engine class.
+_PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER = re.compile(
+    r"^another target creature you control gets \+X/\+X until end of "
+    r"turn, where X is this creature's power$"
+)
+# "Put a +1/+1 counter on each creature you control other than this
+# creature" — Dawnstrike Vanguard's tapped-creatures-gated end-step
+# trigger body. Mass +1/+1-counter spread on each creature the
+# controller controls except the source itself. Maps to
+# ``PutPlusOneCounterOnEachCreatureYouControl(amount=1,
+# exclude_source=True)`` — the ``exclude_source=True`` flag reads
+# ``state.resolving_source`` at resolve time to skip the source from
+# the firing pool. Distinct from the bare ``put a +1/+1 counter on
+# each creature you control`` shape (Atmospheric Greenhouse) which
+# would be a separate primitive without the ``other than`` tail; no
+# EoE creature today prints the bare form, so only the ``other than
+# this creature`` variant is wired here.
+_PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
+    r"^put a \+1/\+1 counter on each creature you control other than "
+    r"this creature$"
+)
 # "This creature gets +N/+M until end of turn" — source pumps itself
 # (no separate target). Surfaces on Skystinger's block trigger
 # ("Whenever this creature blocks a creature with flying, this
@@ -1165,6 +1209,24 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnSelf(amount=1)
+    # ``put a +1/+1 counter on each creature you control other than
+    # this creature`` — Dawnstrike Vanguard's end-step trigger body
+    # (gated by the tapped-creatures wrapper at the trigger-line
+    # level, but the inner effect is a plain mass-counter spread).
+    # Tried BEFORE the bare-target counter regexes because the bare
+    # ones all carry a ``$`` anchor on ``target creature`` etc. that
+    # wouldn't match the ``each creature`` subject anyway, but
+    # ordering more-specific before more-general is the convention
+    # here. Maps to ``PutPlusOneCounterOnEachCreatureYouControl(
+    # amount=1, exclude_source=True)`` — mirrors the static-registry
+    # layout exactly (the ``other than this creature`` tail is what
+    # sets the engine class's ``exclude_source`` flag).
+    if _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL.match(
+        phrase
+    ) is not None:
+        return PutPlusOneCounterOnEachCreatureYouControl(
+            amount=1, exclude_source=True,
+        )
     # ``destroy target creature or Spacecraft`` — Embrace Oblivion.
     # Tried BEFORE the bare ``destroy target creature`` regex so the
     # Spacecraft-tail variant wins. Both produce the same engine class
@@ -1346,6 +1408,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         # class's ``legal_targets`` filters to currently-tapped
         # creatures.
         return PutStunCounterOnTappedCreature()
+    if _UNTAP_ANOTHER_TARGET_PERMANENT.match(phrase) is not None:
+        # ``untap another target permanent`` — Nanoform Sentinel's
+        # becomes-tapped trigger body. The ``another`` qualifier
+        # excludes the source from the legal target pool — encoded
+        # by the engine class's reading of ``state.resolving_source``
+        # at resolve time, not by a parser-level flag. Maps to
+        # ``UntapTargetOtherPermanent()`` with no parameters.
+        return UntapTargetOtherPermanent()
     if _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM.match(
         phrase
     ) is not None:
@@ -1544,6 +1614,23 @@ def _parse_effect(phrase: str) -> Effect | None:
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
         )
+    # ``another target creature you control gets +X/+X until end of
+    # turn, where X is this creature's power`` — Hemosymbic Mite's
+    # becomes-tapped trigger body. Variable-X bonus where X is fixed
+    # to the source's effective power at resolve time; the engine
+    # class ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower``
+    # reads ``state.resolving_source.power`` and applies the bonus
+    # symmetrically (P/T both gain the same X) to the chosen target,
+    # which must be a creature the source's controller controls and
+    # not be the source itself. Maps to the engine class with no
+    # parameters — every aspect of the effect is encoded by the
+    # class. Future "where X is …" forms with a different scaling
+    # source (e.g. number of artifacts you control) would land their
+    # own primitive rather than parameterizing this one.
+    if _PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER.match(
+        phrase
+    ) is not None:
+        return PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()
     # ``another target creature you control gains <kw>[ and <kw2>...]
     # until end of turn`` — pure keyword grant to another creature you
     # control (Blooming Stinger's ETB grants deathtouch). No P/T pump

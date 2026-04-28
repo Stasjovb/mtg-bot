@@ -941,6 +941,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Nanoform Sentinel", "{2}{U}", 3, 2,
             artifact=True,
+            subtypes=("Robot",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BECOMES_TAPPED, predicate=IsSelf(),
@@ -1257,6 +1258,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # neither of which is in the printed card.
         make_creature(
             "Hemosymbic Mite", "{G}", 1, 1,
+            subtypes=("Mite",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BECOMES_TAPPED, predicate=IsSelf(),
