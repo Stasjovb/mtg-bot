@@ -2304,7 +2304,10 @@ def _unlock_room_half(
     state.log.append(
         f"P{player_id} unlocks {obj.printing.name}: door {half_name}"
     )
-    if len(obj.unlocked_halves) == len(obj.printing.room_halves):
+    fully_unlocked = (
+        len(obj.unlocked_halves) == len(obj.printing.room_halves)
+    )
+    if fully_unlocked:
         state.log.append(
             f"{obj.printing.name}: Room fully unlocked"
         )
@@ -2318,6 +2321,23 @@ def _unlock_room_half(
     # ENTERS observers (other Rooms, ETB anthems) aren't re-fired.
     from mtg_bot.effects.predicates import Event as _Event
     _fire_unlock_door_triggers(state, obj, half_name)
+    # Duskmourn "Eerie" mechanic: whenever a Room becomes fully
+    # unlocked (transition from a single-half set to the all-halves
+    # set), every Eerie trigger with this Room under the trigger's
+    # controller observes a ROOM_FULLY_UNLOCKED event. The dispatch
+    # is anchored on the unlock-action transition (NOT on every door
+    # unlock) so the per-half "When you unlock this door" path stays
+    # disjoint from the whole-Room observer path. The event subject
+    # ``room`` is the Room ``GameObject`` itself; predicates layer
+    # ``Controlled(YOU, subject="room")`` to gate "you fully unlock
+    # a Room" vs an opponent's transition.
+    if fully_unlocked:
+        dispatch_event(
+            state,
+            _Event.ROOM_FULLY_UNLOCKED,
+            label="room-fully-unlocked",
+            room=obj,
+        )
 
 
 def _fire_unlock_door_triggers(

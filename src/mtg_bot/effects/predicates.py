@@ -124,6 +124,23 @@ class Event(str, Enum):
     # tapped" gate is encoded via the ``IsTapped`` predicate below
     # AND-ed onto the source-self ``IsSelf()`` arm.
     BEGINNING_OF_POSTCOMBAT_MAIN = "beginning_of_postcombat_main"
+    # A Room has just had its second / final door unlocked, transitioning
+    # ``unlocked_halves`` from a single-half set to the full set
+    # (``len(unlocked_halves) == len(printing.room_halves)``). Subject is
+    # the Room ``GameObject`` (``"room"``). Models the Duskmourn "Eerie"
+    # ability-word trigger arm: ``Eerie — Whenever an enchantment you
+    # control enters or you fully unlock a Room, …``. Distinct from the
+    # per-half "When you unlock this door, …" triggers (which fire via
+    # ``_fire_unlock_door_triggers`` in ``actions.py`` against
+    # ``Event.ENTERS`` so an enters-with-half-unlocked Room and a later
+    # unlock action share the same self-target trigger code path) — the
+    # ROOM_FULLY_UNLOCKED event fires only on the transition into the
+    # all-halves-unlocked state, observable by ANY permanent on the
+    # battlefield (not just the Room itself), and only fires once even
+    # if the Room enters with both halves pre-unlocked (the ENTERS path
+    # handles per-half triggers; the FULLY_UNLOCKED dispatch fires from
+    # the unlock-action site at the transition moment).
+    ROOM_FULLY_UNLOCKED = "room_fully_unlocked"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -147,6 +164,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
+    Event.ROOM_FULLY_UNLOCKED: ("room",),
 }
 
 
@@ -373,6 +391,33 @@ class IsArtifact(Predicate):
         if obj is None:
             return False
         return "Artifact" in obj.printing.card_types
+
+
+@dataclass(frozen=True)
+class IsEnchantment(Predicate):
+    """The named subject is an enchantment.
+
+    Models the "an enchantment you control enters" qualifier on the
+    Duskmourn "Eerie" ability-word trigger family. Mirrors the
+    ``IsArtifact`` / ``IsCreature`` siblings — checks the printing's
+    ``card_types`` for the ``"Enchantment"`` type. Rooms (which print
+    as ``Enchantment — Room``) carry ``"Enchantment"`` in their
+    ``card_types`` so a Room entering ALSO satisfies this predicate;
+    that's the printed Eerie semantics — both arms are independent
+    fires, an enters-as-Room event would observe both the
+    ENTERS-as-enchantment arm AND, on its later transition to
+    fully-unlocked, the ROOM_FULLY_UNLOCKED arm.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        if not hasattr(obj, "printing"):
+            return False
+        return "Enchantment" in obj.printing.card_types
 
 
 @dataclass(frozen=True)
