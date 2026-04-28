@@ -1,11 +1,12 @@
-"""Printing-level parametric keywords (Warp, Ward, Devour).
+"""Printing-level parametric keywords (Warp, Ward, Devour, Impending).
 
 These take a numeric/mana-cost argument so they don't fit the
 literal-line ``_KEYWORD_LINES`` map in ``keywords.py``. They share
 the same shape: a keyword name followed by its argument on its own
 line, with optional parenthesized reminder text. The argument
 round-trips into the ``make_creature`` ``warp=`` / ``ward=`` /
-``devour_land_multiplier=`` kwarg.
+``devour_land_multiplier=`` / ``impending=``+``impending_count=``
+kwarg.
 
 Two ``Ward`` non-mana-cost rider shapes are also recognized: the
 em-dash discard-cost variants ``Ward—Discard a card.`` and
@@ -85,6 +86,32 @@ def _parse_ward_discard_line(line: str) -> str | None:
     if m is None:
         return None
     return "random" if m.group("random") else "chosen"
+
+
+_IMPENDING_LINE = re.compile(
+    # Impending N—{cost}. Scryfall uses an em-dash (U+2014). The
+    # reminder text is stripped per-line by ``_strip_reminder_text``
+    # before this lookup runs, so we match the bare keyword line.
+    r"^Impending (\d+)—(\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_impending_line(line: str) -> tuple[int, str] | None:
+    """Return ``(N, cost_str)`` if ``line`` is an Impending clause
+    (``Impending N—{cost}``), else ``None``.
+
+    Matches the verbatim Duskmourn Overlord cycle surface form. The
+    reminder text — "(If you cast this spell for its impending cost,
+    it enters with N time counters and isn't a creature until the
+    last is removed. At the beginning of your end step, remove a
+    time counter from it.)" — is stripped via the existing per-line
+    reminder-text stripper before this lookup runs, so we only have
+    to match the bare keyword line.
+    """
+    m = _IMPENDING_LINE.match(line.strip())
+    if m is None:
+        return None
+    return int(m.group(1)), m.group(2)
 
 
 _DEVOUR_LINE = re.compile(

@@ -85,6 +85,18 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
             ),
         ),
     ),
+    # 2/1 white Insect creature token with flying — the Mistmoors
+    # Overlord (Duskmourn) creates two of these whenever it enters
+    # or attacks. Color isn't tracked through tokens (the engine
+    # derives color from mana_cost.colors() and tokens have an
+    # empty mana cost), so this surfaces as a colorless 2/1 Insect
+    # with flying — a simplification that matches how every other
+    # color-bearing token is shipped today (no token printing
+    # carries an explicit color tag yet).
+    "Insect": make_token_creature(
+        "Insect", 2, 1, subtypes=("Insect",),
+        keywords=frozenset({"flying"}),
+    ),
     # Munitions: colorless artifact token created by Weapons Manufacturing.
     # "When this token leaves the battlefield, it deals 2 damage to any
     # target." Modeled via a leaves-battlefield trigger on the token.

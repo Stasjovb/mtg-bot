@@ -103,6 +103,27 @@ class GameObject:
     # EoE Spacecraft charge counters. A Spacecraft at ``station_threshold`` or
     # more is a creature (see ``is_creature_now``).
     charge_counters: int = 0
+    # Duskmourn Impending: time counters on the permanent and a flag
+    # indicating the printed creature type is suppressed. When a card
+    # is cast for its impending cost, ``time_counters`` is initialized
+    # to ``printing.impending_count`` and ``impending_active`` is set
+    # True at ETB. While ``impending_active`` is True ``is_creature_now``
+    # returns False even on a printed-creature card type — the
+    # permanent is the enchantment half only (no combat, no creature-
+    # type targeting). The end-step turn-based action
+    # ``run_impending_decrement_turn_based_action`` removes one time
+    # counter from each impending-active permanent the active player
+    # controls; when the count hits 0 it clears ``impending_active``
+    # and the permanent becomes a creature.
+    time_counters: int = 0
+    impending_active: bool = False
+    # Set True at cast time when ``use_impending=True`` so
+    # ``put_into_battlefield`` can initialize time counters and
+    # ``impending_active`` as the permanent transitions onto the
+    # battlefield. Cleared at ETB after the counter init runs (so
+    # a blink-and-recast under the printed cost doesn't reactivate
+    # the suppression). Mirrors the ``cast_via_warp`` precedent.
+    cast_via_impending: bool = False
     # Stun counters: a permanent with stun counters doesn't untap during
     # its controller's untap step — instead one stun counter is removed.
     stun_counters: int = 0
@@ -333,10 +354,23 @@ def is_creature_now(obj: GameObject) -> bool:
 
     A face-down permanent (``obj.face_down=True``, set by Manifest
     Dread / Morph) is always a 2/2 creature regardless of the
-    underlying printing's types — CR 701.34.
+    underlying printing's types — CR 701.34. Face-down identity
+    masking takes precedence over Impending suppression below.
+
+    Impending-cast permanents (Duskmourn Overlord cycle) suppress
+    the printed creature type while ``impending_active`` is True —
+    the printing's ``card_types`` still includes "Creature" but
+    this helper returns False until the last time counter is
+    removed at the controller's end step (see
+    ``run_impending_decrement_turn_based_action``). Impending takes
+    precedence over ``temp_is_creature`` / ``is_stationed`` so a
+    future card animating an impending Overlord wouldn't wake it
+    early — those are independent mechanics.
     """
     if obj.face_down:
         return True
+    if obj.impending_active:
+        return False
     return (
         obj.printing.is_creature
         or is_stationed(obj)

@@ -858,6 +858,48 @@ def run_beginning_of_postcombat_main_triggers(state: GameState) -> None:
     )
 
 
+def run_impending_decrement_turn_based_action(state: GameState) -> None:
+    """Remove one time counter from each impending-active permanent
+    the active player controls. When the count hits 0, clear
+    ``impending_active`` and the permanent becomes a creature again
+    (its printed creature type stops being suppressed by
+    ``is_creature_now``).
+
+    Modeled as a turn-based action at the beginning of each end
+    step (CR 705-style turn-based bookkeeping, mirroring the printed
+    Impending reminder text "At the beginning of your end step,
+    remove a time counter from it"). Runs BEFORE
+    ``run_beginning_of_end_step_triggers`` so an Overlord whose
+    last counter is removed this end step is a creature in time
+    for any "at the beginning of your end step" trigger that keys
+    off creature presence on the same player's end step.
+
+    Only the active player's permanents tick — the Impending
+    reminder is "At the beginning of YOUR end step" — so an
+    Overlord's controller has to reach their own end step to
+    advance it. The active-player gate matches the printed text.
+    """
+    ap_id = state.active_player().id
+    for obj in state.battlefield:
+        if not obj.impending_active:
+            continue
+        if obj.controller_id != ap_id:
+            continue
+        obj.time_counters -= 1
+        if obj.time_counters <= 0:
+            obj.time_counters = 0
+            obj.impending_active = False
+            state.log.append(
+                f"{obj.printing.name} loses its last time counter; "
+                f"becomes a creature"
+            )
+        else:
+            state.log.append(
+                f"{obj.printing.name} loses a time counter "
+                f"({obj.time_counters} remaining)"
+            )
+
+
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
     """Push end-step triggers for the current end step onto the stack.
 

@@ -46,6 +46,7 @@ from mtg_bot.cards.base import (
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfYouGainedLifeAtLeast,
     CostReduction,
+    DealDamageAnyTarget,
     DealDamageEachOpponent,
     DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyTargetNonlandPermanent,
@@ -607,6 +608,67 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
+        # Duskmourn Overlord cycle — Enchantment Creatures with the
+        # Impending alt-cost. Each enters as a creature when cast for
+        # its printed cost, OR enters with N time counters and is
+        # suppressed-as-non-creature when cast for its impending
+        # cost (``GameObject.impending_active`` → ``is_creature_now``
+        # returns False). At the active player's end step the
+        # turn-based action ``run_impending_decrement_turn_based_action``
+        # removes one time counter; when the last is removed, the
+        # permanent becomes a creature. The "Whenever this permanent
+        # enters or attacks, …" trigger fires on entry regardless of
+        # impending state — the ENTERS dispatcher walks the
+        # battlefield and matches any TriggeredAbility whose predicate
+        # accepts the entering object, and ``IsSelf()`` doesn't depend
+        # on creature-ness. The ATTACKS arm only fires once the
+        # permanent has become a creature (combat eligibility checks
+        # ``is_creature_now``), which is the correct CR behavior.
+        # Overlord of the Mistmoors {5}{W}{W} 6/6 Avatar Horror.
+        # Impending 4 — {2}{W}{W}. ETB/attack: create two 2/1 white
+        # Insect creature tokens with flying. (Color isn't tracked
+        # through tokens; see tokens.py.)
+        "Overlord of the Mistmoors": make_creature(
+            "Overlord of the Mistmoors", "{5}{W}{W}", 6, 6,
+            enchantment=True,
+            subtypes=("Avatar", "Horror"),
+            impending="{2}{W}{W}",
+            impending_count=4,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Insect"], count=2,
+                    ),
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Insect"], count=2,
+                    ),
+                ),
+            ),
+        ),
+        # Overlord of the Boilerbilges {4}{R}{R} 5/5 Avatar Horror.
+        # Impending 4 — {2}{R}{R}. ETB/attack: deals 4 damage to any
+        # target.
+        "Overlord of the Boilerbilges": make_creature(
+            "Overlord of the Boilerbilges", "{4}{R}{R}", 5, 5,
+            enchantment=True,
+            subtypes=("Avatar", "Horror"),
+            impending="{2}{R}{R}",
+            impending_count=4,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DealDamageAnyTarget(amount=4),
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=DealDamageAnyTarget(amount=4),
                 ),
             ),
         ),

@@ -296,6 +296,25 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and p.life > card.printing.warp_additional_life_cost
             ):
                 actions.append(CastSpell(card.id, use_warp=True))
+            # Impending alt-cost (Duskmourn Overlord cycle). Sorcery-
+            # speed only — mirrors the printed text; offered when
+            # the card has an impending cost the caster can pay,
+            # alongside the normal cast. ``_targets_are_satisfiable`` /
+            # ``_additional_costs_payable`` checks aren't strictly
+            # needed today (no Overlord targets at cast time / has
+            # additional costs) but the gates mirror the warp pattern
+            # so a future printing with both Impending and a target /
+            # additional cost composes cleanly.
+            if (
+                card.printing.impending_cost is not None
+                and _can_cast(
+                    state, player_id, card,
+                    _effective_cost(card, card.printing.impending_cost),
+                )
+                and _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                actions.append(CastSpell(card.id, use_impending=True))
             # Weftwalking free-cast variant for this sorcery-speed
             # spell. Skips the mana-cost payable check (it's free)
             # but still gates on targets / additional non-mana costs.

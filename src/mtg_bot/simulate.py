@@ -36,6 +36,7 @@ from mtg_bot.turn import (
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
+    run_impending_decrement_turn_based_action,
     run_draw_step,
     run_untap_step,
     state_based_actions,
@@ -298,11 +299,20 @@ def run_step(
         return
 
     # Turn-based actions at the beginning of the end step. Order:
-    #   1. Fire "beginning of end step" triggered abilities (Void, etc.) —
+    #   1. Decrement Impending time counters on each
+    #      impending-active permanent the active player controls.
+    #      Runs BEFORE end-step triggers so an Overlord whose final
+    #      counter is removed this end step is already a creature
+    #      for any same-step trigger that keys off creature state.
+    #   2. Fire "beginning of end step" triggered abilities (Void, etc.) —
     #      they see the turn's state before any deferred warp-exile etc.
-    #   2. Fire delayed end-step triggers (warp self-exile, Mystifying
+    #   3. Fire delayed end-step triggers (warp self-exile, Mystifying
     #      Maze return-to-battlefield, etc.).
     if step == Step.END:
+        run_impending_decrement_turn_based_action(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
         run_beginning_of_end_step_triggers(state)
         state_based_actions(state)
         if state.is_over():

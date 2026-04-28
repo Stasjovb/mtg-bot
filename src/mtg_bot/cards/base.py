@@ -353,6 +353,27 @@ class CardPrinting:
     # the graveyard, not just the hand. Matches Timeline Culler's
     # "You may cast this card from your graveyard using its warp ability."
     warp_castable_from_graveyard: bool = False
+    # Duskmourn "Impending N — {alt-cost}" alt-cost. If set, the card
+    # may be cast from hand for ``impending_cost`` instead of its
+    # normal cost; when cast that way, it enters with
+    # ``impending_count`` time counters and is suppressed-as-non-
+    # creature (``impending_active=True``) until the last counter is
+    # removed at the controller's end step. The Overlord cycle
+    # (Duskmourn) is the printing-source: each Overlord is an
+    # Enchantment Creature with both a normal cost and an Impending
+    # cost. When cast for the Impending cost the permanent's printed
+    # creature type is suppressed via ``is_creature_now`` reading
+    # ``GameObject.impending_active`` — the printing's
+    # ``card_types`` still includes "Creature" but
+    # ``is_creature_now`` returns False so combat / target /
+    # creature-only triggers don't fire. The end-step turn-based
+    # action ``run_impending_decrement_turn_based_action`` removes
+    # one time counter from each impending-active permanent the
+    # active player controls; when the count hits 0 it clears
+    # ``impending_active`` and the permanent becomes a creature.
+    impending_cost: ManaCost | None = None
+    impending_cost_str: str = ""
+    impending_count: int = 0
     # "Kicker {cost}" — an optional additional mana cost the caster may
     # pay while casting. If paid, the StackItem is marked kicked and
     # the resolving effect can branch on state.resolving_kicked.
@@ -839,11 +860,15 @@ def make_creature(
     attack_bypass_if_artifact_entered_this_turn: bool = False,
     enters_as_copy_of_creature: bool = False,
     protection_from_color: str | None = None,
+    impending: str | None = None,
+    impending_count: int = 0,
+    enchantment: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
+    enchantment_word = "Enchantment " if enchantment else ""
     subtype_suffix = f" — {' '.join(subtypes)}" if subtypes else ""
-    type_line = f"{prefix}{artifact_word}Creature{subtype_suffix}"
+    type_line = f"{prefix}{artifact_word}{enchantment_word}Creature{subtype_suffix}"
     supertypes, card_types, parsed_subtypes = _parse_type_line(type_line)
     subtypes = parsed_subtypes
     return CardPrinting(
@@ -902,6 +927,9 @@ def make_creature(
         ),
         enters_as_copy_of_creature=enters_as_copy_of_creature,
         protection_from_color=protection_from_color,
+        impending_cost=parse_mana_cost(impending) if impending else None,
+        impending_cost_str=impending or "",
+        impending_count=impending_count,
     )
 
 

@@ -85,6 +85,18 @@ class CastSpell(Action):
     # and kicked. Targets/additional costs are still paid; only the
     # mana cost is skipped.
     cast_for_free: bool = False
+    # If True, cast from hand for the card's Impending alt-cost (the
+    # Duskmourn Overlord cycle's deferred-cast mechanic). The card
+    # enters the battlefield with ``printing.impending_count`` time
+    # counters and ``impending_active=True`` — its printed creature
+    # type is suppressed via ``is_creature_now`` until the last time
+    # counter is removed at the controller's end step. Sorcery-speed
+    # only (gated in ``legal_actions``); mutually exclusive with
+    # ``use_warp``, ``kicked``, and ``cast_for_free``. The Overlord's
+    # printed cost remains castable for the normal "enters as a
+    # creature" line — flipping ``use_impending`` selects which arm
+    # runs.
+    use_impending: bool = False
 
 
 @dataclass(frozen=True)
@@ -1023,6 +1035,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             state, player_id, action.card_id,
             use_warp=action.use_warp, kicked=action.kicked,
             cast_for_free=action.cast_for_free,
+            use_impending=action.use_impending,
         )
         return
     if isinstance(action, DeclareAttackers):
@@ -1358,6 +1371,7 @@ def _cast_spell(
     state: GameState, player_id: int, card_id: int,
     use_warp: bool = False, kicked: bool = False,
     cast_for_free: bool = False,
+    use_impending: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -1372,15 +1386,25 @@ def _cast_spell(
     cast_from_outside_hand = False
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
-        cost = (
-            card.printing.warp_cost
-            if use_warp
-            else card.printing.mana_cost
-        )
+        if use_impending:
+            cost = card.printing.impending_cost
+        elif use_warp:
+            cost = card.printing.warp_cost
+        else:
+            cost = card.printing.mana_cost
         p.hand.remove(card)
         # Mark the spell as warp-cast so it triggers the end-step exile once
         # it resolves onto the battlefield.
         card.cast_via_warp = bool(use_warp)
+        # Mark the spell as impending-cast so put_into_battlefield
+        # initializes ``time_counters`` and sets ``impending_active``.
+        # Stored on the card itself (not the StackItem) because the
+        # ETB handler in put_into_battlefield reads from the
+        # GameObject as it transitions BATTLEFIELD; mirrors the
+        # ``cast_via_warp`` precedent. Cleared at ETB after the
+        # counter init to avoid double-application if a future
+        # effect blinks the permanent.
+        card.cast_via_impending = bool(use_impending)
         if use_warp:
             state.spell_warped_this_turn = True
             # Pay the warp ability's "Pay N life" rider, if any (Timeline
@@ -2601,6 +2625,20 @@ def put_into_battlefield(
     obj.controller_id = controller_id
     obj.tapped = False
     obj.summoning_sick = True
+    # Impending: a spell cast for its impending cost enters with N
+    # time counters and is suppressed-as-non-creature until the
+    # last counter is removed. The cast site set
+    # ``cast_via_impending`` on the GameObject; consume the flag
+    # here (so a future blink-and-recast under the printed cost
+    # doesn't reactivate the suppression) and initialize the
+    # impending state. The end-step turn-based action
+    # ``run_impending_decrement_turn_based_action`` decrements
+    # ``time_counters`` and clears ``impending_active`` when the
+    # last counter is removed.
+    if obj.cast_via_impending and obj.printing.impending_count > 0:
+        obj.time_counters = obj.printing.impending_count
+        obj.impending_active = True
+    obj.cast_via_impending = False
     # Snapshot the moment of ETB for static-effect timestamp use
     # (Magus / Dryad layer-4 synthesizing in effective_subtypes,
     # Painter's Servant layer-5, Humility layer-6/7b). Bump

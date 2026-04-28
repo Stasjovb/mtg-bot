@@ -6783,9 +6783,14 @@ class DealDamageAnyTarget(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
         targets: list[Target] = []
         for o in state.battlefield:
-            if o.printing.is_creature:
+            # Use ``is_creature_now`` (not ``printing.is_creature``)
+            # so impending-suppressed Overlords aren't valid creature
+            # targets — they're enchantments while their time
+            # counters remain.
+            if is_creature_now(o):
                 targets.append(("creature", o.id))
         for p in state.players:
             if not p.has_lost:
