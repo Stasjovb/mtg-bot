@@ -9,6 +9,7 @@ from mtg_bot.actions import (
     CastSpell,
     PassPriority,
     PlayLand,
+    TurnFaceUp,
     can_pay_cost,
 )
 from mtg_bot.cards import ManaCost
@@ -579,6 +580,26 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 actions.append(
                     ActivateStation(spacecraft_id=ship.id, crew_id=crew.id)
                 )
+
+    # Turn-face-up special action (CR 701.34 / 707.4): for each
+    # face-down permanent the player controls whose underlying
+    # printing is a creature card whose mana cost they can pay, offer
+    # the action. Special action — does not use the stack — but it's
+    # a sorcery-speed timing in our simplified model (CR 707.4
+    # actually permits "any time", but the only paths into this engine
+    # that matter resolve in main phases anyway, and tying it to
+    # sorcery timing avoids interactions with priority windows we
+    # don't yet model).
+    for obj in state.battlefield:
+        if obj.controller_id != player_id:
+            continue
+        if not obj.face_down:
+            continue
+        if not obj.printing.is_creature:
+            continue
+        if not can_pay_cost(state, player_id, obj.printing.mana_cost):
+            continue
+        actions.append(TurnFaceUp(card_id=obj.id))
 
     # Deafening Silence gate: post-filter CastSpell actions so
     # noncreature casts beyond the per-turn limit of 1 are removed

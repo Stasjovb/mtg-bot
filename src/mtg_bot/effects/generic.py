@@ -2673,6 +2673,90 @@ class LookAtTopTwoSplitHandGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class ManifestDread(Effect):
+    """CR 701.55: To manifest dread, look at the top two cards of your
+    library, manifest one of them, then put the other into your
+    graveyard. To manifest a card (CR 701.34) is to put that card onto
+    the battlefield face down. It's a 2/2 creature with no name, no
+    subtypes, and no abilities.
+
+    Repeats ``count`` times — for "Manifest dread X times" / "Manifest
+    dread twice" surfaces. The agent's ``choose_card_from_library``
+    hook picks which of the two examined cards is manifested
+    (face-down) on each iteration; the other goes to the graveyard.
+    With fewer than two cards left in the library the effect manifests
+    one (if available) and skips the graveyard step — the simplest
+    least-surprising fallback.
+    """
+
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        n = self.count
+        # ``count`` may be ``None`` for the X-times surface — read the
+        # X-value off the state when present (Valgavoth's Onslaught).
+        if n is None:
+            n = state.resolving_x_value
+        for _ in range(n):
+            p = state.player_by_id(controller_id)
+            if not p.library:
+                return
+            examined = p.library[:2]
+            # With fewer than two cards left, manifest the only card
+            # available and skip the graveyard step.
+            if len(examined) == 1:
+                card = examined[0]
+                p.library.remove(card)
+                card.face_down = True
+                put_into_battlefield(state, card, controller_id)
+                state.log.append(
+                    f"P{controller_id} manifests a face-down card "
+                    f"(library exhausted)"
+                )
+                continue
+            # Two cards examined. Ask the agent which to manifest;
+            # the other goes to graveyard. Default fallback: manifest
+            # the top card.
+            options = [c.id for c in examined]
+            manifest_id = options[0]
+            if p.agent is not None:
+                chosen = p.agent.choose_card_from_library(
+                    state, p.id, options
+                )
+                if chosen in options:
+                    manifest_id = chosen
+            manifest_card = next(c for c in examined if c.id == manifest_id)
+            gy_card = next(c for c in examined if c.id != manifest_id)
+            p.library.remove(manifest_card)
+            manifest_card.face_down = True
+            put_into_battlefield(state, manifest_card, controller_id)
+            p.library.remove(gy_card)
+            gy_card.zone = Zone.GRAVEYARD
+            p.graveyard.append(gy_card)
+            state.log.append(
+                f"P{controller_id} manifests a face-down card; "
+                f"{gy_card.printing.name} goes to the graveyard"
+            )
+
+    def describe(self) -> str:
+        if self.count == 1:
+            return "manifest dread"
+        if self.count is None:
+            return "manifest dread X times"
+        if self.count == 2:
+            return "manifest dread twice"
+        if self.count == 3:
+            return "manifest dread three times"
+        return f"manifest dread {self.count} times"
+
+
+@dataclass(frozen=True)
 class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original

@@ -205,6 +205,7 @@ from mtg_bot.effects import (
     StaticScope,
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
+    ManifestDread,
     MutinousMassacreEffect,
     Surveil,
     TargetOpponentDiscards,

@@ -99,6 +99,7 @@ from mtg_bot.effects.generic import (
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     MagicalHackTextChangeEffect,
+    ManifestDread,
     SleightOfMindTextChangeEffect,
     MillTargetPlayer,
     MovePlusOneCounterBetweenPermanentsYouControl,

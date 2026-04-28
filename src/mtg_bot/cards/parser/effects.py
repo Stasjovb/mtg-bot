@@ -50,6 +50,7 @@ from mtg_bot.cards.base import (
     GainLife,
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
+    ManifestDread,
     MillTargetPlayer,
     MoveSelfCountersToTargetCreatureYouControl,
     OptionalDiscardCardThenDrawN,
@@ -108,6 +109,25 @@ _SMALL_CARDINAL_WORDS: dict[str, int] = {
     "ten": 10,
 }
 _SMALL_CARDINAL_PATTERN = "|".join(_SMALL_CARDINAL_WORDS)
+
+
+# ``manifest dread`` (CR 701.55) and its repeated forms ``manifest
+# dread N times`` / ``manifest dread twice`` / ``manifest dread three
+# times`` / ``manifest dread X times`` — DSK's Phase 3 mechanic. The
+# bare form (no count tail) maps to ``ManifestDread(count=1)``; the
+# spelled-out / digit forms map to ``ManifestDread(count=N)``; and the
+# ``X times`` form maps to ``ManifestDread(count=None)`` so the engine
+# class reads ``state.resolving_x_value`` at resolve time. The
+# ``twice`` synonym short-circuits to amount 2, matching the same
+# convention used for repeated triggers elsewhere in this grammar.
+_MANIFEST_DREAD = re.compile(
+    r"^manifest dread"
+    r"(?:"
+    r" (twice)"  # bare ``twice`` (no trailing ``times``)
+    r"|"
+    r" (X|" + _SMALL_CARDINAL_PATTERN + r"|\d+) times"
+    r")?$"
+)
 
 
 _DEAL_DAMAGE_ANY_TARGET = re.compile(
@@ -1984,6 +2004,31 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _LOSE_N_LIFE.match(phrase)
     if m is not None:
         return LoseLife(amount=int(m.group(1)))
+    # ``manifest dread`` (count=1) or ``manifest dread <amount> times`` /
+    # ``manifest dread twice`` / ``manifest dread three times`` /
+    # ``manifest dread X times``. Maps to
+    # ``ManifestDread(count=N)`` — N is 1 for the bare form, 2/3/N for
+    # the spelled-out / digit forms, or ``None`` for the X-times form
+    # (count is read from ``state.resolving_x_value`` at resolve time).
+    # Tried BEFORE the generic compound-effect splitter would carve a
+    # phrase like ``manifest dread X times, then put X +1/+1 counters on
+    # each of those creatures`` (no card uses that as a top-level
+    # primitive today; Valgavoth's Onslaught has it but the current
+    # parser doesn't claim it because the second clause's ``those
+    # creatures`` carry-over isn't yet supported).
+    m = _MANIFEST_DREAD.match(phrase)
+    if m is not None:
+        twice_token = m.group(1)
+        amount_token = m.group(2)
+        if twice_token is not None:
+            count: int | None = 2
+        elif amount_token is None:
+            count = 1
+        elif amount_token == "X":
+            count = None
+        else:
+            count = _parse_amount(amount_token)
+        return ManifestDread(count=count)
     m = _DISCARD_N_CARDS.match(phrase)
     if m is not None:
         # ``discard a card`` / ``you discard a card`` / ``discard N

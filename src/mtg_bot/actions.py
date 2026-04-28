@@ -113,6 +113,24 @@ class ActivateStation(Action):
 
 
 @dataclass(frozen=True)
+class TurnFaceUp(Action):
+    """Turn a face-down permanent face up by paying its underlying
+    card's mana cost. CR 701.34 / 707.4: the controller may turn it
+    face up at any time as a special action by revealing what it is
+    and paying its mana cost. Currently only relevant for Manifest
+    Dread / Morph face-down permanents — we accept the action only
+    when the underlying ``printing`` is a creature card (CR 701.34
+    explicitly: the manifest-side rules require the face-down card to
+    be a creature card to turn it face up for its mana cost).
+
+    Special action — does not use the stack. Costs are paid
+    immediately and the flip resolves at once.
+    """
+
+    card_id: int
+
+
+@dataclass(frozen=True)
 class DeclareAttackers(Action):
     """Declare a set of creatures as attackers during the declare-attackers step.
 
@@ -1021,7 +1039,39 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             state, player_id, action.source_id, action.ability_index
         )
         return
+    if isinstance(action, TurnFaceUp):
+        _turn_face_up(state, player_id, action.card_id)
+        return
     raise ValueError(f"unknown action: {action!r}")
+
+
+def _turn_face_up(state: GameState, player_id: int, card_id: int) -> None:
+    """Turn a face-down permanent face up. Pays the mana cost from
+    ``can_pay_cost`` and clears ``face_down``. CR 701.34: only legal
+    when the underlying printing is a creature card; otherwise no-ops
+    (legal_actions gates this — defensive here).
+    """
+    obj = next(
+        (
+            o for o in state.battlefield
+            if o.id == card_id
+            and o.controller_id == player_id
+            and o.face_down
+        ),
+        None,
+    )
+    if obj is None:
+        return
+    if not obj.printing.is_creature:
+        return
+    cost_obj = obj.printing.mana_cost
+    if not can_pay_cost(state, player_id, cost_obj):
+        return
+    auto_tap_for_cost(state, player_id, cost_obj, spell_kind="activated_ability")
+    obj.face_down = False
+    state.log.append(
+        f"P{player_id} turns {obj.printing.name} face up"
+    )
 
 
 def _play_land(state: GameState, player_id: int, card_id: int) -> None:
