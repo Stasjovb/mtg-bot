@@ -829,6 +829,35 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
         )
 
 
+def run_beginning_of_postcombat_main_triggers(state: GameState) -> None:
+    """Push "At the beginning of your second main phase" triggered
+    abilities onto the stack for permanents the active player controls.
+
+    Mirrors ``run_beginning_of_upkeep_triggers`` /
+    ``run_beginning_of_combat_triggers`` exactly — the
+    ``Controlled(YOU)`` predicate against the active-player subject
+    filters to permanents the active player controls, and the
+    dispatcher's ``source.controller_id`` push matches the legacy
+    upkeep/combat resolution rationale (the predicate already gates
+    ``source.controller_id == ap_id``).
+
+    Models the DSK Survival ability-word trigger family — every
+    printed Survival creature in Duskmourn carries a
+    ``TriggeredAbility(event=BEGINNING_OF_POSTCOMBAT_MAIN,
+    predicate=IsSelf() & IsTapped(), …)`` shape. Called from
+    ``simulate.run_step`` (and its search-engine equivalent) at the
+    start of the post-combat main phase, before priority opens.
+    """
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(
+        state, Event.BEGINNING_OF_POSTCOMBAT_MAIN,
+        label="beginning-of-postcombat-main",
+        player=state.active_player(),
+    )
+
+
 def run_beginning_of_end_step_triggers(state: GameState) -> None:
     """Push end-step triggers for the current end step onto the stack.
 

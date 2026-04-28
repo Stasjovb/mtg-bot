@@ -524,6 +524,9 @@ class TriggeredAbility:
                 "beginning_of_end_step": (
                     "At the beginning of your end step"
                 ),
+                "beginning_of_postcombat_main": (
+                    "At the beginning of your second main phase"
+                ),
                 # Phase 9 added these. The DEALS_COMBAT_DAMAGE prefix
                 # uses the broad self-form ("Whenever ~ deals combat
                 # damage to a player") to match Illvoi Infiltrator's

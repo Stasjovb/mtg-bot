@@ -115,6 +115,15 @@ class Event(str, Enum):
     BEGINNING_OF_UPKEEP = "beginning_of_upkeep"
     BEGINNING_OF_COMBAT = "beginning_of_combat"
     BEGINNING_OF_END_STEP = "beginning_of_end_step"
+    # Beginning of the active player's second (post-combat) main phase.
+    # Subject is the active Player. Models the DSK Survival ability-word
+    # trigger ("Survival — At the beginning of your second main phase,
+    # if this creature is tapped, …") — the Player subject pairs with
+    # ``Controlled(YOU)`` for the "your" qualifier exactly like the
+    # other turn-structure events. The intervening-if "this creature is
+    # tapped" gate is encoded via the ``IsTapped`` predicate below
+    # AND-ed onto the source-self ``IsSelf()`` arm.
+    BEGINNING_OF_POSTCOMBAT_MAIN = "beginning_of_postcombat_main"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -137,6 +146,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_UPKEEP: ("player",),
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
+    Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
 }
 
 
@@ -264,12 +274,34 @@ class IsSelf(Predicate):
 
     Models "this creature/permanent <event>" — the event subject
     being the same permanent that hosts the triggered ability.
+
+    On turn-structure events (``BEGINNING_OF_POSTCOMBAT_MAIN`` etc.)
+    whose only subject is a Player rather than a permanent, the
+    no-subject ``IsSelf()`` reads as "the source IS itself" and
+    evaluates true: the dispatcher already iterates one source at a
+    time, so the predicate is tautological for those events. This
+    keeps the Survival idiom ``IsSelf() & IsTapped()`` readable as
+    "the source permanent is tapped" without needing a special
+    ``"source"`` subject slot. Detection mirrors ``Controlled``'s
+    permanent-vs-player branch: a Player exposes ``id`` but no
+    ``printing`` attribute, so ``not hasattr(obj, "printing")`` is the
+    cheapest reliable distinguisher.
     """
 
     subject: str | None = None
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.subject)
+        # Turn-structure events expose a Player subject; ``IsSelf()``
+        # against a Player has no useful identity check, so treat
+        # subject=None on a Player-only event as a tautology — the
+        # source-self check is what the surface text means.
+        if (
+            self.subject is None
+            and obj is not None
+            and not hasattr(obj, "printing")
+        ):
+            return True
         return obj is source
 
 
@@ -471,6 +503,54 @@ class HasSubtype(Predicate):
         if obj is None:
             return False
         return self.name in obj.printing.subtypes
+
+
+@dataclass(frozen=True)
+class IsTapped(Predicate):
+    """The named subject is currently tapped.
+
+    Models the intervening-if "if this creature is tapped" gate on the
+    DSK Survival ability-word trigger ("Survival — At the beginning of
+    your second main phase, if this creature is tapped, …"). Composes
+    with ``IsSelf()`` on the source so the gate reads "the source
+    permanent is tapped right now" — the standard Survival shape on
+    every printed Survival creature in DSK.
+
+    Default subject (``subject=None``) on a turn-structure event
+    whose only subject is a Player resolves to checking the source's
+    own tapped state — Players have no ``tapped`` attribute, so the
+    naive ``getattr(player, "tapped", False)`` would always be False
+    and the predicate would never fire. Detecting that case here and
+    falling back to ``source.tapped`` matches the surface meaning of
+    "this creature is tapped" on Survival cards (the source permanent
+    IS the creature the oracle text refers to). Mirrors the
+    ``IsSelf`` Player-subject branch above structurally.
+
+    Named subjects (``subject="attacker"`` etc.) read straight from
+    the named slot; if that subject lacks a ``tapped`` attribute (a
+    Player) the predicate evaluates false rather than raising, the
+    same way ``HasKeyword`` / ``HasCounter`` handle player-only
+    subject slots.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        # Turn-structure events expose a Player subject (no ``tapped``
+        # attribute); the surface text "this creature is tapped" then
+        # refers to the source itself, not the player. Fall back to
+        # source.tapped so the Survival idiom resolves naturally.
+        if (
+            self.subject is None
+            and obj is not None
+            and not hasattr(obj, "printing")
+        ):
+            return bool(getattr(source, "tapped", False))
+        if obj is None:
+            return False
+        # Player subjects have ``id`` but no ``tapped`` attribute.
+        return bool(getattr(obj, "tapped", False))
 
 
 @dataclass(frozen=True)
