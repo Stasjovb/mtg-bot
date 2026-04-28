@@ -288,13 +288,23 @@ class ReturnTargetCreatureToOwnersHand(Effect):
     "if it was attacking, create a 1/1 colorless Drone artifact creature
     token..." rider — checked at resolve time before the target leaves
     the battlefield (which clears the attacking flag).
+
+    ``optional=True`` for "up to one target creature" oracle text
+    (Bottomless Pool half) — the effect resolves as a no-op when no
+    target is chosen / available. ``target_count_range`` flips to
+    ``(0, 1)`` and ``requires_target`` flips to ``False`` so the cast-
+    site target-selection pipeline allows zero-target casts.
     """
 
     allow_nonland_permanent: bool = False
     create_drone_if_was_attacking: bool = False
+    optional: bool = False
 
     def requires_target(self) -> bool:
-        return True
+        return not self.optional
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -979,7 +989,13 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
 
     Target format: ``("graveyard_creature", id)`` where id is a GameObject
     in the controller's graveyard.
+
+    ``max_mv``: when set, restricts the legal target pool to creature
+    cards with mana value ≤ ``max_mv``. Models Surgical Suite's "with
+    mana value 3 or less" rider. None = no mana-value restriction.
     """
+
+    max_mv: "int | None" = None
 
     def requires_target(self) -> bool:
         return True
@@ -992,6 +1008,10 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
             ("graveyard_creature", c.id)
             for c in p.graveyard
             if c.printing.is_creature
+            and (
+                self.max_mv is None
+                or c.printing.mana_cost.total <= self.max_mv
+            )
         ]
 
     def resolve(
@@ -1445,6 +1465,50 @@ class ReturnUpToNCreaturesFromYourGraveyardToHand(Effect):
             f"graveyard to your hand"
         )
 
+
+
+@dataclass(frozen=True)
+class ReturnAllCreaturesFromYourGraveyardToBattlefield(Effect):
+    """Return every creature card from your graveyard to the battlefield
+    under your control. Untargeted mass-reanimation — Awakening Hall's
+    "Return all creature cards from your graveyard to the battlefield"
+    when its door is unlocked.
+
+    Each creature is moved out of the graveyard and routed through
+    ``put_into_battlefield`` so its ETB triggers fire normally. Order
+    of resolution follows the graveyard's stored order (oldest first);
+    we don't model APNAP for the iteration since the controller is the
+    same player throughout.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        p = state.player_by_id(controller_id)
+        # Snapshot the graveyard before mutation — entering creatures
+        # could (in theory) trigger other effects that touch the
+        # graveyard mid-resolution. We iterate the snapshot.
+        creatures = [c for c in list(p.graveyard) if c.printing.is_creature]
+        for card in creatures:
+            if card not in p.graveyard:
+                # Defensive: an ETB earlier in this loop already moved
+                # the card (very rare; included for safety).
+                continue
+            p.graveyard.remove(card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to the battlefield"
+            )
+            put_into_battlefield(state, card, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "return all creature cards from your graveyard to the "
+            "battlefield"
+        )
 
 
 @dataclass(frozen=True)
@@ -6472,9 +6536,14 @@ class PutPlusOneCounterOnTargetCreature(Effect):
 
     Matches oracle text like "put a +1/+1 counter on target creature" (Honor).
     Unrestricted version of PutPlusOneCounterOnCreatureYouControl.
+
+    ``attacking_only=True`` restricts the legal-target pool to currently-
+    attacking creatures (Hospital Room half — "put a +1/+1 counter on
+    target attacking creature").
     """
 
     amount: int = 1
+    attacking_only: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -6486,6 +6555,7 @@ class PutPlusOneCounterOnTargetCreature(Effect):
             ("creature", o.id)
             for o in state.battlefield
             if o.printing.is_creature
+            and (not self.attacking_only or o.attacking)
         ]
 
     def resolve(

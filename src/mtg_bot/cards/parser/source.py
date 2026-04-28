@@ -24,6 +24,7 @@ from mtg_bot.cards.parser.spacecraft_builder import _build_spacecraft_printing
 from mtg_bot.cards.parser.enchantment_builder import (
     _build_enchantment_printing,
 )
+from mtg_bot.cards.parser.room_builder import _build_room_printing
 from mtg_bot.cards.parser.planeswalker_builder import (
     _build_planeswalker_printing,
 )
@@ -61,6 +62,8 @@ class OracleParserCardSource:
             # builder gates on ``card.set == "spg"`` so it can't claim
             # main-set cards.
             built = _build_special_guest_printing(card)
+            if built is None:
+                built = _build_room_printing(card)
             if built is None:
                 built = _build_enchantment_printing(card)
             if built is None:

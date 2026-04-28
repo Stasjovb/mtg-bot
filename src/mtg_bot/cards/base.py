@@ -120,6 +120,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnTargetCreature,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     PutPoisonCountersOnTargetPlayer,
+    ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
