@@ -231,6 +231,17 @@ class GameObject:
     # Consumed by ``effective_colors`` when synthesizing layer-5
     # ``"add_colors"`` entries from this Painter source.
     painter_chosen_color: Optional[str] = None
+    # Face-down marker. CR 701.34 / 707.2: a face-down permanent has
+    # no name, no subtypes, and no abilities; it's a 2/2 creature.
+    # We keep ``printing`` intact (so ``TurnFaceUp`` can read the
+    # underlying card's mana cost and properties), but the engine's
+    # effective_* helpers (``effective_power`` / ``effective_toughness``
+    # / ``effective_keywords`` / ``effective_subtypes`` /
+    # ``is_creature_now``) short-circuit to the face-down 2/2 vanilla
+    # view when this flag is True. Set by the ``ManifestDread`` effect
+    # at the moment a card becomes a face-down permanent; cleared by
+    # the ``TurnFaceUp`` action.
+    face_down: bool = False
 
 
 def is_void_active(state: GameState) -> bool:
@@ -319,7 +330,13 @@ def is_creature_now(obj: GameObject) -> bool:
     threshold has been crossed (they're artifact creatures while
     stationed), and for lands animated by a manland activation
     (``temp_is_creature`` set until cleanup).
+
+    A face-down permanent (``obj.face_down=True``, set by Manifest
+    Dread / Morph) is always a 2/2 creature regardless of the
+    underlying printing's types — CR 701.34.
     """
+    if obj.face_down:
+        return True
     return (
         obj.printing.is_creature
         or is_stationed(obj)
@@ -557,7 +574,13 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     correctly grants the keyword (Sliver lord's anthem applies
     after the older Lignify wipe). Similarly Equipment keyword
     riders carry the equipment's etb_timestamp.
+
+    A face-down permanent (CR 701.34 / 707.2) has no abilities,
+    so it carries no keywords — short-circuit before walking the
+    layer-6 entries.
     """
+    if obj.face_down:
+        return frozenset()
     kws: set[str] = set(obj.printing.keywords)
     if is_stationed(obj):
         kws |= set(obj.printing.stationed_keywords)
@@ -714,7 +737,12 @@ def effective_subtypes(
     basics added on top, so all 5 colors. Older Dryad + newer
     Magus = five basics added first, then SET to Mountain, so just
     Mountain.
+
+    Face-down permanents have no subtypes (CR 701.34) — short-circuit
+    the layered walk.
     """
+    if obj.face_down:
+        return ()
     subtypes = list(obj.printing.subtypes)
     if obj.printing.is_artifact:
         for o in state.battlefield:
@@ -1390,7 +1418,55 @@ def _compute_effective_pt(
     Single function returning both so the sublayer walk happens
     once per query — saves the duplicate work of the prior
     ``effective_power`` / ``effective_toughness`` split.
+
+    A face-down permanent (CR 701.34) is a 2/2 vanilla creature.
+    +1/+1 / -1/-1 counters still modify the printed-2/2 base, so
+    we apply layer 7d on top; layers 7b (set base) and 7c (anthem
+    pumps from this source's ignored static abilities) and the
+    legacy temp pump-bonus fields don't apply because face-down
+    objects have no abilities and no name to anchor static effects
+    that target by name.
     """
+    if obj.face_down:
+        # 2/2 base + counters (layer 7d). Switch entries (7e) still
+        # affect a face-down permanent — a swap is a creature-state
+        # mutation, not an ability. Anthems applying to "creatures
+        # you control" still pump face-down creatures (they're
+        # creatures), so we still walk static bonuses, but the
+        # face-down object's OWN granted_keywords contributions are
+        # already filtered out via ``effective_keywords`` /
+        # ``_static_bonuses`` reading the printing's static_abilities
+        # — those abilities are wiped by face-down (CR 707.2). So
+        # we apply only counters here and skip anthems too: anthem
+        # contributions from OTHER sources are correctly handled by
+        # ``_static_bonuses`` walking the battlefield, but applying
+        # them here would mismatch the "no abilities" reading. Keep
+        # this simple: face-down = 2/2 plus +1/+1 counters, with
+        # external anthems and switches optionally folded.
+        base_p, base_t = 2, 2
+        # External anthems still buff a face-down creature (it IS a
+        # creature, and the anthem applies to "creatures you
+        # control"). The face-down source's own static abilities
+        # are already gated by being-face-down everywhere they
+        # matter, so this is the sole non-counter contributor here.
+        power_bonus, toughness_bonus, _ = _static_bonuses(state, obj)
+        p = base_p + power_bonus
+        t = base_t + toughness_bonus
+        p += obj.plus_one_counters - obj.minus_one_counters
+        t += obj.plus_one_counters - obj.minus_one_counters
+        # Layer 7e switches.
+        layer7e = sorted(
+            (
+                ce for ce in state.continuous_effects
+                if ce.layer == 7 and ce.sublayer == 4
+                and ce.kind == "switch_pt"
+                and ce.target_id == obj.id
+            ),
+            key=lambda ce: ce.timestamp,
+        )
+        for _ in layer7e:
+            p, t = t, p
+        return p, t
     # 7b: base P/T.
     layer7b = _registry_set_base_pt(state, obj)
     if layer7b is not None:
