@@ -1485,12 +1485,23 @@ function chooseFromOptions(anchorEl, opts) {
     menu.appendChild(btn);
   });
 
-  // Position the popover near the clicked card.
-  const r = anchorEl.getBoundingClientRect();
-  menu.style.position = 'fixed';
-  menu.style.left = `${r.left}px`;
-  menu.style.top  = `${r.bottom + 4}px`;
+  // Position the popover near the clicked card. Prefer below; flip above
+  // if it would extend past the viewport (P0's hand sits at the bottom of
+  // the screen, so a below-the-card popover almost always overflows).
   document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let top = r.bottom + 4;
+  if (top + menuRect.height > window.innerHeight) {
+    top = Math.max(4, r.top - menuRect.height - 4);
+  }
+  let left = r.left;
+  if (left + menuRect.width > window.innerWidth) {
+    left = Math.max(4, window.innerWidth - menuRect.width - 4);
+  }
+  menu.style.position = 'fixed';
+  menu.style.left = `${left}px`;
+  menu.style.top  = `${top}px`;
 
   // Dismiss on outside click.
   setTimeout(() => {

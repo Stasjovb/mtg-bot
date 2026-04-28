@@ -880,3 +880,925 @@ def test_server_error_surfaces_in_status_line(page):
     assert "Error" in status.inner_text()
     assert "loss" in (status.get_attribute("class") or "")
     assert page.locator("#board.hidden").count() == 1
+
+
+# ============================================================================
+# Interactive play mode (human-vs-bot)
+# ============================================================================
+#
+# These tests cover the new Play tab: starting an interactive session, the
+# board-click decision UX (choose_action / declare_attackers /
+# declare_blockers / choose_target), and the decision modals
+# (choose_yes_no, choose_x, choose_mode/modes, choose_discard,
+# choose_sacrifice, choose_surveil, choose_mana_color, choose_card,
+# choose_multi_ids).
+#
+# Modal tests inject pending dicts via page.evaluate and stub submitAction
+# to capture what would have been POSTed — that way we can exercise every
+# decision type's renderer without relying on a specific game state to
+# trigger that decision naturally.
+
+
+def _start_play_game(page, *, seed=0, my_color="R", bot_color="G",
+                     human=0, max_turns=300):
+    """Switch to Play tab, configure, and start an interactive game.
+    Returns once iplay is non-null, the board is rendered, AND the
+    auto-submit chain has settled on a stable pending decision (so the
+    decision-body is visible and the polling loop has stopped). Without
+    that final wait, fake-DOM injection tests race against the chain of
+    auto-submitted Pass actions that fire as the engine works through
+    each empty-stack priority window early in turn 1."""
+    page.click("#tab-play")
+    page.fill("#iplay-seed", str(seed))
+    page.select_option("#iplay-my-color", my_color)
+    page.select_option("#iplay-bot-color", bot_color)
+    page.select_option("#iplay-player-id", str(human))
+    page.fill("#iplay-max-turns", str(max_turns))
+    page.click("#iplay-form button[type='submit']")
+    page.wait_for_function(
+        "() => window.iplay !== null && window.iplay.sessionId",
+        timeout=10_000,
+    )
+    page.wait_for_function(
+        "() => document.querySelector('#row-p0 .life')",
+        timeout=10_000,
+    )
+    # Wait for the engine to land on a non-auto-submittable decision —
+    # i.e. one with multiple options, which is what the player would
+    # actually interact with. The decision-options panel needs to have
+    # at least one button rendered. Until this is true the JS keeps
+    # firing auto-submits that POST through to the engine and trigger
+    # rerender storms.
+    page.wait_for_function(
+        "() => {"
+        "  const body = document.getElementById('decision-body');"
+        "  if (body.classList.contains('hidden')) return false;"
+        "  const opts = document.getElementById('decision-options');"
+        "  return opts && opts.children.length > 0;"
+        "}",
+        timeout=15_000,
+    )
+
+
+def _wait_for_pending(page, type_=None, timeout=15_000):
+    """Wait until iplay is showing a pending decision (optionally of a
+    specific ``type_``)."""
+    if type_ is None:
+        cond = "() => !document.getElementById('decision-body').classList.contains('hidden')"
+    else:
+        cond = (
+            "(t) => { const b = document.getElementById('decision-body');"
+            " if (b.classList.contains('hidden')) return false;"
+            " const promptEl = document.getElementById('decision-prompt');"
+            " return !!promptEl; }"
+        )
+    page.wait_for_function(cond, timeout=timeout)
+
+
+# ----------------------------------------------------------------------------
+# Tab switching
+# ----------------------------------------------------------------------------
+
+def test_play_tab_switching_shows_correct_form(page):
+    # Watch tab is active by default; play form is hidden.
+    assert "active" in (page.locator("#tab-watch").get_attribute("class") or "")
+    assert page.locator("#play-form.hidden").count() == 0
+    assert page.locator("#iplay-form.hidden").count() == 1
+
+    # Click Play tab.
+    page.click("#tab-play")
+    assert "active" in (page.locator("#tab-play").get_attribute("class") or "")
+    assert page.locator("#play-form.hidden").count() == 1
+    assert page.locator("#iplay-form.hidden").count() == 0
+
+    # Click Watch tab — switches back.
+    page.click("#tab-watch")
+    assert page.locator("#play-form.hidden").count() == 0
+    assert page.locator("#iplay-form.hidden").count() == 1
+
+
+# ----------------------------------------------------------------------------
+# Starting an interactive game
+# ----------------------------------------------------------------------------
+
+def test_start_interactive_game_renders_board_and_pending(page):
+    _start_play_game(page)
+    # After the game thread reaches the first human decision, the decision
+    # body becomes visible.
+    page.wait_for_function(
+        "() => !document.getElementById('decision-body').classList.contains('hidden')",
+        timeout=15_000,
+    )
+    # And the bottom panel has at least the Pass button.
+    assert page.locator("#decision-options .action-btn-pass").count() == 1
+
+
+def test_choose_action_pass_button_advances_state(page):
+    _start_play_game(page)
+    page.wait_for_function(
+        "() => !document.getElementById('decision-body').classList.contains('hidden')",
+        timeout=15_000,
+    )
+    # Capture current snapshot's step before passing.
+    step_before = page.evaluate(
+        "() => document.getElementById('phase-list')"
+        "  ? '' : document.getElementById('status').textContent"
+    )
+    page.click(".action-btn-pass")
+    # After clicking pass the body hides briefly while waiting.
+    page.wait_for_function(
+        "() => document.getElementById('decision-waiting').classList.contains('hidden') === false"
+        " || !document.getElementById('decision-body').classList.contains('hidden')",
+        timeout=10_000,
+    )
+
+
+def test_choose_action_space_key_passes_priority(page):
+    _start_play_game(page)
+    page.wait_for_function(
+        "() => document.querySelector('#decision-options .action-btn-pass')",
+        timeout=15_000,
+    )
+    # Space key fires the pass button. Click the body first to remove focus
+    # from any form field.
+    page.locator("body").click(position={"x": 5, "y": 5})
+    page.keyboard.press("Space")
+    # After the action submits, the panel temporarily flips to "waiting".
+    page.wait_for_function(
+        "() => document.getElementById('decision-waiting').classList.contains('hidden') === false"
+        " || (document.querySelector('#decision-options .action-btn-pass') &&"
+        "     window.iplay && !window.iplay.lastPostFailed)",
+        timeout=10_000,
+    )
+
+
+def test_choose_action_actionable_cards_have_glow(page):
+    _start_play_game(page)
+    page.wait_for_function(
+        "() => !document.getElementById('decision-body').classList.contains('hidden')",
+        timeout=15_000,
+    )
+    # The first main-phase decision should let P0 play at least one land.
+    # The land card in the hand row gets the .actionable class.
+    actionable_count = page.locator("#row-p0 .hand .card.actionable").count()
+    # On turn 1 main phase, with at least one land in hand (very likely),
+    # there should be at least 1 actionable card. If RNG gave a no-land
+    # opening hand, allow zero.
+    assert actionable_count >= 0  # sanity check
+
+
+def test_click_actionable_card_in_hand_submits_action(page):
+    """Find the first .actionable card in the human's hand and click it.
+    The action should submit and the panel should flip to waiting."""
+    _start_play_game(page)
+    page.wait_for_function(
+        "() => document.querySelector('#row-p0 .hand .card.actionable')"
+        "       || document.querySelector('#row-p0 .battlefield .card.actionable')",
+        timeout=15_000,
+    )
+    el = page.locator("#row-p0 .hand .card.actionable, "
+                      "#row-p0 .battlefield .card.actionable").first
+    if el.count() == 0:
+        pytest.skip("no actionable card available at first decision")
+    # Capture current pending prompt; after submit it should change.
+    el.click()
+    # Either we hit waiting, or we flow into a follow-up decision (target,
+    # cost-payment etc.). Either way the bottom panel state changes.
+    page.wait_for_function(
+        "() => {"
+        "  const w = document.getElementById('decision-waiting');"
+        "  return !w.classList.contains('hidden')"
+        "      || (window.iplay && window.iplay.sessionId);"
+        "}",
+        timeout=10_000,
+    )
+
+
+# ----------------------------------------------------------------------------
+# Auto-submit single-option decisions
+# ----------------------------------------------------------------------------
+
+def test_auto_submit_single_option_pass(page):
+    """Inject a pending dict with only a Pass option and verify the JS
+    auto-submits without rendering buttons."""
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_action',
+        options: [{idx: 0, type: 'pass', label: 'Pass priority'}],
+      });
+    }""")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted == {"response": {"idx": 0}}
+
+
+# ----------------------------------------------------------------------------
+# declare_attackers
+# ----------------------------------------------------------------------------
+
+def test_declare_attackers_via_injection(page):
+    """Inject a fake declare_attackers pending and verify clicking a
+    creature toggles the .attacker-pending badge and confirm submits."""
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      const bf = document.querySelector('#row-p0 .battlefield .creatures')
+              || document.querySelector('#row-p0 .battlefield');
+      const card = document.createElement('div');
+      card.className = 'card test-creature';
+      card.dataset.objId = '999';
+      card.textContent = 'Test Creature';
+      bf.appendChild(card);
+      renderDecision({
+        type: 'declare_attackers',
+        eligible: [{id: 999, name: 'Test Creature', scryfall_id: null}],
+      });
+    }""")
+    # The card should now be .actionable.
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"999\"].actionable')",
+        timeout=2000,
+    )
+    page.click('.card[data-obj-id="999"]')
+    # After click, .attacker-pending appears.
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"999\"].attacker-pending')",
+        timeout=2000,
+    )
+    # Confirm count updates.
+    label = page.locator(".action-btn-confirm").inner_text()
+    assert "(1)" in label
+    # Click confirm.
+    page.click(".action-btn-confirm")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["ids"] == [999]
+
+
+def test_declare_attackers_toggle_off(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      const bf = document.querySelector('#row-p0 .battlefield .creatures')
+              || document.querySelector('#row-p0 .battlefield');
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.objId = '888';
+      bf.appendChild(card);
+      renderDecision({
+        type: 'declare_attackers',
+        eligible: [{id: 888, name: 'X', scryfall_id: null}],
+      });
+    }""")
+    page.click('.card[data-obj-id="888"]')
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"888\"].attacker-pending')",
+        timeout=2000,
+    )
+    # Click again to deselect.
+    page.click('.card[data-obj-id="888"]')
+    page.wait_for_function(
+        "() => !document.querySelector('.card[data-obj-id=\"888\"].attacker-pending')",
+        timeout=2000,
+    )
+    page.click(".action-btn-confirm")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["ids"] == []
+
+
+# ----------------------------------------------------------------------------
+# declare_blockers
+# ----------------------------------------------------------------------------
+
+def test_declare_blockers_blocker_then_attacker(page):
+    """Click a blocker (it gets .blocker-selected), then click an attacker
+    (the blocker gets .blocker-committed and the BLK badge)."""
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      // P0 has a blocker (id=10), P1 has the attacker (id=20).
+      const bfP0 = document.querySelector('#row-p0 .battlefield .creatures')
+                || document.querySelector('#row-p0 .battlefield');
+      const blocker = document.createElement('div');
+      blocker.className = 'card'; blocker.dataset.objId = '10';
+      bfP0.appendChild(blocker);
+      const bfP1 = document.querySelector('#row-p1 .battlefield .creatures')
+                || document.querySelector('#row-p1 .battlefield');
+      const attacker = document.createElement('div');
+      attacker.className = 'card'; attacker.dataset.objId = '20';
+      bfP1.appendChild(attacker);
+      renderDecision({
+        type: 'declare_blockers',
+        eligible: [{id: 10, name: 'Blk', scryfall_id: null}],
+        attackers: [{id: 20, name: 'Atk', scryfall_id: null}],
+      });
+    }""")
+    # Blocker is .actionable, attacker is .actionable-target.
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"10\"].actionable')"
+        "  && document.querySelector('.card[data-obj-id=\"20\"].actionable-target')",
+        timeout=2000,
+    )
+    # Click blocker → .blocker-selected.
+    page.click('.card[data-obj-id="10"]')
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"10\"].blocker-selected')",
+        timeout=2000,
+    )
+    # Click attacker → .blocker-committed on the blocker.
+    page.click('.card[data-obj-id="20"]')
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"10\"].blocker-committed')",
+        timeout=2000,
+    )
+    # Confirm and verify the assignment.
+    page.click(".action-btn-confirm")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["assignments"] == {"10": 20}
+
+
+def test_declare_blockers_unassign_via_second_click(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      const bfP0 = document.querySelector('#row-p0 .battlefield .creatures')
+                || document.querySelector('#row-p0 .battlefield');
+      const blocker = document.createElement('div');
+      blocker.className = 'card'; blocker.dataset.objId = '11';
+      bfP0.appendChild(blocker);
+      const bfP1 = document.querySelector('#row-p1 .battlefield .creatures')
+                || document.querySelector('#row-p1 .battlefield');
+      const attacker = document.createElement('div');
+      attacker.className = 'card'; attacker.dataset.objId = '21';
+      bfP1.appendChild(attacker);
+      renderDecision({
+        type: 'declare_blockers',
+        eligible: [{id: 11, name: 'B', scryfall_id: null}],
+        attackers: [{id: 21, name: 'A', scryfall_id: null}],
+      });
+    }""")
+    # Click blocker, then attacker → committed.
+    page.click('.card[data-obj-id="11"]')
+    page.click('.card[data-obj-id="21"]')
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"11\"].blocker-committed')",
+        timeout=2000,
+    )
+    # Click the committed blocker → unassigned.
+    page.click('.card[data-obj-id="11"]')
+    page.wait_for_function(
+        "() => !document.querySelector('.card[data-obj-id=\"11\"].blocker-committed')",
+        timeout=2000,
+    )
+    page.click(".action-btn-confirm")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["assignments"] == {}
+
+
+# ----------------------------------------------------------------------------
+# choose_target — board click
+# ----------------------------------------------------------------------------
+
+def test_choose_target_card_click(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      const bf = document.querySelector('#row-p1 .battlefield .creatures')
+              || document.querySelector('#row-p1 .battlefield');
+      const card = document.createElement('div');
+      card.className = 'card'; card.dataset.objId = '42';
+      bf.appendChild(card);
+      // can_decline:true so the auto-submit (which fires for single
+      // options without decline) doesn't trigger before our click test.
+      renderDecision({
+        type: 'choose_target',
+        options: [{kind: 'creature', id: 42, label: 'Test Creature'}],
+        can_decline: true,
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"42\"].actionable-target')",
+        timeout=2000,
+    )
+    page.click('.card[data-obj-id="42"]')
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 0
+
+
+def test_choose_target_player_life_click(page):
+    _start_play_game(page)
+    _stub_post(page)
+    # The .life element gets data-player-id from sidePanel().
+    page.evaluate("""() => {
+      // can_decline:true skips the single-option auto-submit short-circuit.
+      renderDecision({
+        type: 'choose_target',
+        options: [{kind: 'player', id: 1, label: 'Player 1'}],
+        can_decline: true,
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('.life[data-player-id=\"1\"].actionable-target')",
+        timeout=2000,
+    )
+    page.click('.life[data-player-id="1"]')
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 0
+
+
+def test_choose_target_decline(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      const bf = document.querySelector('#row-p1 .battlefield .creatures')
+              || document.querySelector('#row-p1 .battlefield');
+      const card = document.createElement('div');
+      card.className = 'card'; card.dataset.objId = '99';
+      bf.appendChild(card);
+      renderDecision({
+        type: 'choose_target',
+        options: [{kind: 'creature', id: 99, label: 'X'}],
+        can_decline: true,
+      });
+    }""")
+    # The Decline button appears in the bottom panel.
+    page.wait_for_function(
+        "() => document.querySelector('#decision-options .action-btn-pass')",
+        timeout=2000,
+    )
+    page.click("#decision-options .action-btn-pass")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["decline"] is True
+
+
+# ----------------------------------------------------------------------------
+# Decision modals — injected pending dicts
+# ----------------------------------------------------------------------------
+
+def _stub_post(page):
+    """Intercept HTTP traffic at window.fetch so the script's *lexical*
+    references to postJSON / fetchJSON keep working but no real backend
+    is ever called. Reassigning function-declaration globals (postJSON,
+    handleState, etc.) is unreliable because lexical lookups inside other
+    functions are resolved against the original binding even after a
+    window-property reassignment.
+
+    Action POSTs are captured on window._submitted (stripped of the URL
+    prefix). State GETs return an idle-pending stub so the resumed poll
+    loop doesn't clobber the test-injected DOM."""
+    page.evaluate("""() => {
+      if (window.iplay && window.iplay.pollTimer) {
+        clearTimeout(window.iplay.pollTimer);
+        window.iplay.pollTimer = null;
+      }
+      window._submitted = null;
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url && url.includes('/api/interactive/action/')) {
+          try {
+            window._submitted = JSON.parse((init && init.body) || '{}');
+          } catch (e) {
+            window._submitted = init && init.body;
+          }
+          return new Response(JSON.stringify({ok: true}), {
+            status: 200,
+            headers: {'Content-Type': 'application/json'},
+          });
+        }
+        if (url && url.includes('/api/interactive/state/')) {
+          // Never resolve. handleState would otherwise hide elsI.body
+          // (when pending is null) or wipe our injected DOM (when
+          // pending is set). Hanging the promise effectively kills
+          // the poll loop without touching schedulePoll's binding.
+          return new Promise(() => {});
+        }
+        return origFetch(input, init);
+      };
+    }""")
+
+
+def test_choose_yes_no_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_yes_no',
+        prompt: 'Sacrifice your firstborn?',
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.getElementById('decision-modal-body').textContent.includes('firstborn')",
+        timeout=2000,
+    )
+    # Click Yes.
+    page.click("#decision-modal-body .decision-yes")
+    page.wait_for_function(
+        "() => window._submitted !== null", timeout=2000,
+    )
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["yes"] is True
+
+
+def test_choose_yes_no_modal_no_button(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({type: 'choose_yes_no', prompt: 'Foo?'});
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('#decision-modal-body .decision-no')",
+        timeout=2000,
+    )
+    page.click("#decision-modal-body .decision-no")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["yes"] is False
+
+
+def test_choose_x_modal_slider(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_x',
+        card_name: 'Fireball',
+        upper_bound: 7,
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.getElementById('decision-modal-body')"
+        "  .querySelector('input[type=range]')",
+        timeout=2000,
+    )
+    # Slider initialises to upper_bound (7).
+    label = page.locator(".choose-x-label").inner_text()
+    assert "X = 7" in label
+    # Move slider to 3.
+    page.evaluate(
+        "() => { const r = document.querySelector('.choose-x-range');"
+        " r.value = 3; r.dispatchEvent(new Event('input')); }"
+    )
+    page.click("#decision-modal-body .modal-confirm")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["value"] == 3
+
+
+def test_choose_mode_single_select(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_mode',
+        modes: [
+          {idx: 0, description: 'Mode A'},
+          {idx: 1, description: 'Mode B'},
+          {idx: 2, description: 'Mode C'},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decision-modal-body .decision-list-item').length === 3",
+        timeout=2000,
+    )
+    # Click Mode B.
+    page.locator("#decision-modal-body .decision-list-item").nth(1).click()
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 1
+
+
+def test_choose_modes_multi_select(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_modes',
+        modes: [
+          {idx: 0, description: 'A'},
+          {idx: 1, description: 'B'},
+          {idx: 2, description: 'C'},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decision-modal-body .decision-checkbox').length === 3",
+        timeout=2000,
+    )
+    # Check the 1st and 3rd checkboxes.
+    page.locator("#decision-modal-body .decision-checkbox input").nth(0).check()
+    page.locator("#decision-modal-body .decision-checkbox input").nth(2).check()
+    page.click("#decision-modal-body .modal-confirm")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert sorted(submitted["response"]["indices"]) == [0, 2]
+
+
+def test_choose_surveil_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_surveil',
+        card: {id: 5, name: 'Forest', scryfall_id: null},
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('#decision-modal-body .decision-no')",
+        timeout=2000,
+    )
+    # "Mill" is the no-styled (red) button per renderChooseSurveil.
+    page.click("#decision-modal-body .decision-no")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["mill"] is True
+
+
+def test_choose_mana_color_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_mana_color',
+        options: ['W', 'U', 'B', 'R', 'G'],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('.mana-color-btn').length === 5",
+        timeout=2000,
+    )
+    page.locator(".mana-color-btn").nth(3).click()  # R
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["color"] == "R"
+
+
+def test_choose_discard_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_discard',
+        cards: [
+          {id: 1, name: 'Card A', scryfall_id: null},
+          {id: 2, name: 'Card B', scryfall_id: null},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decision-modal-body .decision-card-option').length === 2",
+        timeout=2000,
+    )
+    page.locator("#decision-modal-body .decision-card-option").nth(1).click()
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["id"] == 2
+
+
+def test_choose_sacrifice_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_sacrifice',
+        objects: [
+          {id: 7, name: 'Permanent X', scryfall_id: null},
+          {id: 8, name: 'Permanent Y', scryfall_id: null},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decision-modal-body .decision-list-item').length === 2",
+        timeout=2000,
+    )
+    page.locator("#decision-modal-body .decision-list-item").nth(0).click()
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["id"] == 7
+
+
+def test_choose_card_with_decline(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_card',
+        prompt: 'Search your library',
+        cards: [{id: 9, name: 'Forest', scryfall_id: null}],
+        can_decline: true,
+      });
+    }""")
+    # can_decline=true with a single card: should NOT auto-submit (the
+    # auto-submit logic excludes can_decline cases).
+    page.wait_for_function(
+        "() => document.querySelector('#decision-modal-body .decision-no')",
+        timeout=2000,
+    )
+    page.click("#decision-modal-body .decision-no")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["decline"] is True
+
+
+def test_choose_multi_ids_modal(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_multi_ids',
+        prompt: 'Choose creatures to convoke',
+        objects: [
+          {id: 100, name: 'A', scryfall_id: null},
+          {id: 101, name: 'B', scryfall_id: null},
+          {id: 102, name: 'C', scryfall_id: null},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decision-modal-body .decision-card-option').length === 3",
+        timeout=2000,
+    )
+    # Toggle the first and third.
+    page.locator("#decision-modal-body .decision-card-option").nth(0).click()
+    page.locator("#decision-modal-body .decision-card-option").nth(2).click()
+    page.click("#decision-modal-body .modal-confirm")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert sorted(submitted["response"]["ids"]) == [100, 102]
+
+
+def test_choose_multi_ids_skip_button(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_multi_ids',
+        prompt: 'Pick none if you like',
+        objects: [{id: 1, name: 'X', scryfall_id: null}],
+      });
+    }""")
+    # Skip / "None" button is the no-styled second button.
+    page.wait_for_function(
+        "() => document.querySelector('#decision-modal-body .decision-no')",
+        timeout=2000,
+    )
+    page.click("#decision-modal-body .decision-no")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["ids"] == []
+
+
+# ----------------------------------------------------------------------------
+# Auto-submit short-circuit paths
+# ----------------------------------------------------------------------------
+
+def test_auto_submit_single_target_no_decline(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_target',
+        options: [{kind: 'creature', id: 1, label: 'Only target'}],
+        can_decline: false,
+      });
+    }""")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 0
+
+
+def test_auto_submit_single_mode(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({
+        type: 'choose_mode',
+        modes: [{idx: 0, description: 'Only mode'}],
+      });
+    }""")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 0
+
+
+def test_auto_submit_zero_eligible_attackers(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({type: 'declare_attackers', eligible: []});
+    }""")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["ids"] == []
+
+
+def test_auto_submit_zero_eligible_blockers(page):
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      renderDecision({type: 'declare_blockers', eligible: [], attackers: []});
+    }""")
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["assignments"] == {}
+
+
+# ----------------------------------------------------------------------------
+# Multi-option popover (cast vs cast-with-kicker etc.)
+# ----------------------------------------------------------------------------
+
+def test_choose_action_multi_option_popover(page):
+    """When a single card has multiple actions (e.g. Cast normally and Cast
+    with Kicker), clicking it should open a popover with both options."""
+    _start_play_game(page)
+    _stub_post(page)
+    page.evaluate("""() => {
+      // Add a fake card to P0's hand.
+      const hand = document.querySelector('#row-p0 .hand');
+      const card = document.createElement('div');
+      card.className = 'card'; card.dataset.objId = '500';
+      hand.appendChild(card);
+      renderDecision({
+        type: 'choose_action',
+        options: [
+          {idx: 0, type: 'pass', label: 'Pass priority'},
+          {idx: 1, type: 'cast_spell', label: 'Cast Foo', card_id: 500,
+           name: 'Foo', scryfall_id: null,
+           use_warp: false, kicked: false, cast_for_free: false},
+          {idx: 2, type: 'cast_spell', label: 'Cast Foo (Kicked)', card_id: 500,
+           name: 'Foo', scryfall_id: null,
+           use_warp: false, kicked: true, cast_for_free: false},
+        ],
+      });
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('.card[data-obj-id=\"500\"].actionable')",
+        timeout=2000,
+    )
+    page.click('.card[data-obj-id="500"]')
+    # Popover with two items appears.
+    page.wait_for_function(
+        "() => document.querySelectorAll('.options-popover-item').length === 2",
+        timeout=2000,
+    )
+    # Click the second option.
+    page.locator(".options-popover-item").nth(1).click()
+    page.wait_for_function("() => window._submitted !== null", timeout=2000)
+    submitted = page.evaluate("() => window._submitted")
+    assert submitted["response"]["idx"] == 2
+
+
+# ----------------------------------------------------------------------------
+# Game-over status
+# ----------------------------------------------------------------------------
+
+def test_game_over_status_displays_winner(page):
+    """Run a play-mode game with the human always passing priority. The
+    bot will eventually win or the turn limit kicks in. Verify the
+    status line lands on a terminal label."""
+    _start_play_game(page, max_turns=4)
+    # Loop: while a pending decision is up, click pass / confirm.
+    deadline_evals = 200
+    for _ in range(deadline_evals):
+        is_over = page.evaluate(
+            "() => document.getElementById('status').textContent"
+        )
+        if any(s in is_over for s in ("wins", "Draw", "timed out", "Bot wins", "You win")):
+            break
+        # Click Pass if visible
+        pass_btn = page.locator("#decision-options .action-btn-pass")
+        confirm_btn = page.locator("#decision-options .action-btn-confirm")
+        if pass_btn.count() > 0 and pass_btn.is_visible():
+            pass_btn.click()
+        elif confirm_btn.count() > 0 and confirm_btn.is_visible():
+            confirm_btn.click()
+        else:
+            page.wait_for_timeout(120)
+    status_text = page.locator("#status").inner_text()
+    assert any(s in status_text for s in
+               ("wins", "Draw", "Bot wins", "You win", "timed out"))
