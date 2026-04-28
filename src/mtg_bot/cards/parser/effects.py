@@ -417,6 +417,26 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature card from your graveyard to the battlefield$"
 )
+# Multi-sentence Xu-Ifit, Osteoharmonist variant — the printed oracle is
+# ``Return target creature card from your graveyard to the battlefield.
+# It's a Skeleton in addition to its other types and has no abilities.``
+# The ``It's a Skeleton …`` rider is intentionally dropped (the engine
+# doesn't yet model "has no abilities" suppression nor in-place subtype
+# grants on an arriving creature). This mirrors the matching
+# simplification in the static registry — the resulting primitive is
+# the same bare ``ReturnCreatureFromYourGraveyardToBattlefield`` the
+# bare regex above produces. Kept as its own regex (rather than a
+# preprocessing strip) so the simplification is local and explicit:
+# the only wrapping that matches this surface verbatim is Xu-Ifit's,
+# and any future printing with a different rider tail will hit the
+# bare regex's ``$`` anchor and surface a parser miss instead of being
+# silently dropped.
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON = re.compile(
+    r"^return target creature card from your graveyard "
+    r"to the battlefield\. "
+    r"It's a Skeleton in addition to its other types "
+    r"and has no abilities$"
+)
 # "Return target artifact card from your graveyard to your hand" —
 # matches Scour for Scrap's mode (parsed via the modal combinator
 # elsewhere, but a primitive worth surfacing in the unified grammar).
@@ -1276,6 +1296,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnCreatureFromYourGraveyardToHand()
+    # Xu-Ifit, Osteoharmonist's reanimate-as-Skeleton multi-sentence
+    # surface drops the ``has no abilities`` rider per the static-side
+    # simplification — same engine class as the bare reanimate regex
+    # but with its own pattern so the simplification stays local and
+    # explicit.
+    if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON.match(
+        phrase
+    ) is not None:
+        return ReturnCreatureFromYourGraveyardToBattlefield()
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase
     ) is not None:

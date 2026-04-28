@@ -2078,6 +2078,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Xu-Ifit, Osteoharmonist", "{1}{B}{B}", 2, 3,
             legendary=True,
+            subtypes=("Human", "Wizard"),
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(tap_self=True),
