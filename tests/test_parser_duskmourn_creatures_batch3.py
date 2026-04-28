@@ -143,3 +143,109 @@ def test_vicious_clown_claimed_by_parser():
     # via the new trigger-phrase entry feeding the existing
     # ``PumpSelfUntilEOT`` self-pump primitive.
     assert "Vicious Clown" in _claimed_names()
+
+
+# ---------- ``GrantUnblockableUEOT`` attacking_only / exclude_self ----------
+
+
+def test_grant_unblockable_attacking_only_filters_legal_targets():
+    # With ``attacking_only=True``, ``legal_targets`` only returns
+    # creatures whose ``attacking`` flag is True right now. A non-
+    # attacking creature on the battlefield is excluded from the pool.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    attacker = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    attacker.attacking = True
+    state.battlefield.append(attacker)
+    sitter = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(sitter)
+    eff = GrantUnblockableUEOT(attacking_only=True)
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("creature", attacker.id) in legal
+    assert ("creature", sitter.id) not in legal
+
+
+def test_grant_unblockable_exclude_self_filters_source():
+    # With ``exclude_self=True`` and ``state.resolving_source`` set to
+    # the source object, that object is filtered out of the legal-
+    # target pool even if it would otherwise qualify.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    src = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    src.attacking = True
+    state.battlefield.append(src)
+    other = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    other.attacking = True
+    state.battlefield.append(other)
+    state.resolving_source = src
+    try:
+        eff = GrantUnblockableUEOT(attacking_only=True, exclude_self=True)
+        legal = eff.legal_targets(state, controller_id=0)
+    finally:
+        state.resolving_source = None
+    assert ("creature", src.id) not in legal
+    assert ("creature", other.id) in legal
+
+
+def test_grant_unblockable_describe_attacking_other():
+    # The ``describe`` output reflects the attacking-only +
+    # exclude-self combo as ``another target attacking creature can't
+    # be blocked this turn`` — the Clammy Prowler surface form.
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    eff = GrantUnblockableUEOT(attacking_only=True, exclude_self=True)
+    assert eff.describe() == (
+        "another target attacking creature can't be blocked this turn"
+    )
+
+
+def test_grant_unblockable_describe_attacking_only():
+    # Attacking-only without exclude-self describes as ``target
+    # attacking creature can't be blocked this turn`` — forward-looking
+    # surface form not used by any DSK printing today but kept
+    # symmetric with the other flag combinations.
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    eff = GrantUnblockableUEOT(attacking_only=True)
+    assert eff.describe() == (
+        "target attacking creature can't be blocked this turn"
+    )
+
+
+def test_parse_another_target_attacking_creature_unblockable():
+    # End-to-end through the effect-phrase parser. The phrase
+    # ``another target attacking creature can't be blocked this turn``
+    # parses to ``GrantUnblockableUEOT(attacking_only=True,
+    # exclude_self=True)``.
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    parsed = _parse_effect_phrase(
+        "another target attacking creature can't be blocked this turn"
+    )
+    assert parsed == GrantUnblockableUEOT(
+        attacking_only=True, exclude_self=True,
+    )
+
+
+def test_clammy_prowler_claimed_by_parser():
+    # Clammy Prowler ``{3}{U}`` 2/5 Enchantment Creature — Horror.
+    # Single oracle line: ``Whenever this creature attacks, another
+    # target attacking creature can't be blocked this turn.`` Claims
+    # via the existing ``this creature attacks`` predicate-trigger
+    # phrase + the new ``another target attacking creature`` variant
+    # of the unblockable-UEOT primitive.
+    assert "Clammy Prowler" in _claimed_names()

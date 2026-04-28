@@ -3274,7 +3274,23 @@ class GrantUnblockableUEOT(Effect):
     does only the unblockable grant, with no P/T pump and no granted
     keywords. Matches Enter the Enigma's ``Target creature can't be
     blocked this turn.`` prefix.
+
+    ``attacking_only`` filters legal targets to creatures that are
+    currently declared as attackers. Models Clammy Prowler's
+    ``Whenever this creature attacks, another target attacking creature
+    can't be blocked this turn.`` — the trigger fires during the
+    declare-attackers step, when the source itself is also flagged as
+    attacking, so the target pool is "creatures with ``attacking ==
+    True`` right now".
+
+    ``exclude_self`` filters the source out of the legal-target pool.
+    Pairs with ``attacking_only`` for the ``another target attacking
+    creature`` qualifier — without it, the source itself would be a
+    legal (but useless, since it's already the trigger source) target.
     """
+
+    attacking_only: bool = False
+    exclude_self: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -3285,11 +3301,21 @@ class GrantUnblockableUEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature or o.temp_is_creature
-        ]
+        source_id = (
+            state.resolving_source.id
+            if (self.exclude_self and state.resolving_source is not None)
+            else None
+        )
+        targets: list[Target] = []
+        for o in state.battlefield:
+            if not (o.printing.is_creature or o.temp_is_creature):
+                continue
+            if self.attacking_only and not o.attacking:
+                continue
+            if source_id is not None and o.id == source_id:
+                continue
+            targets.append(("creature", o.id))
+        return targets
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -3311,6 +3337,12 @@ class GrantUnblockableUEOT(Effect):
         )
 
     def describe(self) -> str:
+        if self.attacking_only and self.exclude_self:
+            return (
+                "another target attacking creature can't be blocked this turn"
+            )
+        if self.attacking_only:
+            return "target attacking creature can't be blocked this turn"
         return "target creature can't be blocked this turn"
 
 

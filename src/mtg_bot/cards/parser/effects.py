@@ -758,6 +758,18 @@ _DOUBLE_TARGET_CREATURE_YOU_CONTROL_POWER_UEOT = re.compile(
 _TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN = re.compile(
     r"^target creature can't be blocked this turn$"
 )
+# "Another target attacking creature can't be blocked this turn." —
+# Clammy Prowler's attack-trigger body. Same engine class as the bare
+# unblockable-UEOT primitive but with the ``attacking_only=True`` and
+# ``exclude_self=True`` flags flipped — the legal-target pool is
+# narrowed at selection time to "creatures currently flagged as
+# attacking, excluding the source itself". Tried BEFORE the bare
+# regex because the bare regex's ``$`` anchor would never match this
+# longer form anyway, but ordering more-specific before more-general
+# is the convention here.
+_ANOTHER_TARGET_ATTACKING_CREATURE_CANT_BE_BLOCKED_THIS_TURN = re.compile(
+    r"^another target attacking creature can't be blocked this turn$"
+)
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
 # Transmissions, Elegy Acolyte, Voidforged Titan all print
@@ -1576,6 +1588,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
+    # ``another target attacking creature can't be blocked this turn``
+    # — Clammy Prowler's attack-trigger body. Same engine class as the
+    # bare unblockable-UEOT primitive but with the ``attacking_only``
+    # and ``exclude_self`` flags flipped to narrow the legal-target
+    # pool at selection time. Tried BEFORE the bare regex because the
+    # bare regex's ``$`` anchor would never match this longer form
+    # anyway, but ordering more-specific before more-general is the
+    # convention here.
+    if _ANOTHER_TARGET_ATTACKING_CREATURE_CANT_BE_BLOCKED_THIS_TURN.match(
+        phrase
+    ) is not None:
+        return GrantUnblockableUEOT(attacking_only=True, exclude_self=True)
     # ``target creature can't be blocked this turn`` — bare unblockable
     # grant. Pure UEOT primitive on a creature target; sets
     # ``temp_unblockable=True`` at resolve time. Enter the Enigma is
