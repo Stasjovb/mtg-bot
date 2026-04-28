@@ -26,6 +26,7 @@ from mtg_bot.cards.base import (
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
+    DealNDamageToEachCreature,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     DestroyTargetArtifactOrTappedCreature,
@@ -301,6 +302,22 @@ _EXILE_EACH_OPPONENTS_GRAVEYARD = re.compile(
 # ``this creature`` self-object reference.
 _DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
     r"^(?:this creature )?deals (\d+) damage to each opponent$"
+)
+# "<source> deals N damage to each creature." — untargeted board-wipe
+# burn (Pyroclasm in Duskmourn; the same primitive surfaces inside
+# Lithobraking's reflexive optional-sac sequence and Extinguisher
+# Battleship's ETB sequence in EoE, where it's already exercised by
+# the ``DealNDamageToEachCreature`` engine class). Mirrors the
+# ``deals N damage to each opponent`` shape: ``deals`` form (no ``it``
+# / ``you`` subject) is what Scryfall prints for spells that name
+# themselves as the subject; the spell-effect normalizer strips the
+# ``<Name>`` prefix before this regex sees the phrase. The optional
+# ``this creature `` prefix accepts the surface where a creature-source
+# trigger body names the source explicitly (same precedent as
+# ``_DEAL_N_DAMAGE_EACH_OPPONENT`` and ``_DEAL_DAMAGE_TARGET_OPPONENT``
+# — the ``it `` normalizer only consumes the bare pronoun).
+_DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
+    r"^(?:this creature )?deals (\d+) damage to each creature$"
 )
 # "Search your library for an artifact card, reveal it, put it into
 # your hand, then shuffle." — Scour for Scrap mode 1 (and any future
@@ -1257,6 +1274,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_N_DAMAGE_EACH_OPPONENT.match(phrase)
     if m is not None:
         return DealDamageEachOpponent(amount=int(m.group(1)))
+    # ``deals N damage to each creature`` — untargeted board-wipe burn
+    # (Pyroclasm). Tried after the targeted ``deals N damage to target
+    # creature`` regex above because the bare creature form's ``$``
+    # anchor wouldn't match the ``each creature`` tail anyway, but
+    # ordering more-specific before more-general is the convention here.
+    # Maps to the existing ``DealNDamageToEachCreature`` engine class,
+    # already exercised inside Lithobraking's reflexive optional-sac
+    # sequence and Extinguisher Battleship's ETB sequence in EoE.
+    m = _DEAL_N_DAMAGE_EACH_CREATURE.match(phrase)
+    if m is not None:
+        return DealNDamageToEachCreature(amount=int(m.group(1)))
     # ``deals N damage to target tapped creature`` — Reroute Systems
     # mode 1's tapped-only burn. Tried AFTER the targeted ``deals N
     # damage to target creature`` regex above so the bare creature
