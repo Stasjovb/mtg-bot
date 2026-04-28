@@ -40,6 +40,7 @@ from mtg_bot.cards.base import (
     GainLife,
     LoseLife,
     MillTargetPlayer,
+    MoveSelfCountersToTargetCreatureYouControl,
     OptionalDiscardCardThenDrawN,
     OptionalManaCostThenEffect,
     OptionalSacAnotherForEffect,
@@ -99,6 +100,17 @@ _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
 )
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
+)
+# "Put its counters on target creature you control." — Dockworker Drone's
+# dies trigger. The ``its`` pronoun refers to the source creature (dying
+# permanent). Maps to ``MoveSelfCountersToTargetCreatureYouControl()``,
+# whose engine class reads ``state.resolving_source.plus_one_counters``
+# and transfers them to the chosen target. Surface form is post-
+# normalization (the ``it `` prefix-strip in ``_normalize_creature_
+# effect_phrase`` doesn't fire because the phrase starts with the verb
+# ``put``, not a pronoun subject — so the ``its`` here survives intact).
+_PUT_ITS_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
+    r"^put its counters on target creature you control$"
 )
 _DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
 # "Destroy target creature or Spacecraft." — Embrace Oblivion's
@@ -754,6 +766,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     # more-general is the convention here.
     if _DESTROY_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return DestroyTargetCreature(or_spacecraft=True)
+    if _PUT_ITS_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL.match(
+        phrase
+    ) is not None:
+        # ``put its counters on target creature you control`` — Dockworker
+        # Drone's dies trigger. ``its`` refers to the source creature
+        # (dying permanent); the engine class reads
+        # ``state.resolving_source.plus_one_counters`` at resolve time
+        # and transfers them to the chosen target.
+        return MoveSelfCountersToTargetCreatureYouControl()
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
     # ``counter target artifact or enchantment spell`` — Annul. Tried

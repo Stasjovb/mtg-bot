@@ -257,6 +257,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Thawbringer: surveil 1 on ETB or dies.
         make_creature(
             "Thawbringer", "{2}{G}", 4, 2,
+            subtypes=("Insect", "Scout"),
             triggered_abilities=(
                 TriggeredAbility(event=Event.ENTERS, predicate=IsSelf(), effect=Surveil(amount=1)),
                 TriggeredAbility(event=Event.DIES, predicate=IsSelf(), effect=Surveil(amount=1)),

@@ -375,6 +375,42 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
 }
 
 
+# Compound trigger-condition phrases for the predicate-trigger path → a
+# tuple of (Event, Predicate) pairs, one per condition arm. A single
+# oracle line whose condition is ``X or Y`` (e.g. Thawbringer's
+# ``When this creature enters or dies``) decomposes into multiple
+# ``TriggeredAbility`` entries — one per arm — sharing the same effect.
+# This mirrors the static-registry layout, where Thawbringer's two
+# events live as two separate ``TriggeredAbility`` entries on the
+# printing.
+#
+# The compound table is consulted BEFORE the single ``_PREDICATE_
+# TRIGGER_PHRASES`` lookup so the more-specific compound shape wins.
+# An entry here can co-exist with single-shape entries for either arm
+# (``"this creature enters"`` and ``"this creature dies"`` both already
+# live in ``_PREDICATE_TRIGGER_PHRASES`` — the compound entry below
+# composes them without re-implementing either arm's predicate).
+_COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
+    str, tuple[tuple[Event, Predicate], ...]
+] = {
+    # ``When this creature enters or dies`` (Thawbringer) — fires once
+    # on entry and once on death. The two arms share the same effect at
+    # the line level; the parser produces one ``TriggeredAbility`` per
+    # arm so the engine's per-event dispatch sees them as independent
+    # observers (which matches the static-registry's two-entry layout).
+    "this creature enters or dies": (
+        (Event.ENTERS, IsSelf()),
+        (Event.DIES, IsSelf()),
+    ),
+}
+
+
+def _parse_compound_predicate_trigger_phrase(
+    phrase: str,
+) -> tuple[tuple[Event, Predicate], ...] | None:
+    return _COMPOUND_PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+
+
 # Intervening-if gate phrases → predicate. The phrase is the verbatim
 # oracle text between ``if`` and the trailing comma of the middle
 # clause (after stripping surrounding whitespace). Each predicate is a
@@ -446,7 +482,22 @@ def _parse_predicate_trigger_phrase(
     return _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
 
 
-def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
+def _parse_triggered_ability_line(
+    line: str,
+) -> TriggeredAbility | tuple[TriggeredAbility, ...] | None:
+    """Parse a single triggered-ability oracle line.
+
+    Returns a single ``TriggeredAbility`` for a standard
+    single-condition line, a tuple of ``TriggeredAbility`` (one per
+    arm) for a compound-condition line whose phrase is claimed by
+    ``_COMPOUND_PREDICATE_TRIGGER_PHRASES`` (e.g. Thawbringer's
+    ``When this creature enters or dies``), or ``None`` if no shape
+    matches.
+
+    The clause layer (``_parse_clause``) normalizes both shapes into
+    the ``triggers`` tuple on ``_ParsedClause`` so callers downstream
+    don't need to special-case the compound path.
+    """
     line = _strip_ability_word_prefix(line)
     # Trailing once-per-turn rider: ``<trigger sentence>. This ability
     # triggers only once each turn.`` Strip the suffix BEFORE running
@@ -504,6 +555,20 @@ def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     effect = _parse_effect_phrase(m.group(2))
     if effect is None:
         return None
+    # Compound predicate-trigger lookup wins when the condition phrase
+    # is claimed by the multi-arm table (e.g. ``"this creature enters
+    # or dies"`` → two ``(Event, Predicate)`` arms). The single-arm
+    # tables below are consulted only if the compound lookup misses,
+    # so a future addition that overlaps a compound and a single
+    # phrase resolves predictably to the compound shape — matching the
+    # surface-text intent ("X or Y" should fire on both events, not
+    # silently collapse to one).
+    compound_match = _parse_compound_predicate_trigger_phrase(condition)
+    if compound_match is not None:
+        return tuple(
+            TriggeredAbility(event=event, predicate=predicate, effect=effect)
+            for event, predicate in compound_match
+        )
     # Predicate-style trigger lookup wins when the condition phrase is
     # claimed by both tables — phase 2 only registers ENTERS-family
     # phrases on the predicate side, so today the two tables are
