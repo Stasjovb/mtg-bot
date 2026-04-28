@@ -10,7 +10,17 @@
 
 <header class="top-bar">
   <h1 class="brand">MTG Bot</h1>
-  <form id="play-form" class="play-form" autocomplete="off">
+
+  <div class="mode-tabs" role="tablist">
+    <button type="button" id="tab-watch" class="mode-tab active" role="tab"
+            aria-selected="true" aria-controls="panel-watch">Watch</button>
+    <button type="button" id="tab-play" class="mode-tab" role="tab"
+            aria-selected="false" aria-controls="panel-play">Play</button>
+  </div>
+
+  <!-- Watch mode form -->
+  <form id="play-form" class="play-form mode-panel" role="tabpanel"
+        aria-labelledby="tab-watch" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
     <label>P0 color
       <select name="c1">
@@ -47,6 +57,39 @@
     </label>
     <button type="submit">Run game</button>
   </form>
+
+  <!-- Play mode form -->
+  <form id="iplay-form" class="play-form mode-panel hidden" role="tabpanel"
+        aria-labelledby="tab-play" autocomplete="off">
+    <label>Seed <input type="number" id="iplay-seed" value="0"></label>
+    <label>Your color
+      <select id="iplay-my-color">
+        <option value="W">White</option>
+        <option value="U">Blue</option>
+        <option value="B">Black</option>
+        <option value="R" selected>Red</option>
+        <option value="G">Green</option>
+      </select>
+    </label>
+    <label>Bot color
+      <select id="iplay-bot-color">
+        <option value="W">White</option>
+        <option value="U">Blue</option>
+        <option value="B">Black</option>
+        <option value="R">Red</option>
+        <option value="G" selected>Green</option>
+      </select>
+    </label>
+    <label>You are
+      <select id="iplay-player-id">
+        <option value="0">Player 0 (goes first)</option>
+        <option value="1">Player 1</option>
+      </select>
+    </label>
+    <label>Max turns <input type="number" id="iplay-max-turns" value="300" min="1"></label>
+    <button type="submit">Start game</button>
+  </form>
+
   <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>
 </header>
 
@@ -74,6 +117,17 @@
 
   <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
     <ol id="phase-list" class="phase-list"></ol>
+  </div>
+</div>
+
+<!-- Interactive play: decision panel (replaces the scrubber in play mode) -->
+<div id="decision-panel" class="decision-panel hidden" aria-label="Decision panel" aria-live="polite">
+  <div id="decision-waiting" class="decision-waiting hidden">
+    <span class="decision-spinner"></span> Bot is thinking&hellip;
+  </div>
+  <div id="decision-body" class="decision-body hidden">
+    <div id="decision-prompt" class="decision-prompt"></div>
+    <div id="decision-options" class="decision-options"></div>
   </div>
 </div>
 
@@ -122,6 +176,17 @@
       <button type="button" id="zone-modal-close" title="Close (Esc)">&times;</button>
     </header>
     <div id="zone-modal-cards" class="zone-modal-cards"></div>
+  </div>
+</div>
+
+<!-- Decision modal: used for discard, sacrifice, mode choice, X, mana, yes/no, etc. -->
+<div id="decision-modal" class="zone-modal hidden" role="dialog" aria-modal="true"
+     aria-labelledby="decision-modal-title" hidden>
+  <div class="zone-modal-inner decision-modal-inner">
+    <header class="zone-modal-header">
+      <span id="decision-modal-title">Choose</span>
+    </header>
+    <div id="decision-modal-body" class="decision-modal-body"></div>
   </div>
 </div>
 

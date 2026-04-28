@@ -504,3 +504,123 @@ body { display: grid; grid-template-columns: 1fr 280px;
 @media (hover: none) {
   .card-preview { display: none !important; }
 }
+
+/* ============================================================
+   Interactive play — mode tabs, decision panel, decision modal
+   ============================================================ */
+
+/* Mode tabs */
+.mode-tabs { display: flex; gap: 0; border-radius: 4px; overflow: hidden;
+             border: 1px solid var(--panel-edge); }
+.mode-tab  { background: var(--bg); color: var(--muted); border: none;
+             padding: 0.35em 0.9em; cursor: pointer; font-size: 0.85em;
+             font-weight: 600; letter-spacing: 0.03em; transition: background 0.15s; }
+.mode-tab:hover  { background: var(--panel-edge); color: var(--ink); }
+.mode-tab.active { background: var(--accent); color: #0b1730; }
+
+/* Decision panel — lives in .bottom-controls alongside the scrubber */
+.decision-panel { grid-column: 1; background: var(--panel);
+                  border-top: 1px solid var(--panel-edge);
+                  padding: 0.6em 1em; min-height: 3.5em; }
+.decision-waiting { display: flex; align-items: center; gap: 0.5em;
+                    color: var(--muted); font-size: 0.9em; }
+.decision-spinner { display: inline-block; width: 14px; height: 14px;
+                    border: 2px solid var(--panel-edge);
+                    border-top-color: var(--accent);
+                    border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.decision-body { display: flex; flex-direction: column; gap: 0.5em; }
+.decision-prompt { font-size: 0.9em; color: var(--muted); }
+
+/* choose_action button row */
+.action-row { display: flex; gap: 0.4em; flex-wrap: wrap; }
+.action-btn { border: none; border-radius: 4px; padding: 0.4em 0.8em;
+              cursor: pointer; font-size: 0.85em; font-weight: 600;
+              background: var(--panel-edge); color: var(--ink);
+              transition: filter 0.15s; min-width: 80px; }
+.action-btn:hover  { filter: brightness(1.2); }
+.action-btn.has-art { min-width: var(--card-w); height: 2.6em;
+                      background-size: cover; background-position: top center;
+                      text-shadow: 0 1px 3px #000, 0 0 8px #000; }
+.action-btn-cast_spell  { background: #2a3a55; }
+.action-btn-play_land   { background: #2a3a2a; }
+.action-btn-activate    { background: #3a2a55; }
+.action-btn-station     { background: #2a3a3a; }
+.action-btn-pass        { background: var(--bg); color: var(--muted);
+                          margin-left: auto; border: 1px solid var(--panel-edge); }
+
+/* Decision modal (reuses .zone-modal styles + overrides) */
+.decision-modal-inner { max-width: 560px; }
+.decision-modal-body  { display: flex; flex-direction: column; gap: 0.8em;
+                        padding: 0.4em 0; max-height: 70vh; overflow-y: auto; }
+.decision-hint  { color: var(--muted); font-size: 0.85em; margin: 0; }
+.decision-empty { color: var(--muted); font-style: italic; margin: 0; }
+
+/* Generic list of clickable options */
+.decision-list { display: flex; flex-direction: column; gap: 0.3em; }
+.decision-list-item { background: var(--panel-edge); color: var(--ink);
+                      border: none; border-radius: 4px; padding: 0.5em 0.8em;
+                      cursor: pointer; text-align: left; font-size: 0.9em; }
+.decision-list-item:hover { filter: brightness(1.25); }
+.decision-decline { background: var(--bg); color: var(--muted);
+                    border: 1px solid var(--panel-edge); }
+
+/* Card-art grid for multi-pick */
+.decision-card-grid { display: flex; flex-wrap: wrap; gap: 0.4em; }
+.decision-card-option { width: var(--card-w); height: var(--card-h);
+                        border-radius: var(--card-radius);
+                        background: var(--panel-edge);
+                        background-size: cover; background-position: top center;
+                        border: 2px solid transparent; cursor: pointer;
+                        display: flex; align-items: flex-end; justify-content: center;
+                        position: relative; overflow: hidden; }
+.decision-card-option:hover { border-color: var(--accent); }
+.decision-card-option.selected { border-color: var(--win);
+                                  box-shadow: 0 0 8px var(--win); }
+.decision-card-option .option-name { font-size: 0.7em; text-align: center;
+                                      padding: 0.2em; background: rgba(0,0,0,0.7);
+                                      width: 100%; }
+
+/* Yes / No pair */
+.decision-yes-no { display: flex; gap: 0.5em; }
+.decision-yes { background: #2a4a2a; color: var(--win); border: none;
+                border-radius: 4px; padding: 0.5em 1.2em; cursor: pointer;
+                font-weight: 600; font-size: 0.9em; }
+.decision-yes:hover { filter: brightness(1.25); }
+.decision-no  { background: #4a2a2a; color: var(--loss); border: none;
+                border-radius: 4px; padding: 0.5em 1.2em; cursor: pointer;
+                font-weight: 600; font-size: 0.9em; }
+.decision-no:hover { filter: brightness(1.25); }
+
+/* Confirm button */
+.modal-confirm { background: var(--accent); color: #0b1730; border: none;
+                 border-radius: 4px; padding: 0.5em 1.4em; cursor: pointer;
+                 font-weight: 700; font-size: 0.9em; }
+.modal-confirm:hover { filter: brightness(1.1); }
+
+/* Checkbox list */
+.decision-checkbox { display: flex; align-items: center; gap: 0.4em;
+                     font-size: 0.9em; cursor: pointer; }
+
+/* Blocker assignment table */
+.blocker-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.blocker-table th { text-align: left; color: var(--muted); padding: 0.25em 0.5em;
+                    border-bottom: 1px solid var(--panel-edge); }
+.blocker-table td { padding: 0.3em 0.5em; }
+.blocker-name { color: var(--ink); }
+.blocker-select { background: var(--bg); color: var(--ink);
+                  border: 1px solid var(--panel-edge); border-radius: 3px;
+                  padding: 0.2em 0.4em; width: 100%; }
+
+/* X slider */
+.choose-x-range { width: 100%; accent-color: var(--accent); }
+.choose-x-label { font-size: 1.2em; font-weight: 700; color: var(--accent);
+                  display: block; text-align: center; }
+
+/* Mana color picker */
+.mana-color-row { display: flex; gap: 0.5em; flex-wrap: wrap; }
+.mana-color-btn { width: 44px; height: 44px; border-radius: 50%; border: 2px solid transparent;
+                  cursor: pointer; font-weight: 700; font-size: 1em; }
+.mana-color-btn:hover { border-color: var(--ink); }
+

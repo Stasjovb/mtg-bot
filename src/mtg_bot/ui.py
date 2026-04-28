@@ -30,6 +30,7 @@ from mtg_bot.art import (
 )
 from mtg_bot.cards import COLORS
 from mtg_bot.game import GameState
+from mtg_bot.interactive import create_session, get_session
 from mtg_bot.recommend import recommend_from_snapshot, recommend_from_state
 from mtg_bot.serialize import serialize_state
 from mtg_bot.simulate import simulate_game
@@ -385,6 +386,108 @@ def create_app(
         if not game.snapshots:
             return jsonify([])
         return jsonify(list(game.snapshots[-1]["log"]))
+
+    # ------------------------------------------------------------------
+    # Interactive play API.  All routes are under /api/interactive/.
+    # ------------------------------------------------------------------
+
+    @app.route("/api/interactive/new", methods=["POST"])
+    def api_interactive_new():
+        """Start a new interactive game and return the session_id.
+
+        Expected JSON body::
+
+            {
+                "seed": 0,
+                "c1": "G",     // color for Player 0
+                "c2": "R",     // color for Player 1
+                "human_player": 0,   // 0 or 1
+                "max_turns": 300
+            }
+        """
+        body = request.get_json(force=True, silent=True) or {}
+        seed = int(body.get("seed", 0))
+        c1 = body.get("c1", "G")
+        c2 = body.get("c2", "R")
+        if c1 not in COLORS:
+            abort(400, description=f"c1 must be one of {list(COLORS)}")
+        if c2 not in COLORS:
+            abort(400, description=f"c2 must be one of {list(COLORS)}")
+        human_player = int(body.get("human_player", 0))
+        if human_player not in (0, 1):
+            abort(400, description="human_player must be 0 or 1")
+        max_turns = int(body.get("max_turns", 300))
+        if max_turns < 1:
+            abort(400, description="max_turns must be >= 1")
+
+        def enrich(state):
+            snap = _enrich_snapshot(serialize_state(state), name_to_id)
+            return snap
+
+        session = create_session(
+            seed=seed,
+            colors=[c1, c2],
+            human_player_id=human_player,
+            n2id=name_to_id,
+            enrich_fn=enrich,
+            max_turns=max_turns,
+        )
+        return jsonify({
+            "session_id": session.session_id,
+            "human_player_id": human_player,
+            "colors": [c1, c2],
+            "seed": seed,
+        })
+
+    @app.route("/api/interactive/state/<session_id>")
+    def api_interactive_state(session_id: str):
+        """Return the current board snapshot and any pending decision.
+
+        Poll this endpoint at ~250ms intervals while the game is live.
+        When ``pending`` is non-null, the human player must act.
+        When ``is_over`` is true, ``result`` describes the outcome.
+        """
+        session = get_session(session_id)
+        if session is None:
+            abort(404, description="unknown session_id")
+        return jsonify(session.get_state())
+
+    @app.route("/api/interactive/action/<session_id>", methods=["POST"])
+    def api_interactive_action(session_id: str):
+        """Submit the human player's response to the current pending decision.
+
+        Expected JSON body::
+
+            {"response": <value>}
+
+        The shape of ``value`` depends on the pending decision ``type``:
+
+        * ``choose_action``      → ``{"idx": N}``
+        * ``declare_attackers``  → ``{"ids": [N, ...]}``
+        * ``declare_blockers``   → ``{"assignments": {"blocker_id": attacker_id, ...}}``
+        * ``choose_target``      → ``{"idx": N}`` or ``{"decline": true}``
+        * ``choose_discard``     → ``{"id": N}``
+        * ``choose_surveil``     → ``{"mill": true|false}``
+        * ``choose_sacrifice``   → ``{"id": N}``
+        * ``choose_mode``        → ``{"idx": N}``
+        * ``choose_modes``       → ``{"indices": [N, ...]}``
+        * ``choose_yes_no``      → ``{"yes": true|false}``
+        * ``choose_card``        → ``{"id": N}`` or ``{"decline": true}``
+        * ``choose_x``           → ``{"value": N}``
+        * ``choose_multi_ids``   → ``{"ids": [N, ...]}``
+        * ``choose_mana_color``  → ``{"color": "G"}``
+        * ``choose_one_id``      → ``{"id": N}``
+        """
+        session = get_session(session_id)
+        if session is None:
+            abort(404, description="unknown session_id")
+        if session.is_over:
+            abort(400, description="game is already over")
+        body = request.get_json(force=True, silent=True) or {}
+        if "response" not in body:
+            abort(400, description="missing 'response' field")
+        session.human_agent.submit_response(body["response"])
+        return jsonify({"ok": True})
 
     @app.route("/api/card/<scryfall_id>")
     def api_card(scryfall_id: str):

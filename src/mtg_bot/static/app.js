@@ -1133,3 +1133,749 @@ function firstSnapshotWithLogEntry(logIdx) {
   }
   return game.index[lo].log_size > logIdx ? lo : null;
 }
+
+// ============================================================================
+// Mode tabs — Watch / Play
+// ============================================================================
+
+const tabWatch   = document.getElementById('tab-watch');
+const tabPlay    = document.getElementById('tab-play');
+const panelWatch = document.getElementById('play-form');
+const panelPlay  = document.getElementById('iplay-form');
+
+function switchMode(toPlay) {
+  const playMode = !!toPlay;
+  tabWatch.classList.toggle('active', !playMode);
+  tabPlay .classList.toggle('active',  playMode);
+  tabWatch.setAttribute('aria-selected', String(!playMode));
+  tabPlay .setAttribute('aria-selected', String( playMode));
+  panelWatch.classList.toggle('hidden',  playMode);
+  panelPlay .classList.toggle('hidden', !playMode);
+  // Hide the watch scrubber/phase-tracker when entering play mode
+  if (playMode) {
+    els.scrubber    .classList.add('hidden');
+    els.phaseTracker.classList.add('hidden');
+  }
+}
+
+tabWatch.addEventListener('click', () => switchMode(false));
+tabPlay .addEventListener('click', () => switchMode(true));
+
+// ============================================================================
+// Interactive play — client-side state + poll loop
+// ============================================================================
+
+var iplay = null;  // { sessionId, humanPlayerId, pollTimer, lastPending }
+const POLL_INTERVAL_MS = 250;
+
+const elsI = {
+  form:          document.getElementById('iplay-form'),
+  seed:          document.getElementById('iplay-seed'),
+  myColor:       document.getElementById('iplay-my-color'),
+  botColor:      document.getElementById('iplay-bot-color'),
+  playerId:      document.getElementById('iplay-player-id'),
+  maxTurns:      document.getElementById('iplay-max-turns'),
+  decisionPanel: document.getElementById('decision-panel'),
+  waiting:       document.getElementById('decision-waiting'),
+  body:          document.getElementById('decision-body'),
+  prompt:        document.getElementById('decision-prompt'),
+  options:       document.getElementById('decision-options'),
+  modal:         document.getElementById('decision-modal'),
+  modalTitle:    document.getElementById('decision-modal-title'),
+  modalBody:     document.getElementById('decision-modal-body'),
+};
+
+elsI.form.addEventListener('submit', (ev) => { ev.preventDefault(); startInteractiveGame(); });
+
+async function startInteractiveGame() {
+  stopInteractiveGame();
+  const humanPlayer = parseInt(elsI.playerId.value, 10);
+  const myColor     = elsI.myColor.value;
+  const botColor    = elsI.botColor.value;
+  const c1 = humanPlayer === 0 ? myColor : botColor;
+  const c2 = humanPlayer === 1 ? myColor : botColor;
+  setStatus('Starting game…', 'muted');
+  elsI.form.querySelector('button').disabled = true;
+  try {
+    const body = {
+      seed:         parseInt(elsI.seed.value, 10) || 0,
+      c1, c2,
+      human_player: humanPlayer,
+      max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
+    };
+    const data = await postJSON('/api/interactive/new', body);
+    iplay = {
+      sessionId:     data.session_id,
+      humanPlayerId: data.human_player_id,
+      pollTimer:     null,
+      lastPending:   null,
+    };
+    elsI.decisionPanel.classList.remove('hidden');
+    els.board    .classList.remove('hidden');
+    els.logPanel .classList.remove('hidden');
+    schedulePoll();
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'loss');
+  } finally {
+    elsI.form.querySelector('button').disabled = false;
+  }
+}
+
+function stopInteractiveGame() {
+  if (!iplay) return;
+  clearTimeout(iplay.pollTimer);
+  iplay = null;
+  elsI.decisionPanel.classList.add('hidden');
+  closeDecisionModal();
+}
+
+function schedulePoll() {
+  if (!iplay) return;
+  iplay.pollTimer = setTimeout(pollState, POLL_INTERVAL_MS);
+}
+
+async function pollState() {
+  if (!iplay) return;
+  try {
+    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}`);
+    handleState(state);
+  } catch (e) {
+    setStatus('Poll error: ' + e.message, 'loss');
+    schedulePoll();
+  }
+}
+
+function handleState(state) {
+  if (!iplay) return;
+
+  if (state.snapshot) {
+    // Render the live board. We pass a minimal summary-like object since
+    // renderSnapshot only needs winner_id/is_draw from it for the status bar;
+    // everything else comes from the snapshot itself.
+    const summary = {
+      winner_id: state.result ? state.result.winner_id : null,
+      is_draw:   state.result ? state.result.is_draw   : false,
+    };
+    renderSnapshot(summary, state.snapshot);
+    renderInteractiveLog(state.snapshot);
+  }
+
+  if (state.is_over) {
+    const r = state.result || {};
+    if (r.timed_out) setStatus('Game timed out', 'loss');
+    else if (r.error)  setStatus('Game error: ' + r.error, 'loss');
+    else if (r.is_draw) setStatus(`Draw — ${r.turn_number} turns`, 'draw');
+    else if (r.winner_id != null) {
+      const youWon = r.winner_id === iplay.humanPlayerId;
+      setStatus(
+        `${youWon ? 'You win' : 'Bot wins'} — turn ${r.turn_number}`,
+        youWon ? 'win' : 'loss',
+      );
+    }
+    elsI.waiting.classList.add('hidden');
+    elsI.body   .classList.add('hidden');
+    return;
+  }
+
+  if (state.pending) {
+    elsI.waiting.classList.add('hidden');
+    elsI.body   .classList.remove('hidden');
+    renderDecision(state.pending);
+  } else {
+    elsI.body   .classList.add('hidden');
+    elsI.waiting.classList.remove('hidden');
+    schedulePoll();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Submit a response to the current pending decision
+// ---------------------------------------------------------------------------
+
+async function submitAction(response) {
+  if (!iplay) return;
+  closeDecisionModal();
+  elsI.waiting.classList.remove('hidden');
+  elsI.body   .classList.add('hidden');
+  try {
+    await postJSON(`/api/interactive/action/${iplay.sessionId}`, { response });
+  } catch (e) {
+    setStatus('Submit error: ' + e.message, 'loss');
+  }
+  schedulePoll();
+}
+
+// ---------------------------------------------------------------------------
+// Decision rendering — top-level dispatcher
+// ---------------------------------------------------------------------------
+
+function renderDecision(pending) {
+  const type = pending.type;
+  switch (type) {
+    case 'choose_action':     renderChooseAction(pending);    break;
+    case 'declare_attackers': renderDeclareAttackers(pending); break;
+    case 'declare_blockers':  renderDeclareBlockers(pending);  break;
+    case 'choose_target':     renderChooseTarget(pending);    break;
+    case 'choose_discard':    renderChooseCard(pending, 'Discard a card', (id) => submitAction({ id })); break;
+    case 'choose_sacrifice':  renderChooseObj(pending, 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
+    case 'choose_surveil':    renderChooseSurveil(pending);   break;
+    case 'choose_mode':       renderChooseMode(pending);      break;
+    case 'choose_modes':      renderChooseModes(pending);     break;
+    case 'choose_yes_no':     renderChooseYesNo(pending);     break;
+    case 'choose_card':       renderChooseCard(pending, pending.prompt,
+                                (id, decline) => decline ? submitAction({ decline: true }) : submitAction({ id })); break;
+    case 'choose_x':          renderChooseX(pending);         break;
+    case 'choose_multi_ids':  renderChooseMultiIds(pending);  break;
+    case 'choose_mana_color': renderChooseManaColor(pending); break;
+    case 'choose_one_id':     renderChooseObj(pending, pending.prompt, (id) => submitAction({ id })); break;
+    default:
+      elsI.prompt.textContent = `Unknown decision: ${type}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// choose_action: button row at the bottom (inline, not modal)
+// ---------------------------------------------------------------------------
+
+function renderChooseAction(pending) {
+  elsI.prompt.textContent = 'Your turn — choose an action:';
+  elsI.options.replaceChildren();
+
+  const passOpts   = pending.options.filter(o => o.type === 'pass');
+  const actionOpts = pending.options.filter(o => o.type !== 'pass');
+
+  // Action buttons
+  const row = document.createElement('div');
+  row.className = 'action-row';
+
+  actionOpts.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'action-btn action-btn-' + opt.type;
+    btn.textContent = opt.label;
+    if (opt.scryfall_id) {
+      btn.style.backgroundImage = `url('/card_image/${opt.scryfall_id}/small')`;
+      btn.classList.add('has-art');
+    }
+    btn.addEventListener('click', () => submitAction({ idx: opt.idx }));
+    row.appendChild(btn);
+  });
+
+  // Pass button (separate, de-emphasised)
+  passOpts.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'action-btn action-btn-pass';
+    btn.textContent = 'Pass';
+    btn.addEventListener('click', () => submitAction({ idx: opt.idx }));
+    row.appendChild(btn);
+  });
+
+  elsI.options.appendChild(row);
+}
+
+// ---------------------------------------------------------------------------
+// declare_attackers: toggle cards on the board OR inline list
+// ---------------------------------------------------------------------------
+
+function renderDeclareAttackers(pending) {
+  openDecisionModal('Declare Attackers', () => {
+    const selected = new Set();
+    const body = elsI.modalBody;
+    body.replaceChildren();
+
+    if (!pending.eligible || pending.eligible.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'decision-empty';
+      p.textContent = 'No eligible attackers.';
+      body.appendChild(p);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'modal-confirm';
+      btn.textContent = 'Confirm (no attackers)';
+      btn.addEventListener('click', () => submitAction({ ids: [] }));
+      body.appendChild(btn);
+      return;
+    }
+
+    const hint = document.createElement('p');
+    hint.className = 'decision-hint';
+    hint.textContent = 'Click creatures to toggle them as attackers, then confirm.';
+    body.appendChild(hint);
+
+    const grid = document.createElement('div');
+    grid.className = 'decision-card-grid';
+    pending.eligible.forEach(opt => {
+      const el = makeSelectableCard(opt, selected, opt.id);
+      grid.appendChild(el);
+    });
+    body.appendChild(grid);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal-confirm';
+    btn.textContent = 'Confirm attackers';
+    btn.addEventListener('click', () => submitAction({ ids: Array.from(selected) }));
+    body.appendChild(btn);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// declare_blockers: per-attacker assignment UI
+// ---------------------------------------------------------------------------
+
+function renderDeclareBlockers(pending) {
+  openDecisionModal('Declare Blockers', () => {
+    const assignments = {};  // blocker_id -> attacker_id
+    const body = elsI.modalBody;
+    body.replaceChildren();
+
+    if (!pending.eligible || pending.eligible.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'decision-empty';
+      p.textContent = 'No eligible blockers.';
+      body.appendChild(p);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'modal-confirm';
+      btn.textContent = 'Confirm (no blockers)';
+      btn.addEventListener('click', () => submitAction({ assignments: {} }));
+      body.appendChild(btn);
+      return;
+    }
+
+    const hint = document.createElement('p');
+    hint.className = 'decision-hint';
+    hint.textContent = 'Assign each blocker to an attacker (or leave unassigned).';
+    body.appendChild(hint);
+
+    const table = document.createElement('table');
+    table.className = 'blocker-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>Blocker</th><th>Blocks</th></tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+
+    pending.eligible.forEach(blocker => {
+      const tr = document.createElement('tr');
+      const tdName = document.createElement('td');
+      tdName.className = 'blocker-name';
+      tdName.textContent = blocker.name;
+
+      const tdSel = document.createElement('td');
+      const sel = document.createElement('select');
+      sel.className = 'blocker-select';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '— no block —';
+      sel.appendChild(opt0);
+      (pending.attackers || []).forEach(atk => {
+        const o = document.createElement('option');
+        o.value = String(atk.id);
+        o.textContent = atk.name;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', () => {
+        if (sel.value === '') {
+          delete assignments[blocker.id];
+        } else {
+          assignments[blocker.id] = parseInt(sel.value, 10);
+        }
+      });
+      tdSel.appendChild(sel);
+      tr.append(tdName, tdSel);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    body.appendChild(table);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal-confirm';
+    btn.textContent = 'Confirm blockers';
+    btn.addEventListener('click', () => submitAction({ assignments }));
+    body.appendChild(btn);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_target
+// ---------------------------------------------------------------------------
+
+function renderChooseTarget(pending) {
+  openDecisionModal('Choose a Target', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const list = document.createElement('div');
+    list.className = 'decision-list';
+    (pending.options || []).forEach((opt, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decision-list-item';
+      btn.textContent = opt.label;
+      btn.addEventListener('click', () => submitAction({ idx }));
+      list.appendChild(btn);
+    });
+    if (pending.can_decline) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decision-list-item decision-decline';
+      btn.textContent = 'Decline (no target)';
+      btn.addEventListener('click', () => submitAction({ decline: true }));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_surveil
+// ---------------------------------------------------------------------------
+
+function renderChooseSurveil(pending) {
+  openDecisionModal('Surveil', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const card = pending.card || {};
+    const info = document.createElement('p');
+    info.className = 'decision-hint';
+    info.textContent = `Top of library: ${card.name || '(unknown)'}`;
+    body.appendChild(info);
+    const row = document.createElement('div');
+    row.className = 'decision-yes-no';
+    const btnKeep = document.createElement('button');
+    btnKeep.type = 'button'; btnKeep.className = 'decision-yes';
+    btnKeep.textContent = 'Keep on top';
+    btnKeep.addEventListener('click', () => submitAction({ mill: false }));
+    const btnMill = document.createElement('button');
+    btnMill.type = 'button'; btnMill.className = 'decision-no';
+    btnMill.textContent = 'Mill to graveyard';
+    btnMill.addEventListener('click', () => submitAction({ mill: true }));
+    row.append(btnKeep, btnMill);
+    body.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_mode (single)
+// ---------------------------------------------------------------------------
+
+function renderChooseMode(pending) {
+  openDecisionModal('Choose a Mode', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const list = document.createElement('div');
+    list.className = 'decision-list';
+    (pending.modes || []).forEach(m => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decision-list-item';
+      btn.textContent = m.description;
+      btn.addEventListener('click', () => submitAction({ idx: m.idx }));
+      list.appendChild(btn);
+    });
+    body.appendChild(list);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_modes (multi-select)
+// ---------------------------------------------------------------------------
+
+function renderChooseModes(pending) {
+  openDecisionModal('Choose Modes', () => {
+    const selected = new Set();
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const hint = document.createElement('p');
+    hint.className = 'decision-hint';
+    hint.textContent = 'Select one or more modes, then confirm.';
+    body.appendChild(hint);
+    (pending.modes || []).forEach(m => {
+      const label = document.createElement('label');
+      label.className = 'decision-checkbox';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(m.idx);
+        else selected.delete(m.idx);
+      });
+      label.append(cb, ` ${m.description}`);
+      body.appendChild(label);
+    });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal-confirm';
+    btn.textContent = 'Confirm';
+    btn.addEventListener('click', () => {
+      const indices = Array.from(selected);
+      submitAction({ indices: indices.length ? indices : [0] });
+    });
+    body.appendChild(btn);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_yes_no
+// ---------------------------------------------------------------------------
+
+function renderChooseYesNo(pending) {
+  openDecisionModal('Choose', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const p = document.createElement('p');
+    p.className = 'decision-hint';
+    p.textContent = pending.prompt || 'Yes or No?';
+    body.appendChild(p);
+    const row = document.createElement('div');
+    row.className = 'decision-yes-no';
+    const y = document.createElement('button');
+    y.type = 'button'; y.className = 'decision-yes';
+    y.textContent = 'Yes';
+    y.addEventListener('click', () => submitAction({ yes: true }));
+    const n = document.createElement('button');
+    n.type = 'button'; n.className = 'decision-no';
+    n.textContent = 'No';
+    n.addEventListener('click', () => submitAction({ yes: false }));
+    row.append(y, n);
+    body.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_x
+// ---------------------------------------------------------------------------
+
+function renderChooseX(pending) {
+  openDecisionModal(`Choose X — ${pending.card_name || ''}`, () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const p = document.createElement('p');
+    p.className = 'decision-hint';
+    p.textContent = `Choose a value for X (0 – ${pending.upper_bound}).`;
+    body.appendChild(p);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = 0;
+    input.max = pending.upper_bound;
+    input.value = pending.upper_bound;
+    input.className = 'choose-x-range';
+    const label = document.createElement('span');
+    label.className = 'choose-x-label';
+    label.textContent = `X = ${pending.upper_bound}`;
+    input.addEventListener('input', () => { label.textContent = `X = ${input.value}`; });
+    body.append(input, label);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal-confirm';
+    btn.textContent = 'Confirm';
+    btn.addEventListener('click', () => submitAction({ value: parseInt(input.value, 10) }));
+    body.appendChild(btn);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_mana_color
+// ---------------------------------------------------------------------------
+
+function renderChooseManaColor(pending) {
+  openDecisionModal('Choose Mana Color', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const row = document.createElement('div');
+    row.className = 'mana-color-row';
+    (pending.options || []).forEach(color => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `mana-color-btn mana-coin ${color}`;
+      btn.textContent = color === 'C' ? '◇' : color;
+      btn.title = color;
+      btn.addEventListener('click', () => submitAction({ color }));
+      row.appendChild(btn);
+    });
+    body.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_multi_ids (devour lands, convoke, sac-for-mana)
+// ---------------------------------------------------------------------------
+
+function renderChooseMultiIds(pending) {
+  openDecisionModal(pending.prompt || 'Choose permanents', () => {
+    const selected = new Set();
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const hint = document.createElement('p');
+    hint.className = 'decision-hint';
+    hint.textContent = 'Select any number, then confirm.';
+    body.appendChild(hint);
+    const grid = document.createElement('div');
+    grid.className = 'decision-card-grid';
+    (pending.objects || []).forEach(opt => {
+      const el = makeSelectableCard(opt, selected, opt.id);
+      grid.appendChild(el);
+    });
+    body.appendChild(grid);
+    const row = document.createElement('div');
+    row.className = 'decision-yes-no';
+    const confirm = document.createElement('button');
+    confirm.type = 'button'; confirm.className = 'modal-confirm';
+    confirm.textContent = 'Confirm';
+    confirm.addEventListener('click', () => submitAction({ ids: Array.from(selected) }));
+    const skip = document.createElement('button');
+    skip.type = 'button'; skip.className = 'decision-no';
+    skip.textContent = 'None / Skip';
+    skip.addEventListener('click', () => submitAction({ ids: [] }));
+    row.append(confirm, skip);
+    body.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_card: list of named cards to click
+// ---------------------------------------------------------------------------
+
+function renderChooseCard(pending, title, onPick) {
+  openDecisionModal(title, () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const grid = document.createElement('div');
+    grid.className = 'decision-card-grid';
+    (pending.cards || []).forEach(c => {
+      const el = document.createElement('div');
+      el.className = 'decision-card-option';
+      if (c.scryfall_id) {
+        el.style.backgroundImage = `url('/card_image/${c.scryfall_id}/small')`;
+        el.classList.add('has-art');
+      } else {
+        const nm = document.createElement('span');
+        nm.className = 'option-name';
+        nm.textContent = c.name;
+        el.appendChild(nm);
+      }
+      el.title = c.name;
+      el.addEventListener('click', () => onPick(c.id, false));
+      grid.appendChild(el);
+    });
+    body.appendChild(grid);
+    if (pending.can_decline) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decision-no';
+      btn.textContent = 'Decline';
+      btn.addEventListener('click', () => onPick(null, true));
+      body.appendChild(btn);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_sacrifice / choose_one_id: list of objects, click one
+// ---------------------------------------------------------------------------
+
+function renderChooseObj(pending, title, onPick) {
+  openDecisionModal(title, () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const list = document.createElement('div');
+    list.className = 'decision-list';
+    (pending.objects || []).forEach(o => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'decision-list-item';
+      btn.textContent = o.name;
+      btn.addEventListener('click', () => onPick(o.id));
+      list.appendChild(btn);
+    });
+    body.appendChild(list);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Decision modal helpers
+// ---------------------------------------------------------------------------
+
+function openDecisionModal(title, buildFn) {
+  elsI.modalTitle.textContent = title;
+  elsI.modalBody.replaceChildren();
+  buildFn();
+  elsI.modal.hidden = false;
+  elsI.modal.classList.remove('hidden');
+}
+
+function closeDecisionModal() {
+  elsI.modal.hidden = true;
+  elsI.modal.classList.add('hidden');
+}
+
+elsI.modal.addEventListener('click', (ev) => {
+  if (ev.target === elsI.modal) closeDecisionModal();
+});
+
+// ---------------------------------------------------------------------------
+// makeSelectableCard: a toggleable card element for multi-select decisions
+// ---------------------------------------------------------------------------
+
+function makeSelectableCard(opt, selectedSet, key) {
+  const el = document.createElement('div');
+  el.className = 'decision-card-option selectable';
+  if (opt.scryfall_id) {
+    el.style.backgroundImage = `url('/card_image/${opt.scryfall_id}/small')`;
+    el.classList.add('has-art');
+  } else {
+    const nm = document.createElement('span');
+    nm.className = 'option-name';
+    nm.textContent = opt.name;
+    el.appendChild(nm);
+  }
+  el.title = opt.name;
+  el.addEventListener('click', () => {
+    if (selectedSet.has(key)) {
+      selectedSet.delete(key);
+      el.classList.remove('selected');
+    } else {
+      selectedSet.add(key);
+      el.classList.add('selected');
+    }
+  });
+  return el;
+}
+
+// ---------------------------------------------------------------------------
+// Interactive log renderer (uses snap.log directly, no full-log index)
+// ---------------------------------------------------------------------------
+
+function renderInteractiveLog(snap) {
+  const body = els.logBody;
+  const entries = snap.log || [];
+  const recentCount = (snap.log_since_last || []).length;
+  const firstRecent = entries.length - recentCount;
+  body.replaceChildren();
+  entries.forEach((e, i) => {
+    const d = document.createElement('div');
+    d.className = 'log-entry';
+    if (recentCount > 0 && i >= firstRecent) d.classList.add('this-step');
+    renderLogEntryText(d, e);
+    body.appendChild(d);
+  });
+  body.scrollTop = body.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// postJSON helper
+// ---------------------------------------------------------------------------
+
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => r.statusText);
+    throw new Error(`${r.status} ${text}`);
+  }
+  return r.json();
+}
+}
