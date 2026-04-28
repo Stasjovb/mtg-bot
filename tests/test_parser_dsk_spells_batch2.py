@@ -430,3 +430,112 @@ def test_enter_the_enigma_engine_class():
         GrantUnblockableUEOT(),
         DrawCards(amount=1),
     ))
+
+
+# ---------- Seized from Slumber: tapped-target cost reduction ----------
+
+def test_parse_cost_reduction_targets_tapped_creature():
+    # New cost-reduction condition: ``it targets a tapped creature``
+    # maps to the engine condition key ``target_is_tapped_creature``.
+    # Parallel to the existing ``it targets a blocking creature`` shape.
+    from mtg_bot.cards.base import CostReduction
+    from mtg_bot.cards.parser.cost_reduction import (
+        _parse_cost_reduction_line,
+    )
+
+    rule = _parse_cost_reduction_line(
+        "This spell costs {3} less to cast if it targets a tapped creature."
+    )
+    assert rule == CostReduction(
+        amount=3, condition="target_is_tapped_creature",
+    )
+
+
+def test_seized_from_slumber_claimed_by_parser():
+    # Seized from Slumber ``{2}{B}`` Instant — cost-reduction rider
+    # ``This spell costs {3} less to cast if it targets a tapped
+    # creature.`` plus a base ``Destroy target creature.`` body. The
+    # rider rides the existing CostReduction machinery (with the new
+    # condition key); the base body is the existing
+    # ``DestroyTargetCreature`` primitive.
+    assert "Seized from Slumber" in _claimed_names()
+
+
+def test_seized_from_slumber_carries_cost_reduction_rule():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # both the cost-reduction rule and the bare destroy effect.
+    from mtg_bot.cards.base import CostReduction
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Seized from Slumber"]
+    assert p.cost_reductions == (
+        CostReduction(amount=3, condition="target_is_tapped_creature"),
+    )
+    assert p.spell_effect == DestroyTargetCreature()
+
+
+def test_target_is_tapped_creature_evaluator_optimistic_when_no_targets():
+    # The cost-reduction evaluator's optimistic ``chosen_targets is
+    # None`` branch — used by the legal-actions affordability probe
+    # before the spell's targets are committed — must apply the
+    # discount when ANY tapped creature is on the battlefield (the
+    # caster could pick it).
+    from mtg_bot.actions import _evaluate_cost_reduction
+    from mtg_bot.cards.base import CostReduction, make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    rule = CostReduction(amount=3, condition="target_is_tapped_creature")
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear_obj],
+    )
+    # A tapped creature exists — the optimistic probe applies the
+    # discount.
+    assert _evaluate_cost_reduction(
+        rule, state, caster_id=0, chosen_targets=None,
+    ) == 3
+    # Untap the creature — no tapped creature on the battlefield, so
+    # the optimistic probe doesn't apply the discount.
+    bear_obj.tapped = False
+    assert _evaluate_cost_reduction(
+        rule, state, caster_id=0, chosen_targets=None,
+    ) == 0
+
+
+def test_target_is_tapped_creature_evaluator_committed_target():
+    # When the caster has committed to a target, the discount applies
+    # only if THAT target is tapped (not just any tapped creature).
+    from mtg_bot.actions import _evaluate_cost_reduction
+    from mtg_bot.cards.base import CostReduction, make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    rule = CostReduction(amount=3, condition="target_is_tapped_creature")
+    tapped_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    untapped_pr = make_creature("Bird", "{U}", power=1, toughness=1)
+    tapped_obj = GameObject(
+        id=1, printing=tapped_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    untapped_obj = GameObject(
+        id=2, printing=untapped_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=False,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[tapped_obj, untapped_obj],
+    )
+    # Pointing at the tapped creature — discount applies.
+    assert _evaluate_cost_reduction(
+        rule, state, caster_id=0,
+        chosen_targets=(("creature", 1),),
+    ) == 3
+    # Pointing at the untapped creature — no discount.
+    assert _evaluate_cost_reduction(
+        rule, state, caster_id=0,
+        chosen_targets=(("creature", 2),),
+    ) == 0

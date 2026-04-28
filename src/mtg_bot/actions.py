@@ -392,6 +392,10 @@ def apply_cost_reductions(
         could pick it as the target. ``_cast_spell`` passes the actual
         chosen targets, so the discount only sticks if the caster
         commits to a blocker at cast time.
+      - ``target_is_tapped_creature``: parallel to
+        ``target_is_blocking_creature`` but reads ``obj.tapped`` instead
+        of ``obj.blocking``. Seized from Slumber (Duskmourn): "This
+        spell costs {3} less to cast if it targets a tapped creature."
       - ``during_your_turn``: the caster is the active player (Mental
         Modulation's ``"This spell costs {1} less to cast during your
         turn."`` rider).
@@ -518,6 +522,35 @@ def _evaluate_cost_reduction(
                     obj is not None
                     and obj.printing.is_creature
                     and obj.blocking is not None
+                ):
+                    return rule.amount
+    elif rule.condition == "target_is_tapped_creature":
+        # Seized from Slumber (Duskmourn): "This spell costs {3} less
+        # to cast if it targets a tapped creature." Parallel to the
+        # ``target_is_blocking_creature`` branch above; the discount
+        # applies when the chosen target is tapped (or, optimistically
+        # at affordability-probe time when no targets are committed
+        # yet, when ANY tapped creature exists on the battlefield —
+        # the caster could pick it). Sami's Curiosity precedent for
+        # the same probe-time optimism.
+        if chosen_targets is None:
+            if any(
+                o.printing.is_creature and o.tapped
+                for o in state.battlefield
+            ):
+                return rule.amount
+        else:
+            for kind, tid in chosen_targets:
+                if kind != "creature":
+                    continue
+                obj = next(
+                    (o for o in state.battlefield if o.id == tid),
+                    None,
+                )
+                if (
+                    obj is not None
+                    and obj.printing.is_creature
+                    and obj.tapped
                 ):
                     return rule.amount
     else:

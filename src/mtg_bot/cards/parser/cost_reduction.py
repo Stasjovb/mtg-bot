@@ -88,6 +88,9 @@ _COST_REDUCTION_CONDITIONS: dict[str, str] = {
         "opponents_control_three_or_more_creatures"
     ),
     "it targets a blocking creature": "target_is_blocking_creature",
+    # Seized from Slumber (Duskmourn) — parallel to ``it targets a
+    # blocking creature`` shape but for the tapped state.
+    "it targets a tapped creature": "target_is_tapped_creature",
 }
 
 
