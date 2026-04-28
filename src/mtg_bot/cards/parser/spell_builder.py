@@ -838,6 +838,19 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Counter target spell unless its controller pays {2}. "
         "If they do, you create a Lander token."
     ): CounterTargetSpell(),
+    # Don't Make a Sound: ``unless its controller pays {2}`` mana-pump
+    # counterspell + ``If they do, surveil 2.`` rider. Mirrors Divert
+    # Disaster's simplification: the static ships the bare
+    # ``CounterTargetSpell()`` because the engine doesn't yet model the
+    # pay-cost-or-counter Mana Leak shape. The base mechanic — a
+    # counterspell — survives the rider drop, so claiming the spell
+    # here matches the parser-is-right boundary (same precedent as
+    # Divert Disaster, Unravel). The trailing parenthesized surveil
+    # reminder text is stripped before dispatch.
+    (
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, surveil 2."
+    ): CounterTargetSpell(),
     # Scrounge for Eternity: additional-cost-sacrifice preamble plus a
     # graveyard-return-to-battlefield base + Lander-rider tail. The
     # static ships the bare ``ReturnCreatureFromYourGraveyardToBattle

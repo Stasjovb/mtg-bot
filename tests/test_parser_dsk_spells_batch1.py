@@ -18,21 +18,37 @@ New effect-grammar primitives (``parser.effects``):
   Extinguisher Battleship's ETB sequence in EoE — was missing only
   this surface form.
 
+New whole-spell exact-text dispatch entries
+(``_WHOLE_SPELL_EXACT_TEXT`` in ``parser.spell_builder``):
+
+* **Don't Make a Sound** ``{1}{U}`` Instant — ``Counter target spell
+  unless its controller pays {2}. If they do, surveil 2.``. The
+  static ships the bare ``CounterTargetSpell()`` because the engine
+  doesn't yet model the pay-cost-or-counter Mana Leak shape. Mirrors
+  Divert Disaster's parity simplification — the base mechanic, a
+  counterspell, survives the rider drop.
+
 Cards newly claimed via the new primitive:
 
 * **Pyroclasm** ``{1}{R}`` Sorcery — single-line ``Pyroclasm deals 2
   damage to each creature.``. Parses through the standard single-
   effect path now that the regex is in place.
+* **Don't Make a Sound** ``{1}{U}`` Instant — claimed via the new
+  whole-spell exact-text dispatch entry above.
 """
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import DealNDamageToEachCreature
+from mtg_bot.cards.base import (
+    CounterTargetSpell,
+    DealNDamageToEachCreature,
+)
 from mtg_bot.cards.parser.effects import (
     _parse_effect,
     _parse_spell_effect_phrase,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
+from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 
 
 def _claimed_names() -> frozenset[str]:
@@ -87,3 +103,42 @@ def test_pyroclasm_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Pyroclasm"]
     assert p.spell_effect == DealNDamageToEachCreature(amount=2)
+
+
+# ---------- whole-spell exact-text dispatch (Don't Make a Sound) ----------
+
+def test_dont_make_a_sound_claimed_by_parser():
+    # Don't Make a Sound ``{1}{U}`` Instant — pay-cost counterspell
+    # with a conditional surveil rider. Whole-spell exact-text dispatch
+    # returns the bare ``CounterTargetSpell()`` engine class the static
+    # side ships (the pay-cost branching and surveil rider are dropped
+    # — same simplification as Divert Disaster, since the base mechanic
+    # of a counterspell survives the rider drop per the parser-is-right
+    # rule).
+    assert "Don't Make a Sound" in _claimed_names()
+
+
+def test_dispatch_dont_make_a_sound_returns_engine_class():
+    # The dispatch key carries the post-reminder-strip oracle text (the
+    # parenthesized surveil reminder tail has been stripped before
+    # lookup). The dispatcher hits BEFORE the per-clause grammar would
+    # try to carve the line at the sentence boundary and fail on the
+    # ``If they do, surveil 2.`` rider tail that has no matching
+    # primitive.
+    eff = _try_whole_spell_exact_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, surveil 2."
+    )
+    assert eff == CounterTargetSpell()
+
+
+def test_dispatch_dont_make_a_sound_unrelated_text_returns_none():
+    # Belt-and-suspenders that the new entry doesn't accidentally widen
+    # the dispatcher's match surface — a spell with a similar but not
+    # identical body should NOT match. Different rider tail (e.g.
+    # ``draw a card`` instead of ``surveil 2``) misses the exact-text
+    # key.
+    assert _try_whole_spell_exact_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, draw a card."
+    ) is None
