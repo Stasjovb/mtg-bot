@@ -169,22 +169,11 @@ def test_build_creature_printing_devour_default_zero():
 
 # ---------- end-to-end EoE source claim ----------
 
-def test_source_does_not_claim_famished_worldsire():
-    """Famished Worldsire's oracle text is::
-
-        Ward {3}
-        Devour land 3 (...)
-        When this creature enters, look at the top X cards of your
-        library, where X is this creature's power. Put any number of
-        land cards from among them onto the battlefield tapped, then
-        shuffle.
-
-    The Ward + Devour lines are now both recognized, but the ETB
-    trigger ("look at top X, put any number of land cards...") relies
-    on ``FamishedWorldsireETBEffect``, a bespoke effect class with no
-    generic-grammar surface form. The card therefore still falls
-    through and remains unclaimed — this batch only lays the
-    foundation for any future bare-Devour creatures.
+def test_source_claims_famished_worldsire():
+    """Famished Worldsire is now claimed via the ``_BESPOKE_CREATURES``
+    dispatch table (creature-batch22b). The ETB trigger relies on
+    ``FamishedWorldsireETBEffect`` which has no generic-grammar surface
+    form, so the bespoke entry is the only path to claim it.
     """
     source = OracleParserCardSource()
-    assert "Famished Worldsire" not in source.claimed_names
+    assert "Famished Worldsire" in source.claimed_names

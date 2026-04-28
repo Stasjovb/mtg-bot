@@ -38,21 +38,30 @@ from mtg_bot.cards.base import (
     DrawCardsEqualToResolvingCombatDamage,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
+    FamishedWorldsireETBEffect,
     KavaronHarrierAttackEffect,
     LookAtTopNRevealOrCounter,
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
+    MoveSelfCountersToTargetCreatureYouControl,
+    OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     PerigeeBeckonerDiesReturnTappedEffect,
+    PossibilityTechnicianETBEffect,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
+    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     PutPoisonCountersOnTargetPlayer,
+    ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     RovingActuatorETBEffect,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
     SelfcraftMechanETBEffect,
+    SelfMill,
+    Sequence,
     StaticAbility,
+    TerrapactIntimidatorETBEffect,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
     CreateToken,
@@ -75,6 +84,7 @@ from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
+    HasSubtype,
     IsArtifact,
     IsCreature,
     IsLand,
@@ -391,6 +401,189 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=LookAtTopNRevealOrCounter(
                         n=5, filter_name="spacecraft",
                     ),
+                ),
+            ),
+        ),
+        # ── Batch 22b ──────────────────────────────────────────────────
+        # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
+        # Simplified: drops ETB "each opponent exiles a card" clause.
+        "Lightstall Inquisitor": make_creature(
+            "Lightstall Inquisitor", "{W}", 2, 1,
+            keywords={"vigilance"},
+        ),
+        # Biomechan Engineer {G}{U} 2/2 Insect Artificer.
+        # ETB: create a Lander token.
+        # Activated: {8} → draw 2 + create Robot token.
+        "Biomechan Engineer": make_creature(
+            "Biomechan Engineer", "{G}{U}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Lander"],
+                        count=1,
+                    ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{8}"),
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        CreateToken(
+                            token_printing=TOKEN_PRINTINGS["Robot"],
+                            count=1,
+                        ),
+                    )),
+                ),
+            ),
+        ),
+        # Blade of the Swarm {3}{B} 3/1 Insect Assassin. Warp {1}{B}.
+        # ETB modal: put 2 +1/+1 counters on self OR put target warped
+        # exiled card on bottom of its owner's library.
+        "Blade of the Swarm": make_creature(
+            "Blade of the Swarm", "{3}{B}", 3, 1,
+            warp="{1}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ModalChooseOne(modes=(
+                        PutPlusOneCounterOnSelf(amount=2),
+                        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(),
+                    )),
+                ),
+            ),
+        ),
+        # Seedship Broodtender {B}{G} 2/3 Insect Citizen.
+        # ETB: mill 3. Activated sorcery-speed: {3}{B}{G}, sac self →
+        # reanimate a creature from your graveyard.
+        "Seedship Broodtender": make_creature(
+            "Seedship Broodtender", "{B}{G}", 2, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SelfMill(amount=3),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{3}{B}{G}", sacrifice_self=True),
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
+        # Genemorph Imago {G}{U} 1/3 Insect Druid — flying.
+        # Simplified: drops Landfall base P/T 3/3 or 6/6 rider.
+        "Genemorph Imago": make_creature(
+            "Genemorph Imago", "{G}{U}", 1, 3,
+            keywords={"flying"},
+        ),
+        # Broodguard Elite {X}{G}{G} 0/0 Insect Knight. Warp {X}{G}.
+        # Enters with X +1/+1 counters. When it leaves, move counters
+        # to a target creature you control.
+        "Broodguard Elite": make_creature(
+            "Broodguard Elite", "{X}{G}{G}", 0, 0,
+            subtypes=("Insect", "Knight"),
+            warp="{X}{G}",
+            enters_with_counters_from_x="x",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
+                    effect=MoveSelfCountersToTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        # Icetill Explorer {2}{G}{G} 2/4 Insect Scout.
+        # May play additional land each turn + may play lands from
+        # graveyard + landfall → mill 1.
+        "Icetill Explorer": make_creature(
+            "Icetill Explorer", "{2}{G}{G}", 2, 4,
+            grants_additional_land_per_turn=1,
+            grants_play_lands_from_graveyard=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                    effect=SelfMill(amount=1),
+                ),
+            ),
+        ),
+        # Possibility Technician {2}{R} 3/3 Kavu Artificer. Warp {R}.
+        # Whenever this or another Kavu you control enters: exile top
+        # card, may play it while controlling a Kavu.
+        "Possibility Technician": make_creature(
+            "Possibility Technician", "{2}{R}", 3, 3,
+            warp="{R}",
+            subtypes=("Kavu", "Artificer"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=PossibilityTechnicianETBEffect(),
+                ),
+                TriggeredAbility(
+                    event=Event.ENTERS,
+                    predicate=(
+                        HasSubtype("Kavu") & Controlled(YOU) & ~IsSelf()
+                    ),
+                    effect=PossibilityTechnicianETBEffect(),
+                ),
+            ),
+        ),
+        # Terrapact Intimidator {1}{R} 2/1 Kavu Scout.
+        # ETB: opponent may have you create 2 Landers; if not, put
+        # 2 +1/+1 counters on this creature.
+        "Terrapact Intimidator": make_creature(
+            "Terrapact Intimidator", "{1}{R}", 2, 1,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=TerrapactIntimidatorETBEffect(),
+                ),
+            ),
+        ),
+        # Famished Worldsire {5}{G}{G}{G} 6/6 Leviathan. Ward {3}.
+        # Devour land 3 (enters with 3× sacrificed lands as +1/+1
+        # counters). ETB: look at top X cards (X = power), put land
+        # cards onto battlefield tapped.
+        "Famished Worldsire": make_creature(
+            "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
+            subtypes=("Leviathan",),
+            ward="{3}",
+            devour_land_multiplier=3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=FamishedWorldsireETBEffect(),
+                ),
+            ),
+        ),
+        # Ouroboroid {2}{G}{G} 1/3 Plant Wurm.
+        # At the beginning of combat on your turn, put X +1/+1 counters
+        # on each creature you control where X is this creature's power.
+        "Ouroboroid": make_creature(
+            "Ouroboroid", "{2}{G}{G}", 1, 3,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
+                    effect=(
+                        PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
+                    ),
+                ),
+            ),
+        ),
+        # Quantum Riddler {3}{U}{U} 4/6 Sphinx — flying, warp {1}{U}.
+        # ETB draw a card. Static: if hand ≤ 1 card, each draw draws
+        # one additional card (replaces_draw_with_extra_when_hand_at_
+        # most_one=True).
+        "Quantum Riddler": make_creature(
+            "Quantum Riddler", "{3}{U}{U}", 4, 6,
+            keywords={"flying"},
+            warp="{1}{U}",
+            replaces_draw_with_extra_when_hand_at_most_one=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DrawCards(amount=1),
                 ),
             ),
         ),

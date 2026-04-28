@@ -1380,11 +1380,13 @@ def test_source_claims_harmonious_grovestrider():
     assert "Harmonious Grovestrider" in source.claimed_names
 
 
-def test_source_does_not_claim_famished_worldsire():
-    """Famished Worldsire has simple ``Ward {3}`` but also Devour,
-    which is out of scope — the card must remain unclaimed."""
+def test_source_claims_famished_worldsire():
+    """Famished Worldsire is now claimed via the ``_BESPOKE_CREATURES``
+    dispatch table (creature-batch22b). Ward + Devour are recognized but
+    the ETB effect is bespoke, so the grammar path alone cannot claim it;
+    the bespoke entry handles the whole card."""
     source = OracleParserCardSource()
-    assert "Famished Worldsire" not in source.claimed_names
+    assert "Famished Worldsire" in source.claimed_names
 
 
 def test_source_claims_honor():
