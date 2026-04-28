@@ -807,6 +807,32 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
             inner_effect=DealNDamageToEachCreature(amount=2),
         ),
     )),
+    # Unravel: counter-target-spell + conditional-draw rider whose
+    # condition (``the amount of mana spent to cast that spell was
+    # less than its mana value``) requires per-spell cast-time accounting
+    # the engine doesn't track. The static ships the bare
+    # ``CounterTargetSpell()`` and drops the rider; matching here
+    # mirrors that simplification on a single multi-sentence printed
+    # line. The per-clause grammar would carve this on the sentence
+    # boundary and try to parse the conditional rider as a standalone
+    # effect, which has no primitive — so the whole-spell tier is the
+    # right place to claim the simplified shape.
+    (
+        "Counter target spell. "
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card."
+    ): CounterTargetSpell(),
+    # Divert Disaster: ``unless its controller pays {2}`` mana-pump
+    # counterspell + ``If they do, you create a Lander token.`` rider.
+    # The static ships the bare ``CounterTargetSpell()`` (no pay-cost
+    # branching, no Lander creation) — the engine doesn't yet model
+    # the pay-cost-or-counter Mana Leak shape. Matching here mirrors
+    # that simplification. The trailing parenthesized Lander reminder
+    # text is stripped before dispatch.
+    (
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, you create a Lander token."
+    ): CounterTargetSpell(),
 }
 
 
