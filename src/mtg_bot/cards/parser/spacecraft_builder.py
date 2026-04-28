@@ -24,7 +24,7 @@ The printed oracle text follows a uniform skeleton:
   Spacecraft enters, ..."``, ``"Whenever this Spacecraft attacks,
   ..."``, etc.) and/or a printed activated ability.
 
-This builder grew in two slices:
+This builder grew in several slices:
 
 - **Slice 1** claimed the simplest end-to-end shape: the Station
   reminder line plus a single ``"<N>+ | <evergreen-keyword-list>"``
@@ -41,7 +41,7 @@ This builder grew in two slices:
   ``make_spacecraft(triggered_abilities=...)``. Spacecraft whose ETB
   effect is outside the effect grammar (e.g. ``return target creature
   or enchantment card from your graveyard``) still fall through.
-- **Slice 3** (this batch) extends the trigger arm two ways. First,
+- **Slice 3** extended the trigger arm two ways. First,
   ``Whenever this Spacecraft attacks, <effect>.`` lines are accepted
   alongside the self-ETB shape — the type-qualified self-attack
   predicate-trigger phrase ``this Spacecraft attacks`` lives in the
@@ -51,19 +51,31 @@ This builder grew in two slices:
   skip is dropped — ``_parse_type_line``'s ``Legendary`` supertype is
   forwarded to ``make_spacecraft(legendary=True)`` so a Legendary
   Spacecraft whose body falls inside the supported grammar can be
-  claimed. No EoE Legendary Spacecraft has a body inside the grammar
-  today (Dawnsire's tier-gated trigger is multi-tier-shaped, The
-  Eternity Elevator has no P/T, Infinite Guideline Station's effects
-  aren't in the effect grammar, The Seriema carries a 7+ tier static
-  ability), so both extensions are forward-looking grammar coverage —
-  but the synthetic test cases exercise both arms and parity is
-  preserved end to end via the standard parity gate.
+  claimed.
+- **Slice 4** (this batch) extends the ``"<N>+ | <body>"`` tier-line
+  arm to claim **tier-gated triggered abilities**. A tier-line body
+  that isn't a pure evergreen keyword list is re-tried through
+  ``_parse_clause``; if it parses to a self-ETB or self-ATTACKS
+  ``TriggeredAbility`` the trigger is added to the Spacecraft's
+  trigger list with ``tier_threshold=N`` so the engine's
+  ``TriggeredAbility.tier_threshold`` gate fires only when the
+  Spacecraft has enough charge counters. Multi-tier static
+  **keyword** grants — the Lumen-Class Frigate / Synthesizer Labship
+  shape — were considered as a companion arm but rejected: the engine's
+  ``StaticAbility.applies_to`` requires the target be a creature now,
+  and every real EoE printing's lower-tier keyword line falls below
+  the Station threshold (i.e. while the Spacecraft is still an
+  artifact, not a creature), so a self-scoped ``StaticAbility`` with
+  ``tier_threshold=N`` would never fire. Modeling those grants
+  correctly needs an engine-side change to ``stationed_keywords``
+  (tier-keyed keyword sets) and is left for a future slice.
 
-Anything outside that shape - lower-tier static/trigger/activated
-abilities, multiple tier lines, multiple trigger lines on the same
-event, an ``X+`` body that isn't a bare keyword list, or a missing
-Station line - falls through and the Spacecraft is silently skipped,
-mirroring the creature/spell/land/equipment builders.
+Anything outside the supported shape - lower-tier static/activated
+abilities, multiple tier-keyword lines (single-keyword-tier only is
+claimed today), an ``X+`` body that isn't a bare keyword list and
+isn't a self-trigger, or a missing Station line - falls through and
+the Spacecraft is silently skipped, mirroring the
+creature/spell/land/equipment builders.
 
 Spacecraft live in their own module rather than extending the artifact/
 equipment builders because the printed grammar (Station reminder text
@@ -76,6 +88,7 @@ narrow grammar each one actually claims.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 from mtg_bot.cards.base import (
@@ -110,8 +123,9 @@ _STATION_LINE_RE = re.compile(
 # A tier line: ``"<N>+ | <body>"``. The body for the highest-tier
 # keyword line is a comma-joined evergreen keyword list (e.g.
 # ``"Flying"``, ``"Flying, haste"``). Lower-tier ability bodies use
-# the same prefix but with arbitrary text - those are out of scope
-# for this slice and the parser falls through.
+# the same prefix; this batch (slice 4) re-tries those bodies through
+# the unified clause parser to claim self-ETB / self-ATTACKS triggers
+# tagged with ``tier_threshold=N``.
 _TIER_LINE_RE = re.compile(r"^(\d+)\+ \| (.+)$")
 
 
@@ -119,7 +133,9 @@ def _parse_tier_keyword_body(body: str) -> frozenset[str] | None:
     """Parse a tier line body that's a comma-joined evergreen keyword
     list (``"Flying"``, ``"Flying, haste"``) into the frozen set of
     engine spellings. Returns ``None`` if any piece is not a recognized
-    evergreen - the enclosing Spacecraft is then silently skipped.
+    evergreen - the enclosing tier line then re-tries through the
+    triggered-ability arm and, failing that, the Spacecraft is
+    silently skipped.
 
     Mirrors the equipment-builder rider parser: tier-keyword bodies
     use sentence-case for everything past the first piece (``"Flying,
@@ -140,8 +156,14 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     this builder supports:
 
     - a Station reminder line, plus
-    - a single ``"<N>+ | <evergreen-keyword-list>"`` tier line whose
-      threshold matches the Station threshold, plus
+    - exactly one ``"<N>+ | <evergreen-keyword-list>"`` tier line
+      whose threshold matches the Station threshold (this becomes
+      ``stationed_keywords`` and ``station_threshold``).
+    - zero or more ``"<M>+ | <self-trigger body>"`` tier lines whose
+      body parses through ``_parse_clause`` to a self-ETB or self-
+      ATTACKS ``TriggeredAbility``. The threshold ``M`` lands on
+      ``TriggeredAbility.tier_threshold`` so the engine fires the
+      trigger only once the Spacecraft has enough charge counters.
     - at most one ``"When this Spacecraft enters, <effect>."`` line
       whose effect resolves through ``_parse_clause`` to a
       ``TriggeredAbility(event=ENTERS, predicate=IsSelf())``, and
@@ -153,11 +175,12 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     Station, The Eternity Elevator) are not skipped — the ``Legendary``
     supertype, when present in the type line, is forwarded to
     ``make_spacecraft(legendary=True)``. Today no EoE Legendary
-    Spacecraft body falls inside this grammar (each carries a tier-
-    gated trigger, missing P/T, or an out-of-grammar ETB effect), so
-    accepting the ``Legendary`` supertype is forward-looking grammar
-    coverage; per-card parity stays exact because the static registry
-    builds those cards with ``legendary=True`` directly.
+    Spacecraft body falls inside this grammar (each carries an effect
+    outside the effect grammar, missing P/T, or a tier-gated trigger
+    whose effect isn't claimed), so accepting the ``Legendary``
+    supertype is forward-looking grammar coverage; per-card parity
+    stays exact because the static registry builds those cards with
+    ``legendary=True`` directly.
     """
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
@@ -196,25 +219,66 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             continue
         m = _TIER_LINE_RE.match(line)
         if m is not None:
-            if tier_threshold is not None:
-                # A second tier line means a multi-tier Spacecraft
-                # (e.g. Lumen-Class Frigate with both 2+ and 12+) -
-                # out of scope for this slice.
+            tier_n = int(m.group(1))
+            body = m.group(2)
+            kw = _parse_tier_keyword_body(body)
+            if kw is not None:
+                if tier_threshold is not None:
+                    # A second keyword tier line means a multi-tier
+                    # keyword Spacecraft (e.g. a synthetic
+                    # ``"5+ | Flying" + "10+ | Flying, lifelink"``).
+                    # Out of scope: the engine's ``stationed_keywords``
+                    # is a single-tier set, and modeling lower-tier
+                    # keyword grants via ``StaticAbility`` doesn't
+                    # work because ``StaticAbility.applies_to``
+                    # requires the target be a creature now (so a
+                    # sub-station-threshold keyword grant never fires;
+                    # an at-or-above-threshold one would need a
+                    # different engine model). Skip rather than
+                    # half-claim.
+                    return None
+                tier_threshold = tier_n
+                stationed_keywords = kw
+                continue
+            # Body wasn't a pure evergreen keyword list — try the
+            # unified clause parser for the tier-gated trigger arm.
+            clause = _parse_clause(body)
+            if clause is None:
+                # Static / activated / unknown shape — out of scope.
                 return None
-            kw = _parse_tier_keyword_body(m.group(2))
-            if kw is None:
-                # Body wasn't a pure evergreen keyword list - the
-                # tier carries a static/trigger/activated ability
-                # this builder doesn't claim.
+            if clause.trigger is None:
+                # The clause parsed but as a non-trigger (static
+                # ability, activated ability, granted-keyword line).
+                # Tier-gated statics on Spacecraft aren't modeled by
+                # this builder yet — skip rather than silently drop
+                # the ability.
                 return None
-            tier_threshold = int(m.group(1))
-            stationed_keywords = kw
+            trig = clause.trigger
+            if trig.predicate != IsSelf():
+                # Defensive: only self-targeted predicates make sense
+                # for tier-gated Spacecraft body shapes we claim.
+                return None
+            if trig.event not in (Event.ENTERS, Event.ATTACKS):
+                # Same restriction as the standalone trigger-line arm
+                # — only the two events we explicitly claim.
+                return None
+            if any(
+                t.event == trig.event and t.tier_threshold == tier_n
+                for t in triggers
+            ):
+                # A second tier-gated trigger at the same threshold on
+                # the same event is out of scope; claiming only the
+                # first would silently drop the second.
+                return None
+            triggers.append(
+                dataclasses.replace(trig, tier_threshold=tier_n)
+            )
             continue
         # Try the unified clause parser. This builder accepts at most
         # one self-ETB trigger and at most one self-ATTACKS trigger
-        # per card; any other clause shape (static, activated, a
-        # different trigger event, more than one trigger of the same
-        # event) is out of scope and skips the whole card.
+        # per card from non-tier lines; any other clause shape (static,
+        # activated, a different trigger event) is out of scope and
+        # skips the whole card.
         clause = _parse_clause(line)
         if clause is None:
             # Anything the unified parser doesn't recognize - attack
@@ -243,10 +307,16 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             # future printing whose effect happened to parse. Restrict
             # to the two events we explicitly claim.
             return None
-        if any(t.event == trig.event for t in triggers):
-            # A second trigger line on the same event (two ETB lines,
-            # two attack-trigger lines) is out of scope — claiming
-            # only the first would silently drop the second.
+        if any(
+            t.event == trig.event and t.tier_threshold == 0
+            for t in triggers
+        ):
+            # A second non-tier-gated trigger line on the same event
+            # (two ETB lines, two attack-trigger lines) is out of
+            # scope — claiming only the first would silently drop the
+            # second. Tier-gated triggers at distinct thresholds on
+            # the same event remain allowed (handled in the tier-line
+            # arm above).
             return None
         triggers.append(trig)
 
@@ -258,11 +328,24 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     if tier_threshold is None or stationed_keywords is None:
         return None
     # The Station reminder text encodes the same threshold as the
-    # highest (and here only) tier line on every printing in the
-    # current EoE pool. Treat any drift as a signal that we're
+    # highest (and here only) keyword tier line on every printing in
+    # the current EoE pool. Treat any drift as a signal that we're
     # looking at a shape outside this grammar and bail.
     if station_threshold != tier_threshold:
         return None
+
+    # Order the triggers deterministically: non-tier-gated triggers
+    # (``tier_threshold=0``) first in printed order, followed by tier-
+    # gated triggers sorted by tier threshold ascending. This keeps the
+    # parsed printing byte-equal to the static-registry analogue
+    # regardless of where the printed text places the tier-line vs the
+    # standalone-trigger lines.
+    non_tier_triggers = [t for t in triggers if t.tier_threshold == 0]
+    tier_triggers = sorted(
+        (t for t in triggers if t.tier_threshold != 0),
+        key=lambda t: (t.tier_threshold, t.event.value if hasattr(t.event, "value") else 0),
+    )
+    ordered_triggers = tuple(non_tier_triggers) + tuple(tier_triggers)
 
     return make_spacecraft(
         name=card["name"],
@@ -271,6 +354,6 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         toughness=toughness,
         station_threshold=station_threshold,
         stationed_keywords=stationed_keywords,
-        triggered_abilities=tuple(triggers),
+        triggered_abilities=ordered_triggers,
         legendary=legendary,
     )
