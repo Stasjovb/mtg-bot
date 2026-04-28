@@ -809,12 +809,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Biotech Specialist: {R}{G} 1/3. ETB create a Lander token.
-        # Simplified: drop the "whenever you sacrifice an artifact, deals
-        # 2 damage to an opponent" trigger (sac-your-own-artifact as a
-        # trigger type isn't modeled yet).
+        # Biotech Specialist: {R}{G} 1/3 Creature — Insect Scientist.
+        # ETB create a Lander token, plus sac-an-artifact trigger that
+        # deals 2 damage to target opponent.
         make_creature(
             "Biotech Specialist", "{R}{G}", 1, 3,
+            subtypes=("Insect", "Scientist"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),

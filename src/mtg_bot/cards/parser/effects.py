@@ -24,6 +24,7 @@ from mtg_bot.cards.base import (
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
+    DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
@@ -122,6 +123,31 @@ _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
 # controls`` tail land here.
 _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
     r"^deals (\d+) damage to target creature an opponent controls$"
+)
+# "<source> deals N damage to target opponent" — Biotech Specialist's
+# sacrifice-an-artifact trigger body. Damage targets a player rather
+# than a creature; ``DealDamageToTargetOpponent(amount=N)`` filters
+# the legal-target pool to opponents (not the source's controller).
+#
+# The optional ``this creature `` prefix accepts the surface where the
+# source is named explicitly inside the trigger body. Scryfall prints
+# this form when the trigger's CONDITION already uses ``you`` as the
+# subject (Biotech Specialist's ``Whenever you sacrifice an artifact``
+# leads into ``this creature deals 2 damage to target opponent`` — the
+# explicit ``this creature`` resolves what would otherwise be an
+# ambiguous ``it`` reference). The
+# ``_normalize_creature_effect_phrase`` strip only consumes ``it ``,
+# so we accept the longer subject form here at the regex level
+# rather than expanding the normalizer (which would also strip
+# ``this creature`` from phrases where it's a self-object reference
+# in primitives like ``put a +1/+1 counter on this creature``).
+#
+# Tried BEFORE the bare ``deals N damage to any target`` regex
+# because the ``$`` anchor on the bare regex would not match the
+# ``target opponent`` tail anyway, but ordering more-specific before
+# more-general is the convention in this dispatcher.
+_DEAL_DAMAGE_TARGET_OPPONENT = re.compile(
+    r"^(?:this creature )?deals (\d+) damage to target opponent$"
 )
 # Controller draws cards. The optional ``you `` prefix surfaces in
 # compound bodies like ``you draw a card and lose 1 life`` (Voidforged
@@ -1154,6 +1180,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToOpponentCreature(amount=int(m.group(1)))
+    # ``deals N damage to target opponent`` — Biotech Specialist's
+    # sacrifice-an-artifact trigger body. Tried BEFORE the bare
+    # ``deals N damage to target creature`` regex because the bare
+    # regex's ``$`` anchor on ``target creature`` would not match the
+    # ``target opponent`` tail anyway, but ordering more-specific
+    # before more-general is the convention here. Maps to
+    # ``DealDamageToTargetOpponent(amount=N)`` which gates the legal-
+    # target pool to opponents (not the source's controller).
+    m = _DEAL_DAMAGE_TARGET_OPPONENT.match(phrase)
+    if m is not None:
+        return DealDamageToTargetOpponent(amount=int(m.group(1)))
     m = _DEAL_DAMAGE_TARGET_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetCreature(amount=int(m.group(1)))
