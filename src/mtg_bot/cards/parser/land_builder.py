@@ -18,11 +18,11 @@ Currently supports three land kinds:
   the static-side ``make_colorless_land`` simplification, which also
   ignores those abilities. The land taps for generic via the
   auto-tap-for-cost generic-mana fallback.
-
-Other non-basic shapes (Planet lands, Command Bridge-style sac-self
-utility lands) require Station, sac-self triggers, or any-color mana
-abilities that the parser doesn't yet wire end-to-end — silent skip,
-same pattern as creature/spell.
+- **EoS bespoke lands** — complex multi-ability EoS reprints claimed
+  by name in ``_BESPOKE_EOS_LANDS`` before any generic grammar arm.
+- **EoE bespoke lands** — Planet lands (``Land — Planet`` subtype)
+  and Command Bridge (EoE Land with sac-self-unless-tap ETB) claimed
+  by name in ``_BESPOKE_EOE_LANDS``.
 """
 
 from __future__ import annotations
@@ -37,9 +37,12 @@ from mtg_bot.cards.base import (
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
     BecomeLandCreatureUEOT,
+    BecomesCopyOfTargetLand,
     CardPrinting,
     ChangeControllerToCombatDamageSource,
     ConditionalIfYouControlAtLeast,
+    CopyTargetInstantOrSorceryYouControl,
+    CreateTokenCopyOfTargetCreatureYouControl,
     DealDamageToControllerAndAddMana,
     DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
     DestroyTargetLand,
@@ -59,6 +62,8 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnSelf,
     RegenerateTargetCreature,
     ReturnTargetLandFromGraveyardToHand,
+    SacrificeNLandsYouControl,
+    SacrificeSelfUnlessTapPermanent,
     SearchLibraryForCard,
     Sequence,
     SwitchSourcePowerToughnessUEOT,
@@ -66,6 +71,7 @@ from mtg_bot.cards.base import (
     UntapTargetLand,
     make_basic_land,
     make_colorless_land,
+    make_planet_land,
     make_shock_land,
     make_utility_land,
     parse_mana_cost,
@@ -555,6 +561,130 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
+        # Lotus Field: Hexproof. Enters tapped. ETB sac 2 lands.
+        # {T}: Add three mana of any one color.
+        "Lotus Field": make_utility_land(
+            "Lotus Field",
+            keywords=frozenset({"hexproof"}),
+            enters_tapped=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SacrificeNLandsYouControl(count=2),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddNManaOfChosenColor(amount=3),
+                    is_mana_ability=True,
+                ),
+            ),
+        ),
+        # Mirrorpool: Legendary, enters tapped. {T}: Add {C}.
+        # {2}{C},{T},Sac self: copy target instant/sorcery you control.
+        # {4}{C},{T},Sac self: create token copy of target creature you control.
+        "Mirrorpool": make_utility_land(
+            "Mirrorpool", legendary=True, enters_tapped=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}{C}"),
+                        mana_str="{2}{C}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=CopyTargetInstantOrSorceryYouControl(),
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{4}{C}"),
+                        mana_str="{4}{C}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=CreateTokenCopyOfTargetCreatureYouControl(),
+                ),
+            ),
+        ),
+        # Plaza of Heroes: Legendary. {T}: Add {C}. {T}: any mana
+        # (legendary_spell). {T}: any mana among legendary permanents
+        # you control (legendary_permanent_ability). {3},{T},Exile self:
+        # target legendary creature gains hexproof and indestructible UEOT.
+        "Plaza of Heroes": make_utility_land(
+            "Plaza of Heroes", legendary=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("C", 1),)),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("any", 1),),
+                        spend_restriction="legendary_spell",
+                    ),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("any", 1),),
+                        spend_restriction="legendary_permanent_ability",
+                    ),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}"),
+                        mana_str="{3}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=PumpTargetCreatureUntilEOT(
+                        granted_keywords=frozenset(
+                            {"hexproof", "indestructible"}
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        # Thespian's Stage: {T}: Add {C}. {2},{T}: This land becomes a
+        # copy of target land, except it has this ability.
+        "Thespian's Stage": make_utility_land(
+            "Thespian's Stage",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"),
+                        mana_str="{2}",
+                        tap_self=True,
+                    ),
+                    effect=BecomesCopyOfTargetLand(),
+                ),
+            ),
+        ),
+        # Echoing Deeps: Land — Cave. May enter tapped as copy of any
+        # graveyard land (Cave in addition to its other types).
+        # {T}: Add {C}.
+        "Echoing Deeps": make_utility_land(
+            "Echoing Deeps", subtypes_str="Cave",
+            optional_copy_land_from_graveyard=True,
+        ),
+        # Gemstone Caverns: Legendary. Opening-hand replacement effect
+        # (not modeled — treated as always having a luck counter).
+        # {T}: Add one mana of any color.
+        "Gemstone Caverns": make_utility_land(
+            "Gemstone Caverns", legendary=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("any", 1),)),
+                    is_mana_ability=True,
+                ),
+            ),
+        ),
     }
 
 
@@ -565,6 +695,62 @@ _BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
 # we gate the bespoke table on the same set codes so only true reprints
 # are claimed here.
 _BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
+
+
+# ---------------------------------------------------------------------------
+# Bespoke EoE (Edge of Eternities) land dispatch table.
+#
+# EoE-specific non-basic lands that require either the Planet subtype,
+# sac-self-unless-tap ETB triggers, or any-color mana abilities that the
+# generic grammar arms don't cover.  Keyed by name; dispatcher in
+# ``_build_land_printing`` gates on ``card.get("set") == "eoe"``.
+#
+# Each entry must exactly match the corresponding ``make_planet_land`` or
+# ``make_utility_land`` call in ``src/mtg_bot/cards/lands.py``.
+# ---------------------------------------------------------------------------
+def _make_bespoke_eoe_lands() -> dict[str, CardPrinting]:
+    return {
+        # Planet lands: enters tapped, tap for single color.
+        # Station mechanic and tiered abilities are dropped — the
+        # static make_planet_land simplification.
+        "Adagia, Windswept Bastion": make_planet_land(
+            "Adagia, Windswept Bastion", "W",
+        ),
+        "Uthros, Titanic Godcore": make_planet_land(
+            "Uthros, Titanic Godcore", "U",
+        ),
+        "Susur Secundi, Void Altar": make_planet_land(
+            "Susur Secundi, Void Altar", "B",
+        ),
+        "Kavaron, Memorial World": make_planet_land(
+            "Kavaron, Memorial World", "R",
+        ),
+        "Evendo, Waking Haven": make_planet_land(
+            "Evendo, Waking Haven", "G",
+        ),
+        # Command Bridge: enters tapped, ETB sac-unless-tap-permanent,
+        # {T}: Add one mana of any color.
+        "Command Bridge": make_utility_land(
+            "Command Bridge",
+            enters_tapped=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SacrificeSelfUnlessTapPermanent(),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("any", 1),)),
+                    is_mana_ability=True,
+                ),
+            ),
+        ),
+    }
+
+
+_BESPOKE_EOE_LANDS: dict[str, CardPrinting] = _make_bespoke_eoe_lands()
 
 
 def _build_land_printing(card: dict) -> CardPrinting | None:
@@ -592,6 +778,12 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
         bespoke = _BESPOKE_EOS_LANDS.get(card["name"])
         if bespoke is not None:
             return bespoke
+    # Bespoke EoE lands: Planet lands and Command Bridge. Checked after the
+    # EoS table so reprints with the same name don't get claimed here.
+    if card.get("set") == "eoe":
+        bespoke_eoe = _BESPOKE_EOE_LANDS.get(card["name"])
+        if bespoke_eoe is not None:
+            return bespoke_eoe
     # Non-basic land shapes follow.
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:

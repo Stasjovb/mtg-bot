@@ -792,10 +792,11 @@ def test_build_land_printing_skips_non_lands():
     assert _build_land_printing(creature) is None
 
 
-def test_build_land_printing_skips_planet_lands():
-    """Planet lands have ETB-tapped, mana-tap, Station, and a tier-gated
-    activated ability — none of which the slice grammar yet models. The
-    builder must skip silently rather than partially claim."""
+def test_build_land_printing_claims_planet_lands():
+    """Planet lands are now claimed via the EoE bespoke dispatch table.
+    Station and tier-gated abilities are dropped per the make_planet_land
+    simplification — the parser returns a tapped single-color land."""
+    from mtg_bot.cards.lands import PLANET_LANDS
     card = {
         "name": "Adagia, Windswept Bastion",
         "mana_cost": "",
@@ -810,8 +811,11 @@ def test_build_land_printing_skips_planet_lands():
             "artifact or enchantment you control, except it's legendary. "
             "Activate only as a sorcery."
         ),
+        "set": "eoe",
     }
-    assert _build_land_printing(card) is None
+    result = _build_land_printing(card)
+    assert result is not None, "Adagia should be claimed"
+    assert result == PLANET_LANDS["Adagia, Windswept Bastion"]
 
 
 @pytest.mark.parametrize(
@@ -975,10 +979,18 @@ def test_source_claims_each_basic_land(name):
     assert name in source.get_printings()
 
 
-def test_source_does_not_claim_planet_land():
-    """Planet lands are out-of-slice; the source must not claim them."""
+def test_source_claims_planet_lands():
+    """Planet lands are now claimed via the EoE bespoke dispatch table
+    (batch 23). All five should appear in claimed_names."""
     source = OracleParserCardSource()
-    assert "Adagia, Windswept Bastion" not in source.claimed_names
+    for name in [
+        "Adagia, Windswept Bastion",
+        "Evendo, Waking Haven",
+        "Kavaron, Memorial World",
+        "Susur Secundi, Void Altar",
+        "Uthros, Titanic Godcore",
+    ]:
+        assert name in source.claimed_names, f"{name!r} not claimed"
 
 
 @pytest.mark.parametrize(
@@ -996,11 +1008,11 @@ def test_source_claims_each_shock_land(name):
     assert name in source.get_printings()
 
 
-def test_source_does_not_claim_command_bridge():
-    """Command Bridge needs an ETB sac-self trigger and an any-color
-    mana ability that the parser doesn't yet wire end-to-end."""
+def test_source_claims_command_bridge():
+    """Command Bridge is now claimed via the EoE bespoke dispatch table
+    (batch 23): enters tapped, ETB sac-unless-tap, {T}: any mana."""
     source = OracleParserCardSource()
-    assert "Command Bridge" not in source.claimed_names
+    assert "Command Bridge" in source.claimed_names
 
 
 # ---------- Warp ----------
