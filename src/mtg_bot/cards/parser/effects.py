@@ -275,6 +275,17 @@ _DESTROY_UP_TO_ONE_OTHER_TARGET_CREATURE_DRAW_IF_UNDAMAGED = re.compile(
 _DESTROY_TARGET_CREATURE_OR_SPACECRAFT = re.compile(
     r"^destroy target creature or Spacecraft$"
 )
+# "Destroy target creature or enchantment." — Withering Torment
+# (Duskmourn). Maps to ``DestroyTargetCreature(or_enchantment=True)``
+# whose ``legal_targets`` extends the bare ``destroy target creature``
+# pool to also include any enchantment (Aura subtype or not). The
+# enchantment branch emits ``("enchantment", id)`` tuples; the resolve
+# accepts either kind and finds the object by id. The lowercase
+# ``enchantment`` is the printed surface — unlike ``Spacecraft`` which
+# is capitalized in oracle text, ``enchantment`` is lowercased.
+_DESTROY_TARGET_CREATURE_OR_ENCHANTMENT = re.compile(
+    r"^destroy target creature or enchantment$"
+)
 _COUNTER_TARGET_SPELL = re.compile(r"^counter target spell$")
 # "Counter target artifact or enchantment spell." — Annul. Same engine
 # class as the bare counterspell, just with a non-empty ``filter_types``
@@ -1510,6 +1521,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # more-general is the convention here.
     if _DESTROY_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return DestroyTargetCreature(or_spacecraft=True)
+    # ``destroy target creature or enchantment`` — Withering Torment
+    # (Duskmourn). Tried BEFORE the bare ``destroy target creature``
+    # regex so the more-specific subtype-tail variant wins. The bare
+    # regex's ``$`` anchor would never match this surface anyway, but
+    # ordering more-specific before more-general is the convention here.
+    if _DESTROY_TARGET_CREATURE_OR_ENCHANTMENT.match(phrase) is not None:
+        return DestroyTargetCreature(or_enchantment=True)
     if _PUT_ITS_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL.match(
         phrase
     ) is not None:

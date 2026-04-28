@@ -4101,6 +4101,15 @@ class DestroyTargetCreature(Effect):
     # whether they're currently animated as creatures). Matches oracle
     # text "destroy target creature or Spacecraft" — Embrace Oblivion.
     or_spacecraft: bool = False
+    # When True, Enchantments (any subtype, Aura or otherwise) are also
+    # legal targets. Matches oracle text "destroy target creature or
+    # enchantment" — Withering Torment (Duskmourn). The enchantment
+    # branch emits ("enchantment", id) target tuples; the resolve
+    # accepts either kind and dispatches by id. Distinct from
+    # ``or_spacecraft`` (which extends the creature pool with
+    # Spacecraft) — both flags can in principle co-exist if a future
+    # printing widens to all three subtypes.
+    or_enchantment: bool = False
     # When True, "up to one target creature" semantics — the destroy
     # is optional and the spell/ability resolves silently if no target
     # is chosen. Matches Faller's Faithful's "up to one other target".
@@ -4120,15 +4129,17 @@ class DestroyTargetCreature(Effect):
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
         source = state.resolving_source if self.exclude_self else None
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if (
-                o.printing.is_creature
-                or (self.or_spacecraft and o.printing.is_spacecraft)
-            )
-            and (source is None or o.id != source.id)
-        ]
+        legal: list[Target] = []
+        for o in state.battlefield:
+            if source is not None and o.id == source.id:
+                continue
+            if o.printing.is_creature:
+                legal.append(("creature", o.id))
+            elif self.or_spacecraft and o.printing.is_spacecraft:
+                legal.append(("creature", o.id))
+            elif self.or_enchantment and "Enchantment" in o.printing.card_types:
+                legal.append(("enchantment", o.id))
+        return legal
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -4139,7 +4150,7 @@ class DestroyTargetCreature(Effect):
         if not targets:
             return
         kind, target_id = targets[0]
-        if kind != "creature":
+        if kind not in ("creature", "enchantment"):
             return
         obj = next(
             (o for o in state.battlefield if o.id == target_id), None
@@ -4163,7 +4174,12 @@ class DestroyTargetCreature(Effect):
             )
 
     def describe(self) -> str:
-        suffix = " or Spacecraft" if self.or_spacecraft else ""
+        suffix_parts: list[str] = []
+        if self.or_spacecraft:
+            suffix_parts.append("Spacecraft")
+        if self.or_enchantment:
+            suffix_parts.append("enchantment")
+        suffix = (" or " + " or ".join(suffix_parts)) if suffix_parts else ""
         base = f"destroy target creature{suffix}"
         if self.draw_if_undamaged_amount > 0:
             return (
