@@ -185,7 +185,17 @@ _DEAL_DAMAGE_TARGET_OPPONENT = re.compile(
 # surface noise because the controller is already implicit in every
 # effect's resolve signature.
 _DRAW_A_CARD = re.compile(r"^(?:you )?draw a card$")
-_DRAW_N_CARDS = re.compile(r"^(?:you )?draw (\d+) cards$")
+# ``draw N cards`` — bare-amount draw effect. The ``N`` accepts either
+# a digit or a spelled-out small cardinal (Glimmerburst's printed
+# ``Draw two cards.`` is what introduced the cardinal-word form to
+# this primitive; future ``draw three cards`` / ``draw four cards``
+# printings parse without further grammar work). The captured token
+# routes through ``_parse_amount`` to land as an integer on the engine
+# class. Mirrors the digit-or-spelled-cardinal shape on the existing
+# ``_MILL_N_CARDS`` and ``_OPTIONAL_DISCARD_THEN_DRAW`` primitives.
+_DRAW_N_CARDS = re.compile(
+    rf"^(?:you )?draw (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
+)
 # "Draw that many cards" — the variable-amount form whose count is
 # resolved at fire time from ``state.resolving_combat_damage_amount``.
 # Surfaces inside a triggered-ability body whose CONDITION names a
@@ -1441,7 +1451,7 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
     if m is not None:
-        return DrawCards(amount=int(m.group(1)))
+        return DrawCards(amount=_parse_amount(m.group(1)))
     if _DRAW_THAT_MANY_CARDS.match(phrase) is not None:
         # ``draw that many cards`` — the resolving-combat-damage form
         # used by Fear of Failed Tests's combat-damage trigger body.

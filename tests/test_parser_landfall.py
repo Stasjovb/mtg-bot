@@ -71,14 +71,13 @@ def test_landfall_prefix_extracts_effect_via_unified_grammar():
 # ---------- Negative: malformed Landfall lines return None ----------
 
 def test_landfall_prefix_with_unsupported_inner_effect_returns_none():
-    # The inner effect ``you draw two cards`` is not a recognized
-    # effect phrase (the unified grammar matches ``draw a card`` /
-    # ``draw N cards``, not ``you draw …``). The Landfall prefix must
-    # not paper over an unrecognized body — the line still returns
-    # ``None`` so the enclosing card is skipped.
+    # The inner effect ``you frobnicate the orb`` is not a recognized
+    # effect phrase. The Landfall prefix must not paper over an
+    # unrecognized body — the line still returns ``None`` so the
+    # enclosing card is skipped.
     parsed = _parse_triggered_ability_line(
         "Landfall — Whenever a land you control enters, "
-        "you draw two cards."
+        "you frobnicate the orb."
     )
     assert parsed is None
 

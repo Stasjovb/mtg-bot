@@ -35,11 +35,14 @@ from __future__ import annotations
 
 from mtg_bot.cards.base import (
     DestroyTargetCreature,
+    DrawCards,
     LoseLife,
     Sequence,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.source import OracleParserCardSource
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.generic import CreateToken
 
 
 def _claimed_names() -> frozenset[str]:
@@ -136,4 +139,55 @@ def test_withering_torment_engine_class():
     assert p.spell_effect == Sequence(effects=(
         DestroyTargetCreature(or_enchantment=True),
         LoseLife(amount=2),
+    ))
+
+
+# ---------- draw N cards (spelled-out cardinal) ----------
+
+def test_parse_draw_two_cards():
+    # Extension of ``_DRAW_N_CARDS`` to accept spelled-out small
+    # cardinals — Glimmerburst's printed ``Draw two cards.`` prefix
+    # needed this. Existing digit form must still work.
+    assert _parse_effect("draw two cards") == DrawCards(amount=2)
+
+
+def test_parse_draw_three_cards_spelled():
+    # Forward-looking grammar coverage — no DSK card prints
+    # ``draw three cards`` today, but the regex shape allows it
+    # without further grammar work.
+    assert _parse_effect("draw three cards") == DrawCards(amount=3)
+
+
+def test_parse_draw_n_cards_digit_form_still_works():
+    # The pre-existing digit form must continue to parse to the same
+    # engine class.
+    assert _parse_effect("draw 2 cards") == DrawCards(amount=2)
+
+
+def test_parse_draw_unknown_word_returns_none():
+    # An unrecognized word in the cardinal slot must not parse as a
+    # draw effect (the regex's whitelist of small cardinals enforces
+    # this — anything outside the table fails the alternation).
+    assert _parse_effect("draw eleventy cards") is None
+
+
+# ---------- Glimmerburst claim ----------
+
+def test_glimmerburst_claimed_by_parser():
+    # Glimmerburst ``{2}{W}{U}`` Instant — two-sentence body with
+    # ``Draw two cards.`` + ``Create a 1/1 white Glimmer enchantment
+    # creature token.`` Both pieces parse via existing primitives
+    # (with the new draw-N-cards-spelled-out cardinal extension);
+    # composed via Sequence by the spell-effect parser.
+    assert "Glimmerburst" in _claimed_names()
+
+
+def test_glimmerburst_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the right Sequence shape (draw 2, then mint Glimmer token).
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Glimmerburst"]
+    assert p.spell_effect == Sequence(effects=(
+        DrawCards(amount=2),
+        CreateToken(token_printing=TOKEN_PRINTINGS["Glimmer"], count=1),
     ))
