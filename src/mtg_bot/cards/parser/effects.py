@@ -286,8 +286,21 @@ _EXILE_EACH_OPPONENTS_GRAVEYARD = re.compile(
 # the surface form here is exactly ``deals N damage to each opponent``.
 # For creature-source triggered abilities the ``it`` prefix is also
 # stripped first, leaving the same canonical ``deals …`` form.
+#
+# The optional ``this creature `` prefix accepts the surface where the
+# trigger body names the source explicitly. Scryfall prints that form
+# when the trigger CONDITION already uses a different subject (Weftstalker
+# Ardent's ``Whenever another creature or artifact you control enters``
+# leads into ``this creature deals 1 damage to each opponent`` — the
+# explicit ``this creature`` resolves what would otherwise be an ambiguous
+# ``it`` reference to the unrelated entering object). Mirrors the same
+# ``(?:this creature )?`` shape on ``_DEAL_DAMAGE_TARGET_OPPONENT``
+# (Biotech Specialist's ``Whenever you sacrifice an artifact, this
+# creature deals 2 damage to target opponent``) — same justification:
+# the normalizer only consumes the ``it `` pronoun, not the longer
+# ``this creature`` self-object reference.
 _DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
-    r"^deals (\d+) damage to each opponent$"
+    r"^(?:this creature )?deals (\d+) damage to each opponent$"
 )
 # "Search your library for an artifact card, reveal it, put it into
 # your hand, then shuffle." — Scour for Scrap mode 1 (and any future

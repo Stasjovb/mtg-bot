@@ -20,6 +20,14 @@ New effect-grammar primitives:
   effect tail survives intact, mirroring the ``put its counters
   on …`` precedent.
 
+Extended primitives:
+
+* ``(?:this creature )?deals N damage to each opponent`` — the bare
+  shape was already wired; this batch extends the regex with the
+  optional ``this creature `` self-reference so trigger bodies that
+  spell out the source explicitly parse. Used by Weftstalker
+  Ardent's another-creature-or-artifact ETB trigger.
+
 Newly-claimed creatures:
 
 * **Chrome Companion** — ``Whenever this creature becomes tapped,
@@ -29,6 +37,15 @@ Newly-claimed creatures:
   GainLife); the activated half required the new graveyard-bottom
   primitive. Subtype ``Dog`` is added to the static registry per
   the parser-is-right rule (Scryfall prints the subtype).
+
+* **Weftstalker Ardent** — ``Whenever another creature or artifact
+  you control enters, this creature deals 1 damage to each
+  opponent. Warp {R}.`` Trigger condition was already in the
+  predicate phrasebook (batch 9); the extended ``this creature
+  deals N damage to each opponent`` regex closes the last gap.
+  Static drift fix: real card is 2/3 ``Drix Artificer`` (the
+  registry was carrying the printed power/toughness reversed plus
+  no subtypes — corrected per the parser-is-right rule).
 """
 
 from __future__ import annotations
@@ -36,6 +53,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    DealDamageEachOpponent,
     GainLife,
     PutCardFromGraveyardOnBottomOfLibrary,
     TriggeredAbility,
@@ -46,7 +64,11 @@ from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects.predicates import (
+    YOU,
+    Controlled,
     Event,
+    IsArtifact,
+    IsCreature,
     IsSelf,
 )
 
@@ -131,3 +153,42 @@ def test_chrome_companion_claimed_by_parser():
     # ``tests/test_parser_parity.py`` so a successful claim already
     # implies static-registry equivalence.
     assert "Chrome Companion" in _claimed_names()
+
+
+# ---------- Weftstalker Ardent ----------
+
+def test_parse_this_creature_deals_n_damage_to_each_opponent():
+    # The extended self-prefixed shape: ``this creature`` resolves to
+    # the source at fire time. Bare and prefixed forms must both map
+    # to the same engine class — the prefix is surface noise.
+    assert _parse_effect_phrase(
+        "this creature deals 1 damage to each opponent"
+    ) == DealDamageEachOpponent(amount=1)
+    assert _parse_effect_phrase(
+        "deals 1 damage to each opponent"
+    ) == DealDamageEachOpponent(amount=1)
+
+
+def test_weftstalker_ardent_etb_trigger_line():
+    # End-to-end: condition phrase ``another creature or artifact you
+    # control enters`` (batch-9 predicate-phrasebook entry) feeds the
+    # newly-extended self-prefixed effect grammar. Mirrors the static
+    # registry's Weftstalker entry exactly.
+    line = (
+        "Whenever another creature or artifact you control enters, "
+        "this creature deals 1 damage to each opponent."
+    )
+    parsed = _parse_triggered_ability_line(line)
+    assert parsed == TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=(
+            (IsCreature() | IsArtifact())
+            & Controlled(YOU)
+            & ~IsSelf()
+        ),
+        effect=DealDamageEachOpponent(amount=1),
+    )
+
+
+def test_weftstalker_ardent_claimed_by_parser():
+    assert "Weftstalker Ardent" in _claimed_names()

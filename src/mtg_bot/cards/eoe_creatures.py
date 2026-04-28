@@ -2553,11 +2553,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Weftstalker Ardent: {2}{R} 3/2 + Warp {R}. Whenever another
-        # creature or artifact you control enters, this creature deals
-        # 1 damage to each opponent.
+        # Weftstalker Ardent: {2}{R} 2/3 Drix Artificer + Warp {R}.
+        # Whenever another creature or artifact you control enters,
+        # this creature deals 1 damage to each opponent.
         make_creature(
-            "Weftstalker Ardent", "{2}{R}", 3, 2,
+            "Weftstalker Ardent", "{2}{R}", 2, 3,
+            subtypes=("Drix", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
