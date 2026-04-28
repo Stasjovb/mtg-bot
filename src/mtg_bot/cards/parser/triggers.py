@@ -491,6 +491,22 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
         (Event.ENTERS, IsSelf()),
         (Event.DIES, IsSelf()),
     ),
+    # ``Whenever this creature enters or attacks`` — fires once on
+    # entry and once on each attack. Surfaces as the named-self form
+    # ``"Whenever <name> enters or attacks"`` on Haliya, Ascendant
+    # Cadet and Syr Vondam, the Lucent (the parser does not yet
+    # substitute the printing's own name for ``"this creature"`` in
+    # trigger-condition phrases, so neither claims end-to-end today —
+    # this entry is the trigger-phrase half of those pending claims).
+    # The two arms share the same effect at the line level; the parser
+    # produces one ``TriggeredAbility`` per arm to mirror the static-
+    # registry's two-entry layout (Haliya / Syr Vondam each carry two
+    # separate ``TriggeredAbility`` entries with identical effects in
+    # their static definitions).
+    "this creature enters or attacks": (
+        (Event.ENTERS, IsSelf()),
+        (Event.ATTACKS, IsSelf()),
+    ),
 }
 
 

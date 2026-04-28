@@ -141,11 +141,17 @@ def test_parse_triggered_ability_line_compound_condition_unknown_effect():
 
 def test_parse_triggered_ability_line_unknown_compound_phrase():
     # An unrecognized compound phrase falls through to the single-
-    # condition lookups. ``enters or attacks`` isn't in the compound
-    # table, isn't in the single-condition tables either, so the
-    # whole line rejects (no silent drop of one arm).
+    # condition lookups. ``enters or leaves the battlefield`` isn't in
+    # the compound table, and the bare ``"this creature enters or leaves
+    # the battlefield"`` literal isn't in the single-condition tables
+    # either, so the whole line rejects (no silent drop of one arm).
+    # Earlier this test used ``"enters or attacks"`` as the canary
+    # unknown-compound — the parser-creature-attack-triggers batch
+    # added that exact phrase to the compound table, so the canary
+    # moved here to a still-unclaimed shape.
     assert _parse_triggered_ability_line(
-        "When this creature enters or attacks, draw a card."
+        "When this creature enters or leaves the battlefield, "
+        "draw a card."
     ) is None
 
 

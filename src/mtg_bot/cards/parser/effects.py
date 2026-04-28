@@ -58,6 +58,7 @@ from mtg_bot.cards.base import (
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    PutPlusOneCounterOnOpponentsCreature,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
@@ -130,6 +131,16 @@ _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
 # ``you control`` shape wins on phrases that carry it.
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
     r"^put a \+1/\+1 counter on target creature you control$"
+)
+# "Put a +1/+1 counter on target creature an opponent controls" —
+# Sunset Saboteur's attack trigger. Mirror image of the
+# ``you control`` restriction above: legal targets are creatures NOT
+# controlled by the resolving controller. Maps to
+# ``PutPlusOneCounterOnOpponentsCreature(amount=1)``. Tried BEFORE
+# the bare ``target creature`` regex so the more-specific
+# ``an opponent controls`` shape wins on phrases that carry it.
+_PUT_PLUS_ONE_COUNTER_ON_TARGET_OPPONENT_CREATURE = re.compile(
+    r"^put a \+1/\+1 counter on target creature an opponent controls$"
 )
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
@@ -1082,6 +1093,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return PutPlusOneCounterOnCreatureYouControl(amount=1)
+    # ``put a +1/+1 counter on target creature an opponent controls`` —
+    # Sunset Saboteur's attack trigger. Mirror image of the ``you
+    # control`` restriction above: legal targets are creatures NOT
+    # controlled by the resolving controller. Tried BEFORE the bare
+    # ``target creature`` regex (which has a ``$`` anchor that
+    # wouldn't match this tail anyway) so the more-specific shape wins
+    # by convention.
+    if _PUT_PLUS_ONE_COUNTER_ON_TARGET_OPPONENT_CREATURE.match(
+        phrase
+    ) is not None:
+        return PutPlusOneCounterOnOpponentsCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
