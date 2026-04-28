@@ -179,7 +179,9 @@ def test_parse_effect_returns_none_for_malformed_destroy_land():
 
 def test_parse_effect_returns_none_for_malformed_destroy_noncreature():
     assert _parse_effect("destroy target noncreature") is None
-    assert _parse_effect("destroy target nonland permanent") is None
+    # ``destroy target nonland permanent`` is now a recognized
+    # primitive (Thaumaton Torpedo), so it parses; only the malformed
+    # surface forms below should return None.
     assert _parse_effect("destroy target noncreature permanent you control") \
         is None
 

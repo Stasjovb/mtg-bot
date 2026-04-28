@@ -402,6 +402,15 @@ _ACTIVATED_COST_REDUCTION_CONDITIONS: dict[str, str] = {
     "you control a creature with a +1/+1 counter on it": (
         "control_creature_with_plus_one_counter"
     ),
+    # Thaumaton Torpedo's ``This ability costs {3} less to activate if
+    # you attacked with a Spacecraft this turn.`` rider. The engine key
+    # ``"attacked_with_spacecraft_this_turn"`` is already wired in
+    # ``apply_cost_reductions`` / ``_evaluate_cost_reduction`` and
+    # latches via the ``Player.attacked_with_spacecraft_this_turn`` flag
+    # set in ``combat.py``.
+    "you attacked with a Spacecraft this turn": (
+        "attacked_with_spacecraft_this_turn"
+    ),
 }
 
 

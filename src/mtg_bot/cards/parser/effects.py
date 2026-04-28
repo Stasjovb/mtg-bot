@@ -31,6 +31,7 @@ from mtg_bot.cards.base import (
     DestroyTargetCreature,
     DestroyTargetLand,
     DestroyTargetNoncreaturePermanent,
+    DestroyTargetNonlandPermanent,
     DiscardSelf,
     DrawCards,
     EachOpponentDiscards,
@@ -358,6 +359,15 @@ _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
 _DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
+)
+# "Destroy target nonland permanent." — Thaumaton Torpedo's activated
+# ability. Maps to the existing ``DestroyTargetNonlandPermanent`` engine
+# class whose ``legal_targets`` filters the battlefield to non-land
+# permanents (creatures, artifacts, enchantments, planeswalkers).
+# Distinct from ``destroy target noncreature permanent`` above — that
+# one excludes creatures, this one excludes lands.
+_DESTROY_TARGET_NONLAND_PERMANENT = re.compile(
+    r"^destroy target nonland permanent$"
 )
 # "Add {<color>}." — single coin of a single color. Mana ability surface
 # form. The captured letter is one of WUBRG (no colorless single-coin
@@ -1267,6 +1277,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyTargetLand()
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
+    if _DESTROY_TARGET_NONLAND_PERMANENT.match(phrase) is not None:
+        # ``destroy target nonland permanent`` — Thaumaton Torpedo's
+        # activated ability. Tried after ``destroy target noncreature
+        # permanent`` because the two surface forms are disjoint
+        # (different exclusion words), but ordering more-specific before
+        # more-general is the convention here. Maps to
+        # ``DestroyTargetNonlandPermanent`` whose ``legal_targets``
+        # filters the battlefield to permanents that aren't lands.
+        return DestroyTargetNonlandPermanent()
     if _DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE.match(phrase) is not None:
         # ``destroy target artifact or tapped creature`` — Radiant
         # Strike's destroy clause. The engine class's
