@@ -905,12 +905,16 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Mechan Assembler: {4}{U} 4/4 Artifact Creature — Robot.
+        # Mechan Assembler: {4}{U} 4/4 Artifact Creature — Robot Artificer.
         # Whenever another artifact you control enters, create a 2/2
         # Robot token. Once per turn (prevents infinite-Robot loops).
+        # Subtypes mirror Scryfall's printed type line ("Artifact Creature
+        # — Robot Artificer") — the parser surfaces both subtypes via
+        # ``_parse_type_line`` and the static must match for parity.
         make_creature(
             "Mechan Assembler", "{4}{U}", 4, 4,
             artifact=True,
+            subtypes=("Robot", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsArtifact() & Controlled(YOU) & ~IsSelf(),

@@ -105,6 +105,19 @@ _TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
 )
 
 
+# Trailing once-per-turn rider on a triggered-ability line. Scryfall
+# prints this as a second sentence glued to the trigger body with a
+# single space separator: ``<trigger sentence>. This ability triggers
+# only once each turn.`` Mechan Assembler (and Nanoform Sentinel,
+# whose effect is out of scope today) carry this rider. Stripping the
+# suffix and setting ``once_per_turn=True`` on the resulting
+# ``TriggeredAbility`` mirrors the static registry's
+# ``TriggeredAbility(..., once_per_turn=True)`` shape exactly. The
+# engine field already exists; this is purely a parser-grammar
+# addition.
+_ONCE_PER_TURN_RIDER_SUFFIX = " This ability triggers only once each turn."
+
+
 # Trigger-condition phrases → engine-level trigger key (legacy
 # string-key shape). Pre-phase-2 this dict held every recognized
 # condition; phase 2 lifted the ENTERS-event family into
@@ -435,6 +448,19 @@ def _parse_predicate_trigger_phrase(
 
 def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     line = _strip_ability_word_prefix(line)
+    # Trailing once-per-turn rider: ``<trigger sentence>. This ability
+    # triggers only once each turn.`` Strip the suffix BEFORE running
+    # any sentence-shape regex so the trigger body parses normally; the
+    # ``once_per_turn=True`` flag is glued onto whichever
+    # ``TriggeredAbility`` the body produces (intervening-if path or
+    # plain-trigger path). Doing the strip up front keeps both shapes
+    # supporting the rider with a single source of truth — the
+    # alternative (rider-aware variants of each line regex) would
+    # double the grammar without behavioral benefit.
+    once_per_turn = False
+    if line.endswith(_ONCE_PER_TURN_RIDER_SUFFIX):
+        line = line[: -len(_ONCE_PER_TURN_RIDER_SUFFIX)]
+        once_per_turn = True
     # Intervening-if shape (CR 603.4) tried first: a recognized gate
     # phrase between the trigger condition and the effect collapses to
     # a single ``TriggeredAbility`` with the gate predicate AND-ed onto
@@ -469,6 +495,7 @@ def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
             event=event,
             predicate=base_predicate & gate_pred,
             effect=effect,
+            once_per_turn=once_per_turn,
         )
     m = _TRIGGERED_ABILITY_LINE.match(line)
     if m is None:
@@ -486,9 +513,14 @@ def _parse_triggered_ability_line(line: str) -> TriggeredAbility | None:
     if pred_match is not None:
         event, predicate = pred_match
         return TriggeredAbility(
-            event=event, predicate=predicate, effect=effect,
+            event=event,
+            predicate=predicate,
+            effect=effect,
+            once_per_turn=once_per_turn,
         )
     trigger = _parse_trigger_phrase(condition)
     if trigger is None:
         return None
-    return TriggeredAbility(trigger=trigger, effect=effect)
+    return TriggeredAbility(
+        trigger=trigger, effect=effect, once_per_turn=once_per_turn,
+    )
