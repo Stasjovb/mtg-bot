@@ -130,4 +130,23 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
             ),
         ),
     ),
+    # Glimmer: 1/1 white Glimmer enchantment creature token. Created
+    # by Tunnel Surveyor's ETB (and other Duskmourn cards that
+    # interact with the Glimmer subtype). The first
+    # enchantment-creature token in the EoE/Duskmourn pool — both
+    # ``Enchantment`` and ``Creature`` appear in ``card_types``,
+    # mirroring the printed type line. The token has no abilities and
+    # no flavor text; it's a vanilla 1/1 with the dual card type so
+    # enchantment-targeting effects can interact with it the same way
+    # they would with a non-token enchantment creature.
+    "Glimmer": CardPrinting(
+        name="Glimmer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Token Enchantment Creature — Glimmer",
+        supertypes=("Token",),
+        card_types=("Enchantment", "Creature"),
+        subtypes=("Glimmer",),
+        power=1, toughness=1,
+    ),
 }

@@ -400,13 +400,26 @@ _TOKEN_COLOR_PATTERN = r"white|blue|black|red|green|colorless"
 #   5. color word (consumed only — see above)
 #   6. subtype phrase (one or more space-separated capitalized words)
 #   7. literal ``artifact`` if the token is also an artifact
+#   8. literal ``enchantment`` if the token is also an enchantment
 # The trailing ``creature token[s]?`` is required — bare-name tokens
 # (Lander, Munitions) take a different surface form and parse via
 # ``_CREATE_BARE_NAME_TOKEN`` below.
+#
+# Both ``artifact`` and ``enchantment`` qualifiers are consumed but not
+# inspected — the registered ``TOKEN_PRINTINGS`` entry encodes the
+# token's full type line, so the regex's job is just to recognize the
+# surface and look up the subtype name. Glimmer (Duskmourn's
+# enchantment-creature token created by Tunnel Surveyor and the other
+# Glimmer-token cards) is the first ``enchantment creature`` shape in
+# the EoE/Duskmourn pool; ``artifact`` came earlier with Robot/Drone.
+# The Oxford comma between the two qualifiers (``2/2 white Cat
+# artifact enchantment creature token``) is forward-looking grammar
+# coverage — no card today carries both, but the regex shape allows
+# either independently or both simultaneously without further work.
 _CREATE_CREATURE_TOKEN = re.compile(
     rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?(\d+)/(\d+) "
     rf"({_TOKEN_COLOR_PATTERN}) ([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
-    rf"(artifact )?creature tokens?$"
+    rf"(artifact )?(enchantment )?creature tokens?$"
 )
 # Bare-name token shape — ``create a Lander token`` /
 # ``create two Lander tokens``. The captured subtype IS the registry

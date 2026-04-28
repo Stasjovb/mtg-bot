@@ -228,3 +228,74 @@ def test_hardened_escort_claimed_by_parser():
     # turn.`` Claims via the existing this-creature-attacks trigger
     # predicate and the new ``another``-qualified pump+grant primitive.
     assert "Hardened Escort" in _claimed_names()
+
+
+# ---------- ``Glimmer`` enchantment-creature token ----------
+
+
+def test_glimmer_token_registered():
+    # ``Glimmer`` must be present in the token registry so the
+    # stat-bearing creature-token grammar (extended for the
+    # ``enchantment `` qualifier) can claim Tunnel Surveyor's ETB.
+    assert "Glimmer" in TOKEN_PRINTINGS
+
+
+def test_glimmer_token_is_both_enchantment_and_creature():
+    # Glimmer is the first dual-type ``Enchantment Creature`` token
+    # in the EoE/Duskmourn pool. Both type words MUST appear in
+    # ``card_types`` so enchantment-targeting effects and
+    # creature-targeting effects both interact with the token.
+    glimmer = TOKEN_PRINTINGS["Glimmer"]
+    assert "Enchantment" in glimmer.card_types
+    assert "Creature" in glimmer.card_types
+
+
+def test_glimmer_token_is_vanilla_one_one():
+    # A Glimmer token is a 1/1 with no abilities and no flavor text —
+    # the registered printing must be vanilla (no
+    # triggered/activated/static abilities, no keywords).
+    glimmer = TOKEN_PRINTINGS["Glimmer"]
+    assert glimmer.power == 1
+    assert glimmer.toughness == 1
+    assert glimmer.keywords == frozenset()
+    assert glimmer.triggered_abilities == ()
+    assert glimmer.activated_abilities == ()
+    assert glimmer.static_abilities == ()
+
+
+def test_parse_create_glimmer_enchantment_creature_token():
+    # End-to-end through the extended stat-bearing creature-token
+    # grammar. Tunnel Surveyor's ETB body is ``create a 1/1 white
+    # Glimmer enchantment creature token``; the regex collapses the
+    # token to the ``Glimmer`` registry entry while consuming the
+    # ``enchantment `` qualifier as part of the surface match.
+    eff = _parse_effect_phrase(
+        "create a 1/1 white Glimmer enchantment creature token"
+    )
+    assert eff == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Glimmer"], count=1,
+    )
+
+
+def test_token_grammar_artifact_qualifier_unchanged():
+    # Belt-and-suspenders that adding the optional ``enchantment ``
+    # tail didn't break the pre-existing ``artifact creature token``
+    # surface (Robot, Drone). Checks the parse path returns the
+    # registered Robot token printing for a 2/2 colorless artifact
+    # creature.
+    eff = _parse_effect_phrase(
+        "create a 2/2 colorless Robot artifact creature token"
+    )
+    assert eff == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Robot"], count=1,
+    )
+
+
+def test_tunnel_surveyor_claimed_by_parser():
+    # Tunnel Surveyor ``{2}{U}`` 2/3 Human Detective. Single oracle
+    # line: ``When this creature enters, create a 1/1 white Glimmer
+    # enchantment creature token.`` Claims via the existing
+    # this-creature-enters trigger predicate and the extended
+    # stat-bearing creature-token grammar resolving against the new
+    # Glimmer registry entry.
+    assert "Tunnel Surveyor" in _claimed_names()
