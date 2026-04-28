@@ -79,6 +79,7 @@ from mtg_bot.cards.parser.effects import (
 )
 from mtg_bot.effects.predicates import (
     YOU,
+    Always,
     Controlled,
     Event,
     HasCounter,
@@ -192,6 +193,70 @@ def _parse_enters_with_body(body: str) -> Effect | None:
 _TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
     r"^(?:When|Whenever) (.+?), if (.+?), (.+)\.$"
 )
+
+
+# Turn-structure trigger line shape: ``At the beginning of <when>,
+# <effect>.`` Distinct from the ``When``/``Whenever`` shape above
+# because the trigger word is ``At`` and the condition body is a
+# fixed-phrase time descriptor (``your end step``, ``each end step``,
+# etc.) rather than a free-form event clause. The ``<when>`` capture
+# is non-greedy to stop at the first ``, `` boundary so the time
+# descriptor stays minimal; the effect captures the rest of the
+# sentence up to the trailing period.
+#
+# Two intervening-clause variants live alongside this base shape:
+#
+# - **Tapped-creatures effect-wrapper** (Frontline War-Rager / Flight-
+#   Deck Coordinator / Sami / Sunstar Chaplain / Vaultguard Trooper /
+#   Dawnstrike Vanguard): ``At the beginning of <when>, if you control
+#   two or more tapped creatures, <effect>.`` The middle ``if`` clause
+#   doesn't AND a predicate onto the trigger event the way the
+#   standard ``_TRIGGERED_ABILITY_INTERVENING_IF_LINE`` does — the
+#   static registry wraps the inner effect in
+#   ``ConditionalOnTappedCreatures(effect=inner, min_count=2)`` and
+#   leaves the trigger predicate at ``Controlled(YOU)``. Mirroring that
+#   here keeps parser/static parity exact.
+# - **Trailing-if-gained-life clause** (Haliya, Guided by Light): ``At
+#   the beginning of <when>, <effect> if you've gained N or more life
+#   this turn.`` The ``if`` rides AFTER the effect (not before, and
+#   not in the middle) and the static wraps the inner effect in
+#   ``ConditionalIfYouGainedLifeAtLeast(threshold=N, inner=...)``.
+#
+# Both variants are tried before the bare shape so the more-specific
+# clause structure wins. Each variant has its own regex below.
+_AT_THE_BEGINNING_OF_LINE = re.compile(
+    r"^At the beginning of (.+?), (.+)\.$"
+)
+
+
+# Time-condition phrases for the ``At the beginning of`` line shape →
+# tuple of (Event, Predicate). The condition is the verbatim oracle
+# phrase between ``At the beginning of`` and the first ``, ``
+# boundary — ``your end step``, ``each end step``, ``your upkeep``,
+# etc. Each entry maps to the matching turn-structure event and the
+# controller-gate predicate appropriate for the surface text:
+# ``your X`` reads as "this is MY phase/step" via ``Controlled(YOU)``
+# (the predicate matches a Player subject by ``player.id ==
+# source.controller_id``), and ``each X`` reads as "any player's
+# phase/step" via ``Always()`` (Ragost's untap-self trigger fires on
+# every end step regardless of whose it is).
+#
+# Today only ``BEGINNING_OF_END_STEP`` mappings are populated — every
+# unclaimed creature in the EoE pool with a turn-structure trigger
+# uses the end-step variant. The ``BEGINNING_OF_UPKEEP`` and
+# ``BEGINNING_OF_COMBAT`` events are reachable when a future printing
+# carries them; the phrasebook structure scales to those without
+# further regex work.
+_AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
+    "your end step": (Event.BEGINNING_OF_END_STEP, Controlled(YOU)),
+    "each end step": (Event.BEGINNING_OF_END_STEP, Always()),
+}
+
+
+def _parse_at_beginning_of_phrase(
+    phrase: str,
+) -> tuple[Event, Predicate] | None:
+    return _AT_BEGINNING_OF_PHRASES.get(phrase.strip())
 
 
 # Trailing once-per-turn rider on a triggered-ability line. Scryfall
@@ -618,6 +683,39 @@ def _substitute_self_name(line: str, name: str) -> str:
     return line
 
 
+def _parse_at_the_beginning_of_line(
+    match: "re.Match[str]",
+) -> TriggeredAbility | None:
+    """Body parser for ``At the beginning of <when>, <effect>.`` lines.
+
+    ``match`` is the result of ``_AT_THE_BEGINNING_OF_LINE.match(line)``
+    — group 1 is the time-condition phrase (``your end step`` etc.) and
+    group 2 is the effect tail (the rest of the sentence between the
+    first ``, `` and the trailing period). The time phrase resolves via
+    ``_parse_at_beginning_of_phrase`` to the matching ``(Event,
+    Predicate)`` pair; the effect tail is parsed via
+    ``_parse_effect_phrase`` (the same primitive every other trigger
+    body uses, so the unified effect grammar stays the single source
+    of truth).
+
+    Returns ``None`` if either piece doesn't parse — the line has no
+    other valid interpretation (unlike the When/Whenever shape, which
+    has multiple line-level fallbacks); rejecting here propagates as a
+    parse failure for the whole oracle line so the surrounding card
+    stays unclaimed rather than silently dropping the trigger.
+    """
+    when_match = _parse_at_beginning_of_phrase(match.group(1))
+    if when_match is None:
+        return None
+    event, predicate = when_match
+    effect = _parse_effect_phrase(match.group(2))
+    if effect is None:
+        return None
+    return TriggeredAbility(
+        event=event, predicate=predicate, effect=effect,
+    )
+
+
 def _parse_triggered_ability_line(
     line: str, *, name: str | None = None,
 ) -> TriggeredAbility | tuple[TriggeredAbility, ...] | None:
@@ -681,6 +779,22 @@ def _parse_triggered_ability_line(
     if line.endswith(_ONCE_PER_TURN_RIDER_SUFFIX):
         line = line[: -len(_ONCE_PER_TURN_RIDER_SUFFIX)]
         once_per_turn = True
+    # Turn-structure ``At the beginning of <when>, <effect>.`` shape.
+    # Tried before the standard ``When``/``Whenever`` paths because the
+    # leading word is ``At`` and the line regex below wouldn't match it
+    # anyway, but ordering by surface form keeps the dispatch narrative
+    # readable. The body parser handles bare and intervening-clause
+    # variants in one place — if any variant claims the line, return its
+    # produced ``TriggeredAbility``; otherwise fall through to the
+    # When/Whenever paths below (a future ``At ...`` shape that doesn't
+    # parse here would still get a chance via the bare regex if it
+    # happened to fit, though no such surface exists today).
+    at_match = _AT_THE_BEGINNING_OF_LINE.match(line)
+    if at_match is not None:
+        parsed = _parse_at_the_beginning_of_line(at_match)
+        if parsed is not None:
+            return parsed
+        return None
     # Intervening-if shape (CR 603.4) tried first: a recognized gate
     # phrase between the trigger condition and the effect collapses to
     # a single ``TriggeredAbility`` with the gate predicate AND-ed onto
