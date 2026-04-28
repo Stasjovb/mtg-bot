@@ -276,10 +276,12 @@ def test_clone_stack_source_is_remapped_explicit() -> None:
 
 
 def test_clone_preserves_delayed_triggers() -> None:
+    from mtg_bot.effects import SacrificeSourceDelayed
+
     state = _mid_game_state()
     state.delayed_triggers.append(
         {"fire_at_turn": 99, "controller_id": 0,
-         "action": "sacrifice", "target_id": 1234}
+         "source_id": 1234, "effect": SacrificeSourceDelayed()}
     )
     clone = state.clone()
 

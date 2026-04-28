@@ -211,8 +211,12 @@ def test_devastating_onslaught_creates_x_copies_with_haste_sac_at_end_step():
         assert "haste" in c.temp_keywords
     # Delayed triggers scheduled to sac them at this turn's end step.
     assert len(state.delayed_triggers) == 2
-    # Fire the end step — copies should be sacrificed.
+    # Fire the end step — triggers go on the stack, then resolve.
+    from mtg_bot.actions import resolve_top_of_stack
     run_delayed_end_step_triggers(state)
+    assert len(state.stack) == 2
+    while state.stack:
+        resolve_top_of_stack(state)
     for c in copies:
         assert c not in state.battlefield
 

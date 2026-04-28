@@ -1882,6 +1882,10 @@ def test_eusocial_engineering_warp_cast_and_end_step_exile():
     assert card.cast_via_warp is True
 
     run_delayed_end_step_triggers(state)
+    # Trigger is on the stack; resolution happens via standard path.
+    assert len(state.stack) == 1
+    while state.stack:
+        resolve_top_of_stack(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True
@@ -4179,6 +4183,7 @@ def test_mana_cost_reduced_never_below_zero():
 
 
 def test_kav_landseeker_schedules_sacrifice_and_fires():
+    from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.turn import run_delayed_end_step_triggers
 
     state = _arena()
@@ -4199,19 +4204,28 @@ def test_kav_landseeker_schedules_sacrifice_and_fires():
     assert len(state.delayed_triggers) == 1
     # Scheduled for turn+2 since P0 is active.
     assert state.delayed_triggers[0]["fire_at_turn"] == 3
-    assert state.delayed_triggers[0]["target_id"] == lander.id
+    # Lander is the source of the delayed trigger (it's what gets sac'd).
+    assert state.delayed_triggers[0]["source_id"] == lander.id
 
     # Simulate reaching P0's next end step (turn 3).
     state.turn_number = 3
     state.active_player_idx = 0
     run_delayed_end_step_triggers(state)
+    # Trigger sits on the stack until resolution.
+    assert lander in state.battlefield
+    assert len(state.stack) == 1
+    while state.stack:
+        resolve_top_of_stack(state)
     assert lander not in state.battlefield  # sacrificed
     assert state.delayed_triggers == []
 
 
 def test_delayed_trigger_survives_removal_if_target_gone():
     """If the target leaves before the trigger fires, the entry is
-    consumed but nothing happens."""
+    consumed and the trigger fires as a no-op (lander is a token, so
+    it ceased to exist after being destroyed — the source can't be
+    found anywhere; we skip the push entirely)."""
+    from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.turn import run_delayed_end_step_triggers, destroy
 
     state = _arena()
@@ -4226,15 +4240,20 @@ def test_delayed_trigger_survives_removal_if_target_gone():
     state.resolving_source = kav
     etb.effect.resolve(state, 0)
     lander = [o for o in state.battlefield if o.printing.name == "Lander"][0]
-    destroy(state, lander)  # Lander gone before end step
+    destroy(state, lander)  # Lander (token) ceases to exist
     state.turn_number = 3
     run_delayed_end_step_triggers(state)
+    # Token is gone, so the trigger doesn't go on the stack at all.
+    assert state.stack == []
     assert state.delayed_triggers == []
+    while state.stack:
+        resolve_top_of_stack(state)
 
 
 def test_delayed_trigger_waits_for_correct_turn():
     """Trigger scheduled for turn 3 doesn't fire at turn 2."""
     from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.effects import SacrificeSourceDelayed
     from mtg_bot.turn import run_delayed_end_step_triggers
 
     state = _arena()
@@ -4246,14 +4265,15 @@ def test_delayed_trigger_waits_for_correct_turn():
     state.delayed_triggers.append({
         "fire_at_turn": 3,
         "controller_id": 0,
-        "action": "sacrifice",
-        "target_id": lander.id,
+        "source_id": lander.id,
+        "effect": SacrificeSourceDelayed(),
     })
     # Turn 2, wrong controller — don't fire.
     state.turn_number = 2
     state.active_player_idx = 1
     run_delayed_end_step_triggers(state)
     assert lander in state.battlefield
+    assert state.stack == []
     assert len(state.delayed_triggers) == 1
 
 

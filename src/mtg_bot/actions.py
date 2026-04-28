@@ -1420,13 +1420,15 @@ def _cast_spell(
     # next end step — same turn for sorcery-speed warps cast on the
     # caster's own turn (offset 0), next turn for instant-speed warps
     # cast on an opponent's turn (offset 1, when caster becomes
-    # active). The trigger flows through ``run_delayed_end_step_triggers``
-    # so it logs through the standard "delayed effect fires" path,
-    # observable to the game log just like Mystifying Maze's deferred
-    # return-to-battlefield. ``WarpExileSelf`` looks up the source by
-    # id at fire time — if the warp permanent has already left the
-    # battlefield (countered, died, bounced, etc.), the resolution
-    # is a no-op per CR 603.6c.
+    # active). At end step, ``run_delayed_end_step_triggers`` wraps
+    # this entry as a synthetic ``TriggeredAbility`` and pushes it
+    # onto the stack via ``push_triggered_ability``; players then get
+    # priority and the standard ``resolve_top_of_stack`` path drains
+    # it (logged as "<source>'s delayed trigger goes on the stack").
+    # ``WarpExileSelf`` re-checks the battlefield by id at resolve
+    # time — if the warp permanent has already left the battlefield
+    # (countered, died, bounced, etc.), the resolution is a no-op
+    # per CR 603.6c.
     if use_warp:
         from mtg_bot.effects import WarpExileSelf
 

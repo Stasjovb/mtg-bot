@@ -143,6 +143,8 @@ from mtg_bot.effects.generic import (
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
     SacrificeNLandsYouControl,
+    SacrificeSourceDelayed,
+    RemoveChargeCountersFromSourceDelayed,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,

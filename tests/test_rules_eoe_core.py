@@ -392,17 +392,26 @@ def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
     assert card in state.battlefield
     assert card.cast_via_warp is True
 
-    # End step fires the delayed trigger: warp-cast permanents get exiled
-    # + marked warped.
+    # End step fires the delayed trigger: it goes on the stack first.
     run_delayed_end_step_triggers(state)
+    # SNAPSHOT: the trigger sits on the stack; card hasn't moved yet.
+    assert card in state.battlefield
+    assert len(state.stack) == 1
+    item = state.stack[0]
+    assert item.source is card  # warp creature is the source
+    # Drain the stack — exile happens via standard resolution path.
+    while state.stack:
+        resolve_top_of_stack(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True
     assert card.cast_via_warp is False
-    # Trigger consumed.
+    # Trigger consumed off the queue.
     assert state.delayed_triggers == []
-    # Log includes the standard "delayed effect fires" message.
-    assert any("delayed effect fires" in line for line in state.log)
+    # Log includes the standard "trigger goes on the stack" message.
+    assert any(
+        "delayed trigger goes on the stack" in line for line in state.log
+    )
 
 
 def test_warped_card_can_be_recast_from_exile_at_normal_cost():

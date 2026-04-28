@@ -912,8 +912,8 @@ class CreateLanderAndScheduleSacrifice(Effect):
         state.delayed_triggers.append({
             "fire_at_turn": state.turn_number + offset,
             "controller_id": controller_id,
-            "action": "sacrifice",
-            "target_id": lander.id,
+            "source_id": lander.id,
+            "effect": SacrificeSourceDelayed(),
         })
         state.log.append(
             f"P{controller_id} creates a Lander token (scheduled to be "
@@ -1076,17 +1076,17 @@ class WarpExileSelf(Effect):
     """Delayed-triggered exile of a warp-cast creature at end step.
 
     Scheduled at warp-cast time onto ``state.delayed_triggers`` with
-    ``source_id`` set to the warped card's id. When the delayed
-    end-step machinery fires this effect, ``state.resolving_source``
-    is the warped permanent (looked up on the battlefield by id —
-    None if the card already left the battlefield, e.g. by death,
-    bounce, or earlier exile). On a hit, move the permanent to
-    exile, mark it ``warped`` so it can be re-cast for its normal
-    cost from there, and clear the ``cast_via_warp`` marker so a
-    future return-to-battlefield doesn't re-trigger the exile.
+    ``source_id`` set to the warped card's id. When the delayed-trigger
+    machinery converts the entry into a real triggered ability and
+    pushes it onto the stack, the StackItem's ``source`` is the warp
+    permanent (or stays as the original GameObject reference even if
+    the permanent has since left). On resolve, ``state.resolving_source``
+    is that GameObject — but we re-check the battlefield by id before
+    acting because the card may have left between the trigger going on
+    the stack and resolving (countered, died, bounced, exiled).
 
-    No-op if the source is missing — the trigger still "fires" per
-    CR 603.6c, it just has no permanent to act on.
+    No-op if the source has left the battlefield — the trigger still
+    "fires" per CR 603.6c, it just has no permanent to act on.
     """
 
     def resolve(
@@ -1095,12 +1095,16 @@ class WarpExileSelf(Effect):
     ) -> None:
         from mtg_bot.turn import move_off_battlefield
 
-        # ``run_delayed_end_step_triggers`` sets ``state.resolving_source``
-        # from a battlefield-by-id lookup of ``source_id`` — None here
-        # means the warp permanent already left the battlefield (death,
-        # bounce, prior exile). The trigger still fires per CR 603.6c
-        # but resolves as a no-op.
-        obj = state.resolving_source
+        # ``state.resolving_source`` is set to the StackItem's source
+        # GameObject — that reference persists even if the warp creature
+        # has since left the battlefield. Re-look up by id on the live
+        # battlefield to honor the no-op-if-gone rule (CR 603.6c).
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == ref.id), None,
+        )
         if obj is None:
             return
         state.log.append(f"{obj.printing.name} is warp-exiled")
@@ -1111,6 +1115,86 @@ class WarpExileSelf(Effect):
 
     def describe(self) -> str:
         return "exile this warp-cast permanent"
+
+
+
+@dataclass(frozen=True)
+class SacrificeSourceDelayed(Effect):
+    """Delayed-triggered "sacrifice this permanent" effect.
+
+    Scheduled with ``source_id`` set to the permanent that should be
+    sacrificed. Used by Kav Landseeker (sacrifice the Lander token at
+    P0's next end step) and Devastating Onslaught (sacrifice the haste-
+    token copies at the next end step).
+
+    On resolve, look up the source on the battlefield by id and
+    sacrifice it. No-op if it's already gone (CR 603.6c) — the trigger
+    still fires, it just has nothing to act on.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice
+
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == ref.id), None,
+        )
+        if obj is None:
+            return
+        state.log.append(
+            f"P{controller_id} sacrifices {obj.printing.name} "
+            f"(delayed trigger)"
+        )
+        sacrifice(state, obj)
+
+    def describe(self) -> str:
+        return "sacrifice this permanent"
+
+
+
+@dataclass(frozen=True)
+class RemoveChargeCountersFromSourceDelayed(Effect):
+    """Delayed-triggered "remove N charge counters from this permanent"
+    effect.
+
+    Scheduled with ``source_id`` set to the Spacecraft to be reset.
+    Used by Systems Override (add 10 charge counters now, remove 10
+    at the next end step).
+
+    On resolve, look up the source on the battlefield by id and
+    decrement charge counters (clamped at 0). No-op if the source has
+    left the battlefield.
+    """
+
+    amount: int
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == ref.id), None,
+        )
+        if obj is None:
+            return
+        obj.charge_counters = max(0, obj.charge_counters - self.amount)
+        state.log.append(
+            f"remove {self.amount} charge counters from "
+            f"{obj.printing.name} (now {obj.charge_counters})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"remove {self.amount} charge counters from this permanent"
+        )
 
 
 
@@ -1159,19 +1243,30 @@ class ExileTargetAttackingCreatureUntilEndStep(Effect):
         )
         if target is None:
             return
+        # The Mystifying Maze itself is the source of the delayed
+        # triggered ability: per CR 603.7c the ability is created by
+        # Maze's resolution and goes on the stack at the next end step
+        # under Maze's controller (the active player). We need a
+        # source GameObject for the StackItem; ``state.resolving_source``
+        # is Maze during this resolve.
+        maze_source_id = (
+            state.resolving_source.id
+            if state.resolving_source is not None else None
+        )
         state.log.append(
             f"{target.printing.name} is exiled until end of turn"
         )
         move_off_battlefield(state, target, destination="exile")
-        state.delayed_triggers.append(
-            {
-                "fire_at_turn": state.turn_number,
-                "controller_id": state.active_player().id,
-                "effect": ReturnExiledPermanentToOwnerTapped(
-                    exile_card_id=target.id,
-                ),
-            }
-        )
+        entry: dict = {
+            "fire_at_turn": state.turn_number,
+            "controller_id": state.active_player().id,
+            "effect": ReturnExiledPermanentToOwnerTapped(
+                exile_card_id=target.id,
+            ),
+        }
+        if maze_source_id is not None:
+            entry["source_id"] = maze_source_id
+        state.delayed_triggers.append(entry)
 
     def describe(self) -> str:
         return (
@@ -5857,8 +5952,8 @@ class CreateXTokensOfTargetPermanentWithHasteEndStepSac(Effect):
             state.delayed_triggers.append({
                 "fire_at_turn": state.turn_number,
                 "controller_id": controller_id,
-                "action": "sacrifice",
-                "target_id": token.id,
+                "source_id": token.id,
+                "effect": SacrificeSourceDelayed(),
             })
         state.log.append(
             f"Devastating Onslaught creates {x} copies of "

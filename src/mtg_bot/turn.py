@@ -720,86 +720,113 @@ def run_beginning_of_combat_triggers(state: GameState) -> None:
     )
 
 
-def run_delayed_end_step_triggers(state: GameState) -> None:
-    """Fire any delayed triggers scheduled for this end step.
-
-    Two entry shapes are supported:
-
-    1. Hardcoded string-``action`` entries (legacy): currently
-       ``"sacrifice"`` (Kav Landseeker's scheduled sac) and
-       ``"remove_charge_counters"`` (Systems Override's 10-counter
-       reset). Each specifies a ``target_id`` pointing to a battlefield
-       permanent.
-
-    2. Arbitrary ``effect`` entries: the entry carries an Effect
-       instance, resolved with optional ``source_id`` (sets
-       ``state.resolving_source`` during resolution). Used by
-       Mystifying Maze's "return the exiled creature at the next end
-       step tapped" scheduling. Effect instances are frozen dataclasses
-       so the state stays pickle-friendly.
-
-    Both shapes require ``fire_at_turn`` to match the current turn
-    number and ``controller_id`` to match the active player.
+def _find_object_by_id(state: GameState, obj_id: int):
+    """Find a GameObject by id across every zone (battlefield + each
+    player's library/hand/graveyard/exile). Returns None if no
+    GameObject with that id exists anywhere — only possible for
+    tokens that ceased to exist (CR 704.5d).
     """
+    for o in state.battlefield:
+        if o.id == obj_id:
+            return o
+    for p in state.players:
+        for zone in (p.library, p.hand, p.graveyard, p.exile):
+            for o in zone:
+                if o.id == obj_id:
+                    return o
+    return None
+
+
+def run_delayed_end_step_triggers(state: GameState) -> None:
+    """Push fires-now delayed triggers onto the stack as real
+    triggered abilities.
+
+    Each entry in ``state.delayed_triggers`` whose ``fire_at_turn``
+    matches the current turn AND whose ``controller_id`` matches the
+    active player gets converted into a synthetic
+    ``TriggeredAbility(event=BEGINNING_OF_END_STEP, predicate=Always(),
+    effect=<entry-effect>)`` and pushed via ``push_triggered_ability``.
+    Players then get priority during the end step's priority loop, and
+    the standard ``resolve_top_of_stack`` path drains the stack.
+
+    Push order is the same as the pre-existing iteration order over
+    ``state.delayed_triggers`` (FIFO scheduling order). Items are
+    pushed onto a LIFO stack, so they resolve in reverse-scheduling
+    order — the most recently scheduled delayed trigger resolves
+    first. MTG's APNAP rule for simultaneous triggers from a single
+    player would order these per-controller-choice, but our engine's
+    delayed-trigger collection is single-player anyway (the active
+    player), so the LIFO-of-scheduling-order is a deterministic stand-in.
+
+    The ``state.resolving_source`` plumbing happens automatically
+    through the standard ``resolve_top_of_stack`` path: when a
+    StackItem's ability resolves, ``state.resolving_source`` is set
+    to ``item.source`` for the duration of the effect's resolve. The
+    delayed-trigger effects (``WarpExileSelf``, ``SacrificeSourceDelayed``,
+    ``RemoveChargeCountersFromSourceDelayed``,
+    ``ReturnExiledPermanentToOwnerTapped``) all read from there or
+    from their own stored ids.
+
+    Entries with a missing source (only possible for tokens that
+    ceased to exist before fire time) consume the entry without
+    pushing — there's no observable game state difference vs.
+    pushing a no-op trigger.
+
+    Legacy string-action entries (``"sacrifice"`` / ``"remove_charge_counters"``)
+    are no longer supported here — their producers were migrated to
+    the effect-shape path in the same commit that introduced this
+    refactor. Any leftover string-action entry is a bug; we raise
+    ``ValueError`` rather than silently bypass the stack.
+    """
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always, Event
+
     ap_id = state.active_player().id
     remaining: list[dict] = []
+    to_push: list[dict] = []
     for entry in state.delayed_triggers:
         fires_now = (
             entry["fire_at_turn"] == state.turn_number
             and entry["controller_id"] == ap_id
         )
-        if not fires_now:
+        if fires_now:
+            to_push.append(entry)
+        else:
             remaining.append(entry)
-            continue
-
-        if "effect" in entry:
-            effect = entry["effect"]
-            source_id = entry.get("source_id")
-            source = (
-                next(
-                    (o for o in state.battlefield if o.id == source_id),
-                    None,
-                )
-                if source_id is not None else None
-            )
-            prior = state.resolving_source
-            state.resolving_source = source
-            try:
-                effect.resolve(state, entry["controller_id"], ())
-            finally:
-                state.resolving_source = prior
-            state.log.append(
-                f"delayed effect fires: {effect.describe()}"
-            )
-            continue
-
-        # Legacy string-action path.
-        target = next(
-            (o for o in state.battlefield
-             if o.id == entry["target_id"]),
-            None,
-        )
-        if target is not None and entry["action"] == "sacrifice":
-            state.log.append(
-                f"delayed trigger: P{ap_id} sacrifices "
-                f"{target.printing.name}"
-            )
-            sacrifice(state, target)
-        elif (
-            target is not None
-            and entry["action"] == "remove_charge_counters"
-        ):
-            amount = entry.get("amount", 1)
-            target.charge_counters = max(
-                0, target.charge_counters - amount
-            )
-            state.log.append(
-                f"delayed trigger: remove {amount} charge counters "
-                f"from {target.printing.name} "
-                f"(now {target.charge_counters})"
-            )
-        # Even if target is gone, we're done with this entry.
     state.delayed_triggers = remaining
+
+    for entry in to_push:
+        if "effect" not in entry:
+            raise ValueError(
+                "delayed_triggers entry without 'effect' key — legacy "
+                "string-action entries are no longer supported. Migrate "
+                "the producer to push an Effect instance with source_id."
+            )
+        effect = entry["effect"]
+        source_id = entry.get("source_id")
+        source = (
+            _find_object_by_id(state, source_id)
+            if source_id is not None else None
+        )
+        if source is None:
+            # Token ceased to exist (or no source_id was scheduled);
+            # the trigger has nothing to act on. Mirrors pre-refactor
+            # silent-no-op behavior. Skip the push.
+            continue
+        ability = TriggeredAbility(
+            event=Event.BEGINNING_OF_END_STEP,
+            predicate=Always(),
+            effect=effect,
+        )
+        push_triggered_ability(
+            state,
+            source=source,
+            ability=ability,
+            ability_index=-1,  # not a real index — synthetic ability
+            controller_id=entry["controller_id"],
+            label="delayed",
+        )
 
 
 def run_beginning_of_end_step_triggers(state: GameState) -> None:

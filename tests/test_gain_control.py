@@ -52,7 +52,11 @@ def test_systems_override_reverts_on_cleanup():
 
 def test_systems_override_spacecraft_charge_counters():
     """Systems Override on a Spacecraft adds 10 charge counters and
-    schedules a delayed remove-10 at the next end step."""
+    schedules a delayed remove-10 at the next end step (now via the
+    stack)."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.effects import RemoveChargeCountersFromSourceDelayed
+
     state = _new_state()
     state.active_player_idx = 0
     ship = state.new_object(
@@ -63,10 +67,17 @@ def test_systems_override_spacecraft_charge_counters():
     assert ship.charge_counters == 10
     assert len(state.delayed_triggers) == 1
     entry = state.delayed_triggers[0]
-    assert entry["action"] == "remove_charge_counters"
-    assert entry["amount"] == 10
-    # Fire the end step — counters go back to 0.
+    assert entry["effect"] == RemoveChargeCountersFromSourceDelayed(
+        amount=10
+    )
+    assert entry["source_id"] == ship.id
+    # Fire the end step — counters go back to 0 after stack resolution.
     run_delayed_end_step_triggers(state)
+    # Trigger is on the stack; counters not yet decremented.
+    assert ship.charge_counters == 10
+    assert len(state.stack) == 1
+    while state.stack:
+        resolve_top_of_stack(state)
     assert ship.charge_counters == 0
 
 

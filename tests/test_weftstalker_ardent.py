@@ -71,6 +71,10 @@ def test_weftstalker_ardent_warp_cast_resolves_and_exiles_at_end_step():
     assert card.cast_via_warp is True
 
     run_delayed_end_step_triggers(state)
+    # Drain the stack — the warp-exile trigger now flows through the
+    # standard resolution path.
+    while state.stack:
+        resolve_top_of_stack(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True

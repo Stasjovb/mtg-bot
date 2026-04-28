@@ -2065,12 +2065,14 @@ class SystemsOverrideEffect(Effect):
                 f"{obj.printing.name} gets 10 charge counters "
                 f"(now {obj.charge_counters})"
             )
+            from mtg_bot.effects import (
+                RemoveChargeCountersFromSourceDelayed,
+            )
             state.delayed_triggers.append({
                 "fire_at_turn": state.turn_number,
                 "controller_id": controller_id,
-                "action": "remove_charge_counters",
-                "target_id": obj.id,
-                "amount": 10,
+                "source_id": obj.id,
+                "effect": RemoveChargeCountersFromSourceDelayed(amount=10),
             })
 
     def describe(self) -> str:
