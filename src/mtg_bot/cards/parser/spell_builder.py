@@ -64,6 +64,7 @@ from mtg_bot.cards.base import (
     PumpTargetCreatureUntilEOT,
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    SearchLibraryForGreenCreatureWithMVAtMostX,
     SeedshipImpactEffect,
     Sequence,
     SingularityRuptureEffect,
@@ -603,6 +604,33 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         you_control_only=True,
         granted_keywords_if_warp_cast=frozenset({"trample", "haste"}),
     ),
+    # Nexus of Fate: take-extra-turn instant + shuffle-instead-of-
+    # graveyard rider. The rider is wired separately via the
+    # ``shuffles_into_library_instead_of_graveyard`` printing flag
+    # (see ``_detect_shuffle_self_flags``); the dispatcher returns
+    # only the spell-effect engine class for the first clause. The
+    # full multi-line key is required here because the per-clause
+    # parser can't stand up the take-extra-turn primitive on its
+    # own (no other card shares it). Multi-line key carries the
+    # literal newline between effect line and rider line.
+    (
+        "Take an extra turn after this one.\n"
+        "If Nexus of Fate would be put into a graveyard from anywhere, "
+        "reveal Nexus of Fate and shuffle it into its owner's library "
+        "instead."
+    ): TakeExtraTurnAfterThisOne(),
+    # Green Sun's Zenith: variable-X tutor for a green creature plus
+    # a self-shuffle rider on the same line. The ``X`` in the search
+    # primitive is read from ``state.resolving_x_value`` at resolve
+    # time. The shuffle rider is wired separately via the
+    # ``shuffles_into_library_instead_of_graveyard`` printing flag
+    # (see ``_detect_shuffle_self_flags``); the dispatcher returns
+    # only the search-engine instance.
+    (
+        "Search your library for a green creature card with mana "
+        "value X or less, put it onto the battlefield, then shuffle. "
+        "Shuffle Green Sun's Zenith into its owner's library."
+    ): SearchLibraryForGreenCreatureWithMVAtMostX(),
     # Hymn of the Faller: three-clause Sequence + Void ADDS-A-DRAW
     # rider. Unlike the existing Void replacement helpers (which swap
     # one effect for another), this rider runs an additional effect
@@ -802,6 +830,64 @@ def _detect_additional_cost_flags(text: str) -> dict:
     return flags
 
 
+# Self-shuffle riders: a clause of the form "Shuffle <Name> into its
+# owner's library." (Green Sun's Zenith) or "If <Name> would be put
+# into a graveyard from anywhere, reveal <Name> and shuffle it into
+# its owner's library instead." (Nexus of Fate). The static side wires
+# both via the ``shuffles_into_library_instead_of_graveyard`` printing
+# flag — so detecting either rider in a spell's oracle text threads the
+# flag onto the resulting ``CardPrinting`` without contributing an
+# ``Effect``. The rider's text remains in the oracle text and is
+# matched verbatim by the whole-spell exact-text dispatcher; there is
+# no clause-stripping pass needed for these riders, since the dispatch
+# key already includes the rider.
+#
+# Both shapes interpolate the card's own name and are matched after
+# escaping the name. Non-matching cards (no shuffle rider in their
+# text) round-trip through ``_detect_shuffle_self_flags`` with an
+# empty flag dict.
+_SHUFFLE_SELF_GSZ_RE_TEMPLATE = (
+    r"Shuffle {name} into its owner's library\."
+)
+_SHUFFLE_SELF_NEXUS_RE_TEMPLATE = (
+    r"If {name} would be put into a graveyard from anywhere, "
+    r"reveal {name} and shuffle it into its owner's library instead\."
+)
+
+
+def _detect_shuffle_self_flags(text: str, name: str) -> dict:
+    """Return ``{"shuffles_into_library_instead_of_graveyard": True}``
+    if ``text`` contains a recognized self-shuffle rider for ``name``;
+    an empty dict otherwise.
+
+    Two shapes are recognized:
+      - ``Shuffle <Name> into its owner's library.`` (Green Sun's
+        Zenith). Appears as the trailing sentence of the spell's
+        single oracle line.
+      - ``If <Name> would be put into a graveyard from anywhere,
+        reveal <Name> and shuffle it into its owner's library
+        instead.`` (Nexus of Fate). Appears as the spell's second
+        oracle line.
+
+    The matcher uses ``re.search`` (not ``re.match``) so it finds the
+    rider regardless of where in the spell text it appears. Each
+    pattern interpolates ``re.escape(name)`` so a card name with regex
+    metacharacters (e.g. apostrophes, periods) doesn't break the
+    match. Non-matching texts return ``{}`` — callers spread the dict
+    via ``**`` into ``make_instant`` / ``make_sorcery`` so an empty
+    dict is a no-op.
+    """
+    name_re = re.escape(name)
+    patterns = (
+        _SHUFFLE_SELF_GSZ_RE_TEMPLATE.format(name=name_re),
+        _SHUFFLE_SELF_NEXUS_RE_TEMPLATE.format(name=name_re),
+    )
+    for p in patterns:
+        if re.search(p, text) is not None:
+            return {"shuffles_into_library_instead_of_graveyard": True}
+    return {}
+
+
 def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     """Return every cost-reduction rule implied by ``text``'s recognized
     ``This spell costs {N} less to cast if <condition>.`` clauses, in
@@ -849,4 +935,5 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         cost_reductions=_detect_cost_reductions(text),
         **_detect_preamble_flags(text),
         **_detect_additional_cost_flags(text),
+        **_detect_shuffle_self_flags(text, card["name"]),
     )
