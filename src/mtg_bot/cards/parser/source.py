@@ -38,6 +38,7 @@ _DATA_PATHS: tuple[Path, ...] = (
     _DATA_DIR / "edge_of_eternities.json",
     _DATA_DIR / "stellar_sights.json",
     _DATA_DIR / "special_guests_eoe.json",
+    _DATA_DIR / "duskmourn.json",
 )
 
 
