@@ -35,6 +35,7 @@ from mtg_bot.cards.base import (
     DestroyTargetNonlandPermanent,
     DiscardHandThenDrawN,
     DiscardSelf,
+    DoubleTargetCreaturesPowerUEOT,
     DrawCards,
     EachOpponentDiscards,
     EachOpponentLosesLife,
@@ -589,6 +590,20 @@ _PUMP_YOUR_CREATURES_UEOT = re.compile(
 _PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
     r"^target creature you control gets ([+-]\d+)/([+-]\d+) "
     r"until end of turn$"
+)
+# "Double the power of target creature you control until end of turn"
+# — Mightform Harmonizer's landfall trigger body. The
+# ``DoubleTargetCreaturesPowerUEOT`` engine class adds the target's
+# current effective power as a temporary power bonus that clears at
+# end-of-turn cleanup. Distinct from the ``gets +N/+0`` UEOT pump
+# regexes above: the bonus amount is computed dynamically from the
+# target's current power at resolve time, not a fixed constant. Maps
+# to the engine class with no parameters — the legal-target predicate
+# (``target creature you control``) and duration (``until end of
+# turn``) are both encoded by the class.
+_DOUBLE_TARGET_CREATURE_YOU_CONTROL_POWER_UEOT = re.compile(
+    r"^double the power of target creature you control until end of "
+    r"turn$"
 )
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
@@ -1609,6 +1624,16 @@ def _parse_effect(phrase: str) -> Effect | None:
             toughness_bonus=int(m.group(2)),
             optional=True,
         )
+    if _DOUBLE_TARGET_CREATURE_YOU_CONTROL_POWER_UEOT.match(
+        phrase
+    ) is not None:
+        # ``double the power of target creature you control until end
+        # of turn`` — Mightform Harmonizer's landfall trigger. Distinct
+        # from the bare ``gets +N/+0`` pump shapes above: the bonus is
+        # computed at resolve time from the target's current power
+        # rather than a fixed constant. Maps to the engine class with
+        # no parameters — the surface form is a literal match.
+        return DoubleTargetCreaturesPowerUEOT()
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(

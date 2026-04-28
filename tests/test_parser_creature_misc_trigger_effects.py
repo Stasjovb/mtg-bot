@@ -1,6 +1,6 @@
 """Tests for batch-19 trigger-time and effect-grammar additions.
 
-Two new pieces of grammar land in this batch:
+Three new pieces of grammar land in this batch:
 
 * ``At the beginning of combat on your turn`` —
   ``_AT_BEGINNING_OF_PHRASES`` gains the
@@ -18,7 +18,15 @@ Two new pieces of grammar land in this batch:
   cards`` shape (Mechan Navigator-adjacent grammar): discards the
   WHOLE hand, not a single chosen card.
 
-Two creatures newly claim through these primitives:
+* ``[this creature ]deals N damage to target opponent`` →
+  ``DealDamageToTargetOpponent(amount=N)``. Biotech Specialist's
+  sacrifice-an-artifact trigger body. Accepts both the bare
+  ``deals N damage to target opponent`` form (post normal
+  ``it``-strip) AND the explicit ``this creature deals …`` form
+  Scryfall prints when the trigger condition's subject is ``you``
+  (so ``it`` would be ambiguous).
+
+Three creatures newly claim through these primitives:
 
 * **Molecular Modifier** — ``At the beginning of combat on your
   turn, target creature you control gets +1/+0 and gains first
@@ -32,6 +40,10 @@ Two creatures newly claim through these primitives:
   ``ConditionalOnTappedCreatures`` wrapper already sat at the
   trigger-line level via the tapped-creatures-gate prefix path; the
   blocker was the unrecognized inner-effect grammar.
+* **Biotech Specialist** — ETB create a Lander token, plus
+  ``Whenever you sacrifice an artifact, this creature deals 2
+  damage to target opponent.`` Both triggers parse through existing
+  grammar except the new ``this creature deals …`` effect-phrase.
 
 The shared parametrized parity test in ``tests/test_parser_parity.py``
 enforces full ``CardPrinting`` parity, so this file focuses on the
@@ -42,6 +54,7 @@ from __future__ import annotations
 
 from mtg_bot.cards.base import (
     ConditionalOnTappedCreatures,
+    DealDamageToTargetOpponent,
     DiscardHandThenDrawN,
     PumpTargetCreatureUntilEOT,
     TriggeredAbility,
@@ -136,6 +149,45 @@ def test_vaultguard_trooper_trigger_line():
     )
 
 
+# ---------- ``deals N damage to target opponent`` ----------
+
+def test_parse_deals_damage_to_target_opponent_bare():
+    # Post-``it``-strip form (``_normalize_creature_effect_phrase``
+    # consumes the leading ``it ``). Maps to
+    # ``DealDamageToTargetOpponent(amount=N)``.
+    assert _parse_effect_phrase("it deals 2 damage to target opponent") == (
+        DealDamageToTargetOpponent(amount=2)
+    )
+
+
+def test_parse_deals_damage_to_target_opponent_with_this_creature_prefix():
+    # Biotech Specialist's printed surface — Scryfall prints
+    # ``this creature deals 2 damage to target opponent`` when the
+    # trigger condition's subject is ``you`` and a bare ``it`` would
+    # be ambiguous. The regex's optional ``this creature `` prefix
+    # accepts the longer subject form at the regex level (the
+    # ``_normalize_creature_effect_phrase`` strip only consumes
+    # ``it``).
+    assert _parse_effect_phrase(
+        "this creature deals 2 damage to target opponent"
+    ) == DealDamageToTargetOpponent(amount=2)
+
+
+def test_biotech_specialist_sac_trigger_line():
+    # End-to-end: ``Whenever you sacrifice an artifact, this creature
+    # deals 2 damage to target opponent.`` The trigger phrase is the
+    # batch-9 ``you sacrifice an artifact`` entry; the new piece is
+    # the effect grammar above.
+    line = (
+        "Whenever you sacrifice an artifact, this creature deals 2 "
+        "damage to target opponent."
+    )
+    parsed = _parse_triggered_ability_line(line)
+    assert parsed is not None
+    assert parsed.event == Event.IS_SACRIFICED
+    assert parsed.effect == DealDamageToTargetOpponent(amount=2)
+
+
 # ---------- claim tests (end-to-end via the parser source) ----------
 
 def test_molecular_modifier_claimed_by_parser():
@@ -144,3 +196,7 @@ def test_molecular_modifier_claimed_by_parser():
 
 def test_vaultguard_trooper_claimed_by_parser():
     assert "Vaultguard Trooper" in _claimed_names()
+
+
+def test_biotech_specialist_claimed_by_parser():
+    assert "Biotech Specialist" in _claimed_names()

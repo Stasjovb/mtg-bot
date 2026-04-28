@@ -1295,6 +1295,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # of turn."
         make_creature(
             "Mightform Harmonizer", "{2}{G}{G}", 4, 4,
+            subtypes=("Insect", "Druid"),
             warp="{2}{G}",
             triggered_abilities=(
                 TriggeredAbility(
