@@ -39,20 +39,27 @@ from mtg_bot.cards.base import (
     BecomeLandCreatureUEOT,
     CardPrinting,
     ChangeControllerToCombatDamageSource,
+    ConditionalIfYouControlAtLeast,
     DealDamageToControllerAndAddMana,
+    DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
     DestroyTargetLand,
     DrawCards,
     Effect,
     ExileTargetAttackingCreatureUntilEndStep,
+    ExileTargetCreatureUntilSourceLeaves,
     GainLife,
     GrantLifeToEachOpponent,
+    ManaCost,
+    MovePlusOneCounterBetweenPermanentsYouControl,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfXPowerUEOT,
     PumpTargetCreatureUntilEOT,
     PutBasicLandFromHandOntoBattlefieldTapped,
+    PutChargeCountersOnSelf,
     PutPlusOneCounterOnSelf,
     RegenerateTargetCreature,
     ReturnTargetLandFromGraveyardToHand,
+    SearchLibraryForCard,
     Sequence,
     SwitchSourcePowerToughnessUEOT,
     TriggeredAbility,
@@ -395,6 +402,156 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                         power_bonus=1, toughness_bonus=0,
                         attacking_only=True,
                     ),
+                ),
+            ),
+        ),
+        # Blast Zone: enters with a charge counter. {T}: Add {C}.
+        # {X}{X},{T}: Put X charge counters on this land.
+        # {3},{T},Sac self: Destroy each nonland permanent with MV =
+        # charge counter count.
+        "Blast Zone": make_utility_land(
+            "Blast Zone",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=PutChargeCountersOnSelf(amount=1),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{X}{X}"),
+                        mana_str="{X}{X}",
+                        tap_self=True,
+                    ),
+                    effect=PutChargeCountersOnSelf(amount_from_x=True),
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}"),
+                        mana_str="{3}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=(
+                        DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters()
+                    ),
+                ),
+            ),
+        ),
+        # Nesting Grounds: {T}: Add {C}. {1},{T}: Move a counter from
+        # target permanent you control onto a second target permanent.
+        # Activate only as a sorcery.
+        "Nesting Grounds": make_utility_land(
+            "Nesting Grounds",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"),
+                        mana_str="{1}",
+                        tap_self=True,
+                    ),
+                    effect=MovePlusOneCounterBetweenPermanentsYouControl(),
+                    sorcery_speed=True,
+                ),
+            ),
+        ),
+        # Endless Sands: {T}: Add {C}. {2},{T}: Exile target creature you
+        # control. {4},{T},Sac self: Return each creature card exiled with
+        # this land to the battlefield.
+        "Endless Sands": make_utility_land(
+            "Endless Sands", subtypes_str="Desert",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}"),
+                        mana_str="{3}",
+                        tap_self=True,
+                    ),
+                    effect=ExileTargetCreatureUntilSourceLeaves(yours_only=True),
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{3}"),
+                        mana_str="{3}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=Sequence(effects=()),
+                ),
+            ),
+        ),
+        # Inventors' Fair: legendary, enters tapped. Upkeep trigger: if
+        # you control 3+ artifacts, gain 1 life. {1},{T},Sac self: Search
+        # library for artifact card (if you control 3+ artifacts).
+        "Inventors' Fair": make_utility_land(
+            "Inventors' Fair", legendary=True,
+            enters_tapped=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
+                    effect=ConditionalIfYouControlAtLeast(
+                        threshold=3,
+                        predicate="artifact",
+                        inner=GainLife(amount=1),
+                    ),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"),
+                        mana_str="{1}",
+                        tap_self=True,
+                        sacrifice_self=True,
+                    ),
+                    effect=SearchLibraryForCard(
+                        filter_name="artifact", may_fail=False,
+                    ),
+                ),
+            ),
+        ),
+        # Power Depot: Artifact Land. Enters tapped. {T}: Add one mana of
+        # any color (artifact spells only). Modular 1 is not modeled.
+        "Power Depot": CardPrinting(
+            name="Power Depot",
+            mana_cost_str="",
+            mana_cost=ManaCost(),
+            type_line="Artifact Land",
+            supertypes=(),
+            card_types=("Artifact", "Land"),
+            subtypes=(),
+            produces=frozenset(),
+            enters_tapped=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("any", 1),),
+                        spend_restriction="artifact_spell",
+                    ),
+                    is_mana_ability=True,
+                ),
+            ),
+        ),
+        # Sunken Citadel: Land — Cave, enters tapped. {T}: Add one "any"
+        # mana. {T}: Add two "any" mana (land-activation restricted).
+        # The choose-a-color-on-ETB is simplified to "any" color.
+        "Sunken Citadel": make_utility_land(
+            "Sunken Citadel", subtypes_str="Cave", enters_tapped=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("any", 1),)),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(
+                        produces=(("any", 2),),
+                        spend_restriction="land_activation",
+                    ),
+                    is_mana_ability=True,
                 ),
             ),
         ),
