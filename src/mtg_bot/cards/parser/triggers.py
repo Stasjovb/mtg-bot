@@ -67,6 +67,7 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ConditionalOnTappedCreatures,
     Effect,
     PutPlusOneCounterOnSelf,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
@@ -227,6 +228,29 @@ _TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
 _AT_THE_BEGINNING_OF_LINE = re.compile(
     r"^At the beginning of (.+?), (.+)\.$"
 )
+
+
+# Tapped-creatures effect-wrapper prefix on the body of an
+# ``At the beginning of <when>, <body>.`` line. When the body starts
+# with this exact phrase, the inner effect (the tail after the comma)
+# is wrapped in ``ConditionalOnTappedCreatures(effect=inner,
+# min_count=2)`` and the trigger predicate is left at whatever the
+# time-condition phrasebook yielded (typically ``Controlled(YOU)``).
+#
+# This mirrors the static-registry shape exactly: see Frontline War-
+# Rager / Flight-Deck Coordinator / Sami / Sunstar Chaplain /
+# Vaultguard Trooper / Dawnstrike Vanguard in
+# ``cards/eoe_creatures.py``. The static does NOT layer the gate as a
+# predicate AND on the trigger event — it wraps the effect — so the
+# parser can't use the standard intervening-if predicate path here.
+#
+# ``min_count`` is fixed at 2 because every EoE printing today uses
+# the "two or more" threshold; the engine class accepts an arbitrary
+# min_count, and a future printing with "three or more tapped
+# creatures" would land its own prefix entry rather than parameterizing
+# this one (parser/static parity is easier when the surface text and
+# the engine constant match 1:1).
+_TAPPED_CREATURES_GATE_PREFIX = "if you control two or more tapped creatures, "
 
 
 # Time-condition phrases for the ``At the beginning of`` line shape →
@@ -708,7 +732,26 @@ def _parse_at_the_beginning_of_line(
     if when_match is None:
         return None
     event, predicate = when_match
-    effect = _parse_effect_phrase(match.group(2))
+    body = match.group(2)
+    # Tapped-creatures effect-wrapper variant: ``if you control two or
+    # more tapped creatures, <inner-effect>``. Detect the prefix, parse
+    # the inner-effect tail through the unified effect grammar, and
+    # wrap in ``ConditionalOnTappedCreatures``. Tried BEFORE the bare
+    # body parse so the more-specific shape wins. Mirrors the static-
+    # registry layout exactly — the gate is an effect wrapper, NOT a
+    # predicate AND on the trigger event.
+    if body.startswith(_TAPPED_CREATURES_GATE_PREFIX):
+        inner_phrase = body[len(_TAPPED_CREATURES_GATE_PREFIX):]
+        inner = _parse_effect_phrase(inner_phrase)
+        if inner is None:
+            return None
+        return TriggeredAbility(
+            event=event, predicate=predicate,
+            effect=ConditionalOnTappedCreatures(
+                effect=inner, min_count=2,
+            ),
+        )
+    effect = _parse_effect_phrase(body)
     if effect is None:
         return None
     return TriggeredAbility(

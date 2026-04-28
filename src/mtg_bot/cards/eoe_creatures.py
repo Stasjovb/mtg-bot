@@ -1444,6 +1444,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Sami, Ship's Engineer", "{2}{R}{W}", 2, 4,
             legendary=True,
+            subtypes=("Human", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -2018,6 +2019,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # if you control two or more tapped creatures, you gain 2 life."
         make_creature(
             "Flight-Deck Coordinator", "{2}{W}", 3, 3,
+            subtypes=("Human", "Soldier"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -2033,6 +2035,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # creature you control: Tap target artifact or creature.`
         make_creature(
             "Sunstar Chaplain", "{1}{W}", 3, 2,
+            subtypes=("Human", "Cleric"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -2491,6 +2494,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # when you control two or more tapped creatures.
         make_creature(
             "Frontline War-Rager", "{2}{R}", 2, 3,
+            subtypes=("Kavu", "Soldier"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
