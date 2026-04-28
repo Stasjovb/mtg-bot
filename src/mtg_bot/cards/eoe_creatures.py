@@ -39,6 +39,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # Warp {1}{W}.
         make_creature(
             "Rayblade Trooper", "{2}{W}", 2, 2,
+            subtypes=("Human", "Soldier"),
             warp="{1}{W}",
             triggered_abilities=(
                 TriggeredAbility(
@@ -1714,6 +1715,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # an opponent controls gets -3/-0 until end of turn."
         make_creature(
             "Sinister Cryologist", "{2}{U}", 2, 3,
+            subtypes=("Jellyfish", "Wizard"),
             warp="{U}",
             triggered_abilities=(
                 TriggeredAbility(
@@ -1876,6 +1878,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # untap step) — exactly per oracle.
         make_creature(
             "Mouth of the Storm", "{6}{U}", 6, 6,
+            subtypes=("Elemental",),
             keywords={"flying"},
             ward="{2}",
             triggered_abilities=(
@@ -1893,6 +1896,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # hand, one to graveyard. Ships with Warp {2}{U}.
         make_creature(
             "Codecracker Hound", "{2}{U}", 2, 1,
+            subtypes=("Dog",),
             warp="{2}{U}",
             triggered_abilities=(
                 TriggeredAbility(
@@ -1941,11 +1945,12 @@ EOE_CREATURES: dict[str, CardPrinting] = {
             ),
         ),
         # Exosuit Savior: {2}{W} 2/2 Flying. ETB bounce a permanent you
-        # control to its owner's hand. Simplification: "up to one other"
-        # → required target; self-targeting allowed (no "other"
-        # exclusion). Small flexibility loss, major code simplicity win.
+        # control to its owner's hand. Real oracle is "up to one other
+        # target permanent you control" — modeled with optional=True
+        # and exclude_self=True for full parity with the parser.
         make_creature(
             "Exosuit Savior", "{2}{W}", 2, 2,
+            subtypes=("Human", "Soldier"),
             keywords={"flying"},
             triggered_abilities=(
                 TriggeredAbility(

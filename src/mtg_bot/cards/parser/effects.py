@@ -21,6 +21,7 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
     DealDamageToTargetTappedCreature,
     DestroyTargetArtifact,
@@ -38,6 +39,7 @@ from mtg_bot.cards.base import (
     ExileAllCreaturesAndSpacecraft,
     ExileTargetCreature,
     GainLife,
+    LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     MillTargetPlayer,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -46,15 +48,18 @@ from mtg_bot.cards.base import (
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    PumpCreaturesOpponentsControlUntilEOT,
     PumpSelfUntilEOT,
     PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+    PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    ReturnTargetPermanentYouControlToOwnersHand,
     SearchLibraryForCard,
     SelfMill,
     Sequence,
@@ -92,11 +97,33 @@ _DEAL_DAMAGE_ANY_TARGET = re.compile(
 _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     r"^deals (\d+) damage to target creature$"
 )
+# "<source> deals N damage to target creature an opponent controls" —
+# Nova Hellkite's ETB. Maps to ``DealDamageToOpponentCreature(amount=N)``
+# whose ``legal_targets`` filters to creatures NOT controlled by the
+# resolving controller. The ``deals`` form (no ``it`` / ``you`` subject)
+# is what survives both creature-trigger normalization (the ``it ``
+# prefix-strip) and spell normalization (the ``<Name> `` prefix-strip).
+# Tried BEFORE the bare ``deals N damage to target creature`` regex
+# which has a ``$`` anchor — phrases that end at ``creature`` with no
+# qualifier match the bare form, while phrases with the ``an opponent
+# controls`` tail land here.
+_DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
+    r"^deals (\d+) damage to target creature an opponent controls$"
+)
 _DRAW_A_CARD = re.compile(r"^draw a card$")
 _DRAW_N_CARDS = re.compile(r"^draw (\d+) cards$")
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on target creature$"
+)
+# "Put a +1/+1 counter on target creature you control" — Rayblade
+# Trooper's ETB. Restricted variant: legal targets are creatures the
+# resolving controller controls. Maps to
+# ``PutPlusOneCounterOnCreatureYouControl(amount=1)``. Tried BEFORE
+# the bare ``target creature`` regex so the more-specific
+# ``you control`` shape wins on phrases that carry it.
+_PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
+    r"^put a \+1/\+1 counter on target creature you control$"
 )
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
@@ -239,6 +266,19 @@ _CREATE_BARE_NAME_TOKEN = re.compile(
     rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
 )
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
+# "Look at the top two cards of your library. Put one into your hand
+# and the other into your graveyard." — Codecracker Hound's ETB.
+# Maps to ``LookAtTopTwoSplitHandGraveyard()``. The two-sentence
+# surface is what Scryfall prints — the embedded period sits inside
+# the effect phrase rather than being the trailing terminator. Compound
+# splits don't apply (the second sentence's leading ``Put one`` doesn't
+# parse as a standalone effect — see ``_parse_compound_effect``'s
+# all-or-nothing rule), so the regex matches the literal two-sentence
+# surface as a single primitive.
+_LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
+    r"^look at the top two cards of your library\. "
+    r"Put one into your hand and the other into your graveyard$"
+)
 # Mill is "mill <amount> cards" where the amount is either a digit or
 # one of the spelled-out small cardinals (Scryfall printing convention).
 # Singular "mill 1 card" / "mill one card" is intentionally unsupported
@@ -276,6 +316,19 @@ _ADD_SINGLE_COLOR_MANA = re.compile(r"^add \{([WUBRG])\}$")
 _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^target opponent loses (\d+) life$"
 )
+# "Return up to one other target permanent you control to its owner's
+# hand" — Exosuit Savior's ETB. Maps to
+# ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
+# exclude_self=True)``. The ``up to one other`` fragment combines the
+# ``up to one`` optionality (resolves as a no-op if no target chosen)
+# with the ``other`` self-exclusion (filters the trigger source out
+# of the legal pool). Lands are legal targets — the engine class's
+# ``legal_targets`` doesn't filter on type beyond the controller and
+# self gate.
+_RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
+    r"^return up to one other target permanent you control "
+    r"to its owner's hand$"
+)
 # "Return target creature card from your graveyard to your hand" —
 # graveyard-to-hand reanimation surface.
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
@@ -301,6 +354,30 @@ _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
 # but the regex stays the simplest correct shape.
 _PUMP_TARGET_CREATURE_UEOT = re.compile(
     r"^target creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "Target creature an opponent controls gets -N/-M until end of turn" —
+# pump variant restricted to opposing creatures (Sinister Cryologist's
+# ETB debuff). Maps to ``PumpTargetCreatureUntilEOT(opponents_only=True)``
+# which gates ``legal_targets`` to creatures NOT controlled by the
+# resolving controller. Negative bonuses are typical here (debuff
+# semantics) but the regex accepts both signs so a future card that
+# prints a positive opponent-only pump (rare but possible) parses
+# without further grammar work — symmetric with the bare pump regex
+# above.
+_PUMP_TARGET_OPPONENT_CREATURE_UEOT = re.compile(
+    r"^target creature an opponent controls gets ([+-]\d+)/([+-]\d+) "
+    r"until end of turn$"
+)
+# "Creatures your opponents control get -N/-M until end of turn" /
+# "...until your next turn" — mass debuff on every creature an opponent
+# controls (Mouth of the Storm's ETB). Maps to
+# ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=N, toughness_bonus=M,
+# until_caster_next_turn=...)``. The ``until your next turn`` tail
+# extends the duration past the casting turn's cleanup; the bare
+# ``until end of turn`` tail clears at the normal cleanup step.
+_PUMP_OPPONENT_CREATURES_UEOT = re.compile(
+    r"^creatures your opponents control get ([+-]\d+)/([+-]\d+) "
+    r"until (end of turn|your next turn)$"
 )
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
@@ -722,6 +799,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
+    # ``deals N damage to target creature an opponent controls`` — Nova
+    # Hellkite's ETB. Tried BEFORE the bare ``deals N damage to target
+    # creature`` regex because the bare regex's ``$`` anchor would not
+    # match this surface anyway, but ordering more-specific before
+    # more-general is the convention here.
+    m = _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE.match(phrase)
+    if m is not None:
+        return DealDamageToOpponentCreature(amount=int(m.group(1)))
     m = _DEAL_DAMAGE_TARGET_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetCreature(amount=int(m.group(1)))
@@ -752,6 +837,16 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))
+    # ``put a +1/+1 counter on target creature you control`` — Rayblade
+    # Trooper's ETB. Restricted variant: legal targets are creatures
+    # the resolving controller controls. Tried BEFORE the bare ``target
+    # creature`` regex (which has a ``$`` anchor and so wouldn't match
+    # the ``you control`` tail anyway) so the more-specific shape wins
+    # by convention.
+    if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE_YOU_CONTROL.match(
+        phrase
+    ) is not None:
+        return PutPlusOneCounterOnCreatureYouControl(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
@@ -831,6 +926,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))
+    if _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD.match(phrase) is not None:
+        # ``look at the top two cards of your library. Put one into
+        # your hand and the other into your graveyard`` — Codecracker
+        # Hound's ETB. The two-sentence surface form is matched as a
+        # single primitive; the agent's ``choose_surveil`` hook
+        # decides which card goes to which pile at resolve time.
+        return LookAtTopTwoSplitHandGraveyard()
     m = _MILL_N_CARDS.match(phrase)
     if m is not None:
         return SelfMill(amount=_parse_amount(m.group(1)))
@@ -887,6 +989,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _TARGET_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return TargetOpponentLosesLife(amount=int(m.group(1)))
+    if _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND.match(
+        phrase
+    ) is not None:
+        # ``return up to one other target permanent you control to its
+        # owner's hand`` — Exosuit Savior's ETB. ``up to one`` →
+        # ``optional=True`` (resolves as a no-op if no target chosen);
+        # ``other`` → ``exclude_self=True`` (filters the trigger source
+        # via ``state.resolving_source``).
+        return ReturnTargetPermanentYouControlToOwnersHand(
+            optional=True, exclude_self=True,
+        )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnCreatureFromYourGraveyardToHand()
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
@@ -913,11 +1026,38 @@ def _parse_effect(phrase: str) -> Effect | None:
             granted_keywords=keywords,
             you_control_only=m.group(1) is not None,
         )
+    # ``target creature an opponent controls gets ±N/±M until end of
+    # turn`` — opponent-controlled-only debuff/pump (Sinister
+    # Cryologist's ETB). Tried BEFORE the bare-pump regex because that
+    # bare regex's tail (``until end of turn$``) would never match
+    # phrases with the ``an opponent controls`` qualifier in the
+    # subject anyway, but ordering more-specific before more-general
+    # is the convention here.
+    m = _PUMP_TARGET_OPPONENT_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            opponents_only=True,
+        )
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
+        )
+    # ``creatures your opponents control get ±N/±M until end of turn`` /
+    # ``... until your next turn`` — mass debuff/pump on every creature
+    # an opponent controls (Mouth of the Storm's ETB uses the
+    # ``until your next turn`` tail). The ``until_caster_next_turn``
+    # flag flips when the tail matches the longer-duration form;
+    # otherwise the bonus clears at the casting turn's cleanup.
+    m = _PUMP_OPPONENT_CREATURES_UEOT.match(phrase)
+    if m is not None:
+        return PumpCreaturesOpponentsControlUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            until_caster_next_turn=(m.group(3) == "your next turn"),
         )
     # ``this creature gets +N/+M until end of turn`` — source pumps
     # itself UEOT. Tried AFTER the targeted ``target creature gets …
