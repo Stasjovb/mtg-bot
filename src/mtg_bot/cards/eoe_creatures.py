@@ -1118,8 +1118,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Susurian Voidborn `{2}{B}` 2/2 Creature. Warp `{B}`. Real
-        # oracle: "Whenever this creature or another creature or
+        # Susurian Voidborn `{2}{B}` 2/2 Vampire Soldier. Warp `{B}`.
+        # Real oracle: "Whenever this creature or another creature or
         # artifact you control dies, target opponent loses 1 life and
         # you gain 1 life."
         # Phase-4 predicate-style: any creature OR artifact controlled
@@ -1128,14 +1128,26 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # self). The dispatcher's ``extra_observers=[dead]`` plumbing
         # is what makes the self-firing reach this predicate even
         # though Voidborn has been moved off the battlefield.
+        # Effect surface ``target opponent loses 1 life and you gain
+        # 1 life`` decomposes through the unified compound-effect
+        # splitter into a ``Sequence`` of the two primitives — same
+        # in-engine behavior as the bespoke
+        # ``TargetOpponentLosesNYouGainN`` (now retired) and lets the
+        # parser claim the printing without a one-off effect class.
         make_creature(
             "Susurian Voidborn", "{2}{B}", 2, 2,
+            subtypes=("Vampire", "Soldier"),
             warp="{B}",
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.DIES,
                     predicate=(IsCreature() | IsArtifact()) & Controlled(YOU),
-                    effect=TargetOpponentLosesNYouGainN(amount=1),
+                    effect=Sequence(
+                        effects=(
+                            TargetOpponentLosesLife(amount=1),
+                            GainLife(amount=1),
+                        ),
+                    ),
                 ),
             ),
         ),

@@ -672,6 +672,44 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
 }
 
 
+# Trigger-condition phrases that read as ``X or Y dies/enters`` but
+# whose two arms collapse onto a SINGLE predicate in the static
+# registry — the wording is inclusive (``this creature or another
+# <subset> you control``) and the static carries one
+# ``TriggeredAbility`` whose predicate covers both halves at once.
+# Distinct from ``_COMPOUND_PREDICATE_TRIGGER_PHRASES`` (which
+# produces one ``TriggeredAbility`` per arm) — these collapsed
+# phrases produce exactly one ability.
+#
+# The dispatcher's ``extra_observers=[dead]`` plumbing at the DIES
+# fire site is what lets the source's own death satisfy a
+# ``Controlled(YOU)`` predicate even though the dying object has
+# already been moved off the battlefield by the time the trigger
+# fires; the ``this creature or another …`` wording is explicit
+# about including self in the firing pool.
+_COLLAPSED_PREDICATE_TRIGGER_PHRASES: dict[
+    str, tuple[Event, Predicate]
+] = {
+    # ``Whenever this creature or another creature or artifact you
+    # control dies`` (Susurian Voidborn). The two arms (``this
+    # creature`` + ``another creature or artifact you control``)
+    # collapse to a single ``Controlled(YOU) & (creature OR artifact)``
+    # predicate — no ``~IsSelf()`` because the leading ``this creature``
+    # arm explicitly includes self. Mirrors the static registry's
+    # Susurian Voidborn predicate exactly.
+    "this creature or another creature or artifact you control dies": (
+        Event.DIES,
+        (IsCreature() | IsArtifact()) & Controlled(YOU),
+    ),
+}
+
+
+def _parse_collapsed_predicate_trigger_phrase(
+    phrase: str,
+) -> tuple[Event, Predicate] | None:
+    return _COLLAPSED_PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+
+
 def _parse_compound_predicate_trigger_phrase(
     phrase: str,
 ) -> tuple[tuple[Event, Predicate], ...] | None:
@@ -1029,6 +1067,25 @@ def _parse_triggered_ability_line(
         return tuple(
             TriggeredAbility(event=event, predicate=predicate, effect=effect)
             for event, predicate in compound_match
+        )
+    # Collapsed-arm predicate-trigger lookup: the condition reads as
+    # ``X or Y`` but the two arms share an event AND collapse onto a
+    # single predicate (no ``~IsSelf()`` — the wording explicitly
+    # includes self). Produces ONE ``TriggeredAbility`` whose
+    # predicate covers both arms, mirroring the static registry's
+    # single-entry layout for cards like Susurian Voidborn. Tried
+    # AFTER the multi-arm compound table (so a phrase that wants
+    # two separate abilities still gets them) and BEFORE the single
+    # phrase table (so the inclusive wording wins over an
+    # accidentally-overlapping single-arm match).
+    collapsed_match = _parse_collapsed_predicate_trigger_phrase(condition)
+    if collapsed_match is not None:
+        event, predicate = collapsed_match
+        return TriggeredAbility(
+            event=event,
+            predicate=predicate,
+            effect=effect,
+            once_per_turn=once_per_turn,
         )
     # Predicate-style trigger lookup wins when the condition phrase is
     # claimed by both tables — phase 2 only registers ENTERS-family

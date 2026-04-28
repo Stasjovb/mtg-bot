@@ -28,6 +28,18 @@ Extended primitives:
   spell out the source explicitly parse. Used by Weftstalker
   Ardent's another-creature-or-artifact ETB trigger.
 
+New trigger-condition phrases:
+
+* ``this creature or another creature or artifact you control dies``
+  — Susurian Voidborn's two-arm-collapsed-to-one trigger condition.
+  Distinct from the multi-arm ``_COMPOUND_PREDICATE_TRIGGER_PHRASES``
+  (which produces one ``TriggeredAbility`` per arm) — this lookup
+  produces a single ability whose predicate covers both arms,
+  mirroring the static-registry layout for Susurian Voidborn. The
+  inclusive wording (``this creature or another …``) means no
+  ``~IsSelf()`` exclusion: the source's own death satisfies the
+  predicate via the dispatcher's ``extra_observers=[dead]`` plumbing.
+
 Newly-claimed creatures:
 
 * **Chrome Companion** — ``Whenever this creature becomes tapped,
@@ -46,6 +58,18 @@ Newly-claimed creatures:
   Static drift fix: real card is 2/3 ``Drix Artificer`` (the
   registry was carrying the printed power/toughness reversed plus
   no subtypes — corrected per the parser-is-right rule).
+
+* **Susurian Voidborn** — ``Whenever this creature or another
+  creature or artifact you control dies, target opponent loses 1
+  life and you gain 1 life. Warp {B}.`` Trigger condition lands via
+  the new collapsed-arm phrasebook entry; the effect body splits
+  through the unified compound-effect splitter into a
+  ``Sequence(TargetOpponentLosesLife, GainLife)``. The static
+  registry's bespoke ``TargetOpponentLosesNYouGainN`` engine class
+  (still defined and still test-covered) is retired from the
+  Susurian static in favor of the parser-produced ``Sequence`` —
+  same gameplay outcome, no new effect class. Subtypes
+  ``Vampire Soldier`` are added per the parser-is-right rule.
 """
 
 from __future__ import annotations
@@ -56,13 +80,18 @@ from mtg_bot.cards.base import (
     DealDamageEachOpponent,
     GainLife,
     PutCardFromGraveyardOnBottomOfLibrary,
+    Sequence,
+    TargetOpponentLosesLife,
     TriggeredAbility,
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+from mtg_bot.cards.parser.triggers import (
+    _parse_collapsed_predicate_trigger_phrase,
+    _parse_triggered_ability_line,
+)
 from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
@@ -192,3 +221,55 @@ def test_weftstalker_ardent_etb_trigger_line():
 
 def test_weftstalker_ardent_claimed_by_parser():
     assert "Weftstalker Ardent" in _claimed_names()
+
+
+# ---------- Susurian Voidborn ----------
+
+def test_parse_collapsed_creature_or_artifact_dies_phrase():
+    # New collapsed-arm trigger phrase: ``this creature or another
+    # creature or artifact you control dies`` produces ONE
+    # ``(Event, Predicate)`` tuple (not a multi-arm tuple), and the
+    # predicate omits ``~IsSelf()`` because the leading
+    # ``this creature`` arm explicitly includes self.
+    assert _parse_collapsed_predicate_trigger_phrase(
+        "this creature or another creature or artifact you control dies"
+    ) == (
+        Event.DIES,
+        (IsCreature() | IsArtifact()) & Controlled(YOU),
+    )
+
+
+def test_parse_collapsed_phrase_unknown_returns_none():
+    # The lookup is exact-match — a bare ``creature dies`` shape that
+    # isn't in the table must surface as ``None`` so the caller can
+    # try the single-phrase or compound tables.
+    assert _parse_collapsed_predicate_trigger_phrase(
+        "a creature dies"
+    ) is None
+
+
+def test_susurian_voidborn_trigger_line_end_to_end():
+    # End-to-end: collapsed trigger phrase + compound effect body
+    # decompose into a single ``TriggeredAbility`` whose effect is a
+    # ``Sequence`` of the two primitives. Mirrors the static
+    # registry's Susurian Voidborn entry exactly.
+    line = (
+        "Whenever this creature or another creature or artifact "
+        "you control dies, target opponent loses 1 life and "
+        "you gain 1 life."
+    )
+    parsed = _parse_triggered_ability_line(line)
+    assert parsed == TriggeredAbility(
+        event=Event.DIES,
+        predicate=(IsCreature() | IsArtifact()) & Controlled(YOU),
+        effect=Sequence(
+            effects=(
+                TargetOpponentLosesLife(amount=1),
+                GainLife(amount=1),
+            ),
+        ),
+    )
+
+
+def test_susurian_voidborn_claimed_by_parser():
+    assert "Susurian Voidborn" in _claimed_names()
