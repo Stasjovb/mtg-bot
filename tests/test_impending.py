@@ -35,10 +35,13 @@ _PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
-    """Picks the first legal target for any prompt."""
+    """Picks the first legal target / first discard for any prompt."""
 
     def choose_target(self, state, player_id, legal_targets):
         return legal_targets[0] if legal_targets else None
+
+    def choose_discard(self, state, player_id, hand_card_ids):
+        return hand_card_ids[0] if hand_card_ids else None
 
 
 def _new_state(agent=None):
@@ -374,6 +377,37 @@ def test_boilerbilges_etb_damage_fires_on_impending_cast():
     # players list (P0 self) under _PickFirstAgent.
     total_damage_dealt = 40 - (state.players[0].life + state.players[1].life)
     assert total_damage_dealt == 4
+
+
+def test_floodpits_etb_draws_two_then_discards_one():
+    """Overlord of the Floodpits' ETB sequences DrawCards(2) then
+    DiscardSelf(1). Net hand growth = +1 (drew two, discarded one).
+    Library decreases by 2."""
+    state = _new_state()
+    p = state.players[0]
+    # 5 Islands for {1}{U}{U} = 1 generic + 2 U.
+    for _ in range(5):
+        _put(state, BASIC_LANDS["Island"])
+    # Library has 5 cards so the 2-card draw can be satisfied.
+    for _ in range(5):
+        c = state.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
+        p.library.append(c)
+    overlord = state.new_object(
+        _PRINTINGS["Overlord of the Floodpits"], 0, Zone.HAND,
+    )
+    p.hand.append(overlord)
+    hand_before = len(p.hand)  # includes the Overlord
+    apply_action(state, 0, CastSpell(overlord.id, use_impending=True))
+    drain_stack(state)
+    # Hand: started with [Overlord], cast removed it, drew 2,
+    # discarded 1 → net change vs (hand_before - 1) is +1.
+    assert len(p.hand) == (hand_before - 1) + 1
+
+
+def test_floodpits_keywords_include_flying():
+    p = _PRINTINGS["Overlord of the Floodpits"]
+    assert "flying" in p.keywords
+    assert p.impending_count == 4
 
 
 def test_impending_full_lifecycle_via_end_step_action():

@@ -48,6 +48,7 @@ from mtg_bot.cards.base import (
     CostReduction,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DiscardSelf,
     DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyTargetNonlandPermanent,
     DrawCards,
@@ -649,6 +650,34 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Insect"], count=2,
                     ),
+                ),
+            ),
+        ),
+        # Overlord of the Floodpits {3}{U}{U} 5/3 Avatar Horror.
+        # Flying. Impending 4 — {1}{U}{U}. ETB/attack: draw two
+        # cards, then discard a card. (Sequence(DrawCards(2),
+        # DiscardSelf(1)).)
+        "Overlord of the Floodpits": make_creature(
+            "Overlord of the Floodpits", "{3}{U}{U}", 5, 3,
+            enchantment=True,
+            subtypes=("Avatar", "Horror"),
+            keywords={"flying"},
+            impending="{1}{U}{U}",
+            impending_count=4,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=1),
+                    )),
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=Sequence(effects=(
+                        DrawCards(amount=2),
+                        DiscardSelf(amount=1),
+                    )),
                 ),
             ),
         ),
