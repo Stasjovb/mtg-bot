@@ -353,30 +353,20 @@ def test_parity_wedgelight_rammer_and_wurmwall_sweeper():
         assert parser_printings[name] == static_printings[name]
 
 
-def test_build_spacecraft_printing_skips_attack_trigger_unparseable_effect():
-    """Specimen Freighter (defending player mills four cards) and
-    Sledge-Class Seedship (you may put a creature card from your hand
-    onto the battlefield) both carry attack triggers whose effect
-    phrases are outside the unified effect grammar. Even with the
-    new attack-trigger arm wired up, those cards still skip — the
-    attack-trigger line goes to ``_parse_clause`` which returns
-    ``None`` because the effect phrase isn't claimed.
-
-    This is the same fall-through path the slice-2 ETB-with-
-    unparseable-effect test pins for ETB lines, just routed through
-    the attacks-event arm. Locking it in keeps a future effect-grammar
-    extension that adds either of those phrases from quietly turning
-    Specimen Freighter / Sledge-Class Seedship into half-claimed
-    printings without an explicit static-registry update."""
+def test_build_spacecraft_printing_claims_attack_trigger_spacecraft():
+    """Specimen Freighter, Sledge-Class Seedship, Entropic Battlecruiser,
+    Infinite Guideline Station, and Dawnsire, Sunstar Dreadnought all
+    carry attack triggers whose effect phrases were outside the unified
+    effect grammar in earlier batches. Batch 22 claims all five via the
+    ``_BESPOKE_SPACECRAFT`` dispatch table, so they must now be present
+    in ``claimed_names``."""
     source = OracleParserCardSource()
     claimed = set(source.claimed_names)
-    # Real EoE Spacecraft with attack triggers whose effects aren't
-    # in the effect grammar today — must NOT be claimed.
-    assert "Specimen Freighter" not in claimed
-    assert "Sledge-Class Seedship" not in claimed
-    assert "Entropic Battlecruiser" not in claimed
-    assert "Infinite Guideline Station" not in claimed
-    assert "Dawnsire, Sunstar Dreadnought" not in claimed
+    assert "Specimen Freighter" in claimed
+    assert "Sledge-Class Seedship" in claimed
+    assert "Entropic Battlecruiser" in claimed
+    assert "Infinite Guideline Station" in claimed
+    assert "Dawnsire, Sunstar Dreadnought" in claimed
 
 
 def test_build_spacecraft_printing_skips_attack_trigger_unparseable_card():

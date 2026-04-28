@@ -92,23 +92,48 @@ import dataclasses
 import re
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
     CardPrinting,
+    StaticAbility,
+    StaticScope,
     TriggeredAbility,
+    cost,
+    make_artifact,
     make_spacecraft,
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.combinators import Sequence
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.combinators import (
+    OptionalPutCreatureFromHandOntoBattlefield,
+    OptionalSacLandOrLanderForBasicLandRamp,
+    Sequence,
+)
 from mtg_bot.effects.generic import (
+    CreateTokenPerMulticoloredPermanent,
+    DealDamageAnyTarget,
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
+    DestroyTargetNoncreaturePermanent,
+    DealNDamageToEachCreature,
     DiscardSelf,
+    DrawCardPerMulticoloredPermanent,
     DrawCards,
+    EachOpponentDiscardsOrLosesLife,
+    EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
+    PumpSelfUntilEOT,
     PutPlusOneCounterOnEachCreatureYouControl,
+    ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnCreatureFromYourGraveyardToHand,
+    ReturnUpToNTargetCreaturesToOwnersHands,
+    SearchLibraryForCard,
+    SelfMill,
+    TargetArtifactBecomesCreatureUEOT,
+    TargetPlayerLosesLife,
 )
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +216,245 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                     effect=DealDamageToOpponentCreatureByArtifactCount(),
                 ),
             ),
+        ),
+        # Debris Field Crusher: ETB deals 3 damage to any target, 8+ flying,
+        # "{1}{R}: This Spacecraft gets +2/+0 until end of turn."
+        make_spacecraft(
+            "Debris Field Crusher", "{4}{R}", 1, 5,
+            station_threshold=8,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DealDamageAnyTarget(amount=3),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=cost(mana="{1}{R}"),
+                    effect=PumpSelfUntilEOT(power_bonus=2, toughness_bonus=0),
+                ),
+            ),
+        ),
+        # Fell Gravship: ETB mill 3 then return a creature card from your
+        # graveyard to your hand. Station 8+ flying + lifelink.
+        make_spacecraft(
+            "Fell Gravship", "{2}{B}", 3, 2,
+            station_threshold=8,
+            stationed_keywords={"flying", "lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(effects=(
+                        SelfMill(amount=3),
+                        ReturnCreatureFromYourGraveyardToHand(),
+                    )),
+                ),
+            ),
+        ),
+        # Larval Scoutlander: ETB optional sac land or Lander → search for up
+        # to two basic lands onto battlefield tapped. Station 7+ flying.
+        make_spacecraft(
+            "Larval Scoutlander", "{2}{G}", 3, 3,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=OptionalSacLandOrLanderForBasicLandRamp(
+                        land_count=2,
+                    ),
+                ),
+            ),
+        ),
+        # Rescue Skiff: ETB return target creature from your graveyard to the
+        # battlefield. Station 10+ flying.
+        make_spacecraft(
+            "Rescue Skiff", "{5}{W}", 5, 6,
+            station_threshold=10,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
+                ),
+            ),
+        ),
+        # Sledge-Class Seedship: attack trigger optionally put a creature card
+        # from hand onto the battlefield. Station 7+ flying.
+        make_spacecraft(
+            "Sledge-Class Seedship", "{2}{G}", 4, 5,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=OptionalPutCreatureFromHandOntoBattlefield(),
+                ),
+            ),
+        ),
+        # Specimen Freighter: ETB return up to two non-Spacecraft creatures to
+        # owners' hands. Whenever attacks, each opponent mills 4. Station 9+
+        # flying.
+        make_spacecraft(
+            "Specimen Freighter", "{5}{U}", 4, 7,
+            station_threshold=9,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ReturnUpToNTargetCreaturesToOwnersHands(
+                        max_n=2, exclude_spacecraft=True,
+                    ),
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=EachOpponentMillsCards(amount=4),
+                ),
+            ),
+        ),
+        # Extinguisher Battleship: ETB destroy target noncreature permanent
+        # then deal 4 damage to each creature. Station 5+ flying + trample.
+        make_spacecraft(
+            "Extinguisher Battleship", "{8}", 10, 10,
+            station_threshold=5,
+            stationed_keywords={"flying", "trample"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(effects=(
+                        DestroyTargetNoncreaturePermanent(),
+                        DealNDamageToEachCreature(amount=4),
+                    )),
+                ),
+            ),
+        ),
+        # Entropic Battlecruiser: 1+ tier — whenever an opponent discards a
+        # card, that player loses 3 life. Attack trigger — each opponent
+        # discards a card or loses 3 life. Station 8+ flying + deathtouch.
+        make_spacecraft(
+            "Entropic Battlecruiser", "{3}{B}", 3, 10,
+            station_threshold=8,
+            stationed_keywords={"flying", "deathtouch"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.DISCARDS_CARD,
+                    predicate=Controlled(by=OPPONENT),
+                    effect=TargetPlayerLosesLife(amount=3),
+                    tier_threshold=1,
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=EachOpponentDiscardsOrLosesLife(life_if_cant=3),
+                ),
+            ),
+        ),
+        # Synthesizer Labship: 2+ tier — at the beginning of combat on your
+        # turn, target artifact becomes a 2/2 artifact creature with flying
+        # UEOT. Station 9+ flying.
+        make_spacecraft(
+            "Synthesizer Labship", "{U}", 4, 4,
+            station_threshold=9,
+            stationed_keywords={"flying"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_COMBAT,
+                    predicate=Controlled(YOU),
+                    effect=TargetArtifactBecomesCreatureUEOT(
+                        power=2, toughness=2,
+                        granted_keywords=frozenset({"flying"}),
+                    ),
+                    tier_threshold=2,
+                ),
+            ),
+        ),
+        # Lumen-Class Frigate: 2+ tier static anthem (other creatures you
+        # control get +1/+1). Station 12+ flying + lifelink.
+        make_spacecraft(
+            "Lumen-Class Frigate", "{1}{W}", 3, 5,
+            station_threshold=12,
+            stationed_keywords={"flying", "lifelink"},
+            static_abilities=(
+                StaticAbility(
+                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    power_bonus=1, toughness_bonus=1,
+                    tier_threshold=2,
+                ),
+            ),
+        ),
+        # Infinite Guideline Station: Legendary. ETB create a tapped 2/2
+        # colorless Robot token for each multicolored permanent you control.
+        # Attack trigger draw a card for each multicolored permanent you
+        # control. Station 12+ flying.
+        make_spacecraft(
+            "Infinite Guideline Station", "{W}{U}{B}{R}{G}", 7, 15,
+            station_threshold=12,
+            stationed_keywords={"flying"},
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateTokenPerMulticoloredPermanent(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                        tapped=True,
+                    ),
+                ),
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=DrawCardPerMulticoloredPermanent(),
+                ),
+            ),
+        ),
+        # Dawnsire, Sunstar Dreadnought: Legendary. 10+ tier gated attack
+        # trigger deals 100 damage to target creature. Station 20+ flying.
+        make_spacecraft(
+            "Dawnsire, Sunstar Dreadnought", "{5}", 20, 20,
+            station_threshold=20,
+            stationed_keywords={"flying"},
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=DealDamageToTargetCreature(amount=100),
+                    tier_threshold=10,
+                ),
+            ),
+        ),
+        # The Seriema: Legendary. ETB search library for a legendary creature
+        # card → hand. 7+ tier static — other tapped legendary creatures you
+        # control have indestructible. Station 7+ flying.
+        make_spacecraft(
+            "The Seriema", "{1}{W}{W}", 5, 5,
+            station_threshold=7,
+            stationed_keywords={"flying"},
+            legendary=True,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SearchLibraryForCard(
+                        filter_name="legendary_creature",
+                        may_fail=False,
+                    ),
+                ),
+            ),
+            static_abilities=(
+                StaticAbility(
+                    scope=(
+                        StaticScope
+                        .OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL
+                    ),
+                    granted_keywords=frozenset({"indestructible"}),
+                    tier_threshold=7,
+                ),
+            ),
+        ),
+        # The Eternity Elevator: Legendary Artifact — Spacecraft but has no
+        # printed P/T (never animates). The artifact_builder rejects
+        # Spacecraft-subtyped cards, so ship it here as a plain artifact
+        # using make_artifact to match the static registry.
+        make_artifact(
+            "The Eternity Elevator", "{5}",
+            legendary=True,
         ),
     ]
 }

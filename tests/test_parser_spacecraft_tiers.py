@@ -435,19 +435,17 @@ def test_source_still_claims_existing_spacecraft():
     assert "Wurmwall Sweeper" in claimed
 
 
-def test_source_does_not_claim_real_multi_tier_spacecraft():
-    """Every real EoE multi-tier or tier-gated-trigger Spacecraft
-    still falls outside the grammar today: each carries either a
-    static-tier-gated body (Lumen-Class anthem, Synthesizer combat
-    trigger) or an effect outside the effect grammar (Entropic
-    Battlecruiser's discard trigger, Dawnsire's ``deals 100 damage to
-    up to one target creature or planeswalker``). Pin that they stay
-    unclaimed so a future effect-grammar extension that accidentally
-    claims one without a static-side counterpart surfaces as a parity
-    failure rather than a silent half-claim."""
+def test_source_claims_real_multi_tier_spacecraft():
+    """Lumen-Class Frigate, Synthesizer Labship, Entropic Battlecruiser,
+    and Dawnsire, Sunstar Dreadnought were previously unclaimed because
+    each carried either a static-tier-gated body or an effect outside
+    the unified effect grammar. Batch 22 claims all four via the
+    ``_BESPOKE_SPACECRAFT`` dispatch table, so they must now be present
+    in ``claimed_names`` — and the parametrized parity gate asserts the
+    parser-built printing equals the static registry for each."""
     source = OracleParserCardSource()
     claimed = set(source.claimed_names)
-    assert "Lumen-Class Frigate" not in claimed
-    assert "Synthesizer Labship" not in claimed
-    assert "Entropic Battlecruiser" not in claimed
-    assert "Dawnsire, Sunstar Dreadnought" not in claimed
+    assert "Lumen-Class Frigate" in claimed
+    assert "Synthesizer Labship" in claimed
+    assert "Entropic Battlecruiser" in claimed
+    assert "Dawnsire, Sunstar Dreadnought" in claimed
