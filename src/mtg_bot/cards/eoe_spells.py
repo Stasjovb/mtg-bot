@@ -1077,15 +1077,20 @@ EOE_SPELLS: dict[str, CardPrinting] = {
                 DealDamageToTargetTappedCreature(amount=2),
             )),
         ),
-        # Mental Modulation — tap target artifact or creature, then draw a
-        # card. Skips the "costs {1} less during your turn" rider (cost
-        # modification during casting isn't modeled yet).
+        # Mental Modulation — tap target artifact or creature, then
+        # draw a card. The ``"costs {1} less to cast during your turn"``
+        # rider lands as a ``during_your_turn`` cost reduction
+        # evaluated by ``apply_cost_reductions`` against the caster
+        # being the active player.
         make_instant(
             "Mental Modulation", "{1}{U}",
             effect=Sequence(effects=(
                 TapTargetArtifactOrCreature(),
                 DrawCards(amount=1),
             )),
+            cost_reductions=(
+                CostReduction(amount=1, condition="during_your_turn"),
+            ),
         ),
         # Shattered Wings — destroy artifact/enchantment/creature-with-flying,
         # then Surveil 1.

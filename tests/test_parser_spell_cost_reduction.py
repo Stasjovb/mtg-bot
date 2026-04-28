@@ -141,11 +141,16 @@ def test_recognizer_extracts_each_integer_amount(amount):
 
 # ---------- _parse_cost_reduction_line: negative cases ----------
 
-def test_recognizer_rejects_unsupported_condition():
-    # ``...during your turn`` (Gravitic Scoutship's rider) — engine
-    # has no matching gate today, so the recognizer must decline
-    # rather than silently produce a no-op rule.
-    line = "This spell costs {1} less to cast during your turn."
+def test_recognizer_rejects_unsupported_no_if_connector():
+    # No-``if`` shape with a connector phrase that isn't on the
+    # recognized closed set (``during your turn`` etc.). The
+    # recognizer must decline rather than silently produce a no-op
+    # rule with an unknown engine-condition string. Synthetic phrase
+    # so a future expansion of the connector list doesn't silently
+    # turn this from a negative case into a positive one.
+    line = (
+        "This spell costs {1} less to cast on every other tuesday."
+    )
     assert _parse_cost_reduction_line(line) is None
 
 
@@ -352,8 +357,11 @@ def test_detect_cost_reductions_returns_empty_when_none_present():
 def test_detect_cost_reductions_skips_unsupported_conditions():
     # An unsupported phrase doesn't make it into the returned tuple —
     # it falls through, and the enclosing card is left unsupported.
+    # The connector ``on every other tuesday`` isn't on the closed
+    # set; using a synthetic phrase here keeps this case stable when
+    # the supported list grows.
     text = (
-        "This spell costs {1} less to cast during your turn.\n"
+        "This spell costs {1} less to cast on every other tuesday.\n"
         "Destroy target creature."
     )
     assert _detect_cost_reductions(text) == ()
@@ -431,7 +439,7 @@ def test_unsupported_condition_synthetic_creature_skipped():
         "power": "3",
         "toughness": "3",
         "oracle_text": (
-            "This spell costs {1} less to cast during your turn."
+            "This spell costs {1} less to cast on every other tuesday."
         ),
     }
     assert _build_creature_printing(synthetic) is None
@@ -447,7 +455,7 @@ def test_unsupported_condition_synthetic_spell_skipped():
         "name": "Synthetic Bargain",
         "mana_cost": "{2}{B}",
         "oracle_text": (
-            "This spell costs {1} less to cast during your turn."
+            "This spell costs {1} less to cast on every other tuesday."
         ),
     }
     assert _build_spell_printing(synthetic) is None

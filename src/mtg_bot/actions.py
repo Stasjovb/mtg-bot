@@ -332,6 +332,9 @@ def apply_cost_reductions(
         could pick it as the target. ``_cast_spell`` passes the actual
         chosen targets, so the discount only sticks if the caster
         commits to a blocker at cast time.
+      - ``during_your_turn``: the caster is the active player (Mental
+        Modulation's ``"This spell costs {1} less to cast during your
+        turn."`` rider).
 
     External reductions: also walks every permanent the caster controls
     on the battlefield and applies any ``external_cost_reductions``
@@ -421,6 +424,14 @@ def _evaluate_cost_reduction(
             and "Sliver" in effective_subtypes(state, o)
         )
         return rule.amount * sliver_count
+    elif rule.condition == "during_your_turn":
+        # Mental Modulation: "This spell costs {1} less to cast during
+        # your turn." — discount applies whenever the caster is the
+        # active player. Read off ``state.active_player_idx`` rather
+        # than spinning up a phase check; the discount is independent
+        # of which step/phase the spell is being cast in.
+        if state.active_player().id == caster_id:
+            return rule.amount
     elif rule.condition == "target_is_blocking_creature":
         # Dark Endurance: "this spell costs {1} less to cast if it
         # targets a blocking creature." Cast-pipeline path passes the
