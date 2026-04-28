@@ -33,20 +33,27 @@ from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
     AddManaToPool,
+    AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
     BecomeLandCreatureUEOT,
     CardPrinting,
+    ChangeControllerToCombatDamageSource,
     DealDamageToControllerAndAddMana,
     DestroyTargetLand,
     DrawCards,
     Effect,
     ExileTargetAttackingCreatureUntilEndStep,
     GainLife,
+    GrantLifeToEachOpponent,
+    PumpCreaturesYouControlUntilEOT,
     PumpSelfXPowerUEOT,
+    PumpTargetCreatureUntilEOT,
     PutBasicLandFromHandOntoBattlefieldTapped,
     PutPlusOneCounterOnSelf,
+    RegenerateTargetCreature,
     ReturnTargetLandFromGraveyardToHand,
+    Sequence,
     SwitchSourcePowerToughnessUEOT,
     TriggeredAbility,
     UntapTargetLand,
@@ -57,7 +64,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
 
 
 _COLOR_WORD_TO_LETTER: dict[str, str] = {
@@ -237,6 +244,172 @@ _SHOCK_LAND_LIFE_RIDER = (
 _COLORLESS_TAP_LINE = "{T}: Add {C}."
 
 
+# ---------------------------------------------------------------------------
+# Bespoke EoS (Stellar Sights) land dispatch table.
+#
+# Lands whose oracle shape doesn't map cleanly onto any of the generic
+# grammar arms (multi-step manland, tap-sac, restricted mana, …) are
+# pre-built here as complete ``CardPrinting`` objects and looked up by
+# name before the grammar arms run. The table is keyed purely by name;
+# the dispatcher in ``_build_land_printing`` gates on
+# ``card.get("set") in {"eos", "eoe", "spg"}`` so main-set cards with
+# the same name can't accidentally be claimed here.
+#
+# Each entry must exactly match the corresponding ``make_utility_land``
+# call in ``src/mtg_bot/cards/stellar_sights.py``.
+# ---------------------------------------------------------------------------
+def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
+    return {
+        # Cathedral of War: enters tapped, exalted keyword, {T}: Add {C}.
+        "Cathedral of War": make_utility_land(
+            "Cathedral of War",
+            enters_tapped=True,
+            keywords=frozenset({"exalted"}),
+        ),
+        # Mutavault: {T}: Add {C}. {1}: becomes 2/2 with all creature types UEOT.
+        "Mutavault": make_utility_land(
+            "Mutavault",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"), mana_str="{1}",
+                    ),
+                    effect=BecomeLandCreatureUEOT(power=2, toughness=2),
+                ),
+            ),
+        ),
+        # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact flying UEOT.
+        # {1},{T}: Target Blinkmoth gets +1/+1 UEOT.
+        # Animation at index 0, explicit mana-tap at index 1, pump at index 2.
+        "Blinkmoth Nexus": make_utility_land(
+            "Blinkmoth Nexus",
+            produces=frozenset({"C"}),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"), mana_str="{1}",
+                    ),
+                    effect=BecomeLandCreatureUEOT(
+                        power=1, toughness=1,
+                        granted_keywords=frozenset({"flying"}),
+                        granted_subtype="Blinkmoth",
+                    ),
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("C", 1),)),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"), mana_str="{1}",
+                        tap_self=True,
+                    ),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=1, toughness_bonus=1,
+                        target_subtype="Blinkmoth",
+                    ),
+                ),
+            ),
+        ),
+        # Inkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Phyrexian Blinkmoth artifact
+        # creature with flying and infect UEOT.
+        "Inkmoth Nexus": make_utility_land(
+            "Inkmoth Nexus",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"), mana_str="{1}",
+                    ),
+                    effect=BecomeLandCreatureUEOT(
+                        power=1, toughness=1,
+                        granted_keywords=frozenset({"flying", "infect"}),
+                    ),
+                ),
+            ),
+        ),
+        # Grove of the Burnwillows: {T}: Add {C}. {T}: Add {R} or {G}.
+        # Each opponent gains 1 life.
+        "Grove of the Burnwillows": make_utility_land(
+            "Grove of the Burnwillows",
+            produces=frozenset({"C", "R", "G"}),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("C", 1),)),
+                    is_mana_ability=True,
+                ),
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=Sequence(effects=(
+                        AddNManaOfChosenColor(
+                            amount=1, options=("R", "G"),
+                        ),
+                        GrantLifeToEachOpponent(amount=1),
+                    )),
+                    is_mana_ability=True,
+                ),
+            ),
+        ),
+        # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Insect, Rat,
+        # Spider, Squirrel, or Snake.
+        "Swarmyard": make_utility_land(
+            "Swarmyard",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"),
+                        mana_str="{1}",
+                        tap_self=True,
+                    ),
+                    effect=RegenerateTargetCreature(
+                        allowed_subtypes=frozenset({
+                            "Rat", "Spider", "Squirrel", "Insect", "Snake",
+                        }),
+                    ),
+                ),
+            ),
+        ),
+        # Contested War Zone: triggered (combat damage → opponent gains control)
+        # + {T}: Add {C}. + {1},{T}: Attacking creatures get +1/+0 UEOT.
+        "Contested War Zone": make_utility_land(
+            "Contested War Zone",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.DEALS_COMBAT_DAMAGE,
+                    predicate=(
+                        IsCreature(subject="source")
+                        & Controlled(YOU, subject="target")
+                    ),
+                    effect=ChangeControllerToCombatDamageSource(),
+                ),
+            ),
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{1}"),
+                        mana_str="{1}",
+                        tap_self=True,
+                    ),
+                    effect=PumpCreaturesYouControlUntilEOT(
+                        power_bonus=1, toughness_bonus=0,
+                        attacking_only=True,
+                    ),
+                ),
+            ),
+        ),
+    }
+
+
+_BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
+
+# Set codes that carry full bespoke implementations in the static registry.
+# The colorless-utility-land simplifier already skips "eos" and "spg";
+# we gate the bespoke table on the same set codes so only true reprints
+# are claimed here.
+_BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
+
+
 def _build_land_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a land ``card`` (a Scryfall
     record). Returns ``None`` if the card is not a land or if its shape
@@ -253,6 +426,15 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
             return None
         color = m.group(1)
         return make_basic_land(name=card["name"], color=color)
+    # Bespoke EoS lands: name-keyed exact dispatch before all grammar arms.
+    # Checked first so complex multi-ability shapes (Blinkmoth Nexus, Contested
+    # War Zone, Grove of the Burnwillows, …) can't accidentally partially-match
+    # a generic recognizer. Gated on set code so a main-set card with the same
+    # name doesn't get hijacked.
+    if card.get("set") in _BESPOKE_EOS_SETS:
+        bespoke = _BESPOKE_EOS_LANDS.get(card["name"])
+        if bespoke is not None:
+            return bespoke
     # Non-basic land shapes follow.
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:
