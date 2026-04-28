@@ -51,6 +51,7 @@ from mtg_bot.cards.base import (
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     PumpCreaturesOpponentsControlUntilEOT,
+    PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
     PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
@@ -414,6 +415,30 @@ _PUMP_TARGET_OPPONENT_CREATURE_UEOT = re.compile(
 _PUMP_OPPONENT_CREATURES_UEOT = re.compile(
     r"^creatures your opponents control get ([+-]\d+)/([+-]\d+) "
     r"until (end of turn|your next turn)$"
+)
+# "Creatures you control get +N/+M until end of turn" — anthem-style
+# mass pump on every creature the controller controls (Dual-Sun Adepts'
+# ``{5}`` activated ability). Maps to
+# ``PumpCreaturesYouControlUntilEOT(power_bonus=N, toughness_bonus=M)``.
+# Both signs accepted for symmetry with the targeted/opponent-mass
+# regexes; no EoE printing uses a negative self-mass pump today but the
+# uniform shape parses one without further grammar work.
+_PUMP_YOUR_CREATURES_UEOT = re.compile(
+    r"^creatures you control get ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "Target creature you control gets +N/+M until end of turn" —
+# you-control-only single-target pump (Zookeeper Mechan's ``{6}{R}``
+# sorcery-speed activated ability). Maps to
+# ``PumpTargetCreatureUntilEOT(you_control_only=True)`` whose
+# ``legal_targets`` filters the standard creature pool to creatures the
+# resolving controller controls. Tried BEFORE the bare ``target creature
+# gets ... UEOT`` regex so the ``you control`` qualifier wins; the bare
+# regex's ``$`` anchor wouldn't match the qualifier anyway, but
+# ordering more-specific before more-general is the convention in this
+# dispatcher.
+_PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
+    r"^target creature you control gets ([+-]\d+)/([+-]\d+) "
+    r"until end of turn$"
 )
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
@@ -1213,9 +1238,33 @@ def _parse_effect(phrase: str) -> Effect | None:
             toughness_bonus=int(m.group(2)),
             opponents_only=True,
         )
+    # ``target creature you control gets ±N/±M until end of turn`` —
+    # you-control-only single-target pump (Zookeeper Mechan's ``{6}{R}``
+    # sorcery-speed activated ability). Tried BEFORE the bare
+    # ``target creature gets … UEOT`` regex so the ``you control``
+    # qualifier wins; the bare regex's ``$`` anchor wouldn't match the
+    # qualifier anyway, but ordering more-specific before more-general
+    # is the convention here.
+    m = _PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT.match(phrase)
+    if m is not None:
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            you_control_only=True,
+        )
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+        )
+    # ``creatures you control get ±N/±M until end of turn`` — anthem-
+    # style mass pump on every creature the controller controls
+    # (Dual-Sun Adepts' ``{5}`` activated ability). Maps to
+    # ``PumpCreaturesYouControlUntilEOT``.
+    m = _PUMP_YOUR_CREATURES_UEOT.match(phrase)
+    if m is not None:
+        return PumpCreaturesYouControlUntilEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
         )

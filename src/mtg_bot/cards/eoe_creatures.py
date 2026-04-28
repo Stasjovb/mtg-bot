@@ -98,6 +98,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # +1/+1 until end of turn."
         make_creature(
             "Dual-Sun Adepts", "{2}{W}", 2, 2,
+            subtypes=("Human", "Soldier"),
             keywords={"double strike"},
             activated_abilities=(
                 ActivatedAbility(
@@ -2424,6 +2425,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Zookeeper Mechan", "{1}{R}", 1, 3,
             artifact=True,
+            subtypes=("Robot",),
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(tap_self=True),
