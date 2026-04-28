@@ -10,9 +10,7 @@ Oracle (Scryfall-updated): Choose one —
 from dataclasses import replace
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    EOE_SPELLS, SPECIAL_GUESTS_EOE, SYNTHETIC_CREATURES, TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import (
     ActivationCost,
     CounterTargetSpell,
@@ -21,6 +19,10 @@ from mtg_bot.effects import (
     ModalChooseOne,
 )
 from mtg_bot.game import GameState, ManaCoin, Player, StackItem, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickMode(Agent):
@@ -39,7 +41,7 @@ def _new_state(agent=None):
 
 
 def test_warping_wail_is_wired_up():
-    ww = SPECIAL_GUESTS_EOE["Warping Wail"]
+    ww = _PRINTINGS["Warping Wail"]
     assert ww.is_instant
     assert ww.mana_cost_str == "{1}{C}"
     # Effect shape: three modes.
@@ -81,7 +83,7 @@ def test_mode0_exiles_targeted_creature():
         TOKEN_PRINTINGS["Eldrazi Scion"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(scion)
-    modal = SPECIAL_GUESTS_EOE["Warping Wail"].spell_effect
+    modal = _PRINTINGS["Warping Wail"].spell_effect
     modal.resolve(state, 0, (("creature", scion.id),))
     assert scion not in state.battlefield
 
@@ -109,13 +111,13 @@ def test_mode1_counters_target_sorcery():
     not even in the legal set."""
     state = _new_state(_PickMode(1))
     # Put a sorcery on the stack.
-    sorcery = EOE_SPELLS["Atomic Starburst"] if (
-        "Atomic Starburst" in EOE_SPELLS
+    sorcery = _PRINTINGS["Atomic Starburst"] if (
+        "Atomic Starburst" in _PRINTINGS
     ) else None
     # Fall back to anything that's a sorcery.
     if sorcery is None:
         sorcery = next(
-            p for p in EOE_SPELLS.values() if p.is_sorcery
+            p for p in _PRINTINGS.values() if p.is_sorcery
         )
     src = state.new_object(sorcery, 1, Zone.STACK)
     state.stack.append(
@@ -131,7 +133,7 @@ def test_mode1_counters_target_sorcery():
 def test_mode1_does_not_target_instants():
     """Counter-target-sorcery filters out instants entirely."""
     state = _new_state()
-    inst = next(p for p in EOE_SPELLS.values() if p.is_instant)
+    inst = next(p for p in _PRINTINGS.values() if p.is_instant)
     src = state.new_object(inst, 1, Zone.STACK)
     state.stack.append(
         StackItem(source=src, controller_id=1, targets=(), countered=False)
@@ -142,7 +144,7 @@ def test_mode1_does_not_target_instants():
 
 def test_mode2_creates_eldrazi_scion_token():
     state = _new_state(_PickMode(2))
-    modal = SPECIAL_GUESTS_EOE["Warping Wail"].spell_effect
+    modal = _PRINTINGS["Warping Wail"].spell_effect
     modal.resolve(state, 0, ())
     scions = [
         o for o in state.battlefield
@@ -189,7 +191,7 @@ def test_token_creation_mode_is_untargeted_in_modal_unit():
         TOKEN_PRINTINGS["Eldrazi Scion"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(scion)
-    modal = SPECIAL_GUESTS_EOE["Warping Wail"].spell_effect
+    modal = _PRINTINGS["Warping Wail"].spell_effect
     legal = modal.legal_targets(state, 0)
     # Scion id is eligible (mode 0). Stack is empty so mode 1 has none.
     assert any(t == ("creature", scion.id) for t in legal)
@@ -219,7 +221,7 @@ def test_mode0_defensive_paths_are_safe():
 
 
 def test_modal_describe_lists_all_three_modes():
-    modal = SPECIAL_GUESTS_EOE["Warping Wail"].spell_effect
+    modal = _PRINTINGS["Warping Wail"].spell_effect
     desc = modal.describe()
     assert "power or toughness 1 or less" in desc
     assert "sorcery" in desc.lower()

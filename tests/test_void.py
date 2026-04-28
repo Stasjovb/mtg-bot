@@ -1,13 +1,17 @@
 """Tests for the EoE Void turn-state tracking primitive."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone, is_void_active
 from mtg_bot.turn import (
     move_off_battlefield,
     run_cleanup_step,
     state_based_actions,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _setup():
@@ -72,14 +76,13 @@ def test_creature_dying_via_state_based_actions_activates_void():
 
 def test_warp_cast_sets_spell_warped_this_turn():
     from mtg_bot.actions import CastSpell, apply_action
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _setup()
     # Enough lands to pay warp cost ({2}{R} for Nova Hellkite)
     state.active_player_idx = 0
     state.priority_player_idx = 0
     hellkite = state.new_object(
-        EOE_CREATURES["Nova Hellkite"], owner_id=0, zone=Zone.HAND
+        _PRINTINGS["Nova Hellkite"], owner_id=0, zone=Zone.HAND
     )
     state.players[0].hand.append(hellkite)
     for _ in range(3):

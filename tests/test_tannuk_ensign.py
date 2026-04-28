@@ -3,11 +3,15 @@ draw and the new ability_resolutions_this_turn tracking."""
 
 from mtg_bot.actions import put_into_battlefield
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.effects import TannukEnsignLandfallEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -33,7 +37,7 @@ def _stock_library(state, player_id, n):
 def test_effect_damages_each_opponent():
     state = _new_state()
     tannuk = state.new_object(
-        EOE_CREATURES["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(tannuk)
     state.resolving_source = tannuk
@@ -77,7 +81,7 @@ def test_first_landfall_no_draw_second_landfall_draws():
     state = _new_state()
     _stock_library(state, 0, 5)
     tannuk = state.new_object(
-        EOE_CREATURES["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(tannuk)
     _fire_landfall_for_tannuk(state, tannuk)
@@ -90,7 +94,7 @@ def test_third_and_fourth_landfall_do_not_draw():
     state = _new_state()
     _stock_library(state, 0, 5)
     tannuk = state.new_object(
-        EOE_CREATURES["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(tannuk)
     for _ in range(4):
@@ -105,7 +109,7 @@ def test_cleanup_resets_resolution_counter():
     state = _new_state()
     _stock_library(state, 0, 5)
     tannuk = state.new_object(
-        EOE_CREATURES["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Tannuk, Memorial Ensign"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(tannuk)
     # Fire twice this turn (draws on 2nd).
@@ -121,7 +125,7 @@ def test_cleanup_resets_resolution_counter():
 
 
 def test_tannuk_printing_metadata():
-    t = EOE_CREATURES["Tannuk, Memorial Ensign"]
+    t = _PRINTINGS["Tannuk, Memorial Ensign"]
     assert "Legendary" in t.supertypes
     triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "landfall" in triggers

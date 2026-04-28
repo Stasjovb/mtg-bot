@@ -7,12 +7,16 @@ which the engine doesn't model yet.
 
 from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.effects import SacrificeNLandsYouControl
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
 from tests._etb_helpers import _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -62,7 +66,7 @@ def _put(state, printing, owner_id=0):
 
 def test_sacrifice_n_lands_sacs_two_and_excludes_source():
     state = _new_state()
-    source = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    source = _put(state, _PRINTINGS["Lotus Field"])
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
     state.resolving_source = source
@@ -83,7 +87,7 @@ def test_sacrifice_n_lands_handles_fewer_available_than_count():
     """If the controller has only 1 land besides the source, sac all
     of them and stop — don't raise."""
     state = _new_state()
-    source = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    source = _put(state, _PRINTINGS["Lotus Field"])
     _put(state, BASIC_LANDS["Mountain"])
     state.resolving_source = source
     try:
@@ -106,7 +110,7 @@ def test_sacrifice_n_lands_describe():
 
 
 def test_lotus_field_metadata():
-    p = STELLAR_SIGHTS_LANDS["Lotus Field"]
+    p = _PRINTINGS["Lotus Field"]
     assert "hexproof" in p.keywords
     assert p.enters_tapped is True
     assert len(p.triggered_abilities) == 1
@@ -123,7 +127,7 @@ def test_lotus_field_etb_sacrifices_two_lands():
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
     lotus = state.new_object(
-        STELLAR_SIGHTS_LANDS["Lotus Field"], 0, Zone.HAND,
+        _PRINTINGS["Lotus Field"], 0, Zone.HAND,
     )
     put_into_battlefield(state, lotus, 0)
     while state.stack:
@@ -140,7 +144,7 @@ def test_lotus_field_taps_for_three_of_one_chosen_color_default():
     """Default test agent picks the first color option (W); pool must
     contain three W coins, none of any other color."""
     state = _new_state()
-    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    lotus = _put(state, _PRINTINGS["Lotus Field"])
     apply_action(
         state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
     )
@@ -155,7 +159,7 @@ def test_lotus_field_taps_for_three_of_chosen_color_blue():
     """Forcing the agent to pick U yields three U coins (single color,
     not three independent picks)."""
     state = _new_state(p0_color="U")
-    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    lotus = _put(state, _PRINTINGS["Lotus Field"])
     apply_action(
         state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
     )
@@ -166,7 +170,7 @@ def test_lotus_field_taps_for_three_of_chosen_color_blue():
 def test_lotus_field_taps_for_three_of_chosen_color_green():
     """Different color choice → three G coins, none mixed in."""
     state = _new_state(p0_color="G")
-    lotus = _put(state, STELLAR_SIGHTS_LANDS["Lotus Field"])
+    lotus = _put(state, _PRINTINGS["Lotus Field"])
     apply_action(
         state, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
     )
@@ -181,7 +185,7 @@ def test_lotus_field_taps_for_three_of_chosen_color_green():
 
 
 def test_plaza_of_heroes_metadata():
-    p = STELLAR_SIGHTS_LANDS["Plaza of Heroes"]
+    p = _PRINTINGS["Plaza of Heroes"]
     assert "Legendary" in p.supertypes
     # Plaza has four activated abilities: three mana abilities
     # (baseline {C}, legendary-spell-restricted any, legendary-
@@ -194,7 +198,7 @@ def test_plaza_of_heroes_metadata():
 
 def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
     state = _new_state()
-    plaza = _put(state, STELLAR_SIGHTS_LANDS["Plaza of Heroes"])
+    plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Mana for {3}.
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
@@ -215,12 +219,3 @@ def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
 # -----------------------
 
 
-def test_two_more_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Lotus Field", "Plaza of Heroes"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

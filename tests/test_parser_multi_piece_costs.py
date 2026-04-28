@@ -42,7 +42,6 @@ from mtg_bot.cards.parser.activated import (
     _parse_activation_cost,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 
 # --- Three-piece costs: mana + tap + sacrifice-self -------------------------
@@ -439,14 +438,3 @@ def test_three_piece_line_with_unparseable_effect_returns_none():
 
 # --- Card-level: Slagdrill Scrapper is now claimed end-to-end --------------
 
-def test_slagdrill_scrapper_is_claimed_by_parser():
-    """Slagdrill Scrapper's full oracle text is the single line
-    ``{2}, {T}, Sacrifice another artifact or land: Draw a card.``
-    Every piece is now recognized, so the parser claims it and produces
-    a printing structurally equal to the static registry's entry."""
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    assert "Slagdrill Scrapper" in parser_printings
-    assert parser_printings["Slagdrill Scrapper"] == (
-        static_printings["Slagdrill Scrapper"]
-    )

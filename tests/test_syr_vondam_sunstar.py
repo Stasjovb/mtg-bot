@@ -4,7 +4,7 @@ leaves-battlefield self-trigger gated on power."""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     ConditionalIfSourcePowerAtLeast,
     DestroyTargetNonlandPermanent,
@@ -13,6 +13,10 @@ from mtg_bot.effects import (
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy, move_off_battlefield
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -96,7 +100,7 @@ def test_conditional_power_gate_forwards_target_requirements():
 def test_vondam_counts_allied_creature_dying():
     state = _new_state()
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(vondam)
     ally = state.new_object(
@@ -113,7 +117,7 @@ def test_vondam_counts_allied_creature_dying():
 def test_vondam_counts_allied_creature_exiled():
     state = _new_state()
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(vondam)
     ally = state.new_object(
@@ -130,7 +134,7 @@ def test_vondam_counts_allied_creature_exiled():
 def test_vondam_ignores_opponents_creature_dying():
     state = _new_state()
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(vondam)
     enemy = state.new_object(
@@ -144,7 +148,7 @@ def test_vondam_ignores_opponents_creature_dying():
 def test_vondam_does_not_fire_on_own_death():
     state = _new_state()
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(vondam)
     destroy(state, vondam)
@@ -160,7 +164,7 @@ def test_vondam_does_not_fire_on_own_death():
 def test_vondam_death_at_power_4_destroys_target_permanent():
     state = _new_state(_PickFirstAgent())
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     vondam.plus_one_counters = 2  # 2 + 2 = 4 effective power
     state.battlefield.append(vondam)
@@ -177,7 +181,7 @@ def test_vondam_death_at_power_4_destroys_target_permanent():
 def test_vondam_death_below_power_4_does_nothing():
     state = _new_state(_PickFirstAgent())
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, Sunstar Exemplar"], 0, Zone.BATTLEFIELD,
     )
     # Base 2/2, no counters — power is 2, below threshold.
     state.battlefield.append(vondam)
@@ -190,7 +194,7 @@ def test_vondam_death_below_power_4_does_nothing():
 
 
 def test_vondam_printing_metadata():
-    v = EOE_CREATURES["Syr Vondam, Sunstar Exemplar"]
+    v = _PRINTINGS["Syr Vondam, Sunstar Exemplar"]
     triggers = {_legacy_or_inferred_key(ab) for ab in v.triggered_abilities}
     assert "another_creature_you_control_dies_or_exiled" in triggers
     assert "leaves_battlefield" in triggers

@@ -9,7 +9,7 @@ Exercises:
 
 from mtg_bot.actions import ActivateAbility, apply_action, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.combat import (
     declare_attackers, declare_blockers, resolve_combat_damage,
@@ -20,6 +20,10 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -51,7 +55,7 @@ def _put(state, printing, owner_id=0):
 def test_contested_war_zone_metadata():
     from tests._etb_helpers import _legacy_or_inferred_key
 
-    p = STELLAR_SIGHTS_LANDS["Contested War Zone"]
+    p = _PRINTINGS["Contested War Zone"]
     assert len(p.triggered_abilities) == 1
     # Phase 9 migrated this trigger from
     # ``trigger="creature_deals_combat_damage_to_you"`` to predicate-style
@@ -71,7 +75,7 @@ def test_contested_war_zone_changes_controller_on_combat_damage():
     controller."""
     state = _new_state()
     # Defender (P1) controls the War Zone.
-    zone = _put(state, STELLAR_SIGHTS_LANDS["Contested War Zone"], owner_id=1)
+    zone = _put(state, _PRINTINGS["Contested War Zone"], owner_id=1)
     # Attacker on P0's side.
     attacker = _put(
         state, make_creature("Grizzly", "{1}{G}", 2, 2), owner_id=0,
@@ -87,7 +91,7 @@ def test_contested_war_zone_no_change_when_blocked_fully():
     """If all damage is absorbed by a blocker, no combat damage reaches
     the defender — control doesn't change."""
     state = _new_state()
-    zone = _put(state, STELLAR_SIGHTS_LANDS["Contested War Zone"], owner_id=1)
+    zone = _put(state, _PRINTINGS["Contested War Zone"], owner_id=1)
     attacker = _put(
         state, make_creature("Grizzly", "{1}{G}", 2, 2), owner_id=0,
     )
@@ -128,7 +132,7 @@ def test_pump_attacking_creatures_only_pumps_attackers():
 
 def test_contested_war_zone_activation_pumps_attackers():
     state = _new_state()
-    zone = _put(state, STELLAR_SIGHTS_LANDS["Contested War Zone"])
+    zone = _put(state, _PRINTINGS["Contested War Zone"])
     _put(state, BASIC_LANDS["Mountain"])
     bear = _put(state, make_creature("Bear", "{1}{G}", 2, 2))
     bear.summoning_sick = False
@@ -154,7 +158,7 @@ def test_change_controller_noop_without_source():
 
 def test_change_controller_noop_when_already_owned():
     state = _new_state()
-    zone = _put(state, STELLAR_SIGHTS_LANDS["Contested War Zone"], owner_id=1)
+    zone = _put(state, _PRINTINGS["Contested War Zone"], owner_id=1)
     state.resolving_source = zone
     state.resolving_combat_damage_source_controller_id = 1  # same
     try:
@@ -178,14 +182,14 @@ def test_change_controller_describe():
 
 
 def test_sunken_citadel_enters_tapped_and_is_a_cave():
-    p = STELLAR_SIGHTS_LANDS["Sunken Citadel"]
+    p = _PRINTINGS["Sunken Citadel"]
     assert p.enters_tapped is True
     assert "Cave" in p.subtypes
 
 
 def test_sunken_citadel_taps_for_any_mana():
     state = _new_state()
-    citadel = _put(state, STELLAR_SIGHTS_LANDS["Sunken Citadel"])
+    citadel = _put(state, _PRINTINGS["Sunken Citadel"])
     apply_action(
         state, 0, ActivateAbility(source_id=citadel.id, ability_index=0),
     )
@@ -199,12 +203,3 @@ def test_sunken_citadel_taps_for_any_mana():
 # -----------------------
 
 
-def test_two_more_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Contested War Zone", "Sunken Citadel"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

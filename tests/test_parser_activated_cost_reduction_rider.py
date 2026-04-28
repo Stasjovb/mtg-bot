@@ -108,17 +108,3 @@ def test_no_cost_reduction_rider_unaffected():
 
 # --- Per-card parser-vs-static parity ---------------------------------------
 
-def test_parser_claims_starport_security():
-    """Starport Security is now parser-claimed via the new
-    ``tap another target creature`` effect plus the inline cost-
-    reduction rider parse. Static-registry ``Robot Soldier`` subtypes
-    were backfilled per the parser-is-right rule."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Starport Security" in parser
-    assert (
-        parser["Starport Security"]
-        == static["Starport Security"]
-    )

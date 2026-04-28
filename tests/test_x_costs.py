@@ -11,14 +11,12 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    ManaCost,
-    parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, ManaCost, parse_mana_cost
 from mtg_bot.game import GameState, Player, StackItem, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 # -----------------------
@@ -108,7 +106,7 @@ def test_choose_and_apply_x_clamps_to_upper_bound():
             return 99
 
     state = _state_with_lands(num_swamps=3, agent=GreedyAgent())
-    card = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    card = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     chosen = _choose_and_apply_x(state, 0, card, parse_mana_cost("{X}{B}"))
     assert chosen == 2  # 3 swamps: 1 for B, 2 for X
 
@@ -119,7 +117,7 @@ def test_choose_and_apply_x_clamps_negative_to_zero():
             return -5
 
     state = _state_with_lands(num_swamps=3, agent=PessimistAgent())
-    card = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    card = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     chosen = _choose_and_apply_x(state, 0, card, parse_mana_cost("{X}{B}"))
     assert chosen == 0
 
@@ -146,7 +144,7 @@ def test_zero_point_ballad_destroys_small_creatures_loses_x_life():
     strong = state.new_object(SYNTHETIC_CREATURES["Spider Sentinel"], 1, Zone.BATTLEFIELD)
     # Spider Sentinel is 1/4 — toughness 4 — should survive at X=2.
     state.battlefield.append(strong)
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     # RandomAgent returns upper_bound, which is 2 (3 swamps: 1 for B, 2 for X).
     _cast_and_resolve(state, 0, ballad)
@@ -165,7 +163,7 @@ def test_zero_point_ballad_x6_reanimates_creature():
     # Caster has one of their own creatures with toughness ≤ 6.
     bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(bear)
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     _cast_and_resolve(state, 0, ballad)
     # Bear was destroyed (left battlefield); under X≥6 clause it's returned.
@@ -180,7 +178,7 @@ def test_zero_point_ballad_x_below_6_leaves_creatures_in_graveyard():
     p = state.players[0]
     bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(bear)
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     _cast_and_resolve(state, 0, ballad)
     assert bear not in state.battlefield
@@ -201,7 +199,7 @@ def test_devastating_onslaught_creates_x_copies_with_haste_sac_at_end_step():
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(original)
-    onslaught = state.new_object(EOE_SPELLS["Devastating Onslaught"], 0, Zone.HAND)
+    onslaught = state.new_object(_PRINTINGS["Devastating Onslaught"], 0, Zone.HAND)
     p.hand.append(onslaught)
     # 5 mountains → 1 for R, 4 for 2X → X=2. 2 copies of Wild Bear.
     _cast_and_resolve(state, 0, onslaught)
@@ -222,7 +220,7 @@ def test_devastating_onslaught_creates_x_copies_with_haste_sac_at_end_step():
 def test_broodguard_elite_enters_with_x_plus_one_counters():
     state = _state_with_lands(num_forests=5)
     p = state.players[0]
-    broodguard = state.new_object(EOE_SPELLS["Broodguard Elite"], 0, Zone.HAND)
+    broodguard = state.new_object(_PRINTINGS["Broodguard Elite"], 0, Zone.HAND)
     p.hand.append(broodguard)
     # 5 forests → 2 for {G}{G}, 3 left for X → X=3.
     _cast_and_resolve(state, 0, broodguard)
@@ -245,7 +243,7 @@ def test_dyadrine_enters_with_counters_equal_to_mana_spent():
     plains = state.new_object(BASIC_LANDS["Plains"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(plains)
     dyadrine = state.new_object(
-        EOE_SPELLS["Dyadrine, Synthesis Amalgam"], 0, Zone.HAND
+        _PRINTINGS["Dyadrine, Synthesis Amalgam"], 0, Zone.HAND
     )
     p.hand.append(dyadrine)
     _cast_and_resolve(state, 0, dyadrine)
@@ -258,7 +256,7 @@ def test_dyadrine_enters_with_counters_equal_to_mana_spent():
 def test_cast_spell_preserves_x_value_on_stack_item():
     state = _state_with_lands(num_swamps=4)
     p = state.players[0]
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     apply_action(state, 0, CastSpell(ballad.id))
     item = state.stack[-1]
@@ -270,7 +268,7 @@ def test_cast_spell_preserves_x_value_on_stack_item():
 def test_resolving_x_value_reset_after_spell_resolution():
     state = _state_with_lands(num_swamps=3)
     p = state.players[0]
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     _cast_and_resolve(state, 0, ballad)
     assert state.resolving_x_value == 0
@@ -296,7 +294,7 @@ def test_zero_point_ballad_x6_reanimation_fizzles_without_caster_victim():
     state.players.append(p2)
     opp_bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD)
     state.battlefield.append(opp_bear)
-    ballad = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    ballad = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     p.hand.append(ballad)
     _cast_and_resolve(state, 0, ballad)
     # Opponent's bear died to the graveyard; caster owns nothing from
@@ -377,7 +375,7 @@ def test_choose_and_apply_x_no_agent_uses_zero():
     for _ in range(3):
         s = state.new_object(BASIC_LANDS["Swamp"], 0, Zone.BATTLEFIELD)
         state.battlefield.append(s)
-    card = state.new_object(EOE_SPELLS["Zero Point Ballad"], 0, Zone.HAND)
+    card = state.new_object(_PRINTINGS["Zero Point Ballad"], 0, Zone.HAND)
     assert _choose_and_apply_x(state, 0, card, parse_mana_cost("{X}{B}")) == 0
 
 

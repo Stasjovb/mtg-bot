@@ -2,12 +2,16 @@
 trigger and the DrawCardsEqualToResolvingCombatDamage effect."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import _fire_combat_damage_to_player_triggers
 from mtg_bot.effects import DrawCardsEqualToResolvingCombatDamage
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -61,7 +65,7 @@ def test_starwinder_draws_equal_to_bear_damage():
     state = _new_state()
     _stock_library(state, 0, 5)
     starwinder = state.new_object(
-        EOE_CREATURES["Starwinder"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starwinder"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(starwinder)
     bear = state.new_object(
@@ -78,7 +82,7 @@ def test_starwinder_draws_equal_to_its_own_damage():
     state = _new_state()
     _stock_library(state, 0, 10)
     starwinder = state.new_object(
-        EOE_CREATURES["Starwinder"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starwinder"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(starwinder)
     # Simulate Starwinder (7 power) itself connecting.
@@ -91,7 +95,7 @@ def test_starwinder_does_not_fire_for_opponents_creature():
     state = _new_state()
     _stock_library(state, 0, 5)
     starwinder = state.new_object(
-        EOE_CREATURES["Starwinder"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Starwinder"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(starwinder)
     enemy_bear = state.new_object(
@@ -104,7 +108,7 @@ def test_starwinder_does_not_fire_for_opponents_creature():
 
 
 def test_starwinder_printing_has_warp_and_damage_trigger():
-    s = EOE_CREATURES["Starwinder"]
+    s = _PRINTINGS["Starwinder"]
     assert s.warp_cost_str == "{2}{U}{U}"
     triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "your_creature_combat_damage_to_player" in triggers

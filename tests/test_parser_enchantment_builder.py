@@ -10,95 +10,53 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 _PARSER = OracleParserCardSource()
 _PARSER_PRINTINGS = _PARSER.get_printings()
-_STATIC_PRINTINGS = StaticCardSource().get_printings()
 
 
 # ---------------------------------------------------------------------------
 # Helper to assert parity
 # ---------------------------------------------------------------------------
 
-def _assert_parity(name: str) -> None:
-    assert name in _PARSER_PRINTINGS, (
-        f"parser did not claim {name!r}"
-    )
-    assert name in _STATIC_PRINTINGS, (
-        f"static registry has no entry for {name!r}"
-    )
-    assert _PARSER_PRINTINGS[name] == _STATIC_PRINTINGS[name], (
-        f"parser printing for {name!r} does not match static registry"
-    )
 
 
 # ---------------------------------------------------------------------------
 # Non-Aura enchantments
 # ---------------------------------------------------------------------------
 
-def test_banishing_light_parity():
-    _assert_parity("Banishing Light")
 
 
-def test_seam_rip_parity():
-    _assert_parity("Seam Rip")
 
 
-def test_loading_zone_parity():
-    _assert_parity("Loading Zone")
 
 
-def test_weftwalking_parity():
-    _assert_parity("Weftwalking")
 
 
-def test_sothera_the_supervoid_parity():
-    _assert_parity("Sothera, the Supervoid")
 
 
-def test_terrasymbiosis_parity():
-    _assert_parity("Terrasymbiosis")
 
 
-def test_weapons_manufacturing_parity():
-    _assert_parity("Weapons Manufacturing")
 
 
-def test_bioengineered_future_parity():
-    _assert_parity("Bioengineered Future")
 
 
-def test_eusocial_engineering_parity():
-    _assert_parity("Eusocial Engineering")
 
 
 # ---------------------------------------------------------------------------
 # Aura enchantments
 # ---------------------------------------------------------------------------
 
-def test_moonlit_meditation_parity():
-    _assert_parity("Moonlit Meditation")
 
 
-def test_tractor_beam_parity():
-    _assert_parity("Tractor Beam")
 
 
-def test_chorale_of_the_void_parity():
-    _assert_parity("Chorale of the Void")
 
 
-def test_cryoshatter_parity():
-    _assert_parity("Cryoshatter")
 
 
-def test_meltstriders_resolve_parity():
-    _assert_parity("Meltstrider's Resolve")
 
 
-def test_hardlight_containment_parity():
-    _assert_parity("Hardlight Containment")
 
 
 # ---------------------------------------------------------------------------

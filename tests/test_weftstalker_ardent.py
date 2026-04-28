@@ -10,16 +10,20 @@ import random
 from mtg_bot import apply, legal_moves
 from mtg_bot.actions import CastSpell, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.game import Zone
 from mtg_bot.turn import run_end_step_warp_exile
 
 from tests._rules_helpers import _arena
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 def test_weftstalker_ardent_printing_has_warp_r():
     """The printing exposes the printed Warp {R} cost."""
-    p = EOE_CREATURES["Weftstalker Ardent"]
+    p = _PRINTINGS["Weftstalker Ardent"]
     assert p.warp_cost is not None
     assert p.warp_cost_str == "{R}"
 
@@ -27,7 +31,7 @@ def test_weftstalker_ardent_printing_has_warp_r():
 def test_weftstalker_ardent_warp_cast_is_legal_when_only_warp_payable():
     """With a single Mountain in play, only the warp cost ({R}) is payable;
     the normal {2}{R} cost is not. Warp cast must be in legal_moves."""
-    ardent = EOE_CREATURES["Weftstalker Ardent"]
+    ardent = _PRINTINGS["Weftstalker Ardent"]
     state = _arena(
         p0_hand=[ardent],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -50,7 +54,7 @@ def test_weftstalker_ardent_warp_cast_resolves_and_exiles_at_end_step():
     """Casting via warp puts the creature on the battlefield, marks it
     cast_via_warp, and the end-step warp-exile pass moves it to exile
     flagged as warped."""
-    ardent = EOE_CREATURES["Weftstalker Ardent"]
+    ardent = _PRINTINGS["Weftstalker Ardent"]
     state = _arena(
         p0_hand=[ardent],
         p0_battlefield=[BASIC_LANDS["Mountain"]],
@@ -76,7 +80,7 @@ def test_weftstalker_ardent_warp_cast_resolves_and_exiles_at_end_step():
 def test_weftstalker_ardent_warped_card_recasts_from_exile_at_normal_cost():
     """A warped Weftstalker Ardent in exile can be recast for its normal
     {2}{R} mana cost on a later turn."""
-    ardent = EOE_CREATURES["Weftstalker Ardent"]
+    ardent = _PRINTINGS["Weftstalker Ardent"]
     state = _arena(
         p0_battlefield=[BASIC_LANDS["Mountain"]] * 3,
     )

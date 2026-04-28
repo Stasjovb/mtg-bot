@@ -138,13 +138,3 @@ def test_build_artifact_printing_claims_dubious_delicacy():
     )
 
 
-def test_parser_claims_dubious_delicacy_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Dubious Delicacy via the
-    artifact-builder dispatch arm with the new optional-pump atom."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Dubious Delicacy" in parser
-    assert parser["Dubious Delicacy"] == static["Dubious Delicacy"]

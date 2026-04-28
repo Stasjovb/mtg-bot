@@ -14,7 +14,7 @@ temp_base_pt_override + temp_keywords).
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, TOKEN_PRINTINGS
+from mtg_bot.cards import TOKEN_PRINTINGS
 from mtg_bot.effects import TargetArtifactBecomesCreatureUEOT
 from mtg_bot.game import (
     GameState, Player, Zone,
@@ -22,6 +22,10 @@ from mtg_bot.game import (
     is_creature_now,
 )
 from mtg_bot.turn import Step, run_beginning_of_combat_triggers, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -57,7 +61,7 @@ def test_lander_becomes_2_2_flying_creature_ueot():
     Labship's tier-2 trigger should turn it into a 2/2 flying
     artifact creature UEOT."""
     state = _new_state()
-    labship = _put(state, EOE_CREATURES["Synthesizer Labship"])
+    labship = _put(state, _PRINTINGS["Synthesizer Labship"])
     labship.charge_counters = 2
     lander = _put(state, TOKEN_PRINTINGS["Lander"])
     # Pre-state: Lander is not a creature.
@@ -79,7 +83,7 @@ def test_lander_becomes_2_2_flying_creature_ueot():
 
 def test_animation_clears_at_cleanup():
     state = _new_state()
-    labship = _put(state, EOE_CREATURES["Synthesizer Labship"])
+    labship = _put(state, _PRINTINGS["Synthesizer Labship"])
     labship.charge_counters = 2
     lander = _put(state, TOKEN_PRINTINGS["Lander"])
     run_beginning_of_combat_triggers(state)
@@ -103,12 +107,12 @@ def test_already_creature_artifact_base_pt_overridden():
     oracle. This is the layered-effects part the simplified version
     couldn't model."""
     state = _new_state()
-    labship = _put(state, EOE_CREATURES["Synthesizer Labship"])
+    labship = _put(state, _PRINTINGS["Synthesizer Labship"])
     labship.charge_counters = 2
     # Drop another stationed Spacecraft as the target. Sledge-Class
     # Seedship is a 4/5 Spacecraft; station it at 7+ so it's an
     # artifact creature.
-    other_sc = _put(state, EOE_CREATURES["Sledge-Class Seedship"])
+    other_sc = _put(state, _PRINTINGS["Sledge-Class Seedship"])
     other_sc.charge_counters = 7  # stationed → creature mode
     assert is_creature_now(other_sc)
     assert effective_power(state, other_sc) == 4
@@ -131,7 +135,7 @@ def test_already_creature_artifact_base_pt_overridden():
 
 def test_below_tier_threshold_no_animation():
     state = _new_state()
-    labship = _put(state, EOE_CREATURES["Synthesizer Labship"])
+    labship = _put(state, _PRINTINGS["Synthesizer Labship"])
     labship.charge_counters = 1  # below the 2+ tier
     lander = _put(state, TOKEN_PRINTINGS["Lander"])
 
@@ -154,7 +158,7 @@ def test_labship_cannot_target_itself():
     legal_targets must exclude self. With no other artifact on the
     battlefield, legal_targets returns empty."""
     state = _new_state()
-    labship = _put(state, EOE_CREATURES["Synthesizer Labship"])
+    labship = _put(state, _PRINTINGS["Synthesizer Labship"])
     labship.charge_counters = 9  # stationed; tier 2+ active
     effect = TargetArtifactBecomesCreatureUEOT(
         power=2, toughness=2, granted_keywords=frozenset({"flying"}),

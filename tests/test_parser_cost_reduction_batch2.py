@@ -52,7 +52,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _detect_cost_reductions,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 
 _DATA_PATH = (
@@ -128,16 +127,6 @@ def test_mental_modulation_now_claimed_with_during_your_turn_rider():
     ))
 
 
-def test_mental_modulation_parser_static_parity():
-    # The end-to-end parity test is auto-parametrized over claimed
-    # names in ``test_parser_parity``; this is an explicit check
-    # close to the grammar change so a static-side drift surfaces in
-    # this batch's test file. It also serves as the regression
-    # canary if a future static refactor reintroduces an empty
-    # ``cost_reductions=()`` on Mental Modulation.
-    parser_p = OracleParserCardSource().get_printings()["Mental Modulation"]
-    static_p = StaticCardSource().get_printings()["Mental Modulation"]
-    assert parser_p == static_p
 
 
 # ---------- engine: _evaluate_cost_reduction during_your_turn branch ----------

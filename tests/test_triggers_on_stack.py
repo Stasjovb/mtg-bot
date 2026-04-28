@@ -17,14 +17,13 @@ from __future__ import annotations
 
 from mtg_bot.actions import _cast_spell, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(RandomAgent):
@@ -53,7 +52,7 @@ def test_dies_trigger_lands_on_stack_before_resolving():
     """SBA kills the creature; its dies trigger must be on the stack
     with its effect NOT yet applied."""
     state = _new_state()
-    grav = _bf(state, EOE_CREATURES["Gravpack Monoist"])  # 2/1
+    grav = _bf(state, _PRINTINGS["Gravpack Monoist"])  # 2/1
     grav.damage = 2  # lethal
     state_based_actions(state)
     # Creature is in graveyard, but the Robot hasn't been created yet —
@@ -73,10 +72,10 @@ def test_dies_trigger_can_be_responded_to_with_an_instant():
     cast an instant in response. The instant resolves first (LIFO),
     then the trigger."""
     state = _new_state()
-    grav = _bf(state, EOE_CREATURES["Gravpack Monoist"], owner_id=0)
+    grav = _bf(state, _PRINTINGS["Gravpack Monoist"], owner_id=0)
     # Stock P1 with mana + a Plasma Bolt to fire in response.
     _bf(state, BASIC_LANDS["Mountain"], owner_id=1)
-    bolt = state.new_object(EOE_SPELLS["Plasma Bolt"], 1, Zone.HAND)
+    bolt = state.new_object(_PRINTINGS["Plasma Bolt"], 1, Zone.HAND)
     state.players[1].hand.append(bolt)
     # P0's creature dies via SBA.
     grav.damage = 2
@@ -106,8 +105,8 @@ def test_simultaneous_dies_triggers_all_land_on_stack_before_resolving():
     must be on the stack before either resolves — neither Robot exists
     yet at that point."""
     state = _new_state()
-    g1 = _bf(state, EOE_CREATURES["Gravpack Monoist"])
-    g2 = _bf(state, EOE_CREATURES["Gravpack Monoist"])
+    g1 = _bf(state, _PRINTINGS["Gravpack Monoist"])
+    g2 = _bf(state, _PRINTINGS["Gravpack Monoist"])
     g1.damage = 2
     g2.damage = 2
     state_based_actions(state)
@@ -134,8 +133,8 @@ def test_apnap_dies_trigger_resolution_order_is_lifo():
     before either resolves.
     """
     state = _new_state()
-    ap_grav = _bf(state, EOE_CREATURES["Gravpack Monoist"], owner_id=0)
-    nap_grav = _bf(state, EOE_CREATURES["Gravpack Monoist"], owner_id=1)
+    ap_grav = _bf(state, _PRINTINGS["Gravpack Monoist"], owner_id=0)
+    nap_grav = _bf(state, _PRINTINGS["Gravpack Monoist"], owner_id=1)
     ap_grav.damage = 2
     nap_grav.damage = 2
     state_based_actions(state)

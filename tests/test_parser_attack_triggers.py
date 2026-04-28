@@ -448,36 +448,5 @@ def test_parse_triggered_ability_line_with_name_passthrough_for_canonical():
     ) == canonical
 
 
-def test_syr_vondam_the_lucent_claims_end_to_end():
-    # Syr Vondam, the Lucent's enters-or-attacks trigger uses the
-    # short-form ``"Syr Vondam"`` for both arms; the new name-
-    # substitution path lifts both arms onto the canonical
-    # ``"this creature enters or attacks"`` compound predicate. Pair
-    # this with the mass-pump-and-gain effect grammar from this
-    # batch and the printing claims end-to-end.
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    assert "Syr Vondam, the Lucent" in parser_printings
-    assert (
-        parser_printings["Syr Vondam, the Lucent"]
-        == static_printings["Syr Vondam, the Lucent"]
-    )
 
 
-def test_glacier_godmaw_claims_end_to_end():
-    # Glacier Godmaw was the first EoE printing to claim end-to-end on
-    # the new mass-pump-and-gain grammar. Its landfall trigger fires
-    # ``creatures you control get +1/+1 and gain vigilance and haste
-    # until end of turn`` — the bare-no-other multi-keyword shape.
-    # Pin parser/static parity here so a regression in either layer
-    # surfaces as a focused failure rather than a general parity sweep.
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    assert "Glacier Godmaw" in parser_printings
-    assert parser_printings["Glacier Godmaw"] == static_printings["Glacier Godmaw"]

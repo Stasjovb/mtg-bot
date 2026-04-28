@@ -4,11 +4,15 @@ flag on PumpCreaturesYouControlUntilEOT."""
 
 from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import PumpCreaturesYouControlUntilEOT
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -79,7 +83,7 @@ def test_vondam_etb_pumps_other_creatures_not_self():
     )
     state.battlefield.append(ally)
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, the Lucent"], 0, Zone.HAND,
+        _PRINTINGS["Syr Vondam, the Lucent"], 0, Zone.HAND,
     )
     state.players[0].hand.append(vondam)
     put_into_battlefield(state, vondam, controller_id=0)
@@ -95,7 +99,7 @@ def test_vondam_etb_pumps_other_creatures_not_self():
 def test_vondam_attacks_pumps_other_creatures():
     state = _new_state()
     vondam = state.new_object(
-        EOE_CREATURES["Syr Vondam, the Lucent"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Syr Vondam, the Lucent"], 0, Zone.BATTLEFIELD,
     )
     vondam.summoning_sick = False
     state.battlefield.append(vondam)
@@ -112,7 +116,7 @@ def test_vondam_attacks_pumps_other_creatures():
 
 
 def test_vondam_printing_metadata():
-    v = EOE_CREATURES["Syr Vondam, the Lucent"]
+    v = _PRINTINGS["Syr Vondam, the Lucent"]
     assert "Legendary" in v.supertypes
     assert "deathtouch" in v.keywords
     assert "lifelink" in v.keywords

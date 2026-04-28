@@ -134,13 +134,3 @@ def test_build_artifact_printing_claims_thaumaton_torpedo():
     )
 
 
-def test_parser_claims_thaumaton_torpedo():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Thaumaton Torpedo via the
-    artifact-builder dispatch arm with the new effect/condition atoms."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Thaumaton Torpedo" in parser
-    assert parser["Thaumaton Torpedo"] == static["Thaumaton Torpedo"]

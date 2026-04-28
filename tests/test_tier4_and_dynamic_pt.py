@@ -2,13 +2,7 @@
 and Emissary Escort (dynamic P/T)."""
 
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.effects import CreateToken
 from mtg_bot.game import (
     GameState,
@@ -17,6 +11,10 @@ from mtg_bot.game import (
     effective_power,
     effective_toughness,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -45,7 +43,7 @@ def test_exalted_sunborn_doubles_token_creation():
     state = _new_state()
     # Put Exalted Sunborn on battlefield (is_token_doubler=True).
     sunborn = state.new_object(
-        EOE_CREATURES["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(sunborn)
     effect = CreateToken(
@@ -64,7 +62,7 @@ def test_two_doublers_quadruple_token_creation():
     state = _new_state()
     for _ in range(2):
         s = state.new_object(
-            EOE_CREATURES["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
+            _PRINTINGS["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
         )
         state.battlefield.append(s)
     effect = CreateToken(
@@ -82,7 +80,7 @@ def test_exalted_sunborn_doesnt_double_opponents_tokens():
     state = _new_state()
     # P0 controls the Sunborn.
     sunborn = state.new_object(
-        EOE_CREATURES["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(sunborn)
     # P1 creates tokens.
@@ -101,7 +99,7 @@ def test_exalted_sunborn_doesnt_double_opponents_tokens():
 def test_exalted_sunborn_count_3_doubled_to_6():
     state = _new_state()
     sunborn = state.new_object(
-        EOE_CREATURES["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(sunborn)
     effect = CreateToken(
@@ -116,7 +114,7 @@ def test_exalted_sunborn_count_3_doubled_to_6():
 
 
 def test_exalted_sunborn_printing_has_flag():
-    assert EOE_CREATURES["Exalted Sunborn"].is_token_doubler is True
+    assert _PRINTINGS["Exalted Sunborn"].is_token_doubler is True
 
 
 # -----------------------
@@ -127,7 +125,7 @@ def test_exalted_sunborn_printing_has_flag():
 def test_grovestrider_zero_lands_is_zero_over_zero():
     state = _new_state()
     grove = state.new_object(
-        EOE_SPELLS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(grove)
     assert effective_power(state, grove) == 0
@@ -137,7 +135,7 @@ def test_grovestrider_zero_lands_is_zero_over_zero():
 def test_grovestrider_three_lands_is_three_over_three():
     state = _new_state()
     grove = state.new_object(
-        EOE_SPELLS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(grove)
     for _ in range(3):
@@ -150,7 +148,7 @@ def test_grovestrider_three_lands_is_three_over_three():
 def test_grovestrider_ignores_opponent_lands():
     state = _new_state()
     grove = state.new_object(
-        EOE_SPELLS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Harmonious Grovestrider"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(grove)
     # Opponent has 5 lands, we have 2.
@@ -171,7 +169,7 @@ def test_grovestrider_ignores_opponent_lands():
 def test_emissary_escort_no_other_artifacts_is_printed():
     state = _new_state()
     escort = state.new_object(
-        EOE_CREATURES["Emissary Escort"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Emissary Escort"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(escort)
     # No other artifacts → X = 0, P/T = 0/4 (printed).
@@ -182,17 +180,17 @@ def test_emissary_escort_no_other_artifacts_is_printed():
 def test_emissary_escort_takes_greatest_mv_among_other_artifacts():
     state = _new_state()
     escort = state.new_object(
-        EOE_CREATURES["Emissary Escort"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Emissary Escort"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(escort)
     # Add an artifact with MV 3 and one with MV 5.
     mv3 = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mv3)
     # Synthesizer Labship cost is {U} = MV 1. Find something bigger.
     mv5 = state.new_object(
-        EOE_SPELLS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Virulent Silencer"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(mv5)
     # Memorial Vault is {3}{R} = MV 4. Virulent Silencer is {3} = MV 3.
@@ -203,7 +201,7 @@ def test_emissary_escort_takes_greatest_mv_among_other_artifacts():
 def test_emissary_escort_excludes_self_from_artifact_pool():
     state = _new_state()
     escort = state.new_object(
-        EOE_CREATURES["Emissary Escort"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Emissary Escort"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(escort)
     # Emissary Escort is itself an artifact with MV 2 ({1}{U}). If we
@@ -214,11 +212,11 @@ def test_emissary_escort_excludes_self_from_artifact_pool():
 def test_emissary_escort_excludes_opponent_artifacts():
     state = _new_state()
     escort = state.new_object(
-        EOE_CREATURES["Emissary Escort"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Emissary Escort"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(escort)
     opp_artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 1, Zone.BATTLEFIELD,
+        _PRINTINGS["Memorial Vault"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(opp_artifact)
     # Opponent's MV-4 artifact doesn't count.
@@ -226,6 +224,6 @@ def test_emissary_escort_excludes_opponent_artifacts():
 
 
 def test_emissary_escort_printing_has_formula():
-    assert EOE_CREATURES["Emissary Escort"].dynamic_pt_formula == (
+    assert _PRINTINGS["Emissary Escort"].dynamic_pt_formula == (
         "emissary_escort"
     )

@@ -28,7 +28,6 @@ from mtg_bot.cards.parser.spacecraft_builder import (
     _build_spacecraft_printing,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 from mtg_bot.effects.generic import (
     CreateToken,
     Surveil,
@@ -342,15 +341,6 @@ def test_source_claims_wedgelight_rammer_and_wurmwall_sweeper():
     assert "Galvanizing Sawship" in claimed
 
 
-def test_parity_wedgelight_rammer_and_wurmwall_sweeper():
-    """Per-card parity: the parser-built printings for both newly-
-    claimed Spacecraft must equal the static registry's copies. This
-    is also asserted by the parametrized parity gate, but pinning it
-    here surfaces drift in this batch's specific cards immediately."""
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    for name in ("Wedgelight Rammer", "Wurmwall Sweeper"):
-        assert parser_printings[name] == static_printings[name]
 
 
 def test_build_spacecraft_printing_claims_attack_trigger_spacecraft():

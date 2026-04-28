@@ -41,7 +41,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _parse_modal_choose_one,
     _parse_spell_oracle_text,
 )
-from mtg_bot.cards.source import StaticCardSource
 
 
 _DATA_PATH = (
@@ -186,17 +185,3 @@ _EOE_MODAL_NAMES = (
 )
 
 
-@pytest.mark.parametrize("name", _EOE_MODAL_NAMES)
-def test_eoe_modal_spell_parser_status(name):
-    # Either the parser claims this card and matches the static
-    # printing exactly, OR the parser stays unclaimed (returns None).
-    # No partial / mismatched claim is allowed.
-    card = _eoe_card(name)
-    parsed = _build_spell_printing(card)
-    if parsed is None:
-        return
-    static = StaticCardSource().get_printings()[name]
-    assert parsed == static, (
-        f"parser now claims {name!r} but the printing diverges from "
-        "static — fix one side or the other"
-    )

@@ -17,12 +17,16 @@ import pytest
 
 from mtg_bot.actions import CastSpell, PassPriority
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.game import Zone
 from mtg_bot.search import (
     MtgGameStateAdapter, ResolutionTargetDecision,
 )
 from mtg_bot.simulate import setup_game
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _adapter_with_targetable_setup() -> MtgGameStateAdapter:
@@ -42,7 +46,7 @@ def _adapter_with_targetable_setup() -> MtgGameStateAdapter:
     # Put Bombard in P0's hand. (Oracle: "Bombard deals 4 damage
     # to target creature." — needs a target.)
     bombard_card = state.new_object(
-        EOE_SPELLS["Bombard"], owner_id=0, zone=Zone.HAND,
+        _PRINTINGS["Bombard"], owner_id=0, zone=Zone.HAND,
     )
     state.players[0].hand.append(bombard_card)
     # Give P1 two creatures for targets.

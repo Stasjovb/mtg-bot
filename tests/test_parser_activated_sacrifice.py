@@ -26,7 +26,6 @@ from mtg_bot.cards.parser.activated import (
     _parse_activation_cost,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 
 # --- _parse_activation_cost: pure sacrifice ---------------------------------
@@ -220,14 +219,3 @@ def test_sacrifice_phrasing_typo_does_not_match():
 
 # --- Card-level: Illvoi Galeblade is now claimed end-to-end -----------------
 
-def test_illvoi_galeblade_is_claimed_by_parser():
-    """Illvoi Galeblade's oracle text is ``Flash\\nFlying\\n{2},
-    Sacrifice this creature: Draw a card.`` — every line is now
-    supported, so the parser should claim it and produce a printing
-    structurally equal to the static registry's entry."""
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    assert "Illvoi Galeblade" in parser_printings
-    assert parser_printings["Illvoi Galeblade"] == (
-        static_printings["Illvoi Galeblade"]
-    )

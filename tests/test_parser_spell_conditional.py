@@ -43,7 +43,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _is_spell_keyword_preamble,
     _parse_spell_oracle_text,
 )
-from mtg_bot.cards.source import StaticCardSource
 
 
 _DATA_PATH = (
@@ -120,14 +119,6 @@ def test_preamble_recognizer_rejects_non_keyword_clauses():
 
 # ---------- end-to-end on the EoE pool ----------
 
-def test_vote_out_now_parses_and_matches_static():
-    card = _eoe_card("Vote Out")
-    parsed = _build_spell_printing(card)
-    assert parsed is not None, (
-        "Vote Out should be claimed by the keyword-preamble branch"
-    )
-    static = StaticCardSource().get_printings()["Vote Out"]
-    assert parsed == static
 
 
 def test_vote_out_oracle_text_drops_convoke_and_returns_destroy():
@@ -235,17 +226,6 @@ def test_preamble_appearing_mid_text_is_not_stripped():
 
 # ---------- structural parity sanity ----------
 
-@pytest.mark.parametrize("name", ["Vote Out", "Honor", "Plasma Bolt"])
-def test_parser_matches_static_for_claimed_multi_line_spells(name):
-    # Belt-and-suspenders parity check on every multi-line spell the
-    # parser claims today. The dedicated test_parser_parity.py runs
-    # the same check parametrized over claimed_names; this duplicates
-    # it for the spells touched by the spell-builder dispatch so a
-    # local change here surfaces immediately.
-    card = _eoe_card(name)
-    parsed = _build_spell_printing(card)
-    assert parsed is not None
-    assert parsed == StaticCardSource().get_printings()[name]
 
 
 def test_make_sorcery_round_trip_for_vote_out():

@@ -47,9 +47,7 @@ from mtg_bot.cards.parser.planeswalker_builder import (
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
-from mtg_bot.cards.source import StaticCardSource
 
-_STATIC = StaticCardSource().get_printings()
 
 
 # ---------------------------------------------------------------------------
@@ -98,12 +96,6 @@ _TERMINAL_VELOCITY_ORACLE = (
 )
 
 
-def test_terminal_velocity_matches_static():
-    card = _spell_card("Terminal Velocity", "{4}{R}{R}",
-                       _TERMINAL_VELOCITY_ORACLE)
-    result = _build_spell_printing(card)
-    assert result is not None
-    assert result == _STATIC["Terminal Velocity"]
 
 
 def test_terminal_velocity_is_sorcery():
@@ -114,20 +106,6 @@ def test_terminal_velocity_is_sorcery():
     assert "Sorcery" in result.card_types
 
 
-def test_terminal_velocity_not_claimed_as_instant():
-    card = _spell_card("Terminal Velocity", "{4}{R}{R}",
-                       _TERMINAL_VELOCITY_ORACLE, type_line="Instant")
-    # Instant + this oracle text — the whole-spell key would match but
-    # the factory must not accidentally claim it as an instant since
-    # the static ships it as a sorcery. Actually the whole-spell dispatch
-    # runs inside _parse_spell_oracle_text regardless of type; the
-    # factory routes via make_instant/make_sorcery based on type_line.
-    # The spell effect would be produced but as an Instant — that's a
-    # mismatch with the static, not a None result. Just confirm the
-    # result is NOT equal to the static Sorcery printing.
-    result = _build_spell_printing(card)
-    if result is not None:
-        assert result != _STATIC["Terminal Velocity"]
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +119,6 @@ _PULL_THROUGH_ORACLE = (
 )
 
 
-def test_pull_through_the_weft_matches_static():
-    card = _spell_card("Pull Through the Weft", "{3}{G}{G}",
-                       _PULL_THROUGH_ORACLE)
-    result = _build_spell_printing(card)
-    assert result is not None
-    assert result == _STATIC["Pull Through the Weft"]
 
 
 def test_pull_through_the_weft_is_sorcery():
@@ -178,11 +150,6 @@ _THRUMMING_ORACLE = (
 )
 
 
-def test_thrumming_hivepool_matches_static():
-    card = _artifact_card("Thrumming Hivepool", "{6}", _THRUMMING_ORACLE)
-    result = _build_artifact_printing(card)
-    assert result is not None
-    assert result == _STATIC["Thrumming Hivepool"]
 
 
 def test_thrumming_hivepool_is_artifact():
@@ -237,12 +204,6 @@ _ATOMIC_MICROSIZER_ORACLE = (
 )
 
 
-def test_atomic_microsizer_matches_static():
-    card = _equipment_card("Atomic Microsizer", "{U}",
-                            _ATOMIC_MICROSIZER_ORACLE)
-    result = _build_equipment_printing(card)
-    assert result is not None
-    assert result == _STATIC["Atomic Microsizer"]
 
 
 def test_atomic_microsizer_is_equipment():
@@ -285,14 +246,6 @@ _DOMINION_BRACELET_ORACLE = (
 )
 
 
-def test_dominion_bracelet_matches_static():
-    card = _equipment_card(
-        "The Dominion Bracelet", "{2}", _DOMINION_BRACELET_ORACLE,
-        type_line="Legendary Artifact — Equipment",
-    )
-    result = _build_equipment_printing(card)
-    assert result is not None
-    assert result == _STATIC["The Dominion Bracelet"]
 
 
 def test_dominion_bracelet_is_legendary():
@@ -345,15 +298,6 @@ _TEZZERET_ORACLE = (
 )
 
 
-def test_tezzeret_cruel_captain_matches_static():
-    card = _planeswalker_card(
-        "Tezzeret, Cruel Captain", "{3}", _TEZZERET_ORACLE,
-        type_line="Legendary Planeswalker — Tezzeret",
-        loyalty=4,
-    )
-    result = _build_planeswalker_printing(card)
-    assert result is not None
-    assert result == _STATIC["Tezzeret, Cruel Captain"]
 
 
 def test_tezzeret_is_planeswalker():
@@ -438,11 +382,6 @@ _PAIN_FOR_ALL_ORACLE = (
 )
 
 
-def test_pain_for_all_matches_static():
-    card = _enchantment_card("Pain for All", "{2}{R}", _PAIN_FOR_ALL_ORACLE)
-    result = _build_enchantment_printing(card)
-    assert result is not None
-    assert result == _STATIC["Pain for All"]
 
 
 def test_pain_for_all_is_aura():
@@ -498,21 +437,3 @@ def test_all_batch23_cards_claimed_end_to_end():
         assert name in printings, f"{name!r} not in parser claimed_names"
 
 
-def test_all_batch23_cards_match_static_end_to_end():
-    """Each batch-23 parser printing equals the static registry entry."""
-    parser = OracleParserCardSource()
-    printings = parser.get_printings()
-    targets = [
-        "Terminal Velocity",
-        "Pull Through the Weft",
-        "Thrumming Hivepool",
-        "Atomic Microsizer",
-        "The Dominion Bracelet",
-        "Tezzeret, Cruel Captain",
-        "Pain for All",
-    ]
-    for name in targets:
-        assert name in printings, f"Parser did not claim {name!r}"
-        assert printings[name] == _STATIC[name], (
-            f"Parser/static mismatch for {name!r}"
-        )

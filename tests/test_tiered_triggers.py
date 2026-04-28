@@ -7,13 +7,7 @@ This mirrors ``StaticAbility.tier_threshold`` but for triggered abilities.
 
 from mtg_bot.actions import CastSpell, apply_action, drain_stack, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
     DealDamageToTargetCreature,
@@ -25,6 +19,10 @@ from mtg_bot.turn import (
     run_beginning_of_combat_triggers,
     should_fire_trigger,
 )
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -45,7 +43,7 @@ def test_should_fire_trigger_respects_tier_threshold():
     state = _new_state()
     # Build a spacecraft-like object with 2 counters and a tier-3 ability.
     sc = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
     )
     sc.charge_counters = 1  # below the 2+ tier
     state.battlefield.append(sc)
@@ -74,7 +72,7 @@ def test_synthesizer_labship_combat_trigger_only_at_tier_2():
     state = _new_state()
     state.active_player_idx = 0
     labship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(labship)
     # Target artifact creature: use a Robot token (artifact creature).
@@ -107,7 +105,7 @@ def test_synthesizer_labship_excludes_self_from_targets():
     state = _new_state()
     state.active_player_idx = 0
     labship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
     )
     labship.charge_counters = 9  # stationed → is a creature + tier 2+ active
     state.battlefield.append(labship)
@@ -129,7 +127,7 @@ def test_synthesizer_labship_excludes_self_from_targets():
 def test_synthesizer_labship_legal_target_excludes_opponent_artifacts():
     state = _new_state()
     labship = state.new_object(
-        EOE_CREATURES["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Synthesizer Labship"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(labship)
     # Opponent's Robot token — not legal.
@@ -198,7 +196,7 @@ def test_dawnsire_attacks_trigger_only_at_tier_10():
     state = _new_state()
     state.active_player_idx = 0
     dawnsire = state.new_object(
-        EOE_SPELLS["Dawnsire, Sunstar Dreadnought"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Dawnsire, Sunstar Dreadnought"], 0, Zone.BATTLEFIELD,
     )
     dawnsire.charge_counters = 20  # stationed — is a creature
     dawnsire.summoning_sick = False
@@ -233,7 +231,7 @@ def test_tier_threshold_attacks_fires_when_source_exactly_at_threshold():
     state = _new_state()
     state.active_player_idx = 0
     dawnsire = state.new_object(
-        EOE_SPELLS["Dawnsire, Sunstar Dreadnought"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Dawnsire, Sunstar Dreadnought"], 0, Zone.BATTLEFIELD,
     )
     dawnsire.charge_counters = 10
     dawnsire.summoning_sick = False

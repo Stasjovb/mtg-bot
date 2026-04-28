@@ -2,9 +2,13 @@
 
 from mtg_bot.actions import PlayLand, apply_action
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _DeclineAgent(Agent):
@@ -51,7 +55,7 @@ def _stock_hand_land(state, player_id, printing):
 
 
 def test_echoing_deeps_is_cave_with_copy_flag():
-    p = STELLAR_SIGHTS_LANDS["Echoing Deeps"]
+    p = _PRINTINGS["Echoing Deeps"]
     assert "Cave" in p.subtypes
     assert p.optional_copy_land_from_graveyard is True
 
@@ -65,7 +69,7 @@ def test_echoing_deeps_copies_graveyard_forest():
     state = _new_state(agent_cls=_AcceptAgent)
     _stock_graveyard_land(state, 0, BASIC_LANDS["Forest"])
     deeps_card = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     apply_action(state, 0, PlayLand(card_id=deeps_card.id))
     # Deeps is on the battlefield, tapped, and its printing mirrors
@@ -83,7 +87,7 @@ def test_echoing_deeps_copies_across_opponent_graveyard():
     # P1's graveyard has a Mountain.
     _stock_graveyard_land(state, 1, BASIC_LANDS["Mountain"])
     deeps = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     apply_action(state, 0, PlayLand(card_id=deeps.id))
     assert "R" in deeps.printing.produces
@@ -94,9 +98,9 @@ def test_echoing_deeps_injects_cave_even_when_target_is_a_cave():
     duplicate the subtype."""
     state = _new_state(agent_cls=_AcceptAgent)
     # Use Sunken Citadel (also a Cave) as the copy target.
-    _stock_graveyard_land(state, 0, STELLAR_SIGHTS_LANDS["Sunken Citadel"])
+    _stock_graveyard_land(state, 0, _PRINTINGS["Sunken Citadel"])
     deeps = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     apply_action(state, 0, PlayLand(card_id=deeps.id))
     cave_count = sum(1 for s in deeps.printing.subtypes if s == "Cave")
@@ -112,7 +116,7 @@ def test_echoing_deeps_decline_enters_untapped_and_keeps_own_abilities():
     state = _new_state(agent_cls=_DeclineAgent)
     _stock_graveyard_land(state, 0, BASIC_LANDS["Forest"])
     deeps = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     apply_action(state, 0, PlayLand(card_id=deeps.id))
     assert deeps.tapped is False
@@ -125,7 +129,7 @@ def test_echoing_deeps_no_graveyard_lands_enters_normally():
     state = _new_state(agent_cls=_AcceptAgent)
     # Graveyard has only non-land cards.
     deeps = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     apply_action(state, 0, PlayLand(card_id=deeps.id))
     assert deeps.printing.name == "Echoing Deeps"
@@ -149,7 +153,7 @@ def test_offer_echoing_deeps_copy_bad_kind_is_noop():
     state = _new_state(agent_cls=_WrongKindAgent)
     _stock_graveyard_land(state, 0, BASIC_LANDS["Forest"])
     card = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     _offer_echoing_deeps_copy(state, 0, card)
     assert card.printing.name == "Echoing Deeps"
@@ -168,15 +172,9 @@ def test_offer_echoing_deeps_copy_missing_target_is_noop():
     state = _new_state(agent_cls=_GhostIdAgent)
     _stock_graveyard_land(state, 0, BASIC_LANDS["Forest"])
     card = _stock_hand_land(
-        state, 0, STELLAR_SIGHTS_LANDS["Echoing Deeps"],
+        state, 0, _PRINTINGS["Echoing Deeps"],
     )
     _offer_echoing_deeps_copy(state, 0, card)
     assert card.printing.name == "Echoing Deeps"
 
 
-def test_echoing_deeps_restored_no_longer_stand_in():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    assert '"Echoing Deeps": make_colorless_land(' not in src

@@ -24,7 +24,7 @@ from mtg_bot.actions import (
     CastSpell, apply_action, apply_cost_reductions, resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import (
     ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
     parse_mana_cost,
@@ -34,6 +34,10 @@ from mtg_bot.effects.generic import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 _TREASURE_TOKEN = CardPrinting(
@@ -103,7 +107,7 @@ def test_affinity_discount_on_x_spell_preserves_x_template():
     {2}{X}{R}, the result must keep ``x_pips=1`` so the cast pipeline
     still prompts for X."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     _put(state, _TREASURE_TOKEN, 0)
     _put(state, _TREASURE_TOKEN, 0)
     spell = _x_spell("{2}{X}{R}")
@@ -120,7 +124,7 @@ def test_affinity_discount_on_pure_x_cost_preserves_x_pips():
     and waste the discount, but x_pips must still survive so the
     player gets to pick X."""
     state = _new_state()
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     _put(state, _TREASURE_TOKEN, 0)
     spell = _x_spell("{X}{B}")
     reduced = apply_cost_reductions(
@@ -166,7 +170,7 @@ def test_x_spell_with_affinity_still_prompts_for_x_via_cast_pipeline():
     )
     state = _new_state(p0_agent=_PickXAgent(x=3))
     p = state.players[0]
-    _put(state, EOE_CREATURES["Sami, Wildcat Captain"], 0)
+    _put(state, _PRINTINGS["Sami, Wildcat Captain"], 0)
     _put(state, _TREASURE_TOKEN, 0)
     _put(state, _TREASURE_TOKEN, 0)
     # Need to pay {0}{X=3}{R} after affinity-2 discount = {3}{R}.

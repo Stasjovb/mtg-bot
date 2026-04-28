@@ -121,14 +121,3 @@ def test_build_artifact_printing_claims_cryogen_relic():
     )
 
 
-def test_parser_claims_cryogen_relic_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Cryogen Relic via the artifact-
-    builder dispatch arm with the new compound-trigger + stun-counter
-    atoms."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Cryogen Relic" in parser
-    assert parser["Cryogen Relic"] == static["Cryogen Relic"]

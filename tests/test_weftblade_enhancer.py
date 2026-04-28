@@ -3,10 +3,14 @@ target creatures."""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import PutPlusOneCounterOnEachOfUpToNTargetCreatures
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -90,7 +94,7 @@ def test_weftblade_etb_puts_counters_on_two_creatures():
     b = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(b)
     wb = state.new_object(
-        EOE_CREATURES["Weftblade Enhancer"], 0, Zone.HAND,
+        _PRINTINGS["Weftblade Enhancer"], 0, Zone.HAND,
     )
     put_into_battlefield(state, wb, controller_id=0)
     while state.stack:
@@ -102,7 +106,7 @@ def test_weftblade_etb_puts_counters_on_two_creatures():
 
 
 def test_weftblade_printing_has_warp_and_etb():
-    w = EOE_CREATURES["Weftblade Enhancer"]
+    w = _PRINTINGS["Weftblade Enhancer"]
     assert w.warp_cost_str == "{2}{W}"
     triggers = {_legacy_or_inferred_key(ab) for ab in w.triggered_abilities}
     assert "etb" in triggers

@@ -19,12 +19,16 @@ from mtg_bot.actions import (
     drain_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
     Step, destroy, move_off_battlefield, run_untap_step, tap_permanent,
 )
 from tests._etb_helpers import _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirst(Agent):
@@ -70,7 +74,7 @@ def test_etb_grants_control_of_enchanted_creature():
     """When Tractor Beam attaches to an opponent's creature, P0 (the
     aura's controller) gains control of that creature."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     assert bear.controller_id == 1
 
@@ -95,7 +99,7 @@ def test_etb_no_swap_when_already_self_controlled():
     swap is recorded (prevents weird revert chains if the aura later
     leaves)."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
 
     _attach_and_etb(state, aura, bear)
@@ -113,7 +117,7 @@ def test_etb_no_swap_when_already_self_controlled():
 
 def test_aura_destroyed_reverts_controller():
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     _attach_and_etb(state, aura, bear)
     assert bear.controller_id == 0
@@ -133,7 +137,7 @@ def test_aura_destroyed_reverts_controller():
 def test_aura_exiled_reverts_controller():
     """Same revert when the aura is exiled (not just destroyed)."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     _attach_and_etb(state, aura, bear)
     assert bear.controller_id == 0
@@ -148,7 +152,7 @@ def test_enchanted_creature_destroyed_aura_falls_off_no_revert_needed():
     no orphaned permanent to revert — the post-death cleanup just
     works."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     _attach_and_etb(state, aura, bear)
 
@@ -171,7 +175,7 @@ def test_dont_untap_during_controllers_untap_step():
     opponent's creature, on P0's untap step the creature stays tapped
     (since enchanted-permanent's controller is now P0)."""
     state = _new_state()
-    aura = _put(state, EOE_SPELLS["Tractor Beam"], owner_id=0)
+    aura = _put(state, _PRINTINGS["Tractor Beam"], owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     _attach_and_etb(state, aura, bear)
     # Tap the bear (already tapped from ETB, but be explicit).
@@ -193,7 +197,7 @@ def test_dont_untap_during_controllers_untap_step():
 def test_printing_is_aura_with_correct_etb_and_static_flags():
     """Pin the printing's shape so future refactors don't drop the
     fix."""
-    p = EOE_SPELLS["Tractor Beam"]
+    p = _PRINTINGS["Tractor Beam"]
     assert p.is_aura is True
     assert p.attached_prevents_untap is True
     assert p.attached_grants_control is True
@@ -226,14 +230,14 @@ def test_nested_tractor_beams_revert_in_lifo_order():
     assert bear.owner_id == 1
 
     # Step 1: P0's TB1 attaches.
-    tb1 = state.new_object(EOE_SPELLS["Tractor Beam"], 0, Zone.BATTLEFIELD)
+    tb1 = state.new_object(_PRINTINGS["Tractor Beam"], 0, Zone.BATTLEFIELD)
     state.battlefield.append(tb1)
     tb1.attached_to = bear.id
     apply_aura_static_grants_on_attach(state, tb1, bear, 0)
     assert bear.controller_id == 0
 
     # Step 2: P1's TB2 attaches on the same creature.
-    tb2 = state.new_object(EOE_SPELLS["Tractor Beam"], 1, Zone.BATTLEFIELD)
+    tb2 = state.new_object(_PRINTINGS["Tractor Beam"], 1, Zone.BATTLEFIELD)
     state.battlefield.append(tb2)
     tb2.attached_to = bear.id
     apply_aura_static_grants_on_attach(state, tb2, bear, 1)
@@ -272,7 +276,7 @@ def test_control_swap_applies_before_etb_tap_resolves():
     from mtg_bot.game import StackItem
 
     state = _new_state()
-    aura = state.new_object(EOE_SPELLS["Tractor Beam"], 0, Zone.STACK)
+    aura = state.new_object(_PRINTINGS["Tractor Beam"], 0, Zone.STACK)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     bear.summoning_sick = False
     bear.tapped = False  # untapped pre-cast

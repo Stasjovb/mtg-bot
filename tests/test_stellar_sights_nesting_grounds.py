@@ -6,11 +6,15 @@ Also exercises _activate_ability's multi-target selection loop
 
 from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.effects import MovePlusOneCounterBetweenPermanentsYouControl
 from mtg_bot.game import GameState, Player, Zone, add_plus_one_counters
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -135,7 +139,7 @@ def test_nesting_grounds_activation_moves_counter():
     recipient — exercises the refactored multi-target selection in
     _activate_ability."""
     state = _new_state()
-    _put(state, STELLAR_SIGHTS_LANDS["Nesting Grounds"])
+    _put(state, _PRINTINGS["Nesting Grounds"])
     _put(state, BASIC_LANDS["Mountain"])
     donor = _put(state, make_creature("Donor", "{G}", 1, 1))
     recipient = _put(state, make_creature("Recip", "{G}", 1, 1))
@@ -156,7 +160,7 @@ def test_nesting_grounds_activation_moves_counter():
 
 
 def test_nesting_grounds_is_sorcery_speed():
-    p = STELLAR_SIGHTS_LANDS["Nesting Grounds"]
+    p = _PRINTINGS["Nesting Grounds"]
     assert p.activated_abilities[0].sorcery_speed is True
 
 
@@ -166,7 +170,7 @@ def test_nesting_grounds_not_legal_at_instant_speed():
     from mtg_bot import legal_moves
 
     state = _new_state()
-    nesting = _put(state, STELLAR_SIGHTS_LANDS["Nesting Grounds"])
+    nesting = _put(state, _PRINTINGS["Nesting Grounds"])
     _put(state, BASIC_LANDS["Mountain"])
     # Switch step to combat damage — sorcery speed is filtered.
     state.step = Step.COMBAT_DAMAGE
@@ -182,9 +186,3 @@ def test_nesting_grounds_not_legal_at_instant_speed():
 # -----------------------
 
 
-def test_nesting_grounds_restored_no_longer_stand_in():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    assert '"Nesting Grounds": make_colorless_land(' not in src

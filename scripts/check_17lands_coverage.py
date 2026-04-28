@@ -31,7 +31,7 @@ _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from mtg_bot.cards import all_printings  # noqa: E402
+from mtg_bot.cards.source import get_active_source  # noqa: E402
 from mtg_bot.decks import (  # noqa: E402
     coverage_report, decks_from_json, parse_17lands_csv,
 )
@@ -74,7 +74,7 @@ def main() -> None:
 
     print(f"# loaded {len(decks)} decks")
 
-    known_names = set(all_printings().keys())
+    known_names = set(get_active_source().get_printings().keys())
     report = coverage_report(decks, known_names)
 
     total = report["modeled_cards"] + len(report["unmodeled_cards"])

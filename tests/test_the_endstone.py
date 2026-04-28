@@ -8,15 +8,15 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import SetLifeToHalfStartingRoundedUp
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_beginning_of_end_step_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -56,7 +56,7 @@ def test_endstone_draws_when_playing_a_land():
     p = state.players[0]
     # Put The Endstone into play.
     endstone = state.new_object(
-        EOE_SPELLS["The Endstone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Endstone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(endstone)
     # Give P0 a Forest to play and a card in library to draw.
@@ -76,7 +76,7 @@ def test_endstone_draws_when_casting_a_spell():
     p = state.players[0]
     # Put The Endstone + enough lands in play.
     endstone = state.new_object(
-        EOE_SPELLS["The Endstone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Endstone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(endstone)
     for _ in range(2):
@@ -100,7 +100,7 @@ def test_endstone_end_step_life_halving():
     p.life = 3
     state.active_player_idx = 0
     endstone = state.new_object(
-        EOE_SPELLS["The Endstone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Endstone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(endstone)
     run_beginning_of_end_step_triggers(state)
@@ -116,7 +116,7 @@ def test_endstone_doesnt_trigger_for_opponent_land_play():
     p = state.players[0]
     p1 = state.players[1]
     endstone = state.new_object(
-        EOE_SPELLS["The Endstone"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["The Endstone"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(endstone)
     forest = state.new_object(BASIC_LANDS["Forest"], 1, Zone.HAND)
@@ -130,7 +130,7 @@ def test_endstone_doesnt_trigger_for_opponent_land_play():
 
 
 def test_endstone_card_printing_has_both_abilities():
-    p = EOE_SPELLS["The Endstone"]
+    p = _PRINTINGS["The Endstone"]
     triggers = {_legacy_or_inferred_key(ab) for ab in p.triggered_abilities}
     assert "cast_spell_or_play_land" in triggers
     assert "beginning_of_end_step" in triggers

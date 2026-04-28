@@ -13,7 +13,7 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_artifact, make_creature
 from mtg_bot.effects import (
     DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
@@ -21,6 +21,10 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _ChooseXAgent(Agent):
@@ -56,7 +60,7 @@ def _put(state, printing, owner_id=0):
 
 def test_put_charge_counters_on_self_fixed_amount():
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    land = _put(state, _PRINTINGS["Blast Zone"])
     state.resolving_source = land
     try:
         PutChargeCountersOnSelf(amount=3).resolve(state, 0, ())
@@ -67,7 +71,7 @@ def test_put_charge_counters_on_self_fixed_amount():
 
 def test_put_charge_counters_on_self_amount_from_x():
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    land = _put(state, _PRINTINGS["Blast Zone"])
     state.resolving_source = land
     state.resolving_x_value = 4
     try:
@@ -87,7 +91,7 @@ def test_put_charge_counters_on_self_zero_is_noop():
     """PutChargeCountersOnSelf(amount=0) / with X=0 should no-op
     instead of spamming a 'gets 0 counters' log entry."""
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    land = _put(state, _PRINTINGS["Blast Zone"])
     state.resolving_source = land
     try:
         PutChargeCountersOnSelf(amount=0).resolve(state, 0, ())
@@ -103,7 +107,7 @@ def test_put_charge_counters_on_self_zero_is_noop():
 
 def test_destroy_by_mv_hits_matching_nonland_only():
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    land = _put(state, _PRINTINGS["Blast Zone"])
     land.charge_counters = 2
     # 2-MV artifact: destroyed.
     two = _put(state, make_artifact("Cog-2", "{2}"))
@@ -124,7 +128,7 @@ def test_destroy_by_mv_hits_matching_nonland_only():
 
 def test_destroy_by_mv_skips_indestructible():
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    land = _put(state, _PRINTINGS["Blast Zone"])
     land.charge_counters = 2
     indestr = _put(
         state,
@@ -149,7 +153,7 @@ def test_destroy_by_mv_skips_indestructible():
 def test_blast_zone_enters_with_one_charge_counter():
     state = _new_state()
     bz = state.new_object(
-        STELLAR_SIGHTS_LANDS["Blast Zone"], 0, Zone.HAND,
+        _PRINTINGS["Blast Zone"], 0, Zone.HAND,
     )
     put_into_battlefield(state, bz, 0)
     while state.stack:
@@ -162,7 +166,7 @@ def test_blast_zone_x_ability_adds_x_charge_counters():
     by the agent), the agent spends 6 generic, land taps, counters go
     from 1 to 4."""
     state = _new_state()
-    bz = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    bz = _put(state, _PRINTINGS["Blast Zone"])
     bz.charge_counters = 1
     # 6 Mountains to pay {X}{X} with X=3.
     for _ in range(6):
@@ -180,7 +184,7 @@ def test_blast_zone_sac_ability_destroys_matching_mv_nonland():
     """Blast Zone enters with 1 counter, pumps to 3 via {X}{X}, then
     {3},{T},Sac fires and destroys every 3-MV nonland permanent."""
     state = _new_state()
-    bz = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    bz = _put(state, _PRINTINGS["Blast Zone"])
     bz.charge_counters = 3
     # Mana for {3}.
     for _ in range(3):
@@ -202,7 +206,7 @@ def test_blast_zone_sac_with_zero_counters_destroys_zero_mv_nonland():
     """Edge case: with 0 charge counters, destroys 0-MV nonland
     permanents (mostly tokens and {0}-cost artifacts)."""
     state = _new_state()
-    bz = _put(state, STELLAR_SIGHTS_LANDS["Blast Zone"])
+    bz = _put(state, _PRINTINGS["Blast Zone"])
     bz.charge_counters = 0
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
@@ -223,13 +227,13 @@ def test_blast_zone_sac_with_zero_counters_destroys_zero_mv_nonland():
 
 
 def test_gemstone_caverns_is_legendary():
-    p = STELLAR_SIGHTS_LANDS["Gemstone Caverns"]
+    p = _PRINTINGS["Gemstone Caverns"]
     assert "Legendary" in p.supertypes
 
 
 def test_gemstone_caverns_taps_for_any_color():
     state = _new_state()
-    gc = _put(state, STELLAR_SIGHTS_LANDS["Gemstone Caverns"])
+    gc = _put(state, _PRINTINGS["Gemstone Caverns"])
     apply_action(
         state, 0, ActivateAbility(source_id=gc.id, ability_index=0),
     )
@@ -243,12 +247,3 @@ def test_gemstone_caverns_taps_for_any_color():
 # -----------------------
 
 
-def test_two_more_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Blast Zone", "Gemstone Caverns"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

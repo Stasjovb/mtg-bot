@@ -175,26 +175,3 @@ def test_bare_landfall_condition_still_parses():
 
 # ---------- End-to-end: Eumidian Terrabotanist is claimed ----------
 
-def test_eumidian_terrabotanist_is_claimed_with_landfall():
-    """The only oracle text on Eumidian Terrabotanist is the Landfall
-    gain-1-life trigger. With the prefix recognizer in place, the
-    parser must claim it end-to-end and produce a printing identical
-    to the static registry's. (The full per-card structural-parity
-    check lives in ``test_parser_parity.py`` — this is a focused
-    smoke test that the new recognizer wires up correctly.)
-    """
-    from mtg_bot.cards.parser_source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser = OracleParserCardSource()
-    static = StaticCardSource().get_printings()
-
-    assert "Eumidian Terrabotanist" in parser.claimed_names
-    parsed = parser.get_printings()["Eumidian Terrabotanist"]
-    assert parsed == static["Eumidian Terrabotanist"]
-    assert parsed.triggered_abilities == (
-        TriggeredAbility(
-            event=Event.ENTERS, predicate=_LANDFALL_PRED,
-            effect=GainLife(amount=1),
-        ),
-    )

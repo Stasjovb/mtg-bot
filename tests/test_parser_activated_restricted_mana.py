@@ -125,14 +125,3 @@ def test_steelswarm_operator_second_activated_ability_line():
 
 # --- Per-card parser-vs-static parity ---------------------------------------
 
-def test_parser_claims_steelswarm_operator():
-    """Steelswarm Operator is now parser-claimed: both ``{T}`` mana
-    abilities ride the new restricted-mana regex through the
-    activated grammar. Static-registry ``Robot Soldier`` subtypes
-    were backfilled per the parser-is-right rule."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Steelswarm Operator" in parser
-    assert parser["Steelswarm Operator"] == static["Steelswarm Operator"]

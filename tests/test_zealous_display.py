@@ -16,11 +16,15 @@ import random
 from mtg_bot import apply
 from mtg_bot.actions import CastSpell, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import effective_power
 from mtg_bot.turn import Step, run_cleanup_step
 
 from tests._rules_helpers import _arena
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _seat_agents(state):
@@ -32,7 +36,7 @@ def test_zealous_display_on_opponents_turn_pumps_and_untaps():
     """Cast on the opponent's turn: every creature P0 controls gets
     +2/+0 AND any tapped ones come back untapped (the rider)."""
     state = _arena(
-        p0_hand=[EOE_SPELLS["Zealous Display"]],
+        p0_hand=[_PRINTINGS["Zealous Display"]],
         p0_battlefield=[
             SYNTHETIC_CREATURES["Wild Bear"],
             SYNTHETIC_CREATURES["Wild Bear"],
@@ -66,7 +70,7 @@ def test_zealous_display_on_your_turn_pumps_but_does_not_untap():
     """Cast on your own turn: pump applies but the rider must NOT
     fire — those creatures stay tapped if they were tapped."""
     state = _arena(
-        p0_hand=[EOE_SPELLS["Zealous Display"]],
+        p0_hand=[_PRINTINGS["Zealous Display"]],
         p0_battlefield=[
             SYNTHETIC_CREATURES["Wild Bear"],
             BASIC_LANDS["Plains"],
@@ -93,7 +97,7 @@ def test_zealous_display_does_not_untap_opponents_creatures():
     """Even on opponent's turn, the rider only touches creatures the
     caster controls — opponent's tapped creatures stay tapped."""
     state = _arena(
-        p0_hand=[EOE_SPELLS["Zealous Display"]],
+        p0_hand=[_PRINTINGS["Zealous Display"]],
         p0_battlefield=[
             SYNTHETIC_CREATURES["Wild Bear"],
             BASIC_LANDS["Plains"],
@@ -128,7 +132,7 @@ def test_zealous_display_cleanup_clears_pump():
     """Cleanup at end of turn wipes the +2/+0 pump as usual; tapped
     state is unaffected (it was already changed at resolution)."""
     state = _arena(
-        p0_hand=[EOE_SPELLS["Zealous Display"]],
+        p0_hand=[_PRINTINGS["Zealous Display"]],
         p0_battlefield=[
             SYNTHETIC_CREATURES["Wild Bear"],
             BASIC_LANDS["Plains"],

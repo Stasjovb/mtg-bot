@@ -2,16 +2,15 @@
 
 from mtg_bot.actions import drain_stack, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import TargetOpponentLosesNYouGainN
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import destroy, sacrifice
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -90,7 +89,7 @@ def test_opponent_loses_describe():
 def test_susurian_fires_when_other_creature_dies():
     state = _new_state(_PickFirstAgent())
     susurian = state.new_object(
-        EOE_CREATURES["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(susurian)
     bear = state.new_object(
@@ -108,7 +107,7 @@ def test_susurian_fires_on_its_own_death():
     """Susurian's trigger fires on 'this or another' — includes self."""
     state = _new_state(_PickFirstAgent())
     susurian = state.new_object(
-        EOE_CREATURES["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(susurian)
     destroy(state, susurian)
@@ -120,7 +119,7 @@ def test_susurian_fires_on_its_own_death():
 def test_susurian_does_not_fire_on_opponent_creature_death():
     state = _new_state()
     susurian = state.new_object(
-        EOE_CREATURES["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(susurian)
     opp_bear = state.new_object(
@@ -137,7 +136,7 @@ def test_susurian_also_fires_on_your_artifact_dying():
     from mtg_bot.cards import TOKEN_PRINTINGS
     state = _new_state(_PickFirstAgent())
     susurian = state.new_object(
-        EOE_CREATURES["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Susurian Voidborn"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(susurian)
     # Robot token is an artifact (creature too). Sacrifice it.
@@ -160,7 +159,7 @@ def test_alpharael_etb_draws_two_then_discards_two():
         c = state.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
         p.library.append(c)
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
+        _PRINTINGS["Alpharael, Dreaming Acolyte"], 0, Zone.HAND,
     )
     # Simulate normal spell flow — alpha moves HAND → STACK → BATTLEFIELD
     # (put_into_battlefield doesn't remove from source zone itself).
@@ -177,7 +176,7 @@ def test_alpharael_deathtouch_only_during_your_turn():
     state = _new_state()
     state.active_player_idx = 0
     alpha = state.new_object(
-        EOE_CREATURES["Alpharael, Dreaming Acolyte"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Alpharael, Dreaming Acolyte"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(alpha)
     # During your turn → deathtouch granted.
@@ -188,6 +187,6 @@ def test_alpharael_deathtouch_only_during_your_turn():
 
 
 def test_alpharael_has_triggered_and_static_abilities_wired():
-    a = EOE_CREATURES["Alpharael, Dreaming Acolyte"]
+    a = _PRINTINGS["Alpharael, Dreaming Acolyte"]
     assert any(_matches_legacy_key(ab, "etb") for ab in a.triggered_abilities)
     assert len(a.static_abilities) == 1

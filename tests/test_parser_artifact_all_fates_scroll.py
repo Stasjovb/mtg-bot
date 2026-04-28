@@ -114,14 +114,3 @@ def test_build_artifact_printing_claims_all_fates_scroll():
     assert printing.keywords == frozenset()
 
 
-def test_parser_claims_all_fates_scroll_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming All-Fates Scroll via the
-    artifact-builder dispatch arm with the new ``add one mana of any
-    color`` primitive plus the literal-line bespoke-effect dispatch."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "All-Fates Scroll" in parser
-    assert parser["All-Fates Scroll"] == static["All-Fates Scroll"]

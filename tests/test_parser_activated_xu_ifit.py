@@ -74,18 +74,3 @@ def test_xu_ifit_activated_ability_line():
     )
 
 
-def test_parser_claims_xu_ifit():
-    """Xu-Ifit, Osteoharmonist is now parser-claimed: the multi-
-    sentence reanimate-as-Skeleton regex collapses to the same
-    primitive the static registry uses, the inline sorcery rider
-    flips ``sorcery_speed=True``, and the static's ``Human Wizard``
-    subtypes were backfilled per the parser-is-right rule."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Xu-Ifit, Osteoharmonist" in parser
-    assert (
-        parser["Xu-Ifit, Osteoharmonist"]
-        == static["Xu-Ifit, Osteoharmonist"]
-    )

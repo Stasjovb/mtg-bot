@@ -3,9 +3,13 @@ Power Depot — any-color mana variants."""
 
 from mtg_bot.actions import ActivateAbility, apply_action
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _RecordingColorAgent(Agent):
@@ -46,7 +50,7 @@ def test_reflecting_pool_only_forest_offers_only_green():
     agent = _RecordingColorAgent()
     state = _new_state(agent=agent)
     _put(state, BASIC_LANDS["Forest"])
-    rp = _put(state, STELLAR_SIGHTS_LANDS["Reflecting Pool"])
+    rp = _put(state, _PRINTINGS["Reflecting Pool"])
     apply_action(state, 0, ActivateAbility(source_id=rp.id, ability_index=0))
     assert agent.last_options == ["G"]
     assert len(state.players[0].mana_pool) == 1
@@ -60,7 +64,7 @@ def test_reflecting_pool_island_and_swamp_offers_u_and_b():
     state = _new_state(agent=agent)
     _put(state, BASIC_LANDS["Island"])
     _put(state, BASIC_LANDS["Swamp"])
-    rp = _put(state, STELLAR_SIGHTS_LANDS["Reflecting Pool"])
+    rp = _put(state, _PRINTINGS["Reflecting Pool"])
     apply_action(state, 0, ActivateAbility(source_id=rp.id, ability_index=0))
     assert set(agent.last_options or []) == {"U", "B"}
     assert "W" not in (agent.last_options or [])
@@ -74,8 +78,8 @@ def test_reflecting_pool_dual_color_land_unions_into_options():
     must contribute both colors to the union."""
     agent = _RecordingColorAgent(pick="B")
     state = _new_state(agent=agent)
-    _put(state, STELLAR_SIGHTS_LANDS["Hissing Quagmire"])
-    rp = _put(state, STELLAR_SIGHTS_LANDS["Reflecting Pool"])
+    _put(state, _PRINTINGS["Hissing Quagmire"])
+    rp = _put(state, _PRINTINGS["Reflecting Pool"])
     apply_action(state, 0, ActivateAbility(source_id=rp.id, ability_index=0))
     assert set(agent.last_options or []) == {"B", "G"}
     assert state.players[0].mana_pool[0].color == "B"
@@ -151,7 +155,7 @@ def test_meteor_crater_options_are_colors_of_controlled_permanents():
     """Oracle: 'Choose a color of a permanent you control.' With a
     blue-cost creature on the battlefield, the option set is {U}; the
     minted coin matches that color."""
-    from mtg_bot.cards import SYNTHETIC_CREATURES, EOE_CREATURES
+    from mtg_bot.cards import SYNTHETIC_CREATURES
 
     agent = _RecordingColorAgent()
     state = _new_state(agent=agent)
@@ -160,10 +164,10 @@ def test_meteor_crater_options_are_colors_of_controlled_permanents():
     # contributes U.
     _put(state, BASIC_LANDS["Island"])
     op = state.new_object(
-        EOE_CREATURES["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(op)
-    mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
+    mc = _put(state, _PRINTINGS["Meteor Crater"])
     apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
     assert agent.last_options == ["U"]
     assert state.players[0].mana_pool[0].color == "U"
@@ -181,7 +185,7 @@ def test_meteor_crater_no_colored_permanents_falls_back_to_colorless():
         TOKEN_PRINTINGS["Lander"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(lander)
-    mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
+    mc = _put(state, _PRINTINGS["Meteor Crater"])
     apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
     assert state.players[0].mana_pool[0].color == "C"
 
@@ -189,22 +193,21 @@ def test_meteor_crater_no_colored_permanents_falls_back_to_colorless():
 def test_meteor_crater_unions_multiple_colors():
     """Two differently-colored creatures in play → union of their
     color sets is offered to the agent."""
-    from mtg_bot.cards import EOE_CREATURES
 
     agent = _RecordingColorAgent(pick="W")
     state = _new_state(agent=agent)
     blue = state.new_object(
-        EOE_CREATURES["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Steelswarm Operator"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(blue)
-    # Find any white creature in EOE_CREATURES.
+    # Find any white creature in _PRINTINGS.
     white_card = next(
-        p for p in EOE_CREATURES.values()
+        p for p in _PRINTINGS.values()
         if "W" in p.mana_cost.colors and p.is_creature
     )
     white = state.new_object(white_card, 0, Zone.BATTLEFIELD)
     state.battlefield.append(white)
-    mc = _put(state, STELLAR_SIGHTS_LANDS["Meteor Crater"])
+    mc = _put(state, _PRINTINGS["Meteor Crater"])
     apply_action(state, 0, ActivateAbility(source_id=mc.id, ability_index=0))
     assert set(agent.last_options or []) >= {"U", "W"}
     assert state.players[0].mana_pool[0].color == "W"
@@ -212,7 +215,7 @@ def test_meteor_crater_unions_multiple_colors():
 
 def test_power_depot_mana_is_artifact_restricted():
     state = _new_state()
-    pd = _put(state, STELLAR_SIGHTS_LANDS["Power Depot"])
+    pd = _put(state, _PRINTINGS["Power Depot"])
     apply_action(state, 0, ActivateAbility(source_id=pd.id, ability_index=0))
     coin = state.players[0].mana_pool[0]
     assert coin.color == "any"
@@ -220,15 +223,8 @@ def test_power_depot_mana_is_artifact_restricted():
 
 
 def test_power_depot_is_artifact_land_and_enters_tapped():
-    p = STELLAR_SIGHTS_LANDS["Power Depot"]
+    p = _PRINTINGS["Power Depot"]
     assert p.is_artifact and p.is_land
     assert p.enters_tapped
 
 
-def test_three_more_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Reflecting Pool", "Meteor Crater"):
-        assert f'"{name}": make_colorless_land(' not in src

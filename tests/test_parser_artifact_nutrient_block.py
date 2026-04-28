@@ -105,14 +105,3 @@ def test_build_artifact_printing_claims_nutrient_block():
     )
 
 
-def test_parser_claims_nutrient_block_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Nutrient Block via the
-    artifact-builder dispatch arm with the new graveyard-from-
-    battlefield trigger phrase."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Nutrient Block" in parser
-    assert parser["Nutrient Block"] == static["Nutrient Block"]

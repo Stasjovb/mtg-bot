@@ -119,31 +119,7 @@ def test_zookeeper_mechan_pump_activated_ability_line():
 
 # --- Per-card parser-vs-static parity ---------------------------------------
 
-def test_parser_claims_dual_sun_adepts():
-    """Dual-Sun Adepts is now parser-claimed: the ``{5}`` anthem rides
-    the new ``creatures you control get …`` regex through the activated
-    grammar, and the static registry's ``Human Soldier`` subtypes were
-    backfilled to match the parsed type line."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Dual-Sun Adepts" in parser
-    assert parser["Dual-Sun Adepts"] == static["Dual-Sun Adepts"]
 
 
-def test_parser_claims_zookeeper_mechan():
-    """Zookeeper Mechan is now parser-claimed: ``{T}: Add {R}.`` rides
-    the existing single-color mana ability path, and ``{6}{R}: Target
-    creature you control gets +4/+0 UEOT. Activate only as a sorcery.``
-    rides the new ``target creature you control`` regex plus the
-    inline-sorcery-rider strip. Static-registry ``Robot`` subtype was
-    backfilled per the parser-is-right rule."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Zookeeper Mechan" in parser
-    assert parser["Zookeeper Mechan"] == static["Zookeeper Mechan"]
 
 

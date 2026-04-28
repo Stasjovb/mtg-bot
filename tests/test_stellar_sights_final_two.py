@@ -18,13 +18,17 @@ from mtg_bot.actions import (
     _cast_spell,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.effects import RegenerateTargetCreature
 from mtg_bot.game import (
     GameObject, GameState, ManaCoin, Player, Zone, StackItem,
 )
 from mtg_bot.turn import Step, run_cleanup_step, state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -54,14 +58,14 @@ def _put(state, printing, owner_id=0):
 
 
 def test_eldrazi_temple_has_two_mana_abilities():
-    p = STELLAR_SIGHTS_LANDS["Eldrazi Temple"]
+    p = _PRINTINGS["Eldrazi Temple"]
     assert len(p.activated_abilities) == 2
     assert all(a.is_mana_ability for a in p.activated_abilities)
 
 
 def test_eldrazi_temple_ability_one_produces_normal_colorless():
     state = _new_state()
-    temple = _put(state, STELLAR_SIGHTS_LANDS["Eldrazi Temple"])
+    temple = _put(state, _PRINTINGS["Eldrazi Temple"])
     apply_action(
         state, 0, ActivateAbility(source_id=temple.id, ability_index=0),
     )
@@ -73,7 +77,7 @@ def test_eldrazi_temple_ability_one_produces_normal_colorless():
 
 def test_eldrazi_temple_ability_two_produces_eldrazi_restricted():
     state = _new_state()
-    temple = _put(state, STELLAR_SIGHTS_LANDS["Eldrazi Temple"])
+    temple = _put(state, _PRINTINGS["Eldrazi Temple"])
     apply_action(
         state, 0, ActivateAbility(source_id=temple.id, ability_index=1),
     )
@@ -102,7 +106,7 @@ def test_eldrazi_temple_mana_pays_for_synthetic_eldrazi_cast():
     """End-to-end: pay for a colorless-Eldrazi spell's cast with the
     restricted mana from Eldrazi Temple's second ability."""
     state = _new_state()
-    temple = _put(state, STELLAR_SIGHTS_LANDS["Eldrazi Temple"])
+    temple = _put(state, _PRINTINGS["Eldrazi Temple"])
     # Activate the second mana ability to fill the pool with 2
     # Eldrazi-restricted colorless.
     apply_action(
@@ -131,7 +135,7 @@ def test_eldrazi_temple_mana_pays_for_synthetic_eldrazi_cast():
 
 
 def test_swarmyard_has_regenerate_ability():
-    p = STELLAR_SIGHTS_LANDS["Swarmyard"]
+    p = _PRINTINGS["Swarmyard"]
     assert len(p.activated_abilities) == 1
 
 
@@ -232,7 +236,7 @@ def test_swarmyard_activation_on_synthetic_rat_regenerates_it():
     """End-to-end: play Swarmyard, summon a synthetic Rat, take
     lethal damage, activate Swarmyard, confirm the Rat survives."""
     state = _new_state()
-    swarm = _put(state, STELLAR_SIGHTS_LANDS["Swarmyard"])
+    swarm = _put(state, _PRINTINGS["Swarmyard"])
     _put(state, BASIC_LANDS["Mountain"])  # {1} mana source
     rat = _put(state, dataclasses.replace(
         make_creature("Rat", "{B}", 1, 1), subtypes=("Rat",),
@@ -299,24 +303,5 @@ def test_move_counter_noop_when_donor_missing():
 # =======================
 
 
-def test_final_two_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Eldrazi Temple", "Swarmyard"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )
 
 
-def test_all_45_stellar_sights_cards_no_longer_stand_ins():
-    """Final progress marker: ALL 45 Stellar Sights cards are wired
-    with real oracle machinery (or documented simplifications)."""
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    # No stand-in pattern anywhere in the file.
-    assert "make_colorless_land(" not in src
-    assert len(STELLAR_SIGHTS_LANDS) == 45

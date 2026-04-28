@@ -7,7 +7,7 @@ the rider doesn't silently regress.
 """
 
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import AttachToTargetCreatureYouControl
 from mtg_bot.game import (
     GameState, Player, Zone,
@@ -15,6 +15,10 @@ from mtg_bot.game import (
 )
 from mtg_bot.turn import run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -43,7 +47,7 @@ def _put(state, printing, owner_id=0):
 
 def test_printing_has_flash_and_equipment_bonus_unchanged():
     """Restoring the rider must not disturb the printed Flash / +1/+0."""
-    c = EOE_CREATURES["Squire's Lightblade"]
+    c = _PRINTINGS["Squire's Lightblade"]
     assert "flash" in c.keywords
     # Equipment continuous bonus is unchanged: +1/+0, no granted
     # static keywords on the equipped creature.
@@ -51,7 +55,7 @@ def test_printing_has_flash_and_equipment_bonus_unchanged():
 
 
 def test_printing_etb_attaches_via_attach_effect():
-    c = EOE_CREATURES["Squire's Lightblade"]
+    c = _PRINTINGS["Squire's Lightblade"]
     etbs = [ab for ab in c.triggered_abilities if _matches_legacy_key(ab, "etb")]
     assert len(etbs) == 1
     assert isinstance(etbs[0].effect, AttachToTargetCreatureYouControl)
@@ -59,7 +63,7 @@ def test_printing_etb_attaches_via_attach_effect():
 
 def test_printing_etb_grants_first_strike_ueot():
     """The dropped 'first strike UEOT' rider is now wired."""
-    c = EOE_CREATURES["Squire's Lightblade"]
+    c = _PRINTINGS["Squire's Lightblade"]
     etb_effect = next(
         ab.effect for ab in c.triggered_abilities if _matches_legacy_key(ab, "etb")
     )
@@ -75,7 +79,7 @@ def test_printing_etb_grants_first_strike_ueot():
 def test_etb_attaches_and_grants_first_strike_until_eot():
     state = _new_state()
     ally = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    blade = _put(state, EOE_CREATURES["Squire's Lightblade"])
+    blade = _put(state, _PRINTINGS["Squire's Lightblade"])
     # Sanity: target doesn't have first strike before ETB resolves.
     assert "first strike" not in effective_keywords(state, ally)
 
@@ -99,7 +103,7 @@ def test_etb_attaches_and_grants_first_strike_until_eot():
 def test_first_strike_clears_at_cleanup_but_attach_and_buff_persist():
     state = _new_state()
     ally = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    blade = _put(state, EOE_CREATURES["Squire's Lightblade"])
+    blade = _put(state, _PRINTINGS["Squire's Lightblade"])
 
     etb = next(
         ab for ab in blade.printing.triggered_abilities
@@ -124,7 +128,7 @@ def test_etb_does_not_grant_first_strike_to_other_creatures():
     state = _new_state()
     chosen = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     bystander = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    blade = _put(state, EOE_CREATURES["Squire's Lightblade"])
+    blade = _put(state, _PRINTINGS["Squire's Lightblade"])
 
     etb = next(
         ab for ab in blade.printing.triggered_abilities

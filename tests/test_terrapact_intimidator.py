@@ -2,10 +2,13 @@
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import EOE_CREATURES
 from mtg_bot.effects import TerrapactIntimidatorETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickOpponentAgent(Agent):
@@ -70,7 +73,7 @@ def test_effect_wrong_target_kind_is_noop():
 def test_terrapact_etb_opponent_elects_landers():
     state = _new_state(_OpponentPicksLanders(), _OpponentPicksLanders())
     tp = state.new_object(
-        EOE_CREATURES["Terrapact Intimidator"], 0, Zone.HAND,
+        _PRINTINGS["Terrapact Intimidator"], 0, Zone.HAND,
     )
     state.players[0].hand.append(tp)
     put_into_battlefield(state, tp, controller_id=0)
@@ -89,7 +92,7 @@ def test_terrapact_etb_opponent_elects_landers():
 def test_terrapact_etb_opponent_declines_gives_two_counters():
     state = _new_state(_OpponentDeclines(), _OpponentDeclines())
     tp = state.new_object(
-        EOE_CREATURES["Terrapact Intimidator"], 0, Zone.HAND,
+        _PRINTINGS["Terrapact Intimidator"], 0, Zone.HAND,
     )
     state.players[0].hand.append(tp)
     put_into_battlefield(state, tp, controller_id=0)
@@ -102,6 +105,6 @@ def test_terrapact_etb_opponent_declines_gives_two_counters():
 
 
 def test_terrapact_printing_has_etb():
-    t = EOE_CREATURES["Terrapact Intimidator"]
+    t = _PRINTINGS["Terrapact Intimidator"]
     triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "etb" in triggers

@@ -9,7 +9,7 @@ creatures UEOT. Shared mechanic: temp_is_creature + temp_base_pt_override
 
 from mtg_bot.actions import ActivateAbility, apply_action
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS, parse_mana_cost
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.combat import _fire_combat_damage_to_player_triggers, declare_attackers
 from mtg_bot.effects import BecomeLandCreatureUEOT
 from mtg_bot.game import (
@@ -18,6 +18,10 @@ from mtg_bot.game import (
     is_creature_now,
 )
 from mtg_bot.turn import Step, run_cleanup_step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -172,7 +176,7 @@ def test_every_manland_has_expected_printing_metadata():
     for (
         name, _, _, _, _, produces, enters_tapped,
     ) in MANLAND_TABLE:
-        p = STELLAR_SIGHTS_LANDS[name]
+        p = _PRINTINGS[name]
         assert p.is_land, f"{name} should be a land"
         assert p.produces == produces, (
             f"{name} produces {p.produces} vs expected {produces}"
@@ -206,7 +210,7 @@ def test_every_manland_animates_to_expected_pt_and_keywords():
         name, cost_str, pt, kws, unblockable, _, _,
     ) in MANLAND_TABLE:
         state = _new_state()
-        land = _put(state, STELLAR_SIGHTS_LANDS[name])
+        land = _put(state, _PRINTINGS[name])
         _mana_for(state, cost_str)
         apply_action(
             state, 0, ActivateAbility(source_id=land.id, ability_index=0),
@@ -239,7 +243,7 @@ def test_every_manland_animates_to_expected_pt_and_keywords():
 
 def test_inkmoth_infect_damage_to_player_poisons_not_life_loss():
     state = _new_state()
-    land = _put(state, STELLAR_SIGHTS_LANDS["Inkmoth Nexus"])
+    land = _put(state, _PRINTINGS["Inkmoth Nexus"])
     # Activate: 1/1 flying infect.
     _mana_for(state, "{1}")
     apply_action(
@@ -269,7 +273,7 @@ def test_infect_damage_to_player_via_damage_pipeline():
     branch converts player damage to poison counters."""
     from mtg_bot.combat import _fire_combat_damage_to_player_triggers
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Inkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Inkmoth Nexus"])
     _mana_for(state, "{1}")
     apply_action(
         state, 0, ActivateAbility(source_id=nexus.id, ability_index=0),
@@ -301,7 +305,7 @@ def test_infect_damage_to_player_via_damage_pipeline():
 def test_blinkmoth_nexus_taps_for_one_colorless():
     """Oracle: '{T}: Add {C}.' Was previously dropped — now wired."""
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Blinkmoth Nexus"])
     # Mana ability lives at activated_abilities[1] (animation kept at 0).
     apply_action(
         state, 0, ActivateAbility(source_id=nexus.id, ability_index=1),
@@ -317,7 +321,7 @@ def test_blinkmoth_nexus_animates_with_blinkmoth_subtype():
     from mtg_bot.actions import resolve_top_of_stack
 
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Blinkmoth Nexus"])
     _mana_for(state, "{1}")
     apply_action(
         state, 0, ActivateAbility(source_id=nexus.id, ability_index=0),
@@ -334,7 +338,7 @@ def test_blinkmoth_nexus_pump_targets_only_blinkmoth_creatures():
     from mtg_bot.cards import SYNTHETIC_CREATURES
 
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Blinkmoth Nexus"])
     bear = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
     )
@@ -352,7 +356,7 @@ def test_blinkmoth_nexus_pump_finds_animated_self():
     from mtg_bot.actions import resolve_top_of_stack
 
     state = _new_state()
-    nexus = _put(state, STELLAR_SIGHTS_LANDS["Blinkmoth Nexus"])
+    nexus = _put(state, _PRINTINGS["Blinkmoth Nexus"])
     _mana_for(state, "{1}")
     apply_action(
         state, 0, ActivateAbility(source_id=nexus.id, ability_index=0),
@@ -365,14 +369,3 @@ def test_blinkmoth_nexus_pump_finds_animated_self():
     assert nexus.id in target_ids
 
 
-def test_thirteen_manlands_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    manlands = [name for name, *_ in MANLAND_TABLE]
-    assert len(manlands) == 13
-    for name in manlands:
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} is still a colorless-land stand-in"
-        )

@@ -88,13 +88,3 @@ def test_build_artifact_printing_claims_the_endstone():
     assert printing.keywords == frozenset()
 
 
-def test_parser_claims_the_endstone_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming The Endstone via the artifact-
-    builder dispatch arm with the new literal-trigger-line table."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "The Endstone" in parser
-    assert parser["The Endstone"] == static["The Endstone"]

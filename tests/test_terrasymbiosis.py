@@ -3,10 +3,14 @@
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import DrawCardsEqualToResolvingCounterAmount
 from mtg_bot.game import GameState, Player, Zone, add_plus_one_counters
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -65,7 +69,7 @@ def _put(state, printing, owner_id=0):
 
 def test_terrasymbiosis_fires_when_counter_added_to_own_creature():
     state = _new_state()
-    _put(state, EOE_SPELLS["Terrasymbiosis"])
+    _put(state, _PRINTINGS["Terrasymbiosis"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 3)
     add_plus_one_counters(state, bear, 1)
@@ -75,7 +79,7 @@ def test_terrasymbiosis_fires_when_counter_added_to_own_creature():
 
 def test_terrasymbiosis_draws_multiple_when_multiple_counters():
     state = _new_state()
-    _put(state, EOE_SPELLS["Terrasymbiosis"])
+    _put(state, _PRINTINGS["Terrasymbiosis"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 5)
     add_plus_one_counters(state, bear, 3)
@@ -85,7 +89,7 @@ def test_terrasymbiosis_draws_multiple_when_multiple_counters():
 
 def test_terrasymbiosis_once_per_turn():
     state = _new_state()
-    _put(state, EOE_SPELLS["Terrasymbiosis"])
+    _put(state, _PRINTINGS["Terrasymbiosis"])
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     _stock_library(state, 0, 5)
     add_plus_one_counters(state, bear, 1)
@@ -98,7 +102,7 @@ def test_terrasymbiosis_once_per_turn():
 
 def test_terrasymbiosis_does_not_fire_for_opponents_counters():
     state = _new_state()
-    _put(state, EOE_SPELLS["Terrasymbiosis"])
+    _put(state, _PRINTINGS["Terrasymbiosis"])
     enemy_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     _stock_library(state, 0, 3)
     add_plus_one_counters(state, enemy_bear, 2)
@@ -107,6 +111,6 @@ def test_terrasymbiosis_does_not_fire_for_opponents_counters():
 
 
 def test_terrasymbiosis_printing_has_trigger():
-    t = EOE_SPELLS["Terrasymbiosis"]
+    t = _PRINTINGS["Terrasymbiosis"]
     triggers = {_legacy_or_inferred_key(ab) for ab in t.triggered_abilities}
     assert "counters_added_to_your_creature" in triggers

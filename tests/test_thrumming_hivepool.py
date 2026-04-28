@@ -4,10 +4,14 @@ still dropped.)"""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS
+from mtg_bot.cards import TOKEN_PRINTINGS
 from mtg_bot.game import GameState, Player, Zone, effective_keywords
 from mtg_bot.turn import run_beginning_of_upkeep_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -33,7 +37,7 @@ def test_sliver_token_printing():
 
 def test_hivepool_creates_two_slivers_on_upkeep():
     state = _new_state()
-    _put(state, EOE_SPELLS["Thrumming Hivepool"])
+    _put(state, _PRINTINGS["Thrumming Hivepool"])
     run_beginning_of_upkeep_triggers(state)
     drain_stack(state)
     slivers = [o for o in state.battlefield if o.printing.name == "Sliver"]
@@ -42,7 +46,7 @@ def test_hivepool_creates_two_slivers_on_upkeep():
 
 def test_slivers_get_double_strike_and_haste_from_hivepool():
     state = _new_state()
-    _put(state, EOE_SPELLS["Thrumming Hivepool"])
+    _put(state, _PRINTINGS["Thrumming Hivepool"])
     sliver = _put(state, TOKEN_PRINTINGS["Sliver"])
     kws = effective_keywords(state, sliver)
     assert "double strike" in kws
@@ -51,7 +55,7 @@ def test_slivers_get_double_strike_and_haste_from_hivepool():
 
 def test_non_sliver_does_not_get_anthem():
     state = _new_state()
-    _put(state, EOE_SPELLS["Thrumming Hivepool"])
+    _put(state, _PRINTINGS["Thrumming Hivepool"])
     from mtg_bot.cards import SYNTHETIC_CREATURES
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     kws = effective_keywords(state, bear)
@@ -60,7 +64,7 @@ def test_non_sliver_does_not_get_anthem():
 
 
 def test_hivepool_printing_metadata():
-    h = EOE_SPELLS["Thrumming Hivepool"]
+    h = _PRINTINGS["Thrumming Hivepool"]
     assert h.is_artifact
     assert len(h.static_abilities) == 1
     triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}

@@ -67,14 +67,3 @@ def test_build_artifact_printing_claims_requiem_monolith():
     assert printing.keywords == frozenset()
 
 
-def test_parser_claims_requiem_monolith_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Requiem Monolith via the
-    artifact-builder dispatch arm with the new literal-line bespoke-
-    effect table."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Requiem Monolith" in parser
-    assert parser["Requiem Monolith"] == static["Requiem Monolith"]

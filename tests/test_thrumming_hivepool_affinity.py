@@ -11,9 +11,13 @@ toward its own discount — it isn't on the battlefield yet.
 """
 
 from mtg_bot.actions import apply_cost_reductions
-from mtg_bot.cards import EOE_SPELLS, TOKEN_PRINTINGS, CostReduction
+from mtg_bot.cards import TOKEN_PRINTINGS, CostReduction
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -42,7 +46,7 @@ def _put_sliver_token(state, owner_id=0):
 
 
 def test_thrumming_hivepool_has_affinity_cost_reduction():
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     assert p.is_artifact is True
     assert p.cost_reductions == (
         CostReduction(amount=1, condition="affinity_for_slivers"),
@@ -59,7 +63,7 @@ def test_thrumming_hivepool_has_affinity_cost_reduction():
 
 def test_no_slivers_means_no_discount():
     state = _new_state()
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     assert reduced.generic == p.mana_cost.generic  # base {6}
 
@@ -67,7 +71,7 @@ def test_no_slivers_means_no_discount():
 def test_one_sliver_discounts_by_one():
     state = _new_state()
     _put_sliver_token(state)
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     assert reduced.generic == p.mana_cost.generic - 1  # {5}
 
@@ -76,7 +80,7 @@ def test_three_slivers_discounts_by_three():
     state = _new_state()
     for _ in range(3):
         _put_sliver_token(state)
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     assert reduced.generic == p.mana_cost.generic - 3  # {3}
 
@@ -87,7 +91,7 @@ def test_max_discount_clamps_at_base_generic():
     state = _new_state()
     for _ in range(10):
         _put_sliver_token(state)
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     assert reduced.generic == 0
 
@@ -96,7 +100,7 @@ def test_opponent_slivers_do_not_count():
     state = _new_state()
     _put_sliver_token(state, owner_id=1)
     _put_sliver_token(state, owner_id=1)
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     # Opponent's Slivers are irrelevant.
     assert reduced.generic == p.mana_cost.generic
@@ -109,7 +113,7 @@ def test_non_sliver_creatures_do_not_count():
 
     state = _new_state()
     _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
     assert reduced.generic == p.mana_cost.generic
 
@@ -118,7 +122,7 @@ def test_describe_text():
     """Sanity check the printing's affinity reduction is exposed in
     the cost_reductions tuple. (No textual describe() currently, but
     pin the shape.)"""
-    p = EOE_SPELLS["Thrumming Hivepool"]
+    p = _PRINTINGS["Thrumming Hivepool"]
     rule = p.cost_reductions[0]
     assert rule.condition == "affinity_for_slivers"
     assert rule.amount == 1
@@ -140,7 +144,7 @@ def test_legal_actions_exposes_hivepool_at_reduced_cost():
     state = _new_state()
     state.players[0].agent = None  # legal_actions must work without one
     p = state.players[0]
-    hivepool = state.new_object(EOE_SPELLS["Thrumming Hivepool"], 0, Zone.HAND)
+    hivepool = state.new_object(_PRINTINGS["Thrumming Hivepool"], 0, Zone.HAND)
     p.hand.append(hivepool)
     # 4 untapped Mountains → {4} available.
     for _ in range(4):
@@ -166,7 +170,7 @@ def test_legal_actions_blocks_hivepool_without_enough_slivers():
     state = _new_state()
     state.players[0].agent = None
     p = state.players[0]
-    hivepool = state.new_object(EOE_SPELLS["Thrumming Hivepool"], 0, Zone.HAND)
+    hivepool = state.new_object(_PRINTINGS["Thrumming Hivepool"], 0, Zone.HAND)
     p.hand.append(hivepool)
     for _ in range(4):
         _put(state, BASIC_LANDS["Mountain"], owner_id=0)

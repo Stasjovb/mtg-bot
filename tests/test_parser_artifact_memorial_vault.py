@@ -65,14 +65,3 @@ def test_build_artifact_printing_claims_memorial_vault():
     assert printing.keywords == frozenset()
 
 
-def test_parser_claims_memorial_vault_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Memorial Vault via the
-    artifact-builder dispatch arm with the new literal-line bespoke-
-    effect table."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Memorial Vault" in parser
-    assert parser["Memorial Vault"] == static["Memorial Vault"]

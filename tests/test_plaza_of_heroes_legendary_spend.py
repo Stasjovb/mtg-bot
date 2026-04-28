@@ -366,13 +366,3 @@ def test_legal_actions_hides_nonlegendary_when_only_plaza_mana_is_floating():
 # -----------------------
 
 
-def test_plaza_of_heroes_no_longer_drops_legendary_spend_restrictions():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    # The old simplification comment said the two mana abilities
-    # were dropped; the wording must be gone now.
-    assert "are dropped" not in src.split("Plaza of Heroes")[1].split(
-        '"Power Depot"'
-    )[0], "Plaza simplification still claims abilities are dropped"

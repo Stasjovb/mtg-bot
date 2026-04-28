@@ -22,11 +22,13 @@ from mtg_bot.actions import (
     can_pay_cost,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import (
-    BASIC_LANDS, EOE_CREATURES, STELLAR_SIGHTS_LANDS, parse_mana_cost,
-)
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.game import GameState, ManaCoin, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _Agent(Agent):
@@ -56,7 +58,7 @@ def _put(state, printing, owner_id=0):
 
 
 def test_sunken_citadel_now_has_two_mana_abilities():
-    p = STELLAR_SIGHTS_LANDS["Sunken Citadel"]
+    p = _PRINTINGS["Sunken Citadel"]
     assert len(p.activated_abilities) == 2
     # Ability 0: tap for one any-color (unrestricted).
     a0 = p.activated_abilities[0]
@@ -76,7 +78,7 @@ def test_sunken_citadel_now_has_two_mana_abilities():
 
 def test_second_ability_mints_two_land_activation_coins():
     state = _new_state()
-    citadel = _put(state, STELLAR_SIGHTS_LANDS["Sunken Citadel"])
+    citadel = _put(state, _PRINTINGS["Sunken Citadel"])
     # Bypass enters-tapped for the test fixture.
     citadel.tapped = False
     apply_action(
@@ -176,7 +178,7 @@ def test_steelswarm_artifact_activation_coin_pays_for_artifact_ability():
     state = _new_state()
     # Drop a colorless artifact source on the battlefield to confirm
     # the printing-side conditions used by legal/actions still apply.
-    op = EOE_CREATURES["Steelswarm Operator"]
+    op = _PRINTINGS["Steelswarm Operator"]
     assert op.is_artifact is True
     state.players[0].mana_pool.append(
         ManaCoin(color="U", spend_restriction="artifact_activation")
@@ -208,7 +210,7 @@ def test_land_activation_coin_unlocks_costed_land_ability():
         state.players[0].mana_pool.append(
             ManaCoin(color="any", spend_restriction="land_activation")
         )
-    enclave = _put(state, STELLAR_SIGHTS_LANDS["Bonders' Enclave"])
+    enclave = _put(state, _PRINTINGS["Bonders' Enclave"])
     enclave.tapped = False
     # Bonders' Enclave's activation requires a creature with power ≥ 4.
     big = _put(
@@ -270,7 +272,7 @@ def test_land_activation_coin_does_not_unlock_creature_activation():
 
 def test_first_ability_unchanged():
     state = _new_state()
-    citadel = _put(state, STELLAR_SIGHTS_LANDS["Sunken Citadel"])
+    citadel = _put(state, _PRINTINGS["Sunken Citadel"])
     citadel.tapped = False
     apply_action(
         state, 0, ActivateAbility(source_id=citadel.id, ability_index=0),

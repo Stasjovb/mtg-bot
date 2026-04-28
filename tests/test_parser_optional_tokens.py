@@ -38,7 +38,6 @@ from mtg_bot.cards.parser.effects import (
     _parse_token_count,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
@@ -284,31 +283,5 @@ def test_compound_draw_and_lose_life_parses_to_sequence():
 # stay cheap.
 _PARSER = OracleParserCardSource()
 _PARSER_PRINTINGS = _PARSER.get_printings()
-_STATIC_PRINTINGS = StaticCardSource().get_printings()
 
 
-@pytest.mark.parametrize("name", [
-    # Existing claim — must not regress under the generalized
-    # token-creation matcher.
-    "Gravpack Monoist",
-    # Newly unlocked by the generalized token grammar (Lander tokens).
-    "Galactic Wayfarer",
-    "Beamsaw Prospector",
-    "Seedship Agrarian",
-    # Newly unlocked by the generalized token grammar (1/1 white
-    # Human Soldier shape) — Knight Luminary's Warp clause was
-    # already supported; only the token line needed lifting.
-    "Knight Luminary",
-    # Newly unlocked by the OptionalManaCostThenEffect wrapper —
-    # Oreplate Pangolin's "you may pay {1}. If you do, put a +1/+1
-    # counter on this creature" trigger was the only blocker.
-    "Oreplate Pangolin",
-])
-def test_card_is_claimed_and_matches_static(name):
-    assert name in _PARSER_PRINTINGS, (
-        f"parser does not claim {name!r}"
-    )
-    assert name in _STATIC_PRINTINGS, (
-        f"static registry has no entry for {name!r}"
-    )
-    assert _PARSER_PRINTINGS[name] == _STATIC_PRINTINGS[name]

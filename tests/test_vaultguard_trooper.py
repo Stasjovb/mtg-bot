@@ -9,10 +9,14 @@ declines, neither the discard nor the dependent draw fires.
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.actions import drain_stack
 from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _YesAgent(Agent):
@@ -39,7 +43,7 @@ def _state_with_two_tapped_creatures(agent):
     state.active_player_idx = 0
     p0 = state.players[0]
     vg = state.new_object(
-        EOE_CREATURES["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["Vaultguard Trooper"], 0, Zone.BATTLEFIELD,
     )
     vg.tapped = True
     state.battlefield.append(vg)

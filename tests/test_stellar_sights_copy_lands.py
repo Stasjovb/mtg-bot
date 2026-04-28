@@ -9,10 +9,14 @@ Covers the new copy primitives:
 
 from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
 from mtg_bot.agents import Agent
-from mtg_bot.cards import BASIC_LANDS, EOE_SPELLS, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature
 from mtg_bot.game import GameState, Player, StackItem, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -53,7 +57,7 @@ def test_thespians_stage_copies_basic_forest_to_produce_green():
     # PickLast so the agent chooses the Forest (last land added),
     # not the Stage itself (first).
     state = _new_state(agent_cls=_PickLastAgent)
-    stage = _put(state, STELLAR_SIGHTS_LANDS["Thespian's Stage"])
+    stage = _put(state, _PRINTINGS["Thespian's Stage"])
     # Pay {2} from two basic lands, plus a Forest as the target.
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
@@ -76,7 +80,7 @@ def test_thespians_stage_retains_own_activated_ability_after_copy():
     """The 'except it has this ability' clause — Thespian's own
     {2},{T}: become-a-copy ability survives the copy."""
     state = _new_state(agent_cls=_PickLastAgent)
-    stage = _put(state, STELLAR_SIGHTS_LANDS["Thespian's Stage"])
+    stage = _put(state, _PRINTINGS["Thespian's Stage"])
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
     _put(state, BASIC_LANDS["Forest"], owner_id=1)
@@ -94,11 +98,11 @@ def test_thespians_stage_recopy_does_not_accumulate_abilities():
     """A second copy activation should still leave the Stage with the
     target's abilities + its own copy ability — not double-stacked."""
     state = _new_state(agent_cls=_PickLastAgent)
-    stage = _put(state, STELLAR_SIGHTS_LANDS["Thespian's Stage"])
+    stage = _put(state, _PRINTINGS["Thespian's Stage"])
     for _ in range(4):
         _put(state, BASIC_LANDS["Mountain"])
     # First target: Ancient Tomb (1 activated ability).
-    ancient_tomb = _put(state, STELLAR_SIGHTS_LANDS["Ancient Tomb"])
+    ancient_tomb = _put(state, _PRINTINGS["Ancient Tomb"])
     apply_action(
         state, 0, ActivateAbility(source_id=stage.id, ability_index=0),
     )
@@ -128,7 +132,7 @@ def test_thespians_stage_recopy_does_not_accumulate_abilities():
 
 
 def test_mirrorpool_is_legendary_and_enters_tapped():
-    p = STELLAR_SIGHTS_LANDS["Mirrorpool"]
+    p = _PRINTINGS["Mirrorpool"]
     assert "Legendary" in p.supertypes
     assert p.enters_tapped is True
     assert len(p.activated_abilities) == 2
@@ -143,7 +147,7 @@ def test_mirrorpool_is_legendary_and_enters_tapped():
 
 def test_mirrorpool_token_copy_creature_creates_a_copy_token():
     state = _new_state()
-    pool = _put(state, STELLAR_SIGHTS_LANDS["Mirrorpool"])
+    pool = _put(state, _PRINTINGS["Mirrorpool"])
     # Mana for {4}{C} = 5 generic; we need 5 coins. Colorless mana
     # via activating basic lands is auto-tapped; seed directly.
     from mtg_bot.game import ManaCoin
@@ -191,13 +195,13 @@ def test_mirrorpool_copy_spell_reresolves_target_effect():
             return legal_targets[0] if legal_targets else None
 
     state = _new_state(agent_cls=_TargetOpponentAgent)
-    pool = _put(state, STELLAR_SIGHTS_LANDS["Mirrorpool"])
+    pool = _put(state, _PRINTINGS["Mirrorpool"])
     # Skip Mirrorpool's own mana cost via direct mana pool.
     from mtg_bot.game import ManaCoin
     state.players[0].mana_pool.extend([ManaCoin(color="C")] * 3)
     # Cast a Plasma Bolt at opponent. Short-circuit: put the bolt
     # StackItem directly onto the stack.
-    bolt_printing = EOE_SPELLS["Plasma Bolt"]
+    bolt_printing = _PRINTINGS["Plasma Bolt"]
     bolt_obj = state.new_object(bolt_printing, 0, Zone.STACK)
     state.stack.append(
         StackItem(
@@ -252,7 +256,7 @@ def test_becomes_copy_noop_without_source_or_target():
     # No resolving_source → noop.
     BecomesCopyOfTargetLand().resolve(state, 0, ())
     # resolving_source but empty targets → noop.
-    stage = _put(state, STELLAR_SIGHTS_LANDS["Thespian's Stage"])
+    stage = _put(state, _PRINTINGS["Thespian's Stage"])
     state.resolving_source = stage
     try:
         BecomesCopyOfTargetLand().resolve(state, 0, ())
@@ -299,11 +303,10 @@ def test_copy_spell_legal_targets_filters_correctly():
     """Only instants/sorceries controlled by the effect's controller
     appear in legal_targets."""
     from mtg_bot.effects import CopyTargetInstantOrSorceryYouControl
-    from mtg_bot.cards import EOE_CREATURES
 
     state = _new_state()
     # Opponent's sorcery — should be filtered out.
-    opp_bolt = state.new_object(EOE_SPELLS["Plasma Bolt"], 1, Zone.STACK)
+    opp_bolt = state.new_object(_PRINTINGS["Plasma Bolt"], 1, Zone.STACK)
     state.stack.append(
         StackItem(
             source=opp_bolt, controller_id=1, ability=None, targets=(),
@@ -311,7 +314,7 @@ def test_copy_spell_legal_targets_filters_correctly():
     )
     # Our creature spell (not an instant/sorcery) — should be filtered out.
     creature_printing = None
-    for p in EOE_CREATURES.values():
+    for p in _PRINTINGS.values():
         if p.is_creature and not p.is_instant and not p.is_sorcery:
             creature_printing = p
             break
@@ -323,7 +326,7 @@ def test_copy_spell_legal_targets_filters_correctly():
         ),
     )
     # Our sorcery — included.
-    our_bolt = state.new_object(EOE_SPELLS["Plasma Bolt"], 0, Zone.STACK)
+    our_bolt = state.new_object(_PRINTINGS["Plasma Bolt"], 0, Zone.STACK)
     state.stack.append(
         StackItem(
             source=our_bolt, controller_id=0, ability=None, targets=(),
@@ -334,12 +337,3 @@ def test_copy_spell_legal_targets_filters_correctly():
     assert legal == [("stack_spell", our_bolt.id)]
 
 
-def test_copy_lands_restored_no_longer_stand_ins():
-    import pathlib
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Thespian's Stage", "Mirrorpool"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

@@ -164,70 +164,7 @@ def test_unknown_trigger_phrase_in_line_returns_none():
 
 # ---------- End-to-end claim parity for newly-supported cards ----------
 
-def test_illvoi_operative_is_claimed_with_second_spell_trigger():
-    """Illvoi Operative's oracle text is exactly one triggered ability
-    using the migrated predicate-style ``second_spell_each_turn``
-    shape. With the phrase mapped, the parser must claim the card
-    end-to-end and produce a printing identical to the static
-    registry's.
-    """
-    from mtg_bot.cards.parser_source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser = OracleParserCardSource()
-    static = StaticCardSource().get_printings()
-
-    assert "Illvoi Operative" in parser.claimed_names
-    parsed = parser.get_printings()["Illvoi Operative"]
-    assert parsed == static["Illvoi Operative"]
-    assert parsed.triggered_abilities == (
-        TriggeredAbility(
-            event=Event.IS_CAST, predicate=_SECOND_SPELL_PRED,
-            effect=PutPlusOneCounterOnSelf(amount=1),
-        ),
-    )
 
 
-def test_lightless_evangel_is_claimed_with_sacrifice_trigger():
-    """Lightless Evangel's oracle text is one triggered ability using
-    the migrated predicate-style ``sacrifice_creature_or_artifact``
-    shape.
-    """
-    from mtg_bot.cards.parser_source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser = OracleParserCardSource()
-    static = StaticCardSource().get_printings()
-
-    assert "Lightless Evangel" in parser.claimed_names
-    parsed = parser.get_printings()["Lightless Evangel"]
-    assert parsed == static["Lightless Evangel"]
-    assert parsed.triggered_abilities == (
-        TriggeredAbility(
-            event=Event.IS_SACRIFICED,
-            predicate=_SAC_CREATURE_OR_ARTIFACT_PRED,
-            effect=PutPlusOneCounterOnSelf(amount=1),
-        ),
-    )
 
 
-def test_meltstrider_eulogist_is_claimed_with_counter_dies_trigger():
-    """Meltstrider Eulogist's oracle text is one triggered ability
-    using the new ``creature_you_control_with_counter_dies``
-    condition phrase.
-    """
-    from mtg_bot.cards.parser_source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser = OracleParserCardSource()
-    static = StaticCardSource().get_printings()
-
-    assert "Meltstrider Eulogist" in parser.claimed_names
-    parsed = parser.get_printings()["Meltstrider Eulogist"]
-    assert parsed == static["Meltstrider Eulogist"]
-    assert parsed.triggered_abilities == (
-        TriggeredAbility(
-            event=Event.DIES, predicate=_COUNTER_DIES_PRED,
-            effect=DrawCards(amount=1),
-        ),
-    )

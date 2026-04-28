@@ -5,32 +5,12 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.registry import all_printings, build_mono_color_deck
 from mtg_bot.cards.source import (
     CardSource,
-    StaticCardSource,
     card_source_from_env,
     get_active_source,
     set_active_source,
 )
-
-
-def test_static_source_get_printings_matches_registry():
-    source = StaticCardSource()
-    assert source.get_printings() == all_printings()
-
-
-def test_static_source_build_mono_color_deck_matches_registry():
-    source = StaticCardSource()
-    for color in ("W", "U", "B", "R", "G"):
-        assert source.build_mono_color_deck(color, seed=42) == \
-            build_mono_color_deck(color, seed=42)
-
-
-def test_static_source_build_mono_color_deck_rejects_unknown_color():
-    source = StaticCardSource()
-    with pytest.raises(ValueError):
-        source.build_mono_color_deck("Z")
 
 
 def test_set_active_source_swaps_and_reverts():
@@ -76,16 +56,6 @@ def test_card_source_from_env_default_is_parser():
     assert isinstance(card_source_from_env(""), OracleParserCardSource)
     assert isinstance(card_source_from_env("parser"), OracleParserCardSource)
     assert isinstance(card_source_from_env("PARSER"), OracleParserCardSource)
-
-
-def test_card_source_from_env_static_value_returns_static():
-    assert isinstance(card_source_from_env("static"), StaticCardSource)
-
-
-def test_card_source_from_env_parser_returns_oracle_parser():
-    assert isinstance(
-        card_source_from_env("parser"), OracleParserCardSource
-    )
 
 
 def test_card_source_from_env_unknown_value_raises():

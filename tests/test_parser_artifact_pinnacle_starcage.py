@@ -89,14 +89,3 @@ def test_build_artifact_printing_claims_pinnacle_starcage():
     assert printing.keywords == frozenset()
 
 
-def test_parser_claims_pinnacle_starcage_end_to_end():
-    """End-to-end: ``OracleParserCardSource`` walks the cached EoE
-    Scryfall data and ends up claiming Pinnacle Starcage via the
-    artifact-builder dispatch arm with the new literal-line bespoke-
-    effect tables (one entry per oracle line)."""
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-    parser = OracleParserCardSource().get_printings()
-    static = StaticCardSource().get_printings()
-    assert "Pinnacle Starcage" in parser
-    assert parser["Pinnacle Starcage"] == static["Pinnacle Starcage"]

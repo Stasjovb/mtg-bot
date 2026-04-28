@@ -11,11 +11,15 @@ from mtg_bot.actions import (
     drain_stack, push_triggered_ability, put_into_battlefield,
 )
 from mtg_bot.agents import Agent
-from mtg_bot.cards import EOE_CREATURES, SYNTHETIC_CREATURES
+from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     DiplomaticRelationsEffect, MonoistCircuitFeederETBEffect,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -84,7 +88,7 @@ def test_pickfirst_agent_with_two_friendlies_still_routes_kinds_correctly():
     own_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     opp_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     monoist = state.new_object(
-        EOE_CREATURES["Monoist Circuit-Feeder"], 0, Zone.HAND,
+        _PRINTINGS["Monoist Circuit-Feeder"], 0, Zone.HAND,
     )
     put_into_battlefield(state, monoist, controller_id=0)
     drain_stack(state)
@@ -113,7 +117,7 @@ def test_per_slot_kind_skips_when_kind_unavailable():
     # one-kind pool. We do this by constructing the trigger manually
     # and force-pushing it with no opp candidates available.
     own_bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    monoist = _put(state, EOE_CREATURES["Monoist Circuit-Feeder"], owner_id=0)
+    monoist = _put(state, _PRINTINGS["Monoist Circuit-Feeder"], owner_id=0)
     monoist.summoning_sick = False
     # legal_targets: for Monoist's effect with no opp creature, returns
     # [] (per-slot rule), so push_triggered_ability fizzles before the

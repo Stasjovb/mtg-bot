@@ -9,10 +9,14 @@ triggers, multiple mana abilities per card, and Regenerate respectively.
 
 from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, STELLAR_SIGHTS_LANDS
+from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.base import make_creature, make_artifact
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -48,7 +52,7 @@ def _put(state, printing, owner_id=0):
 
 
 def test_cathedral_of_war_enters_tapped():
-    p = STELLAR_SIGHTS_LANDS["Cathedral of War"]
+    p = _PRINTINGS["Cathedral of War"]
     assert p.enters_tapped is True
     assert p.is_land
 
@@ -58,7 +62,7 @@ def test_cathedral_of_war_has_exalted_keyword():
     its printing. The pump is applied by combat._fire_exalted_pumps
     after declare_attackers, so no triggered/activated abilities live
     on the printing itself."""
-    p = STELLAR_SIGHTS_LANDS["Cathedral of War"]
+    p = _PRINTINGS["Cathedral of War"]
     assert "exalted" in p.keywords
     assert p.triggered_abilities == ()
     assert p.activated_abilities == ()
@@ -70,7 +74,7 @@ def test_cathedral_of_war_has_exalted_keyword():
 
 
 def test_endless_sands_has_two_activated_abilities():
-    p = STELLAR_SIGHTS_LANDS["Endless Sands"]
+    p = _PRINTINGS["Endless Sands"]
     assert len(p.activated_abilities) == 2
     # Second ability has sacrifice_self cost.
     assert p.activated_abilities[1].cost.sacrifice_self is True
@@ -78,7 +82,7 @@ def test_endless_sands_has_two_activated_abilities():
 
 def test_endless_sands_exiles_your_creature():
     state = _new_state()
-    sands = _put(state, STELLAR_SIGHTS_LANDS["Endless Sands"])
+    sands = _put(state, _PRINTINGS["Endless Sands"])
     # Give mana for {3}.
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
@@ -105,7 +109,7 @@ def test_endless_sands_cannot_target_opponents_creature():
     from mtg_bot import legal_moves
 
     state = _new_state()
-    sands = _put(state, STELLAR_SIGHTS_LANDS["Endless Sands"])
+    sands = _put(state, _PRINTINGS["Endless Sands"])
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
     # Only an opponent's creature exists — ability should have no legal
@@ -138,7 +142,7 @@ def test_endless_sands_cannot_target_opponents_creature():
 def test_endless_sands_sac_returns_exiled_creatures():
     """Sacrificing Endless Sands releases all creatures it exiled."""
     state = _new_state()
-    sands = _put(state, STELLAR_SIGHTS_LANDS["Endless Sands"])
+    sands = _put(state, _PRINTINGS["Endless Sands"])
     for _ in range(6):
         _put(state, BASIC_LANDS["Mountain"])
     bear = _put(
@@ -172,14 +176,14 @@ def test_endless_sands_sac_returns_exiled_creatures():
 
 
 def test_inventors_fair_is_legendary_and_enters_tapped():
-    p = STELLAR_SIGHTS_LANDS["Inventors' Fair"]
+    p = _PRINTINGS["Inventors' Fair"]
     assert "Legendary" in p.supertypes
     assert p.enters_tapped is True
 
 
 def test_inventors_fair_tutors_an_artifact():
     state = _new_state()
-    fair = _put(state, STELLAR_SIGHTS_LANDS["Inventors' Fair"])
+    fair = _put(state, _PRINTINGS["Inventors' Fair"])
     _put(state, BASIC_LANDS["Mountain"])
     # Stock library with an artifact and a non-artifact distractor.
     art_printing = make_artifact("Test Cog", "{0}")
@@ -206,7 +210,7 @@ def test_inventors_fair_has_upkeep_trigger():
     artifacts condition)."""
     from mtg_bot.effects.predicates import YOU, Controlled, Event
 
-    p = STELLAR_SIGHTS_LANDS["Inventors' Fair"]
+    p = _PRINTINGS["Inventors' Fair"]
     assert len(p.triggered_abilities) == 1
     ab = p.triggered_abilities[0]
     assert ab.event == Event.BEGINNING_OF_UPKEEP
@@ -218,15 +222,3 @@ def test_inventors_fair_has_upkeep_trigger():
 # -----------------------
 
 
-def test_three_more_restored_no_longer_stand_ins():
-    """The three cards restored in this batch must no longer be built
-    via make_colorless_land."""
-    import pathlib
-
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    for name in ("Cathedral of War", "Endless Sands", "Inventors' Fair"):
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

@@ -4,11 +4,15 @@ Mm'menon, the Right Hand (cast artifact spells from top of library)."""
 from mtg_bot import legal_moves
 from mtg_bot.actions import CastSpell, apply_action, put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import RovingActuatorETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -49,11 +53,11 @@ def _put_in_graveyard(state, printing, owner_id=0):
 def test_effect_legal_targets_are_low_mv_spells():
     state = _new_state()
     # Plasma Bolt ({R}) — MV 1, instant, legal.
-    bolt = _put_in_graveyard(state, EOE_SPELLS["Plasma Bolt"])
+    bolt = _put_in_graveyard(state, _PRINTINGS["Plasma Bolt"])
     # Close Encounter ({R}{G}) — MV 2, sorcery, legal.
-    ce = _put_in_graveyard(state, EOE_SPELLS["Close Encounter"])
+    ce = _put_in_graveyard(state, _PRINTINGS["Close Encounter"])
     # Hymn of the Faller ({2}) — MV 2 sorcery, legal.
-    hymn = _put_in_graveyard(state, EOE_SPELLS["Hymn of the Faller"])
+    hymn = _put_in_graveyard(state, _PRINTINGS["Hymn of the Faller"])
     # Wild Bear (creature) — not an instant/sorcery.
     bear = _put_in_graveyard(state, SYNTHETIC_CREATURES["Wild Bear"])
     targets = RovingActuatorETBEffect().legal_targets(state, 0)
@@ -67,7 +71,7 @@ def test_effect_legal_targets_are_low_mv_spells():
 def test_effect_exiles_and_resolves_spell_copy():
     state = _new_state()
     # Plasma Bolt deals 2 to any target.
-    bolt = _put_in_graveyard(state, EOE_SPELLS["Plasma Bolt"])
+    bolt = _put_in_graveyard(state, _PRINTINGS["Plasma Bolt"])
     p0_life_before = state.players[0].life
     p1_life_before = state.players[1].life
     RovingActuatorETBEffect().resolve(
@@ -109,8 +113,8 @@ def test_roving_actuator_etb_requires_void():
     state = _new_state()
     # Void inactive — actuator's ETB should NOT fire even with a
     # valid graveyard target.
-    _put_in_graveyard(state, EOE_SPELLS["Plasma Bolt"])
-    ra = state.new_object(EOE_CREATURES["Roving Actuator"], 0, Zone.HAND)
+    _put_in_graveyard(state, _PRINTINGS["Plasma Bolt"])
+    ra = state.new_object(_PRINTINGS["Roving Actuator"], 0, Zone.HAND)
     put_into_battlefield(state, ra, controller_id=0)
     while state.stack:
         resolve_top_of_stack(state)
@@ -122,8 +126,8 @@ def test_roving_actuator_etb_fires_with_void_active():
     state = _new_state()
     # Void activation: mark permanent-left-battlefield.
     state.permanent_left_battlefield_this_turn = True
-    bolt = _put_in_graveyard(state, EOE_SPELLS["Plasma Bolt"])
-    ra = state.new_object(EOE_CREATURES["Roving Actuator"], 0, Zone.HAND)
+    bolt = _put_in_graveyard(state, _PRINTINGS["Plasma Bolt"])
+    ra = state.new_object(_PRINTINGS["Roving Actuator"], 0, Zone.HAND)
     put_into_battlefield(state, ra, controller_id=0)
     while state.stack:
         resolve_top_of_stack(state)
@@ -132,7 +136,7 @@ def test_roving_actuator_etb_fires_with_void_active():
 
 
 def test_roving_actuator_printing_has_void_gated_etb():
-    ra = EOE_CREATURES["Roving Actuator"]
+    ra = _PRINTINGS["Roving Actuator"]
     assert ra.warp_cost_str == "{1}{R}"
     etb_abilities = [a for a in ra.triggered_abilities if _matches_legacy_key(a, "etb")]
     assert len(etb_abilities) == 1
@@ -146,11 +150,11 @@ def test_roving_actuator_printing_has_void_gated_etb():
 
 def test_mmenon_offers_cast_for_top_artifact_in_library():
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
     # Mana for a {1} artifact.
     _put(state, BASIC_LANDS["Island"])
     # Top of library: Nutrient Block ({1}, artifact).
-    block = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.LIBRARY)
+    block = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.LIBRARY)
     state.players[0].library.insert(0, block)
     actions = legal_moves(state)
     assert any(
@@ -160,7 +164,7 @@ def test_mmenon_offers_cast_for_top_artifact_in_library():
 
 def test_mmenon_does_not_offer_non_artifact_top():
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
     _put(state, BASIC_LANDS["Island"])
     # Top of library: Wild Bear (creature, non-artifact) → not offered.
     bear = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.LIBRARY)
@@ -175,7 +179,7 @@ def test_mmenon_not_offered_without_controller():
     state = _new_state()
     # No Mm'menon on bf — top-of-library casting not granted.
     _put(state, BASIC_LANDS["Island"])
-    block = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.LIBRARY)
+    block = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.LIBRARY)
     state.players[0].library.insert(0, block)
     actions = legal_moves(state)
     assert not any(
@@ -185,9 +189,9 @@ def test_mmenon_not_offered_without_controller():
 
 def test_mmenon_cast_from_library_actually_resolves():
     state = _new_state()
-    _put(state, EOE_CREATURES["Mm'menon, the Right Hand"])
+    _put(state, _PRINTINGS["Mm'menon, the Right Hand"])
     _put(state, BASIC_LANDS["Island"])
-    block = state.new_object(EOE_SPELLS["Nutrient Block"], 0, Zone.LIBRARY)
+    block = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.LIBRARY)
     state.players[0].library.insert(0, block)
     apply_action(state, 0, CastSpell(block.id))
     # Resolve the stack — Nutrient Block is a permanent, lands on bf.
@@ -198,7 +202,7 @@ def test_mmenon_cast_from_library_actually_resolves():
 
 
 def test_mmenon_printing_has_flag():
-    m = EOE_CREATURES["Mm'menon, the Right Hand"]
+    m = _PRINTINGS["Mm'menon, the Right Hand"]
     assert m.grants_cast_artifact_from_top_of_library is True
     assert "flying" in m.keywords
     assert "Legendary" in m.supertypes

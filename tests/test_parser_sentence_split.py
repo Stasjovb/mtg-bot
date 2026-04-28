@@ -51,7 +51,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _parse_spell_oracle_text,
     _split_sentences,
 )
-from mtg_bot.cards.source import StaticCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
@@ -185,15 +184,6 @@ def test_radiant_strike_parses_via_sentence_split():
     )
 
 
-def test_radiant_strike_matches_static():
-    """Static-side parity for Radiant Strike — the parser-built
-    ``CardPrinting`` equals the static registry's entry exactly. The
-    parametrized ``test_parser_parity.py`` gate also covers this; we
-    keep an explicit assertion here so a regression points straight
-    at this slice."""
-    parser_printing = _build_spell_printing(_eoe_card("Radiant Strike"))
-    static = StaticCardSource().get_printings()["Radiant Strike"]
-    assert parser_printing == static
 
 
 def test_samis_curiosity_parses_via_sentence_split():
@@ -215,12 +205,6 @@ def test_samis_curiosity_parses_via_sentence_split():
     )
 
 
-def test_samis_curiosity_matches_static():
-    """Static-side parity for Sami's Curiosity. Same rationale as the
-    Radiant Strike parity test."""
-    parser_printing = _build_spell_printing(_eoe_card("Sami's Curiosity"))
-    static = StaticCardSource().get_printings()["Sami's Curiosity"]
-    assert parser_printing == static
 
 
 # ---------------------------------------------------------------------------
@@ -229,33 +213,6 @@ def test_samis_curiosity_matches_static():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        # Convoke preamble has two sentences in its parenthesized reminder
-        # text — those are stripped by `_strip_reminder_text` before the
-        # splitter ever sees them, so the surviving body
-        # ("Destroy target creature.") splits to itself.
-        "Vote Out",
-        # Plasma Bolt's Void rider is a separate ``\n``-split clause so
-        # sentence splitting is a no-op on each clause; the two-clause
-        # ConditionalIfVoid combinator path still wins.
-        "Plasma Bolt",
-        # Scour for Scrap's modes are individual ``• <sentence>`` lines —
-        # each is a single sentence, splitter is a no-op, modal
-        # combinator path still wins.
-        "Scour for Scrap",
-        # Dark Endurance has a ``This spell costs {1} less to cast if it
-        # targets a blocking creature.`` rider on its own line — single
-        # sentence, splitter no-op.
-        "Dark Endurance",
-    ],
-)
-def test_previously_claimed_spell_still_matches_static(name):
-    parser_printing = _build_spell_printing(_eoe_card(name))
-    assert parser_printing is not None
-    static = StaticCardSource().get_printings()[name]
-    assert parser_printing == static
 
 
 # ---------------------------------------------------------------------------

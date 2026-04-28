@@ -7,12 +7,7 @@ with the new ReturnTargetArtifactCardFromYourGraveyardToHand.
 """
 
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    EOE_CREATURES,
-    EOE_SPELLS,
-    SYNTHETIC_CREATURES,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     ExileTargetCreatureUntilSourceLeaves,
     ModalChooseOne,
@@ -20,6 +15,10 @@ from mtg_bot.effects import (
     SearchLibraryForCard,
 )
 from mtg_bot.game import GameState, Player, Zone
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -39,12 +38,12 @@ def test_all_fates_stalker_excludes_assassin_creatures():
     All-Fates Stalker is itself an Assassin — excluded via filter."""
     state = _new_state()
     stalker = state.new_object(
-        EOE_CREATURES["All-Fates Stalker"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["All-Fates Stalker"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(stalker)
     # Another Assassin — should NOT be a legal target.
     other_stalker = state.new_object(
-        EOE_CREATURES["All-Fates Stalker"], 0, Zone.BATTLEFIELD,
+        _PRINTINGS["All-Fates Stalker"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(other_stalker)
     # A non-Assassin creature — should be legal.
@@ -82,7 +81,7 @@ def test_return_target_artifact_from_graveyard_happy_path():
     p = state.players[0]
     # Put an artifact in the graveyard.
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact)
     effect = ReturnTargetArtifactCardFromYourGraveyardToHand()
@@ -135,7 +134,7 @@ def test_search_library_for_artifact_matches_artifacts_only():
     state = _new_state()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     bear = state.new_object(
@@ -213,11 +212,11 @@ def test_scour_for_scrap_modal_resolves_search_mode():
     state.players[0].agent = AlwaysModeZero()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.LIBRARY,
+        _PRINTINGS["Memorial Vault"], 0, Zone.LIBRARY,
     )
     p.library.append(artifact)
     scour = state.new_object(
-        EOE_SPELLS["Scour for Scrap"], 0, Zone.HAND,
+        _PRINTINGS["Scour for Scrap"], 0, Zone.HAND,
     )
     p.hand.append(scour)
     scour.printing.spell_effect.resolve(state, 0, ())
@@ -239,10 +238,10 @@ def test_scour_for_scrap_modal_resolves_graveyard_mode():
     state.players[0].agent = AlwaysModeOne()
     p = state.players[0]
     artifact = state.new_object(
-        EOE_SPELLS["Memorial Vault"], 0, Zone.GRAVEYARD,
+        _PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD,
     )
     p.graveyard.append(artifact)
-    scour_printing = EOE_SPELLS["Scour for Scrap"]
+    scour_printing = _PRINTINGS["Scour for Scrap"]
     scour_printing.spell_effect.resolve(
         state, 0, (("graveyard_artifact", artifact.id),),
     )

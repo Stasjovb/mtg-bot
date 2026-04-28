@@ -11,6 +11,10 @@ from mtg_bot.search import MtgGameStateAdapter
 from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator
 from mtg_bot.simulate import setup_game
 
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
+
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     state = setup_game(
@@ -269,7 +273,6 @@ def test_non_creature_spell_on_stack_counts_as_card():
     advantage (since the value hasn't been spent yet) instead of
     contributing to board. So casting it produces no net penalty:
     hand goes down by 1, stack count goes up by 1."""
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.game import StackItem
     adapter = _adapter()
     engine = adapter.engine_state
@@ -277,12 +280,12 @@ def test_non_creature_spell_on_stack_counts_as_card():
 
     # Find any non-creature spell in the EoE spell registry.
     non_creature_name = next(
-        name for name, p in EOE_SPELLS.items()
+        name for name, p in _PRINTINGS.items()
         if not p.is_creature and not p.is_land
     )
     # Pre-state: the spell is in P0's hand.
     spell_obj = engine.new_object(
-        EOE_SPELLS[non_creature_name], owner_id=0, zone=Zone.HAND,
+        _PRINTINGS[non_creature_name], owner_id=0, zone=Zone.HAND,
     )
     engine.players[0].hand.append(spell_obj)
     pre_score = evaluator._evaluate_nonterminal(engine, player_id=0)

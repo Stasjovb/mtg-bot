@@ -10,7 +10,7 @@ from mtg_bot.actions import (
     resolve_top_of_stack,
 )
 from mtg_bot.agents import Agent, RandomAgent
-from mtg_bot.cards import BASIC_LANDS, STELLAR_SIGHTS_LANDS, parse_mana_cost
+from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
 from mtg_bot.effects import (
     DealDamageToControllerAndAddMana,
     DestroyTargetLand,
@@ -20,6 +20,10 @@ from mtg_bot.effects import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 class _PickFirstAgent(Agent):
@@ -53,7 +57,7 @@ def _put(state, printing, owner_id=0):
 
 def test_ancient_tomb_mana_ability_adds_cc_and_damages_controller():
     state = _new_state()
-    tomb = _put(state, STELLAR_SIGHTS_LANDS["Ancient Tomb"])
+    tomb = _put(state, _PRINTINGS["Ancient Tomb"])
     apply_action(state, 0, ActivateAbility(source_id=tomb.id, ability_index=0))
     # 2 damage to controller; 2 colorless in pool.
     assert state.players[0].life == 18
@@ -75,7 +79,7 @@ def test_ancient_tomb_effect_describe():
 
 def test_mana_confluence_pay_life_for_any_color():
     state = _new_state()
-    conf = _put(state, STELLAR_SIGHTS_LANDS["Mana Confluence"])
+    conf = _put(state, _PRINTINGS["Mana Confluence"])
     apply_action(state, 0, ActivateAbility(source_id=conf.id, ability_index=0))
     assert state.players[0].life == 19
     assert len(state.players[0].mana_pool) == 1
@@ -84,7 +88,7 @@ def test_mana_confluence_pay_life_for_any_color():
 
 def test_mana_confluence_not_legal_when_would_kill_you():
     state = _new_state()
-    conf = _put(state, STELLAR_SIGHTS_LANDS["Mana Confluence"])
+    conf = _put(state, _PRINTINGS["Mana Confluence"])
     state.players[0].life = 1  # paying 1 would reduce to 0
     actions = legal_moves(state)
     assert not any(
@@ -101,7 +105,7 @@ def test_mana_confluence_not_legal_when_would_kill_you():
 def test_grove_of_the_burnwillows_produces_c_r_and_g():
     """Oracle has TWO mana abilities — {T}: Add {C} and {T}: Add {R} or
     {G}. Both colors plus C are advertised in ``produces``."""
-    g = STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"]
+    g = _PRINTINGS["Grove of the Burnwillows"]
     assert g.produces == frozenset({"C", "R", "G"})
 
 
@@ -110,7 +114,7 @@ def test_grove_colored_activation_grants_life_to_each_opponent():
     bundled GrantLifeToEachOpponent(amount=1) rider — each opponent
     gains 1, controller's life unchanged."""
     state = _new_state()
-    grove = _put(state, STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"])
+    grove = _put(state, _PRINTINGS["Grove of the Burnwillows"])
     # ability_index=1 is the colored mana ability with the rider.
     apply_action(
         state, 0, ActivateAbility(source_id=grove.id, ability_index=1),
@@ -127,7 +131,7 @@ def test_grove_colorless_activation_does_not_grant_life():
     lifegain on every tap (becomes_tapped trigger), which over-fired
     on the {C} ability."""
     state = _new_state()
-    grove = _put(state, STELLAR_SIGHTS_LANDS["Grove of the Burnwillows"])
+    grove = _put(state, _PRINTINGS["Grove of the Burnwillows"])
     # ability_index=0 is the {T}: Add {C} mana ability (no rider).
     apply_action(
         state, 0, ActivateAbility(source_id=grove.id, ability_index=0),
@@ -149,7 +153,7 @@ def test_grant_life_effect_describe():
 
 def test_strip_mine_destroys_target_land():
     state = _new_state()
-    strip = _put(state, STELLAR_SIGHTS_LANDS["Strip Mine"])
+    strip = _put(state, _PRINTINGS["Strip Mine"])
     victim = _put(state, BASIC_LANDS["Forest"], owner_id=1)
     apply_action(
         state, 0, ActivateAbility(source_id=strip.id, ability_index=0),
@@ -174,7 +178,7 @@ def test_destroy_target_land_effect_legal_targets_lands_only():
 def test_destroy_target_land_nonbasic_only_variant():
     state = _new_state()
     basic = _put(state, BASIC_LANDS["Forest"])
-    nonbasic = _put(state, STELLAR_SIGHTS_LANDS["Strip Mine"])
+    nonbasic = _put(state, _PRINTINGS["Strip Mine"])
     legal = DestroyTargetLand(nonbasic_only=True).legal_targets(state, 0)
     ids = {tid for _, tid in legal}
     assert nonbasic.id in ids
@@ -188,7 +192,7 @@ def test_destroy_target_land_nonbasic_only_variant():
 
 def test_terrain_generator_puts_basic_land_tapped():
     state = _new_state()
-    tg = _put(state, STELLAR_SIGHTS_LANDS["Terrain Generator"])
+    tg = _put(state, _PRINTINGS["Terrain Generator"])
     # Mana for {2}.
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
@@ -216,7 +220,7 @@ def test_terrain_generator_no_basic_in_hand_is_noop():
 
 def test_petrified_field_returns_land_from_graveyard():
     state = _new_state()
-    pf = _put(state, STELLAR_SIGHTS_LANDS["Petrified Field"])
+    pf = _put(state, _PRINTINGS["Petrified Field"])
     card = state.new_object(BASIC_LANDS["Forest"], 0, Zone.GRAVEYARD)
     state.players[0].graveyard.append(card)
     apply_action(
@@ -276,7 +280,7 @@ def test_pay_life_cost_skipped_when_not_required():
     """When pay_life is 0, the cost is not applied."""
     state = _new_state()
     life_before = state.players[0].life
-    tg = _put(state, STELLAR_SIGHTS_LANDS["Terrain Generator"])
+    tg = _put(state, _PRINTINGS["Terrain Generator"])
     # Mana for {2}.
     for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
@@ -310,19 +314,3 @@ def test_destroy_target_land_describe_variants():
     assert "nonbasic" not in DestroyTargetLand().describe()
 
 
-def test_six_cards_restored_no_longer_stand_ins():
-    """The six cards restored in this batch must no longer be
-    built via make_colorless_land — they have real abilities now."""
-    import pathlib
-
-    src = pathlib.Path("src/mtg_bot/cards/stellar_sights.py").read_text(
-        encoding="utf-8"
-    )
-    restored = [
-        "Ancient Tomb", "Mana Confluence", "Grove of the Burnwillows",
-        "Petrified Field", "Strip Mine", "Terrain Generator",
-    ]
-    for name in restored:
-        assert f'"{name}": make_colorless_land(' not in src, (
-            f"{name} still a colorless-land stand-in"
-        )

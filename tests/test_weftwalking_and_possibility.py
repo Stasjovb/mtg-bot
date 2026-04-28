@@ -4,10 +4,14 @@ cast-from-exile clause."""
 
 from mtg_bot.actions import CastSpell, PlayLand
 from mtg_bot.agents import RandomAgent
-from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS, SYNTHETIC_CREATURES
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import PossibilityTechnicianETBEffect, WeftwalkingETBEffect
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _new_state():
@@ -55,7 +59,7 @@ def test_weftwalking_describe():
 
 
 def test_weftwalking_printing_has_etb():
-    w = EOE_SPELLS["Weftwalking"]
+    w = _PRINTINGS["Weftwalking"]
     triggers = {_legacy_or_inferred_key(ab) for ab in w.triggered_abilities}
     assert "etb" in triggers
 
@@ -93,7 +97,7 @@ def test_possibility_describe():
 
 
 def test_possibility_printing_has_subtypes_etb_kavu_observer_and_warp():
-    pt = EOE_CREATURES["Possibility Technician"]
+    pt = _PRINTINGS["Possibility Technician"]
     assert pt.warp_cost_str == "{R}"
     assert "Kavu" in pt.subtypes
     triggers = {_legacy_or_inferred_key(ab) for ab in pt.triggered_abilities}
@@ -124,14 +128,14 @@ def test_kavu_observer_fires_when_another_kavu_enters_under_technician():
     # Place Technician on the battlefield (skip its own ETB since
     # we're measuring the observer firing on a different Kavu's ETB).
     tech = state.new_object(
-        EOE_CREATURES["Possibility Technician"], 0, Zone.BATTLEFIELD
+        _PRINTINGS["Possibility Technician"], 0, Zone.BATTLEFIELD
     )
     state.battlefield.append(tech)
     # Snapshot exile-size pre-observer.
     before = len(p.exile)
     # Another Kavu enters: reuse the Technician printing.
     other_kavu = state.new_object(
-        EOE_CREATURES["Possibility Technician"], 0, Zone.STACK
+        _PRINTINGS["Possibility Technician"], 0, Zone.STACK
     )
     put_into_battlefield(state, other_kavu, 0)
     drain_stack(state)
@@ -153,7 +157,7 @@ def test_kavu_observer_does_not_fire_for_non_kavu_creature():
     _stock_library(state, 0, 5)
     p = state.players[0]
     tech = state.new_object(
-        EOE_CREATURES["Possibility Technician"], 0, Zone.BATTLEFIELD
+        _PRINTINGS["Possibility Technician"], 0, Zone.BATTLEFIELD
     )
     state.battlefield.append(tech)
     # SYNTHETIC_CREATURES["Wild Bear"] has no Kavu subtype.
@@ -195,7 +199,7 @@ def test_persistent_cast_from_exile_legal_only_while_controlling_kavu():
     )
     # Add a Kavu to the battlefield (reuse the Technician printing).
     kavu = state.new_object(
-        EOE_CREATURES["Possibility Technician"], 0, Zone.BATTLEFIELD
+        _PRINTINGS["Possibility Technician"], 0, Zone.BATTLEFIELD
     )
     state.battlefield.append(kavu)
     actions = legal_mod.legal_actions(state, 0)
@@ -245,7 +249,7 @@ def test_persistent_flag_cleared_on_cast_from_exile():
 def test_weftwalking_printing_grants_first_spell_each_turn_free():
     """The static second clause is plumbed via a flag on the printing
     so legal_actions can detect a Weftwalking on the battlefield."""
-    w = EOE_SPELLS["Weftwalking"]
+    w = _PRINTINGS["Weftwalking"]
     assert w.grants_first_spell_each_turn_free is True
 
 
@@ -256,13 +260,12 @@ def test_legal_moves_offers_free_first_cast_when_weftwalking_in_play():
     player can't afford."""
     from mtg_bot import legal_moves
     from mtg_bot.actions import CastSpell
-    from mtg_bot.cards import EOE_SPELLS
     from tests._rules_helpers import _arena
 
-    bolt = EOE_SPELLS["Plasma Bolt"]  # {R} — needs a Mountain
+    bolt = _PRINTINGS["Plasma Bolt"]  # {R} — needs a Mountain
     state = _arena(
         p0_hand=[bolt],
-        p0_battlefield=[EOE_SPELLS["Weftwalking"]],  # no lands
+        p0_battlefield=[_PRINTINGS["Weftwalking"]],  # no lands
     )
     card = state.players[0].hand[0]
     moves = legal_moves(state)
@@ -289,12 +292,12 @@ def test_free_cast_skips_mana_payment_and_increments_spells_cast():
     from mtg_bot import apply
     from mtg_bot.actions import CastSpell, resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.cards import BASIC_LANDS, EOE_CREATURES, EOE_SPELLS
+    from mtg_bot.cards import BASIC_LANDS
     from tests._rules_helpers import _arena
     import random
 
-    weftwalking = EOE_SPELLS["Weftwalking"]
-    nova = EOE_CREATURES["Nova Hellkite"]  # {3}{R}{R} normal — way too pricey
+    weftwalking = _PRINTINGS["Weftwalking"]
+    nova = _PRINTINGS["Nova Hellkite"]  # {3}{R}{R} normal — way too pricey
     state = _arena(
         p0_hand=[nova],
         p0_battlefield=[weftwalking, BASIC_LANDS["Mountain"]],  # 1 land
@@ -328,13 +331,12 @@ def test_legal_moves_does_not_offer_free_cast_after_first_spell():
     eligible."""
     from mtg_bot import legal_moves
     from mtg_bot.actions import CastSpell
-    from mtg_bot.cards import EOE_SPELLS
     from tests._rules_helpers import _arena
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p0_hand=[bolt],
-        p0_battlefield=[EOE_SPELLS["Weftwalking"]],
+        p0_battlefield=[_PRINTINGS["Weftwalking"]],
     )
     # Simulate a prior cast this turn.
     state.players[0].spells_cast_this_turn = 1
@@ -355,14 +357,13 @@ def test_legal_moves_does_not_offer_free_cast_to_nonactive_player():
     free-cast variant for spells in their hand even if they have
     priority to cast instants."""
     from mtg_bot.actions import CastSpell
-    from mtg_bot.cards import EOE_SPELLS
     from mtg_bot.legal import legal_actions
     from tests._rules_helpers import _arena
 
-    bolt = EOE_SPELLS["Plasma Bolt"]
+    bolt = _PRINTINGS["Plasma Bolt"]
     state = _arena(
         p1_hand=[bolt],
-        p0_battlefield=[EOE_SPELLS["Weftwalking"]],
+        p0_battlefield=[_PRINTINGS["Weftwalking"]],
     )
     # Hand priority off to P1 (e.g. P0 cast and passed).
     state.priority_player_idx = 1

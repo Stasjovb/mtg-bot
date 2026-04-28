@@ -39,7 +39,6 @@ from mtg_bot.cards.parser.activated import (
     _parse_activation_cost,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 
 # --- _is_mana_ability_effect predicate --------------------------------------
@@ -265,15 +264,3 @@ def test_malformed_sacrifice_another_line_does_not_match():
 
 # --- Card-level: Umbral Collar Zealot is now claimed end-to-end -------------
 
-def test_umbral_collar_zealot_is_claimed_by_parser():
-    """Umbral Collar Zealot's full oracle text is the single line
-    ``Sacrifice another creature or artifact: Surveil 1.`` (followed by
-    parenthesized reminder text the line-stripper drops). With the new
-    sac-another cost shape, the parser claims the card and produces a
-    printing structurally equal to the static registry's entry."""
-    parser_printings = OracleParserCardSource().get_printings()
-    static_printings = StaticCardSource().get_printings()
-    assert "Umbral Collar Zealot" in parser_printings
-    assert parser_printings["Umbral Collar Zealot"] == (
-        static_printings["Umbral Collar Zealot"]
-    )

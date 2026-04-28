@@ -2,16 +2,14 @@
 
 import pytest
 
-from mtg_bot.cards import (
-    BASIC_LANDS,
-    CREATURE_POOL,
-    SYNTHETIC_CREATURES,
-    TOKEN_PRINTINGS,
-    make_token_creature,
-)
+from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, TOKEN_PRINTINGS, make_token_creature
 from mtg_bot.effects import CreateToken
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import state_based_actions
+
+from mtg_bot.cards.source import get_active_source
+
+_PRINTINGS = get_active_source().get_printings()
 
 
 def _setup():
@@ -79,7 +77,7 @@ def test_human_soldier_token_is_defined():
 def test_token_printings_are_not_in_the_deckbuilder_pool():
     # Tokens are never cast or drawn — must not be in the creature pool.
     for name in TOKEN_PRINTINGS:
-        assert name not in CREATURE_POOL
+        assert name not in _PRINTINGS
 
 
 def test_non_token_printings_report_is_token_false():

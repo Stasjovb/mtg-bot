@@ -54,7 +54,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _parse_spell_oracle_text,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
-from mtg_bot.cards.source import StaticCardSource
 
 
 _DATA_PATH = (
@@ -263,36 +262,8 @@ def test_every_recognized_condition_resolves_to_known_engine_key():
 
 # ---------- end-to-end on the EoE pool: creatures ----------
 
-def test_gigastorm_titan_now_parses_and_matches_static():
-    card = _eoe_card("Gigastorm Titan")
-    parsed = _build_creature_printing(card)
-    assert parsed is not None, (
-        "Gigastorm Titan should be claimed by the cost-reduction "
-        "creature-builder branch"
-    )
-    static = StaticCardSource().get_printings()["Gigastorm Titan"]
-    assert parsed == static
-    assert parsed.cost_reductions == (
-        CostReduction(amount=3, condition="another_spell_cast_this_turn"),
-    )
 
 
-def test_lashwhip_predator_now_parses_and_matches_static():
-    card = _eoe_card("Lashwhip Predator")
-    parsed = _build_creature_printing(card)
-    assert parsed is not None, (
-        "Lashwhip Predator should be claimed by the cost-reduction "
-        "creature-builder branch (its other line is the Reach keyword)"
-    )
-    static = StaticCardSource().get_printings()["Lashwhip Predator"]
-    assert parsed == static
-    assert parsed.cost_reductions == (
-        CostReduction(
-            amount=2,
-            condition="opponents_control_three_or_more_creatures",
-        ),
-    )
-    assert "reach" in parsed.keywords
 
 
 @pytest.mark.parametrize(

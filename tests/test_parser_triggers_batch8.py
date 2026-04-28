@@ -273,25 +273,3 @@ def test_unknown_trigger_phrase_in_line_returns_none():
 
 # ---------- End-to-end claim parity for newly-supported card ----------
 
-def test_mmmenon_uthros_exile_is_claimed_with_artifact_enters_trigger():
-    """Mm'menon, Uthros Exile's oracle text is exactly two lines —
-    ``Flying`` and one triggered ability whose trigger condition is
-    the new ``an artifact you control enters`` phrase. With the phrase
-    mapped, the parser must claim the card end-to-end and produce a
-    printing identical to the static registry's.
-    """
-    from mtg_bot.cards.parser_source import OracleParserCardSource
-    from mtg_bot.cards.source import StaticCardSource
-
-    parser = OracleParserCardSource()
-    static = StaticCardSource().get_printings()
-
-    assert "Mm'menon, Uthros Exile" in parser.claimed_names
-    parsed = parser.get_printings()["Mm'menon, Uthros Exile"]
-    assert parsed == static["Mm'menon, Uthros Exile"]
-    assert parsed.triggered_abilities == (
-        TriggeredAbility(
-            event=Event.ENTERS, predicate=_ARTIFACT_ENTERS_PRED,
-            effect=PutPlusOneCounterOnTargetCreature(amount=1),
-        ),
-    )
