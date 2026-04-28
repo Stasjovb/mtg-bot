@@ -159,6 +159,62 @@ _SPELL_KEYWORD_PREAMBLE_RE = re.compile(
 )
 
 
+# Additional-cost preamble: a leading clause of the form
+# ``As an additional cost to cast this spell, <cost-clause>.``. The
+# preamble itself contributes no ``Effect`` — its behavior is wired via
+# a flag on ``CardPrinting`` (e.g. ``additional_cost_sacrifice_creature_
+# or_artifact=True`` for Embrace Oblivion / Scrounge for Eternity).
+# Stripping this preamble lets the remaining clauses parse as a
+# single-effect or Sequence spell.
+#
+# The cost-clause body is matched against a small whitelist of
+# recognized cost shapes; each maps to a specific printing-flag dict.
+# Unrecognized cost clauses leave the spell unclaimed (the preamble
+# isn't dropped) so the parser doesn't silently diverge from the
+# static implementation.
+_ADDITIONAL_COST_PREAMBLE_RE = re.compile(
+    r"^As an additional cost to cast this spell, (.+)\.$"
+)
+# Recognized additional-cost bodies → printing flags. Keys are the
+# captured ``(.+)`` group (without trailing period); values are the
+# dict of flags applied to the resulting ``CardPrinting`` via
+# ``make_instant`` / ``make_sorcery``.
+_ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
+    "sacrifice an artifact or creature": {
+        "additional_cost_sacrifice_creature_or_artifact": True,
+    },
+}
+
+
+def _is_additional_cost_preamble(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a recognized additional-cost
+    preamble (``As an additional cost to cast this spell, <cost>.``
+    where ``<cost>`` is one of the whitelisted cost bodies). The
+    caller drops these preamble clauses before parsing the rest of
+    the spell. Unrecognized cost bodies return ``False`` so the
+    spell stays unclaimed rather than silently dropping the cost.
+    """
+    m = _ADDITIONAL_COST_PREAMBLE_RE.match(clause.strip())
+    if m is None:
+        return False
+    return m.group(1) in _ADDITIONAL_COST_BODY_FLAGS
+
+
+def _additional_cost_flags(clause: str) -> dict:
+    """Return the printing-flag dict for a recognized additional-cost
+    preamble ``clause``. Returns an empty dict if the clause isn't a
+    recognized preamble (caller should ``_is_additional_cost_preamble``
+    first to gate the call). Keeps the per-shape flag mapping
+    centralized in ``_ADDITIONAL_COST_BODY_FLAGS`` so adding a new
+    cost shape is a one-line entry there plus a one-line dispatch
+    here is the only edit needed.
+    """
+    m = _ADDITIONAL_COST_PREAMBLE_RE.match(clause.strip())
+    if m is None:
+        return {}
+    return _ADDITIONAL_COST_BODY_FLAGS.get(m.group(1), {})
+
+
 def _is_spell_keyword_preamble(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a recognized unimplemented
     spell-keyword preamble (keyword name + parenthesized reminder
@@ -313,6 +369,15 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # those preamble clauses while their parentheses are still intact.
     while clauses and _is_spell_keyword_preamble(clauses[0]):
         clauses = clauses[1:]
+    # Drop leading recognized additional-cost preambles. The preamble
+    # itself contributes no ``Effect`` — the corresponding printing
+    # flag is threaded onto the resulting ``CardPrinting`` separately
+    # via ``_detect_additional_cost_flags`` (called from
+    # ``_build_spell_printing``). Unrecognized cost bodies leave the
+    # preamble in place; the spell will fail to parse downstream and
+    # stay unclaimed rather than silently dropping the cost.
+    while clauses and _is_additional_cost_preamble(clauses[0]):
+        clauses = clauses[1:]
     # Now drop per-clause parenthesized reminder text. Empty results
     # (a clause that was nothing but a parenthetical) are filtered out.
     clauses = [
@@ -389,6 +454,37 @@ def _detect_preamble_flags(text: str) -> dict:
     return flags
 
 
+def _detect_additional_cost_flags(text: str) -> dict:
+    """Scan ``text``'s leading additional-cost preamble clauses and
+    return a dict of ``CardPrinting`` flags they imply (e.g.
+    ``{"additional_cost_sacrifice_creature_or_artifact": True}`` when
+    ``"As an additional cost to cast this spell, sacrifice an artifact
+    or creature."`` leads the oracle text).
+
+    Mirrors the preamble-stripping in ``_parse_spell_oracle_text`` —
+    iterates through leading clauses while each is a recognized
+    additional-cost preamble, accumulates the flags, and stops at the
+    first non-preamble clause. Multiple stacked additional-cost
+    preambles aren't a printed shape today, but the loop handles them
+    naturally if a future card ships them.
+
+    Walks past keyword-preamble clauses (the existing Convoke shape)
+    in case a future card stacks both shapes (Convoke + additional
+    cost). Today no card does, but skipping them keeps the dispatcher
+    order-insensitive: the flag set returned doesn't depend on
+    whether the spell author put the additional-cost line first or
+    after the keyword preamble.
+    """
+    flags: dict = {}
+    for clause in [c.strip() for c in text.split("\n") if c.strip()]:
+        if _is_spell_keyword_preamble(clause):
+            continue
+        if not _is_additional_cost_preamble(clause):
+            break
+        flags.update(_additional_cost_flags(clause))
+    return flags
+
+
 def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     """Return every cost-reduction rule implied by ``text``'s recognized
     ``This spell costs {N} less to cast if <condition>.`` clauses, in
@@ -435,4 +531,5 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         effect=effect,
         cost_reductions=_detect_cost_reductions(text),
         **_detect_preamble_flags(text),
+        **_detect_additional_cost_flags(text),
     )

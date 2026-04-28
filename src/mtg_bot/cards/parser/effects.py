@@ -101,6 +101,17 @@ _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
 )
 _DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
+# "Destroy target creature or Spacecraft." — Embrace Oblivion's
+# destroy clause. Maps to ``DestroyTargetCreature(or_spacecraft=True)``
+# whose ``legal_targets`` extends the bare ``destroy target creature``
+# pool to also include unstationed Spacecraft (which aren't
+# currently creatures). The ``Spacecraft`` capitalization is verbatim
+# from the oracle text — the spell-effect normalizer only lowercases
+# the first letter of the phrase, so inner type-name capitalization
+# survives.
+_DESTROY_TARGET_CREATURE_OR_SPACECRAFT = re.compile(
+    r"^destroy target creature or Spacecraft$"
+)
 _COUNTER_TARGET_SPELL = re.compile(r"^counter target spell$")
 # "Counter target artifact or enchantment spell." — Annul. Same engine
 # class as the bare counterspell, just with a non-empty ``filter_types``
@@ -733,6 +744,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnSelf(amount=1)
+    # ``destroy target creature or Spacecraft`` — Embrace Oblivion.
+    # Tried BEFORE the bare ``destroy target creature`` regex so the
+    # Spacecraft-tail variant wins. Both produce the same engine class
+    # today (``DestroyTargetCreature``), just with the
+    # ``or_spacecraft=True`` flag flipped — the bare regex below would
+    # never match this surface anyway (its ``$`` anchor rejects the
+    # ``or Spacecraft`` tail) but ordering more-specific before
+    # more-general is the convention here.
+    if _DESTROY_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
+        return DestroyTargetCreature(or_spacecraft=True)
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
     # ``counter target artifact or enchantment spell`` — Annul. Tried

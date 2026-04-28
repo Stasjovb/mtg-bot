@@ -60,6 +60,9 @@ from mtg_bot.cards.parser.effects import (
     _parse_spell_effect_phrase,
 )
 from mtg_bot.cards.parser.spell_builder import (
+    _additional_cost_flags,
+    _detect_additional_cost_flags,
+    _is_additional_cost_preamble,
     _parse_spell_oracle_text,
     _parse_void_pump_replacement,
 )
@@ -452,6 +455,128 @@ def test_tragic_trajectory_conditional_void_shape():
     assert (eff.else_effect.power_bonus, eff.else_effect.toughness_bonus) == (
         -2, -2,
     )
+
+
+def test_is_additional_cost_preamble_recognizes_sacrifice_body():
+    # The exact whitelisted body (Embrace Oblivion / Scrounge for
+    # Eternity).
+    assert _is_additional_cost_preamble(
+        "As an additional cost to cast this spell, "
+        "sacrifice an artifact or creature."
+    )
+
+
+def test_is_additional_cost_preamble_rejects_unrecognized_body():
+    # An unrecognized cost body returns ``False`` so the wrapping
+    # spell stays unclaimed (the preamble isn't dropped). The
+    # whitelist gates which bodies the parser is willing to
+    # silently consume.
+    assert not _is_additional_cost_preamble(
+        "As an additional cost to cast this spell, pay 3 life."
+    )
+
+
+def test_is_additional_cost_preamble_rejects_non_preamble():
+    # A plain effect clause that doesn't start with the
+    # additional-cost prefix returns ``False`` — defensive against
+    # future cards that mention "additional cost" mid-sentence
+    # without printing the preamble shape.
+    assert not _is_additional_cost_preamble("Destroy target creature.")
+
+
+def test_additional_cost_flags_returns_dict_for_recognized_body():
+    # Whitelisted body returns the corresponding flag dict.
+    flags = _additional_cost_flags(
+        "As an additional cost to cast this spell, "
+        "sacrifice an artifact or creature."
+    )
+    assert flags == {
+        "additional_cost_sacrifice_creature_or_artifact": True,
+    }
+
+
+def test_additional_cost_flags_returns_empty_for_unrecognized_body():
+    # Unrecognized body returns the empty dict — defensively, so
+    # a caller that doesn't first check ``_is_additional_cost_
+    # preamble`` doesn't accidentally apply spurious flags to the
+    # printing.
+    assert _additional_cost_flags(
+        "As an additional cost to cast this spell, pay 3 life."
+    ) == {}
+
+
+def test_detect_additional_cost_flags_finds_sacrifice_preamble():
+    # End-to-end on the full oracle text — the helper walks the
+    # leading preamble clauses and returns the accumulated flag
+    # dict.
+    text = (
+        "As an additional cost to cast this spell, "
+        "sacrifice an artifact or creature.\n"
+        "Destroy target creature or Spacecraft."
+    )
+    assert _detect_additional_cost_flags(text) == {
+        "additional_cost_sacrifice_creature_or_artifact": True,
+    }
+
+
+def test_detect_additional_cost_flags_returns_empty_when_absent():
+    # No preamble → empty dict. A spell whose oracle text is just
+    # a plain effect line shouldn't carry any spurious cost flags.
+    text = "Destroy target creature."
+    assert _detect_additional_cost_flags(text) == {}
+
+
+def test_embrace_oblivion_claimed_by_parser():
+    # Embrace Oblivion `{B}` Sorcery — additional cost: sacrifice
+    # an artifact or creature; effect: destroy target creature or
+    # Spacecraft. Unlocked by:
+    #   - the new ``As an additional cost to cast this spell,
+    #     sacrifice an artifact or creature.`` preamble parser
+    #     (sets ``additional_cost_sacrifice_creature_or_artifact=
+    #     True`` on the printing).
+    #   - the new ``destroy target creature or Spacecraft`` primitive
+    #     (maps to ``DestroyTargetCreature(or_spacecraft=True)``).
+    assert "Embrace Oblivion" in _claimed_names()
+
+
+def test_embrace_oblivion_carries_additional_cost_flag():
+    # Spot-check that the additional-cost preamble lands on the
+    # printing as the expected flag — the parity gate covers full
+    # equality with the static, but pinning the flag here keeps
+    # regression noise close to the cause if the preamble parser
+    # silently stops setting the flag.
+    printings = OracleParserCardSource().get_printings()
+    p = printings["Embrace Oblivion"]
+    assert p.additional_cost_sacrifice_creature_or_artifact is True
+
+
+def test_parse_effect_recognizes_destroy_target_creature_or_spacecraft():
+    # Embrace Oblivion's destroy clause. Maps to
+    # ``DestroyTargetCreature`` with the ``or_spacecraft=True`` flag
+    # flipped — the engine class's ``legal_targets`` extends the
+    # bare creature pool to also include unstationed Spacecraft.
+    from mtg_bot.cards.base import DestroyTargetCreature
+
+    eff = _parse_effect("destroy target creature or Spacecraft")
+    assert eff == DestroyTargetCreature(or_spacecraft=True)
+
+
+def test_parse_effect_does_not_collide_with_bare_destroy_creature():
+    # The bare ``destroy target creature`` regex has a ``$`` anchor
+    # so the Spacecraft-tail variant doesn't accidentally match it.
+    # Sanity-check both regexes produce their expected (different)
+    # engine-class instances.
+    from mtg_bot.cards.base import DestroyTargetCreature
+
+    bare = _parse_effect("destroy target creature")
+    spacecraft = _parse_effect("destroy target creature or Spacecraft")
+    assert bare == DestroyTargetCreature()
+    assert spacecraft == DestroyTargetCreature(or_spacecraft=True)
+    # Specifically, ``or_spacecraft`` is False on the bare and True
+    # on the variant — the flag is what distinguishes the two
+    # engine-class instances.
+    assert bare.or_spacecraft is False
+    assert spacecraft.or_spacecraft is True
 
 
 def test_void_pump_rider_does_not_perturb_plasma_bolt():
