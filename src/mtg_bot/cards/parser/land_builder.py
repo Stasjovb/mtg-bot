@@ -34,6 +34,10 @@ from mtg_bot.cards.base import (
     ActivationCost,
     BecomeLandCreatureUEOT,
     CardPrinting,
+    PumpSelfXPowerUEOT,
+    PutPlusOneCounterOnSelf,
+    SwitchSourcePowerToughnessUEOT,
+    TriggeredAbility,
     make_basic_land,
     make_colorless_land,
     make_shock_land,
@@ -41,6 +45,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 _COLOR_WORD_TO_LETTER: dict[str, str] = {
@@ -88,6 +93,74 @@ _MANLAND_ANIMATE_UNBLOCKABLE_RE = re.compile(
     r"(?P<c2word>white|blue|black|red|green) Elemental creature\. "
     r"It's still a land\. It can't be blocked this turn\.$"
 )
+# Granted-ability-shape variant: ``... with "<quoted body>". It's
+# still a land.``. The quoted body is dispatched through
+# ``_GRANTED_ABILITY_BODIES`` to produce either a granted activated
+# ability (Lavaclaw Reaches's X-pump, Wandering Fumarole's P/T swap)
+# or a granted triggered ability (Raging Ravine's attacks → +1/+1
+# counter). Bodies outside the dispatch table fall through.
+_MANLAND_ANIMATE_GRANTED_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+): Until end of turn, this land becomes a "
+    r"(?P<power>\d+)/(?P<toughness>\d+) "
+    r"(?P<c1word>white|blue|black|red|green) and "
+    r"(?P<c2word>white|blue|black|red|green) Elemental creature "
+    r"with \"(?P<body>[^\"]+)\.\" It's still a land\.$"
+)
+
+
+# Whitelist of granted-ability bodies the parser knows how to model.
+# Each value is a tuple ``(granted_activated_abilities,
+# granted_triggered_abilities)`` to plug straight into
+# ``BecomeLandCreatureUEOT``. Lavaclaw Reaches and Wandering Fumarole
+# grant activated abilities; Raging Ravine grants a triggered one.
+# Adding a new body is a one-line table extension; unrecognized bodies
+# leave the manland unclaimed (silent skip).
+def _granted_x_pump() -> tuple:
+    return (
+        (
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{X}"), mana_str="{X}",
+                ),
+                effect=PumpSelfXPowerUEOT(),
+            ),
+        ),
+        (),
+    )
+
+
+def _granted_pt_swap() -> tuple:
+    return (
+        (
+            ActivatedAbility(
+                cost=ActivationCost(),
+                effect=SwitchSourcePowerToughnessUEOT(),
+            ),
+        ),
+        (),
+    )
+
+
+def _granted_attacks_plus_one_counter() -> tuple:
+    return (
+        (),
+        (
+            TriggeredAbility(
+                event=Event.ATTACKS, predicate=IsSelf(),
+                effect=PutPlusOneCounterOnSelf(amount=1),
+            ),
+        ),
+    )
+
+
+_GRANTED_ABILITY_BODIES: dict[str, "callable"] = {
+    "{X}: This creature gets +X/+0 until end of turn":
+        _granted_x_pump,
+    "{0}: Switch this creature's power and toughness until end of turn":
+        _granted_pt_swap,
+    "Whenever this creature attacks, put a +1/+1 counter on it":
+        _granted_attacks_plus_one_counter,
+}
 
 
 def _parse_manland_keywords(text: str) -> frozenset[str] | None:
@@ -247,15 +320,25 @@ def _try_build_manland(
     animate_match = _MANLAND_ANIMATE_RE.match(lines[2])
     keywords: frozenset[str] = frozenset()
     unblockable = False
+    granted_activated: tuple = ()
+    granted_triggered: tuple = ()
     if animate_match is not None:
         keywords = _parse_manland_keywords(animate_match.group("keywords"))
         if keywords is None:
             return None
     else:
         animate_match = _MANLAND_ANIMATE_UNBLOCKABLE_RE.match(lines[2])
-        if animate_match is None:
-            return None
-        unblockable = True
+        if animate_match is not None:
+            unblockable = True
+        else:
+            animate_match = _MANLAND_ANIMATE_GRANTED_RE.match(lines[2])
+            if animate_match is None:
+                return None
+            body = animate_match.group("body")
+            builder = _GRANTED_ABILITY_BODIES.get(body)
+            if builder is None:
+                return None
+            granted_activated, granted_triggered = builder()
     c1, c2 = tap_match.group(1), tap_match.group(2)
     c1_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c1word")]
     c2_animate = _COLOR_WORD_TO_LETTER[animate_match.group("c2word")]
@@ -277,6 +360,8 @@ def _try_build_manland(
                     toughness=int(animate_match.group("toughness")),
                     granted_keywords=keywords,
                     unblockable=unblockable,
+                    granted_activated_abilities=granted_activated,
+                    granted_triggered_abilities=granted_triggered,
                 ),
             ),
         ),

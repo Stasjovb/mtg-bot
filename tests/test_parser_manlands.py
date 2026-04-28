@@ -220,6 +220,95 @@ def test_parse_manland_keywords_rejects_empty():
     assert _parse_manland_keywords("   ") is None
 
 
+def test_lavaclaw_reaches_matches_static():
+    """Lavaclaw Reaches grants an X-pump activated ability while
+    animated. The granted-ability variant of ``_try_build_manland``
+    should claim it via ``_GRANTED_ABILITY_BODIES`` dispatch and the
+    parsed printing must match the static registry."""
+    card = {
+        "name": "Lavaclaw Reaches",
+        "type_line": "Land",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "{T}: Add {B} or {R}.\n"
+            "{1}{B}{R}: Until end of turn, this land becomes a 2/2 "
+            "black and red Elemental creature with \"{X}: This "
+            "creature gets +X/+0 until end of turn.\" It's still a "
+            "land."
+        ),
+        "produced_mana": ["B", "R"],
+        "set": "eos",
+    }
+    parsed = _build_land_printing(card)
+    assert parsed is not None
+    assert parsed == STELLAR_SIGHTS_LANDS["Lavaclaw Reaches"]
+
+
+def test_wandering_fumarole_matches_static():
+    """Wandering Fumarole grants a {0} P/T-swap activated ability."""
+    card = {
+        "name": "Wandering Fumarole",
+        "type_line": "Land",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "{T}: Add {U} or {R}.\n"
+            "{2}{U}{R}: Until end of turn, this land becomes a 1/4 "
+            "blue and red Elemental creature with \"{0}: Switch this "
+            "creature's power and toughness until end of turn.\" "
+            "It's still a land."
+        ),
+        "produced_mana": ["U", "R"],
+        "set": "eos",
+    }
+    parsed = _build_land_printing(card)
+    assert parsed is not None
+    assert parsed == STELLAR_SIGHTS_LANDS["Wandering Fumarole"]
+
+
+def test_raging_ravine_matches_static():
+    """Raging Ravine grants an attacks-triggered +1/+1 counter
+    ability — exercises the granted_triggered_abilities path."""
+    card = {
+        "name": "Raging Ravine",
+        "type_line": "Land",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "{T}: Add {R} or {G}.\n"
+            "{2}{R}{G}: Until end of turn, this land becomes a 3/3 "
+            "red and green Elemental creature with \"Whenever this "
+            "creature attacks, put a +1/+1 counter on it.\" It's "
+            "still a land."
+        ),
+        "produced_mana": ["R", "G"],
+        "set": "eos",
+    }
+    parsed = _build_land_printing(card)
+    assert parsed is not None
+    assert parsed == STELLAR_SIGHTS_LANDS["Raging Ravine"]
+
+
+def test_skips_granted_body_outside_dispatch_table():
+    """A manland with a quoted granted ability whose body isn't on
+    the ``_GRANTED_ABILITY_BODIES`` whitelist must NOT be claimed —
+    the parser would otherwise produce a printing missing the
+    granted ability and fail parity."""
+    card = {
+        "name": "Hypothetical Hexproof Manland",
+        "type_line": "Land",
+        "oracle_text": (
+            "This land enters tapped.\n"
+            "{T}: Add {W} or {U}.\n"
+            "{2}{W}{U}: Until end of turn, this land becomes a 3/3 "
+            "white and blue Elemental creature with \"{1}: This "
+            "creature gains hexproof until end of turn.\" It's "
+            "still a land."
+        ),
+        "produced_mana": ["W", "U"],
+        "set": "eos",
+    }
+    assert _try_build_manland(card, card["oracle_text"], (), ()) is None
+
+
 def test_simple_manland_builder_returns_make_utility_land_shape():
     """White-box: the builder produces a CardPrinting equal to the
     one ``make_utility_land`` would produce with the same parameters.
