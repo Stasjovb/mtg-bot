@@ -158,3 +158,24 @@ def _parse_enters_tapped_line(line: str) -> bool:
     a static replacement effect, not an event-firing trigger.
     """
     return line.strip() == _ENTERS_TAPPED_LINE
+
+
+# ``This creature must be blocked if able.`` — printing-level static
+# block-requirement (CR 509.1c). Surfaces on Fear of Being Hunted
+# alongside Haste. The matching engine flag
+# (``CardPrinting.must_be_blocked_if_able``) is consumed by
+# ``actions._declare_blockers``: if no validated blocker is assigned
+# to the attacker and at least one eligible defender exists that
+# could legally block it, the engine forces one. A literal-string
+# match is sufficient; future related surfaces (``This creature can't
+# be blocked except by …``) would land their own recognizers.
+_MUST_BE_BLOCKED_LINE = "This creature must be blocked if able."
+
+
+def _parse_must_be_blocked_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level ``This creature
+    must be blocked if able.`` clause, else ``False``. Used by
+    ``creature_builder._build_creature_printing`` to flip the
+    ``must_be_blocked_if_able`` kwarg on ``make_creature``.
+    """
+    return line.strip() == _MUST_BE_BLOCKED_LINE

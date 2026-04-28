@@ -2426,6 +2426,33 @@ def _declare_blockers(
             for bid in blocker_ids:
                 validated.pop(bid, None)
 
+    # ``This creature must be blocked if able.`` enforcement (CR 509.1c).
+    # For each attacker carrying the static requirement, if the
+    # defending player didn't already assign a blocker to it, scan the
+    # eligible-blockers pool for an unused defender that could legally
+    # block (per ``can_block``). If one exists, force the assignment.
+    # The scan is deterministic — first by id — so the engine's choice
+    # is reproducible from the seed; the agent's intent for OTHER
+    # attackers is preserved (we only force the missing assignment).
+    used_blocker_ids = set(validated.keys())
+    sorted_attacker_items = sorted(attackers.items(), key=lambda kv: kv[0])
+    for aid, attacker in sorted_attacker_items:
+        if not attacker.printing.must_be_blocked_if_able:
+            continue
+        if aid in {a for a in validated.values()}:
+            continue
+        for blocker_id in sorted(eligible_ids):
+            if blocker_id in used_blocker_ids:
+                continue
+            if blocker_id not in blockers_on_bf:
+                continue
+            blocker = blockers_on_bf[blocker_id]
+            if not can_block(state, blocker, attacker):
+                continue
+            validated[blocker_id] = aid
+            used_blocker_ids.add(blocker_id)
+            break
+
     declare_blockers(state, validated)
 
 

@@ -98,6 +98,7 @@ from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
     _parse_enters_tapped_line,
+    _parse_must_be_blocked_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -1248,6 +1249,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward_discard_random = False
     devour: int = 0
     enters_tapped = False
+    must_be_blocked_if_able = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1301,6 +1303,15 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing with the line twice still ends up with the
             # field set once.
             enters_tapped = True
+            continue
+        if _parse_must_be_blocked_line(line):
+            # ``This creature must be blocked if able.`` — printing-
+            # level block requirement (CR 509.1c). Flips the
+            # ``must_be_blocked_if_able`` kwarg below; the engine's
+            # ``_declare_blockers`` enforces the requirement by
+            # forcing a block when the defending player skipped it
+            # but has an eligible blocker.
+            must_be_blocked_if_able = True
             continue
         cost_reduction = _parse_cost_reduction_line(line)
         if cost_reduction is not None:
@@ -1360,4 +1371,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward_discard_random=ward_discard_random,
         devour_land_multiplier=devour,
         enters_tapped=enters_tapped,
+        must_be_blocked_if_able=must_be_blocked_if_able,
     )

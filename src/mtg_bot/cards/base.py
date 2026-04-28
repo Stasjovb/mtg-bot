@@ -718,6 +718,18 @@ class CardPrinting:
     # Creeping Tar Pit / pump effects) — this is a static printed clause
     # gated on a per-turn counter.
     unblockable_if_two_spells_cast_this_turn: bool = False
+    # "This creature must be blocked if able." (CR 509.1c). When True,
+    # while this creature is attacking, the defending player must
+    # assign at least one of their untapped creatures that could
+    # legally block it (per ``combat.can_block``) to block it. Enforced
+    # in ``actions._declare_blockers``: if no validated blocker is
+    # assigned to the attacker and at least one eligible defender
+    # exists that could block it, the engine picks one (deterministic
+    # — first by id) and adds the assignment. Differs from "menace" /
+    # "unblockable" / per-block restrictions: those LIMIT the blocker
+    # set; this requirement OBLIGATES at least one block. Matches DSK's
+    # Fear of Being Hunted's static rider.
+    must_be_blocked_if_able: bool = False
     # Static attack-restriction relaxation: while True, this creature's
     # "defender" keyword is ignored for attack-eligibility on any turn
     # in which an artifact has entered the battlefield under its
@@ -912,6 +924,7 @@ def make_creature(
     impending_count: int = 0,
     enchantment: bool = False,
     enters_tapped: bool = False,
+    must_be_blocked_if_able: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -980,6 +993,7 @@ def make_creature(
         impending_cost_str=impending or "",
         impending_count=impending_count,
         enters_tapped=enters_tapped,
+        must_be_blocked_if_able=must_be_blocked_if_able,
     )
 
 
