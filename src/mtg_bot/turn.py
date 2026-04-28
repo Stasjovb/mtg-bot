@@ -241,9 +241,6 @@ def move_off_battlefield(
     # If the departing permanent itself was Equipment, clear its
     # attachment state.
     obj.attached_to = None
-    # If a warp-cast creature leaves the battlefield by any means (death,
-    # exile, etc.) its pending end-step exile trigger no longer applies.
-    obj.cast_via_warp = False
     if obj.printing.is_token:
         state.log.append(f"{obj.printing.name} token ceases to exist")
     elif destination == "graveyard":
@@ -836,26 +833,6 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
         state, Event.BEGINNING_OF_END_STEP,
         label="end-step", player=state.active_player(),
     )
-
-
-def run_end_step_warp_exile(state: GameState) -> None:
-    """At the beginning of the end step, exile every creature that was cast
-    via its warp cost. The card moves to its owner's exile zone and is marked
-    ``warped`` so it can be re-cast from exile at its normal cost later.
-
-    Simplified model for Stage 3: warp triggers do not go on the stack — the
-    exile is applied as a turn-based action. Functionally equivalent while
-    there's nothing in the engine that could counter a triggered ability.
-    """
-    to_warp = [o for o in state.battlefield if o.cast_via_warp]
-    for obj in to_warp:
-        state.log.append(f"{obj.printing.name} is warp-exiled")
-        move_off_battlefield(state, obj, destination="exile")
-        # move_off_battlefield cleared cast_via_warp and (for non-tokens)
-        # placed obj in its owner's exile. Tokens shouldn't end up with
-        # cast_via_warp set — tokens aren't cast — but defend anyway.
-        if not obj.printing.is_token:
-            obj.warped = True
 
 
 def run_cleanup_step(state: GameState) -> None:

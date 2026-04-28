@@ -12,7 +12,7 @@ from mtg_bot.actions import CastSpell, resolve_top_of_stack
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.game import Zone
-from mtg_bot.turn import run_end_step_warp_exile
+from mtg_bot.turn import run_delayed_end_step_triggers
 
 from tests._rules_helpers import _arena
 
@@ -52,7 +52,7 @@ def test_weftstalker_ardent_warp_cast_is_legal_when_only_warp_payable():
 
 def test_weftstalker_ardent_warp_cast_resolves_and_exiles_at_end_step():
     """Casting via warp puts the creature on the battlefield, marks it
-    cast_via_warp, and the end-step warp-exile pass moves it to exile
+    cast_via_warp, and the delayed end-step trigger moves it to exile
     flagged as warped."""
     ardent = _PRINTINGS["Weftstalker Ardent"]
     state = _arena(
@@ -70,7 +70,7 @@ def test_weftstalker_ardent_warp_cast_resolves_and_exiles_at_end_step():
     assert card in state.battlefield
     assert card.cast_via_warp is True
 
-    run_end_step_warp_exile(state)
+    run_delayed_end_step_triggers(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True

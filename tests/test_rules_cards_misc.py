@@ -1859,11 +1859,12 @@ def test_enchantment_is_permanent_but_not_creature():
 
 def test_eusocial_engineering_warp_cast_and_end_step_exile():
     """Non-creature warp end-to-end: cast an enchantment via Warp {1}{G},
-    it resolves onto the battlefield, then end-of-turn warp-exile fires."""
+    it resolves onto the battlefield, then the delayed end-step exile
+    trigger fires."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
     from mtg_bot.cards import BASIC_LANDS
-    from mtg_bot.turn import run_end_step_warp_exile
+    from mtg_bot.turn import run_delayed_end_step_triggers
     import random
 
     euso = _PRINTINGS["Eusocial Engineering"]
@@ -1880,7 +1881,7 @@ def test_eusocial_engineering_warp_cast_and_end_step_exile():
     assert card in state.battlefield
     assert card.cast_via_warp is True
 
-    run_end_step_warp_exile(state)
+    run_delayed_end_step_triggers(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True

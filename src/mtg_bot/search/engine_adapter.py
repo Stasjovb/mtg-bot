@@ -89,7 +89,6 @@ from mtg_bot.turn import (
     run_cleanup_step,
     run_delayed_end_step_triggers,
     run_draw_step,
-    run_end_step_warp_exile,
     run_untap_step,
     state_based_actions,
 )
@@ -692,9 +691,6 @@ class MtgGameStateAdapter:
             state_based_actions(self._state)
             if not self._state.is_over():
                 run_delayed_end_step_triggers(self._state)
-                state_based_actions(self._state)
-            if not self._state.is_over():
-                run_end_step_warp_exile(self._state)
                 state_based_actions(self._state)
 
         elif step == Step.CLEANUP:

@@ -36,7 +36,6 @@ from mtg_bot.turn import (
     run_cleanup_step,
     run_delayed_end_step_triggers,
     run_draw_step,
-    run_end_step_warp_exile,
     run_untap_step,
     state_based_actions,
 )
@@ -285,18 +284,15 @@ def run_step(
 
     # Turn-based actions at the beginning of the end step. Order:
     #   1. Fire "beginning of end step" triggered abilities (Void, etc.) —
-    #      they see the turn's state before warp-exile creates new events.
-    #   2. Warp-exile any permanents cast via their warp cost this turn.
+    #      they see the turn's state before any deferred warp-exile etc.
+    #   2. Fire delayed end-step triggers (warp self-exile, Mystifying
+    #      Maze return-to-battlefield, etc.).
     if step == Step.END:
         run_beginning_of_end_step_triggers(state)
         state_based_actions(state)
         if state.is_over():
             return
         run_delayed_end_step_triggers(state)
-        state_based_actions(state)
-        if state.is_over():
-            return
-        run_end_step_warp_exile(state)
         state_based_actions(state)
         if state.is_over():
             return

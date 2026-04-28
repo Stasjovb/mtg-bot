@@ -336,7 +336,6 @@ class ReturnTargetCreatureToOwnersHand(Effect):
         obj.attacking = False
         obj.blocking = None
         obj.blocked_by = []
-        obj.cast_via_warp = False
         obj.plus_one_counters = 0
         obj.charge_counters = 0
         obj.temp_power_bonus = 0
@@ -428,7 +427,6 @@ class ReturnTargetPermanentYouControlToOwnersHand(Effect):
         obj.attacking = False
         obj.blocking = None
         obj.blocked_by = []
-        obj.cast_via_warp = False
         obj.plus_one_counters = 0
         obj.charge_counters = 0
         obj.temp_power_bonus = 0
@@ -517,7 +515,6 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         obj.attacking = False
         obj.blocking = None
         obj.blocked_by = []
-        obj.cast_via_warp = False
         obj.plus_one_counters = 0
         obj.charge_counters = 0
         obj.temp_power_bonus = 0
@@ -778,7 +775,6 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             obj.attacking = False
             obj.blocking = None
             obj.blocked_by = []
-            obj.cast_via_warp = False
             obj.plus_one_counters = 0
             obj.charge_counters = 0
             obj.temp_power_bonus = 0
@@ -1072,6 +1068,49 @@ class ReturnExiledPermanentToOwnerTapped(Effect):
             f"return exiled card #{self.exile_card_id} to its owner's "
             f"battlefield tapped"
         )
+
+
+
+@dataclass(frozen=True)
+class WarpExileSelf(Effect):
+    """Delayed-triggered exile of a warp-cast creature at end step.
+
+    Scheduled at warp-cast time onto ``state.delayed_triggers`` with
+    ``source_id`` set to the warped card's id. When the delayed
+    end-step machinery fires this effect, ``state.resolving_source``
+    is the warped permanent (looked up on the battlefield by id —
+    None if the card already left the battlefield, e.g. by death,
+    bounce, or earlier exile). On a hit, move the permanent to
+    exile, mark it ``warped`` so it can be re-cast for its normal
+    cost from there, and clear the ``cast_via_warp`` marker so a
+    future return-to-battlefield doesn't re-trigger the exile.
+
+    No-op if the source is missing — the trigger still "fires" per
+    CR 603.6c, it just has no permanent to act on.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        # ``run_delayed_end_step_triggers`` sets ``state.resolving_source``
+        # from a battlefield-by-id lookup of ``source_id`` — None here
+        # means the warp permanent already left the battlefield (death,
+        # bounce, prior exile). The trigger still fires per CR 603.6c
+        # but resolves as a no-op.
+        obj = state.resolving_source
+        if obj is None:
+            return
+        state.log.append(f"{obj.printing.name} is warp-exiled")
+        move_off_battlefield(state, obj, destination="exile")
+        if not obj.printing.is_token:
+            obj.warped = True
+        obj.cast_via_warp = False
+
+    def describe(self) -> str:
+        return "exile this warp-cast permanent"
 
 
 

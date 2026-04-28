@@ -1415,6 +1415,29 @@ def _cast_spell(
                     f"card {card_id} not castable by P{player_id}"
                 )
 
+    # Schedule the warp end-step exile as a proper delayed triggered
+    # ability (CR 603.7). The trigger fires once on the controller's
+    # next end step — same turn for sorcery-speed warps cast on the
+    # caster's own turn (offset 0), next turn for instant-speed warps
+    # cast on an opponent's turn (offset 1, when caster becomes
+    # active). The trigger flows through ``run_delayed_end_step_triggers``
+    # so it logs through the standard "delayed effect fires" path,
+    # observable to the game log just like Mystifying Maze's deferred
+    # return-to-battlefield. ``WarpExileSelf`` looks up the source by
+    # id at fire time — if the warp permanent has already left the
+    # battlefield (countered, died, bounced, etc.), the resolution
+    # is a no-op per CR 603.6c.
+    if use_warp:
+        from mtg_bot.effects import WarpExileSelf
+
+        offset = 0 if state.active_player().id == player_id else 1
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number + offset,
+            "controller_id": player_id,
+            "source_id": card.id,
+            "effect": WarpExileSelf(),
+        })
+
     # CR 601.2e: pick modes BEFORE 601.2f cost determination so a
     # mode-dependent cost rider (or a target picked in the chosen
     # mode) can feed into the discount layer. Returns () for non-modal

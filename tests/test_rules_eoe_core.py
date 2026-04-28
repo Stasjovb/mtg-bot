@@ -368,7 +368,7 @@ def test_legal_moves_proposes_warp_cast_when_only_warp_cost_is_payable():
 def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.agents import RandomAgent
-    from mtg_bot.turn import run_end_step_warp_exile
+    from mtg_bot.turn import run_delayed_end_step_triggers
     import random
 
     colossus = _PRINTINGS["Bygone Colossus"]  # {9} normal, {3} warp
@@ -382,16 +382,27 @@ def test_warp_cast_enters_battlefield_and_exiles_at_end_step():
 
     # Cast via warp for {3}
     apply(state, CastSpell(card.id, use_warp=True))
+    # Casting via warp scheduled the delayed exile trigger. Confirm it.
+    assert len(state.delayed_triggers) == 1
+    entry = state.delayed_triggers[0]
+    assert entry["source_id"] == card.id
+    assert entry["controller_id"] == 0
+    assert entry["fire_at_turn"] == state.turn_number
     resolve_top_of_stack(state)  # spell resolves → Colossus on battlefield
     assert card in state.battlefield
     assert card.cast_via_warp is True
 
-    # End step fires: warp-cast permanents get exiled + marked warped
-    run_end_step_warp_exile(state)
+    # End step fires the delayed trigger: warp-cast permanents get exiled
+    # + marked warped.
+    run_delayed_end_step_triggers(state)
     assert card not in state.battlefield
     assert card in state.players[0].exile
     assert card.warped is True
     assert card.cast_via_warp is False
+    # Trigger consumed.
+    assert state.delayed_triggers == []
+    # Log includes the standard "delayed effect fires" message.
+    assert any("delayed effect fires" in line for line in state.log)
 
 
 def test_warped_card_can_be_recast_from_exile_at_normal_cost():
@@ -429,8 +440,10 @@ def test_warped_card_can_be_recast_from_exile_at_normal_cost():
 
 def test_warp_cast_creature_dying_before_end_step_does_not_exile():
     """If the warp-cast permanent dies before its end step, the delayed
-    exile trigger has no creature to exile — it just dies normally."""
-    from mtg_bot.turn import move_off_battlefield, run_end_step_warp_exile
+    exile trigger fires but has no battlefield permanent to act on —
+    it resolves as a no-op and the card stays in the graveyard."""
+    from mtg_bot.effects import WarpExileSelf
+    from mtg_bot.turn import move_off_battlefield, run_delayed_end_step_triggers
 
     tiger = _PRINTINGS["Red Tiger Mechan"]
     state = _arena()
@@ -438,15 +451,23 @@ def test_warp_cast_creature_dying_before_end_step_does_not_exile():
     obj = state.new_object(tiger, owner_id=0, zone=Zone.BATTLEFIELD)
     obj.cast_via_warp = True
     state.battlefield.append(obj)
-    # It dies (e.g. to combat)
+    # Schedule the delayed exile trigger as if cast via warp this turn.
+    state.delayed_triggers.append({
+        "fire_at_turn": state.turn_number,
+        "controller_id": 0,
+        "source_id": obj.id,
+        "effect": WarpExileSelf(),
+    })
+    # It dies (e.g. to combat) before end step.
     move_off_battlefield(state, obj, destination="graveyard")
-    assert obj.cast_via_warp is False  # cleared on leaving battlefield
 
-    # End step: nothing to exile. Red Tiger stays in the graveyard.
-    run_end_step_warp_exile(state)
+    # End step: trigger fires, source is gone from battlefield, no-op.
+    run_delayed_end_step_triggers(state)
     assert obj in state.players[0].graveyard
     assert obj not in state.players[0].exile
     assert obj.warped is False
+    # Trigger was consumed despite resolving as a no-op.
+    assert state.delayed_triggers == []
 
 
 def test_timeline_culler_warp_pays_two_life_from_hand():

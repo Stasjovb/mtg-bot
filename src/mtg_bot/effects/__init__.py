@@ -164,6 +164,7 @@ from mtg_bot.effects.generic import (
     TargetPlayerLosesLife,
     UntapTargetLand,
     UntapTargetOtherPermanent,
+    WarpExileSelf,
 )
 from mtg_bot.effects.combinators import (
     ConditionalIfOpponentHasMoreLands,
