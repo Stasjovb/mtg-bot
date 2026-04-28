@@ -40,12 +40,15 @@ from mtg_bot.cards.base import (
     DealDamageToControllerAndAddMana,
     DestroyTargetLand,
     Effect,
+    ExileTargetAttackingCreatureUntilEndStep,
     GainLife,
     PumpSelfXPowerUEOT,
+    PutBasicLandFromHandOntoBattlefieldTapped,
     PutPlusOneCounterOnSelf,
     ReturnTargetLandFromGraveyardToHand,
     SwitchSourcePowerToughnessUEOT,
     TriggeredAbility,
+    UntapTargetLand,
     make_basic_land,
     make_colorless_land,
     make_shock_land,
@@ -276,6 +279,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if paid_fancy is not None:
         return paid_fancy
+    paid_effect = _try_build_paid_effect_utility_land(
+        card, text, supertypes, subtypes,
+    )
+    if paid_effect is not None:
+        return paid_effect
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -810,6 +818,110 @@ def _try_build_paid_fancy_mana_land(
                 ),
                 effect=factory(),
                 is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Generic-paid single-effect utility lands.
+#
+# Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
+# is the strict two-line shape:
+#   1. ``{T}: Add {C}.``
+#   2. ``<MANA-COST>, {T}: <BODY>.``
+# where ``<MANA-COST>`` is a generic-mana cost (e.g. ``{1}``, ``{2}``,
+# ``{4}``) and ``<BODY>`` is on a per-card body whitelist that maps to
+# a single bespoke ``Effect`` instance. The static side wraps that
+# effect in a single ``ActivatedAbility`` whose cost carries the parsed
+# mana plus ``tap_self=True``.
+#
+# Distinct from the tap-and-sac branch (those costs include a sac
+# clause) and the paid-fancy-mana branch (those bodies produce mana).
+# Currently claims:
+# - Deserted Temple — ``{1}, {T}: Untap target land.``
+# - Mystifying Maze — ``{4}, {T}: Exile target attacking creature an
+#   opponent controls. At the beginning of the next end step, return
+#   it to the battlefield tapped under its owner's control.``
+# - Terrain Generator — ``{2}, {T}: You may put a basic land card from
+#   your hand onto the battlefield tapped.``
+#
+# Adding a new card with the same shape is a one-line table extension:
+# add the exact body surface form (no trailing period — the regex
+# strips it) to ``_PAID_EFFECT_BODIES`` paired with a factory that
+# returns a fresh ``Effect`` instance. Bodies / cost shapes outside
+# the table fall through to the silent-skip path.
+_PAID_EFFECT_RE = re.compile(
+    r"^(?P<cost>(?:\{\d+\})+), \{T\}: (?P<body>.+)\.$"
+)
+
+
+def _paid_effect_untap_target_land() -> Effect:
+    return UntapTargetLand()
+
+
+def _paid_effect_exile_attacking_until_end_step() -> Effect:
+    return ExileTargetAttackingCreatureUntilEndStep()
+
+
+def _paid_effect_put_basic_from_hand_tapped() -> Effect:
+    return PutBasicLandFromHandOntoBattlefieldTapped()
+
+
+_PAID_EFFECT_BODIES: dict[str, "callable"] = {
+    "Untap target land": _paid_effect_untap_target_land,
+    "Exile target attacking creature an opponent controls. "
+    "At the beginning of the next end step, return it to the "
+    "battlefield tapped under its owner's control":
+        _paid_effect_exile_attacking_until_end_step,
+    "You may put a basic land card from your hand onto the "
+    "battlefield tapped":
+        _paid_effect_put_basic_from_hand_tapped,
+}
+
+
+def _try_build_paid_effect_utility_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a generic-paid single-effect utility ``CardPrinting`` if
+    ``text`` matches the strict two-line ``{T}: Add {C}.`` +
+    ``<MANA>, {T}: <BODY>.`` shape with a body on
+    ``_PAID_EFFECT_BODIES``, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The mana-cost
+    capture is restricted to all-generic pips (``{1}``, ``{2}``, …) —
+    cards with colored or hybrid pips on the activation cost would
+    need a different cost shape and don't fit the current set.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _TAP_FOR_C_LINE:
+        return None
+    paid_match = _PAID_EFFECT_RE.match(lines[1])
+    if paid_match is None:
+        return None
+    body = paid_match.group("body")
+    factory = _PAID_EFFECT_BODIES.get(body)
+    if factory is None:
+        return None
+    cost_str = paid_match.group("cost")
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(cost_str),
+                    mana_str=cost_str,
+                    tap_self=True,
+                ),
+                effect=factory(),
             ),
         ),
     )
