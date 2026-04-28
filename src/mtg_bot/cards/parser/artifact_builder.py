@@ -48,7 +48,7 @@ Today the EoE pure-artifacts the unified clause grammar claims are:
   zone-change trigger drawing a card (modeled via LEAVES_BATTLEFIELD
   to match the static-registry simplification).
 
-In addition, two single-card oracle-line shapes are matched as
+In addition, three single-card oracle-line shapes are matched as
 literal strings and dispatched to bespoke effect classes (the same
 "literal match for bespoke effect text" pattern Round 18 used for
 Hylderblade and Robe of Stars). Each entry is keyed on the full,
@@ -67,13 +67,19 @@ post-reminder-strip oracle line:
   ``RequiemMonolithActivatedEffect`` with ``sorcery_speed=True``. The
   printed body grants a UEOT trigger then offers an optional ping —
   one bespoke effect class encapsulates both.
+* **All-Fates Scroll** — two-line activation: the standard
+  ``{T}: Add one mana of any color.`` mana ability (parsed via the
+  unified grammar through the new ``add one mana of any color``
+  primitive in ``effects.py``), plus a literal-matched
+  ``{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the
+  number of differently named lands you control.`` activation →
+  ``AllFatesScrollDrawEffect``.
 
-All-Fates Scroll, Pinnacle Starcage, The Endstone, and Thrumming
-Hivepool still fall through — their oracles use shapes (``add one
-mana of any color`` mana ability + bespoke draw, ``until this
-artifact leaves the battlefield`` exile, composite play-land-or-
-cast-spell triggers, ``Affinity for Slivers``, SLIVERS_YOU_CONTROL
-anthem) the parser doesn't yet model.
+Pinnacle Starcage, The Endstone, and Thrumming Hivepool still fall
+through — their oracles use shapes (``until this artifact leaves the
+battlefield`` exile, composite play-land-or-cast-spell triggers,
+``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the parser
+doesn't yet model.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
@@ -90,12 +96,14 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    AllFatesScrollDrawEffect,
     CardPrinting,
     MemorialVaultActivatedEffect,
     RequiemMonolithActivatedEffect,
     StaticAbility,
     TriggeredAbility,
     make_artifact,
+    parse_mana_cost,
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
@@ -149,6 +157,29 @@ def _requiem_monolith_activation() -> ActivatedAbility:
     )
 
 
+def _all_fates_scroll_draw_activation() -> ActivatedAbility:
+    """Build All-Fates Scroll's ``{7}, {T}, Sacrifice this artifact``
+    activation drawing X cards (X = number of differently named lands
+    the controller controls).
+
+    The first ability ``{T}: Add one mana of any color.`` parses via
+    the unified activation grammar — the new ``add one mana of any
+    color`` primitive in ``effects.py`` produces the same
+    ``AddManaToPool(produces=(("any", 1),))`` the static registry uses,
+    and the activation layer auto-flags ``is_mana_ability=True``. Only
+    the bespoke draw activation needs the literal-line dispatch.
+    """
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{7}"),
+            mana_str="{7}",
+            tap_self=True,
+            sacrifice_self=True,
+        ),
+        effect=AllFatesScrollDrawEffect(),
+    )
+
+
 _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     # Memorial Vault — bespoke "exile X-from-top, may play this turn"
     # body. Cost atom is standard.
@@ -163,6 +194,11 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "that much life.\" That creature's controller may have this "
     "artifact deal 1 damage to it. Activate only as a sorcery.":
         _requiem_monolith_activation,
+    # All-Fates Scroll — bespoke "draw X = differently-named lands"
+    # body. The companion mana ability parses via the unified grammar.
+    "{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the "
+    "number of differently named lands you control.":
+        _all_fates_scroll_draw_activation,
 }
 
 

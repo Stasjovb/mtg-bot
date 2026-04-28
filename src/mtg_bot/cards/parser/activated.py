@@ -420,12 +420,13 @@ def _is_mana_ability_effect(effect) -> bool:
 
     Today the only effect class that satisfies both is ``AddManaToPool``
     — it mints coins straight into the controller's mana pool with no
-    target selection. ``AddNManaOfChosenColor`` and the various
-    "permanent-color" / "land-could-produce" mana effects also belong
-    here in principle but require an at-resolution choice and aren't
-    yet emitted by the activated-ability grammar (no EoE single-line
-    ``Add one mana of any color`` activated ability is parser-claimed
-    today; when one becomes claimable, extend this predicate).
+    target selection. ``AddManaToPool`` covers both fixed-color coins
+    (``add {U}`` → ``("U", 1)``) and the at-resolution choose-color
+    coin (``add one mana of any color`` → ``("any", 1)``, used by
+    All-Fates Scroll's ``{T}`` ability). The other "permanent-color" /
+    "land-could-produce" mana effects also belong here in principle but
+    aren't yet emitted by the activated-ability grammar (each requires
+    its own surface-form regex first).
 
     Effects that would be excluded if they ever appeared (defense in
     depth): anything reporting ``requires_target() == True`` is not a

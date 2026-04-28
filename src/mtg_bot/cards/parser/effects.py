@@ -423,6 +423,18 @@ _DESTROY_TARGET_NONLAND_PERMANENT = re.compile(
 # recognized by ``_is_mana_ability_effect``, so the engine bypasses the
 # stack on activation per CR 605.
 _ADD_SINGLE_COLOR_MANA = re.compile(r"^add \{([WUBRG])\}$")
+# "Add one mana of any color" — single coin of any color, the
+# at-resolution choose-a-color mana ability surface form (All-Fates
+# Scroll's ``{T}: Add one mana of any color.``). Maps to
+# ``AddManaToPool(produces=(("any", 1),))`` — the engine treats the
+# ``"any"`` color tag as a chosen-at-mint colored coin (the controller
+# names the color when the ability resolves). Distinct from the
+# bracketed ``add {<color>}`` shape: the latter mints a fixed-color
+# coin known at parse time, this one defers the choice to resolution.
+# Mana-source tracking treats ``"any"`` coins as untyped at compile
+# time, mirroring ``land_builder``'s ``_fancy_pay_one_life_any_color``
+# wiring on Mana Confluence.
+_ADD_ONE_MANA_OF_ANY_COLOR = re.compile(r"^add one mana of any color$")
 # "Add {<color>}{<color>}." — two coins of a single color (Steelswarm
 # Operator's ``{T}: Add {U}{U}`` ability mints two restricted coins of
 # the same color). The captured letter is reused — the engine class
@@ -1560,6 +1572,12 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))
+    if _ADD_ONE_MANA_OF_ANY_COLOR.match(phrase) is not None:
+        # ``add one mana of any color`` — at-resolution choose-color
+        # mana ability. Mints a single ``("any", 1)`` coin; the engine
+        # prompts the controller to name the color at resolution. Same
+        # production tuple ``land_builder`` builds for Mana Confluence.
+        return AddManaToPool(produces=(("any", 1),))
     m = _TARGET_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return TargetOpponentLosesLife(amount=int(m.group(1)))

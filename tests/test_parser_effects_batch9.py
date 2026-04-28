@@ -193,9 +193,11 @@ def test_parse_effect_returns_none_for_malformed_add_mana():
     # extend to ``[WUBRGC]``; no EoE single-line ``{C}`` mana ability
     # today, only land-builder territory).
     assert _parse_effect("add {C}") is None
-    # "Add one mana of any color" is a different effect class; reject
-    # the loose phrasing here.
-    assert _parse_effect("add one mana of any color") is None
+    # ``add one mana of any color`` IS recognized (All-Fates Scroll).
+    # See ``test_parser_artifact_all_fates_scroll`` for the positive
+    # case. Plural / amount-N shapes are not recognized:
+    assert _parse_effect("add two mana of any color") is None
+    assert _parse_effect("add one mana of any one color") is None
     # Bracketed amount instead of a color symbol.
     assert _parse_effect("add {1}") is None
 
