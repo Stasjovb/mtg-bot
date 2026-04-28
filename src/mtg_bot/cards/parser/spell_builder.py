@@ -71,6 +71,7 @@ from mtg_bot.cards.base import (
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+    ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
@@ -836,6 +837,40 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Counter target spell unless its controller pays {2}. "
         "If they do, you create a Lander token."
     ): CounterTargetSpell(),
+    # Scrounge for Eternity: additional-cost-sacrifice preamble plus a
+    # graveyard-return-to-battlefield base + Lander-rider tail. The
+    # static ships the bare ``ReturnCreatureFromYourGraveyardToBattle
+    # field()`` engine class, dropping the ``or Spacecraft`` target
+    # widening, the ``with mana value 5 or less`` cap, and the
+    # ``Then create a Lander token`` rider. The base mechanic (a
+    # graveyard return) survives the simplification, so claiming the
+    # spell here matches the batch-19 parser-is-right boundary —
+    # Unravel and Divert Disaster drop similar riders while preserving
+    # the printed effect's intent.
+    #
+    # The dispatch key carries the full additional-cost preamble line —
+    # the dispatcher hits BEFORE the per-clause preamble-stripping pass
+    # in ``_parse_spell_oracle_text``. The
+    # ``additional_cost_sacrifice_creature_or_artifact=True`` flag is
+    # wired separately via ``_detect_additional_cost_flags`` (called
+    # from ``_build_spell_printing``); the dispatcher returns only the
+    # spell-effect engine class. The trailing parenthesized Lander
+    # reminder text is stripped before dispatch.
+    #
+    # The per-clause grammar can't claim this spell because the second
+    # clause's ``Return target creature or Spacecraft card with mana
+    # value 5 or less ... Then create a Lander token.`` doesn't parse
+    # as a standalone effect (no primitive widens to ``or Spacecraft``
+    # / mana-value cap, and the trailing ``Then create a Lander token``
+    # rider has no per-sentence shape). The whole-spell tier mirrors
+    # the static-side simplification verbatim.
+    (
+        "As an additional cost to cast this spell, sacrifice an "
+        "artifact or creature.\n"
+        "Return target creature or Spacecraft card with mana value 5 "
+        "or less from your graveyard to the battlefield. "
+        "Then create a Lander token."
+    ): ReturnCreatureFromYourGraveyardToBattlefield(),
     # Archenemy's Charm: 3-mode Choose-one modal with one one-off
     # primitive per mode. The per-mode parser (``_parse_modal_choose_
     # one``) can't claim it because none of the three mode lines parse
