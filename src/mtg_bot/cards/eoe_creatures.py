@@ -1563,12 +1563,13 @@ EOE_CREATURES: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Chrome Companion `{2}` 2/1 Artifact Creature. Real oracle:
-        # "Whenever this creature becomes tapped, you gain 1 life.
-        # {2}, {T}: Put target card from a graveyard on the bottom of
-        # its owner's library."
+        # Chrome Companion `{2}` 2/1 Artifact Creature — Dog. Real
+        # oracle: "Whenever this creature becomes tapped, you gain 1
+        # life. {2}, {T}: Put target card from a graveyard on the
+        # bottom of its owner's library."
         make_creature(
             "Chrome Companion", "{2}", 2, 1,
+            subtypes=("Dog",),
             artifact=True,
             triggered_abilities=(
                 TriggeredAbility(

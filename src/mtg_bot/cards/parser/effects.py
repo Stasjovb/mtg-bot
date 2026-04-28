@@ -60,6 +60,7 @@ from mtg_bot.cards.base import (
     PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    PutCardFromGraveyardOnBottomOfLibrary,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutStunCounterOnTappedCreature,
     PutPlusOneCounterOnCreatureYouControl,
@@ -506,6 +507,20 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON = re.compile(
 # elsewhere, but a primitive worth surfacing in the unified grammar).
 _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
     r"^return target artifact card from your graveyard to your hand$"
+)
+# "Put target card from a graveyard on the bottom of its owner's
+# library" — Chrome Companion's tap-mana activated ability. Untyped
+# grave-target (any card in any player's graveyard is legal); the
+# resolution moves the chosen card to the bottom of its owner's
+# library. Maps to the existing ``PutCardFromGraveyardOnBottomOfLibrary``
+# engine class. Surface form is post-normalization (the ``it `` prefix-
+# strip in ``_normalize_creature_effect_phrase`` doesn't fire because
+# the phrase starts with the verb ``put``, not a pronoun subject — so
+# the ``its`` here survives intact, mirroring the ``put its counters
+# on …`` precedent).
+_PUT_CARD_FROM_GRAVEYARD_ON_BOTTOM_OF_LIBRARY = re.compile(
+    r"^put target card from a graveyard "
+    r"on the bottom of its owner's library$"
 )
 # "Target creature gets +N/+M until end of turn" or
 # "Target creature gets -N/-M until end of turn". Both signs supported
@@ -1563,6 +1578,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
     if _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnTargetArtifactCardFromYourGraveyardToHand()
+    # ``put target card from a graveyard on the bottom of its owner's
+    # library`` — Chrome Companion's tap-mana activated ability. Untyped
+    # grave-target across all players; resolution moves the chosen card
+    # to the bottom of its owner's library. Maps to the existing
+    # ``PutCardFromGraveyardOnBottomOfLibrary`` engine class — same
+    # primitive the static registry uses for Chrome Companion today, so
+    # parser/static parity holds out of the box.
+    if _PUT_CARD_FROM_GRAVEYARD_ON_BOTTOM_OF_LIBRARY.match(
+        phrase
+    ) is not None:
+        return PutCardFromGraveyardOnBottomOfLibrary()
     # Pump + grant-keywords compound is tried BEFORE the bare-pump
     # regex so a phrase like ``+3/+0 and gains first strike and reach
     # until end of turn`` produces the keyword-bearing
