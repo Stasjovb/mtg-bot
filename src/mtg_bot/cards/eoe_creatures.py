@@ -1943,6 +1943,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # each other creature and/or artifact you control.
         make_creature(
             "Luxknight Breacher", "{3}{W}", 2, 2,
+            subtypes=("Human", "Knight"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
@@ -1996,6 +1997,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Dockworker Drone", "{1}{W}", 1, 1,
             artifact=True,
+            subtypes=("Robot",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),

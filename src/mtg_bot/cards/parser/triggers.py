@@ -66,8 +66,17 @@ from __future__ import annotations
 
 import re
 
-from mtg_bot.cards.base import TriggeredAbility
-from mtg_bot.cards.parser.effects import _parse_effect_phrase
+from mtg_bot.cards.base import (
+    Effect,
+    PutPlusOneCounterOnSelf,
+    PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    TriggeredAbility,
+)
+from mtg_bot.cards.parser.effects import (
+    _SMALL_CARDINAL_PATTERN,
+    _parse_amount,
+    _parse_effect_phrase,
+)
 from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
@@ -90,6 +99,86 @@ from mtg_bot.effects.predicates import (
 _TRIGGERED_ABILITY_LINE = re.compile(
     r"^(?:When|Whenever) (.+?), (.+)\.$"
 )
+
+
+# ETB-replacement-style "enters with counters" line.
+#
+# Scryfall prints these as a standalone sentence — ``This creature
+# enters with a +1/+1 counter on it.`` (Dockworker Drone) or with a
+# numeric variant like ``This creature enters with two +1/+1 counters
+# on it.`` Mechanically these are static replacement effects (CR 614),
+# but the engine doesn't model replacements today; the static-card
+# convention is to express them as a ``TriggeredAbility(event=ENTERS,
+# predicate=IsSelf(), effect=PutPlusOneCounterOnSelf(amount=N))`` pair
+# — see Dockworker Drone in ``cards/eoe_creatures.py`` for the
+# canonical static layout. The parser mirrors that convention here:
+# the line shape is recognized as a triggered-ability source even
+# though its surface text doesn't carry a ``When``/``Whenever``
+# keyword, and the produced ``TriggeredAbility`` matches the static
+# entry shape verbatim.
+#
+# The body capture group covers everything between ``enters with`` and
+# the trailing period. ``_parse_enters_with_body`` translates the body
+# to an ``Effect`` — currently the bare ``a +1/+1 counter on it`` form,
+# the spelled-out / digit ``N +1/+1 counters on it`` form (forward-
+# looking — no EoE printing uses N>1 today, but the grammar shape is
+# uniform and trivially extends), and the per-other-creature-or-
+# artifact scaling form (Luxknight Breacher).
+_ENTERS_WITH_REPLACEMENT_LINE = re.compile(
+    r"^This creature enters with (.+)\.$"
+)
+
+
+# "Enters with N +1/+1 counters on it" — the bare counter-creation
+# body. The amount tail accepts ``a`` (= 1), spelled-out small
+# cardinals (``two`` etc.), and bare digits; ``a`` requires the
+# singular ``counter`` tail, the others require the plural
+# ``counters`` tail. Maps to ``PutPlusOneCounterOnSelf(amount=N)``.
+_ENTERS_WITH_PLUS_ONE_COUNTERS_BODY = re.compile(
+    rf"^(?:a \+1/\+1 counter|"
+    rf"(\d+|{_SMALL_CARDINAL_PATTERN}) \+1/\+1 counters) on it$"
+)
+
+
+# "Enters with a +1/+1 counter on it for each other creature and/or
+# artifact you control" — Luxknight Breacher's printed body. Maps to
+# ``PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()``, the same
+# engine class the static registry uses. The phrase is matched as a
+# literal (no captures): the per-other-creature-or-artifact scaling
+# is the engine class's whole semantics, so there are no parameters
+# to extract.
+_ENTERS_WITH_PLUS_ONE_PER_OTHER_CREATURE_OR_ARTIFACT_BODY = re.compile(
+    r"^a \+1/\+1 counter on it for each other "
+    r"creature and/or artifact you control$"
+)
+
+
+def _parse_enters_with_body(body: str) -> Effect | None:
+    """Translate the body of an ``enters with`` line to the engine
+    ``Effect`` the static registry would carry on the same printing.
+
+    Returns ``None`` if the body shape isn't claimed — the caller
+    propagates the rejection up to ``_parse_triggered_ability_line``,
+    which surfaces it as a parse failure for the whole oracle line.
+
+    Tried in most-specific-first order: the per-other-creature-or-
+    artifact scaling shape carries a ``for each ...`` tail that the
+    bare counter-creation body's regex doesn't tolerate, but ordering
+    explicitly here keeps the precedence intent visible.
+    """
+    if _ENTERS_WITH_PLUS_ONE_PER_OTHER_CREATURE_OR_ARTIFACT_BODY.match(
+        body
+    ) is not None:
+        return PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()
+    m = _ENTERS_WITH_PLUS_ONE_COUNTERS_BODY.match(body)
+    if m is not None:
+        # Group 1 is the captured count word/digit for the plural
+        # ``N +1/+1 counters`` shape; the bare ``a +1/+1 counter``
+        # alternative has no capture, so a missing group resolves
+        # to amount=1.
+        amount = _parse_amount(m.group(1)) if m.group(1) else 1
+        return PutPlusOneCounterOnSelf(amount=amount)
+    return None
 
 
 # Intervening-if shape: ``When/Whenever <condition>, if <gate>, <effect>.``
@@ -499,6 +588,25 @@ def _parse_triggered_ability_line(
     don't need to special-case the compound path.
     """
     line = _strip_ability_word_prefix(line)
+    # ETB-replacement-style ``This creature enters with …`` line. This
+    # surface shape doesn't carry a ``When``/``Whenever`` keyword and so
+    # would never match the standard trigger-line regex below; checking
+    # it up front turns the line into a ``TriggeredAbility(event=ENTERS,
+    # predicate=IsSelf(), effect=...)`` mirroring the static-registry
+    # convention for "enters with counters" cards (the engine doesn't
+    # model replacement effects, so static and parser both express the
+    # printed replacement as an ETB trigger). A failed body lookup
+    # propagates as ``None`` from this branch — we don't fall through
+    # to the When/Whenever paths, because an unparseable ``enters
+    # with`` body has no other valid interpretation as a trigger line.
+    enters_with_match = _ENTERS_WITH_REPLACEMENT_LINE.match(line)
+    if enters_with_match is not None:
+        effect = _parse_enters_with_body(enters_with_match.group(1))
+        if effect is None:
+            return None
+        return TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(), effect=effect,
+        )
     # Trailing once-per-turn rider: ``<trigger sentence>. This ability
     # triggers only once each turn.`` Strip the suffix BEFORE running
     # any sentence-shape regex so the trigger body parses normally; the
