@@ -34,8 +34,12 @@ from mtg_bot.cards.base import (
     ActivationCost,
     BecomeLandCreatureUEOT,
     CardPrinting,
+    DestroyTargetLand,
+    Effect,
+    GainLife,
     PumpSelfXPowerUEOT,
     PutPlusOneCounterOnSelf,
+    ReturnTargetLandFromGraveyardToHand,
     SwitchSourcePowerToughnessUEOT,
     TriggeredAbility,
     make_basic_land,
@@ -248,6 +252,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     manland = _try_build_manland(card, text, supertypes, subtypes)
     if manland is not None:
         return manland
+    tap_sac = _try_build_tap_sac_utility_land(
+        card, text, supertypes, subtypes,
+    )
+    if tap_sac is not None:
+        return tap_sac
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -366,6 +375,184 @@ def _try_build_manland(
             ),
         ),
     )
+
+
+# Tap-and-sac utility land builder.
+#
+# Recognizes plain colorless utility lands whose oracle text is the
+# fixed two-line shape:
+#   1. ``{T}: Add {C}.``
+#   2. ``<COST>: <BODY>.``
+# where ``<COST>`` is one of a small set of recognized cost prefixes
+# (``{T}, Sacrifice this land``, ``{N}, {T}, Sacrifice a land``, etc.)
+# and ``<BODY>`` is on a per-cost-shape effect whitelist below.
+# Bodies / costs outside the table fall through silently.
+#
+# Built on the same ``make_utility_land`` factory as the manland
+# branch — single activated ability, the cost flags carry the sac
+# semantics, the effect comes from the dispatch.
+_TAP_FOR_C_LINE = "{T}: Add {C}."
+_TAP_AND_SAC_SELF_RE = re.compile(
+    r"^\{T\}, Sacrifice this land: (?P<body>.+)\.$"
+)
+_MANA_TAP_AND_SAC_LAND_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}, Sacrifice a land: (?P<body>.+)\.$"
+)
+_TAP_AND_SAC_CREATURE_RE = re.compile(
+    r"^\{T\}, Sacrifice a creature: (?P<body>.+)\.$"
+)
+_MANA_TAP_AND_SAC_DESERT_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}, Sacrifice a Desert: (?P<body>.+)\.$"
+)
+
+
+# Body-text → effect-factory whitelist. Each factory returns a fresh
+# ``Effect`` instance; matching bodies outside the table makes the
+# recognizer fall through. Adding a new card is one entry per cost
+# shape — keep the surface form exact (no trailing period — the
+# regexes strip it).
+_TAP_SAC_SELF_BODIES: dict[str, "callable"] = {
+    "Destroy target land": lambda: DestroyTargetLand(),
+    "Return target land card from your graveyard to your hand":
+        lambda: ReturnTargetLandFromGraveyardToHand(),
+}
+_TAP_SAC_LAND_BODIES: dict[str, "callable"] = {
+    "Destroy target nonbasic land":
+        lambda: DestroyTargetLand(nonbasic_only=True),
+}
+_TAP_SAC_CREATURE_BODIES: dict[str, "callable"] = {
+    "You gain 1 life": lambda: GainLife(amount=1),
+}
+
+
+# Bodies for the Desert-subtyped sac-a-Desert path. Imports are
+# resolved lazily inside the factory because some of these effect
+# classes are bespoke (e.g. ``ExileAllGraveyards``) and pulling them
+# into the top-level imports keeps the import graph predictable.
+def _exile_all_graveyards() -> Effect:
+    from mtg_bot.cards.base import ExileAllGraveyards
+    return ExileAllGraveyards()
+
+
+_TAP_SAC_DESERT_BODIES: dict[str, "callable"] = {
+    "Exile all graveyards": _exile_all_graveyards,
+}
+
+
+def _try_build_tap_sac_utility_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a tap-and-sac utility-land ``CardPrinting`` if ``text``
+    matches one of the recognized two-line shapes, else ``None``.
+
+    Supported shapes (each gated by its own body whitelist):
+
+    - **Sac-self, no mana cost**: ``{T}: Add {C}.`` then
+      ``{T}, Sacrifice this land: <BODY>.`` — Strip Mine,
+      Petrified Field.
+    - **Sac-a-land with mana cost**: ``{T}: Add {C}.`` then
+      ``<COST>, {T}, Sacrifice a land: <BODY>.`` — Dust Bowl.
+    - **Sac-a-creature, no mana cost**: ``{T}: Add {C}.`` then
+      ``{T}, Sacrifice a creature: <BODY>.`` — High Market.
+      The ``sacrifice_another_creature_or_artifact`` flag is set
+      (matches the static side; widens "a creature" to "a creature
+      or artifact").
+    """
+    if supertypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _TAP_FOR_C_LINE:
+        return None
+    second = lines[1]
+
+    sac_self = _TAP_AND_SAC_SELF_RE.match(second)
+    if sac_self is not None and not subtypes:
+        body = sac_self.group("body")
+        factory = _TAP_SAC_SELF_BODIES.get(body)
+        if factory is None:
+            return None
+        return make_utility_land(
+            card["name"],
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        tap_self=True, sacrifice_self=True,
+                    ),
+                    effect=factory(),
+                ),
+            ),
+        )
+
+    sac_land = _MANA_TAP_AND_SAC_LAND_RE.match(second)
+    if sac_land is not None and not subtypes:
+        body = sac_land.group("body")
+        factory = _TAP_SAC_LAND_BODIES.get(body)
+        if factory is None:
+            return None
+        cost_str = sac_land.group("cost")
+        return make_utility_land(
+            card["name"],
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost(cost_str),
+                        mana_str=cost_str,
+                        tap_self=True,
+                        sacrifice_a_land=True,
+                    ),
+                    effect=factory(),
+                ),
+            ),
+        )
+
+    sac_creature = _TAP_AND_SAC_CREATURE_RE.match(second)
+    if sac_creature is not None and not subtypes:
+        body = sac_creature.group("body")
+        factory = _TAP_SAC_CREATURE_BODIES.get(body)
+        if factory is None:
+            return None
+        return make_utility_land(
+            card["name"],
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        tap_self=True,
+                        sacrifice_another_creature_or_artifact=True,
+                    ),
+                    effect=factory(),
+                ),
+            ),
+        )
+
+    sac_desert = _MANA_TAP_AND_SAC_DESERT_RE.match(second)
+    if sac_desert is not None and subtypes == ("Desert",):
+        body = sac_desert.group("body")
+        factory = _TAP_SAC_DESERT_BODIES.get(body)
+        if factory is None:
+            return None
+        cost_str = sac_desert.group("cost")
+        return make_utility_land(
+            card["name"],
+            subtypes_str="Desert",
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost(cost_str),
+                        mana_str=cost_str,
+                        tap_self=True,
+                        sacrifice_a_desert=True,
+                    ),
+                    effect=factory(),
+                ),
+            ),
+        )
+
+    return None
 
 
 def _try_build_colorless_utility_land(
