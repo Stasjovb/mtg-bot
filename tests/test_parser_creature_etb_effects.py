@@ -45,20 +45,27 @@ Codecracker Hound, Exosuit Savior, Rayblade Trooper.
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    CreateToken,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
+    ExileEachOpponentsGraveyard,
     LookAtTopTwoSplitHandGraveyard,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnTargetCreature,
     ReturnTargetPermanentYouControlToOwnersHand,
+    Sequence,
 )
 from mtg_bot.cards.parser.effects import (
+    _parse_compound_effect,
     _parse_effect,
     _parse_effect_phrase,
+    _split_effect_sentences,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
 # ---------- deals N damage to target creature an opponent controls ----------
@@ -334,3 +341,144 @@ def test_rayblade_trooper_claimed_by_parser():
     # the parser's death-trigger family). Unlocked here by the new
     # restricted-target +1/+1 counter primitive.
     assert "Rayblade Trooper" in _claimed_names()
+
+
+# ---------- exile each opponent's graveyard ----------
+
+def test_parse_effect_recognizes_exile_each_opponents_graveyard():
+    # Untargeted graveyard wipe on every opponent. Surfaces in
+    # Dauntless Scrapbot's compound ETB ``exile each opponent's
+    # graveyard. Create a Lander token``.
+    assert _parse_effect(
+        "exile each opponent's graveyard"
+    ) == ExileEachOpponentsGraveyard()
+
+
+# ---------- put a +1/+1 counter on each of up to N target creatures ----------
+
+def test_parse_effect_recognizes_counter_on_each_of_up_to_two():
+    # Weftblade Enhancer's ETB. Multi-target counter spread; the
+    # ``two`` cardinal goes through ``_parse_amount`` to land as the
+    # int 2 on the engine class's ``max_n`` field.
+    assert _parse_effect(
+        "put a +1/+1 counter on each of up to two target creatures"
+    ) == PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)
+
+
+def test_parse_effect_recognizes_counter_on_each_of_up_to_three():
+    # Forward-symmetric larger-amount form. No EoE card prints
+    # ``up to three`` today, but the regex accepts both digits and
+    # spelled-out small cardinals.
+    assert _parse_effect(
+        "put a +1/+1 counter on each of up to three target creatures"
+    ) == PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=3)
+
+
+def test_parse_effect_recognizes_counter_on_each_of_up_to_digit():
+    # Digit form symmetric with the spelled-out form.
+    assert _parse_effect(
+        "put a +1/+1 counter on each of up to 2 target creatures"
+    ) == PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)
+
+
+def test_parse_effect_does_not_collide_with_bare_counter_target_creature():
+    # The bare ``put a +1/+1 counter on target creature`` regex has
+    # a ``$`` anchor on ``creature``; the ``each of up to two target
+    # creatures`` shape is anchored on a different verb-object
+    # phrasing, so the two surfaces are disjoint.
+    bare = _parse_effect("put a +1/+1 counter on target creature")
+    multi = _parse_effect(
+        "put a +1/+1 counter on each of up to two target creatures"
+    )
+    assert isinstance(bare, PutPlusOneCounterOnTargetCreature)
+    assert isinstance(multi, PutPlusOneCounterOnEachOfUpToNTargetCreatures)
+
+
+# ---------- sentence-boundary compound split ----------
+
+def test_split_effect_sentences_returns_single_phrase_unchanged():
+    # No internal sentence boundary → returns ``[phrase]``. Trailing
+    # period is preserved (it's the OUTER terminator, not an internal
+    # boundary).
+    assert _split_effect_sentences("draw a card") == ["draw a card"]
+
+
+def test_split_effect_sentences_carves_two_sentences():
+    # Period + uppercase-letter boundary → carve. Each piece is
+    # stripped, trailing period removed, and the second piece's
+    # first letter lowercased so it matches the normalized regex
+    # shape (no leading uppercase).
+    assert _split_effect_sentences(
+        "exile each opponent's graveyard. Create a Lander token"
+    ) == ["exile each opponent's graveyard", "create a Lander token"]
+
+
+def test_split_effect_sentences_preserves_if_you_do_continuation():
+    # ``If you do,`` continuation must NOT split — the negative
+    # lookahead in the boundary regex keeps the phrase welded
+    # together so the ``You may pay {COST}. If you do, …`` family
+    # parses through its single primitive.
+    assert _split_effect_sentences(
+        "you may pay {2}. If you do, draw a card"
+    ) == ["you may pay {2}. If you do, draw a card"]
+
+
+def test_parse_compound_effect_carves_dauntless_scrapbot_etb():
+    # Dauntless Scrapbot's compound ETB body. The effect-phrase has
+    # no `` and `` and no ``, then ``, so the splitter falls through
+    # to the sentence-boundary split path.
+    eff = _parse_compound_effect(
+        "exile each opponent's graveyard. Create a Lander token"
+    )
+    assert eff == Sequence(effects=(
+        ExileEachOpponentsGraveyard(),
+        CreateToken(
+            token_printing=TOKEN_PRINTINGS["Lander"],
+            count=1,
+        ),
+    ))
+
+
+def test_parse_compound_effect_returns_none_for_unparseable_sentence_split():
+    # Sentence-boundary split is all-or-nothing — if any piece
+    # fails to parse, the whole compound is rejected so the caller
+    # can try the single-effect grammar on the unsplit phrase. This
+    # protects single-effect primitives whose regex contains an
+    # internal period (Codecracker Hound's two-sentence look-at-
+    # top-two phrase) from being torn in half by the splitter when
+    # the second piece doesn't standalone-parse.
+    assert _parse_compound_effect(
+        "look at the top two cards of your library. "
+        "Put one into your hand"
+    ) is None
+
+
+def test_codecracker_hound_phrase_still_claims_single_primitive():
+    # Codecracker Hound's phrase contains an internal period AND the
+    # ``and`` joiner. The compound split tries the ``and`` joiner
+    # FIRST and rejects (neither piece parses), which lets the
+    # single-effect dispatcher claim the whole phrase as the
+    # ``LookAtTopTwoSplitHandGraveyard`` primitive. Regression guard
+    # for the sentence-boundary split path not stealing this phrase.
+    assert _parse_effect(
+        "look at the top two cards of your library. "
+        "Put one into your hand and the other into your graveyard"
+    ) == LookAtTopTwoSplitHandGraveyard()
+
+
+def test_dauntless_scrapbot_claimed_by_parser():
+    # Dauntless Scrapbot `{3}` 3/1 Robot Artifact Creature. ETB:
+    # ``exile each opponent's graveyard. Create a Lander token.``
+    # Unlocked by the new sentence-boundary compound-effect splitter
+    # plus the new ``exile each opponent's graveyard`` primitive
+    # (the ``create a Lander token`` half was already supported by
+    # the existing bare-name token-creation grammar).
+    assert "Dauntless Scrapbot" in _claimed_names()
+
+
+def test_weftblade_enhancer_claimed_by_parser():
+    # Weftblade Enhancer `{5}{W}` 3/4 Drix Artificer. Warp `{2}{W}`.
+    # ETB: put a +1/+1 counter on each of up to two target
+    # creatures. Unlocked by the new multi-target counter-spread
+    # primitive.
+    assert "Weftblade Enhancer" in _claimed_names()

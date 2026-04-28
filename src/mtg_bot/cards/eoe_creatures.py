@@ -268,6 +268,8 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # graveyard. Create a Lander token."
         make_creature(
             "Dauntless Scrapbot", "{3}", 3, 1,
+            artifact=True,
+            subtypes=("Robot",),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
@@ -1660,6 +1662,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # on each of up to two target creatures."
         make_creature(
             "Weftblade Enhancer", "{5}{W}", 3, 4,
+            subtypes=("Drix", "Artificer"),
             warp="{2}{W}",
             triggered_abilities=(
                 TriggeredAbility(

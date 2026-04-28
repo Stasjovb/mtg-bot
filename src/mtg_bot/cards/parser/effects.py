@@ -37,6 +37,7 @@ from mtg_bot.cards.base import (
     Effect,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
+    ExileEachOpponentsGraveyard,
     ExileTargetCreature,
     GainLife,
     LookAtTopTwoSplitHandGraveyard,
@@ -54,6 +55,7 @@ from mtg_bot.cards.base import (
     PumpTargetCreatureUntilEOT,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutPlusOneCounterOnCreatureYouControl,
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
@@ -128,6 +130,17 @@ _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
 )
+# "Put a +1/+1 counter on each of up to N target creatures" —
+# multi-target counter spread (Weftblade Enhancer's ETB uses ``two``).
+# The amount tail accepts spelled-out small cardinals (the only form
+# that ships in EoE today; ``two`` for Weftblade) plus bare digits so
+# a future ``up to three target creatures`` printing parses without
+# further grammar work. Maps to
+# ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=N)``.
+_PUT_PLUS_ONE_COUNTER_ON_EACH_OF_UP_TO_N_TARGET_CREATURES = re.compile(
+    rf"^put a \+1/\+1 counter on each of up to "
+    rf"(\d+|{_SMALL_CARDINAL_PATTERN}) target creatures$"
+)
 # "Put its counters on target creature you control." — Dockworker Drone's
 # dies trigger. The ``its`` pronoun refers to the source creature (dying
 # permanent). Maps to ``MoveSelfCountersToTargetCreatureYouControl()``,
@@ -184,6 +197,13 @@ _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST = re.compile(
 )
 _EACH_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^each opponent loses (\d+) life$"
+)
+# "Exile each opponent's graveyard" — untargeted graveyard wipe on
+# every opponent (Dauntless Scrapbot's ETB compound first half).
+# Maps to ``ExileEachOpponentsGraveyard()`` which sweeps every card
+# in each opponent's graveyard into exile at resolve time.
+_EXILE_EACH_OPPONENTS_GRAVEYARD = re.compile(
+    r"^exile each opponent's graveyard$"
 )
 # "<source> deals N damage to each opponent." — mass burn aimed at
 # every opponent (Ruinous Rampage's burn mode). The ``deals`` form
@@ -725,16 +745,62 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
     return None
 
 
+# Sentence-boundary split for compound effect phrases — period
+# followed by whitespace and an uppercase letter, with a negative
+# lookahead for ``If you do,`` so the
+# ``You may pay/sacrifice/discard {COST}. If you do, …`` family
+# stays welded together (the spell-builder splitter applies the same
+# guard at the line level; we mirror it here at the effect-phrase
+# level so triggered abilities with multi-sentence bodies — e.g.
+# Dauntless Scrapbot's ``exile each opponent's graveyard. Create a
+# Lander token.`` — split at the right boundary).
+_EFFECT_SENTENCE_BOUNDARY = re.compile(r"(?<=\.) (?=[A-Z](?!f you do,))")
+
+
+def _split_effect_sentences(phrase: str) -> list[str]:
+    """Split a normalized effect phrase at internal sentence
+    boundaries, preserving the trailing period on the leading piece(s)
+    and lowercasing the first letter of each non-leading piece so each
+    piece passes back through ``_parse_effect`` in normalized form.
+
+    Returns ``[phrase]`` when no internal sentence boundary exists.
+    The leading piece keeps its trailing period (so it can match
+    primitives whose surface form ends mid-phrase, like Codecracker
+    Hound's ``look at the top two cards of your library. Put one
+    into your hand and the other into your graveyard``); we strip the
+    trailing period from EVERY piece before returning so each one
+    matches the normalized regex shape (no trailing period). The
+    embedded period in Codecracker's surface is part of a single
+    primitive's literal regex, so its phrase doesn't reach this
+    splitter — it claims through the single-effect dispatcher first.
+    """
+    pieces = _EFFECT_SENTENCE_BOUNDARY.split(phrase)
+    if len(pieces) == 1:
+        return pieces
+    out: list[str] = []
+    for i, piece in enumerate(pieces):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if piece.endswith("."):
+            piece = piece[:-1]
+        if i > 0 and piece and piece[0].isupper():
+            piece = piece[0].lower() + piece[1:]
+        out.append(piece)
+    return out
+
+
 def _parse_compound_effect(phrase: str) -> Effect | None:
     """Try to parse ``phrase`` as a compound effect: two or more
-    primitive effects joined by `` and `` or by ``, then ``.
+    primitive effects joined by `` and ``, by ``, then ``, or by
+    sentence boundary (``. ``).
 
     Splits on whichever joiner appears (`` and `` is preferred — see
     below), parses each piece via ``_parse_effect``, and returns a
     ``Sequence`` only if EVERY piece parses cleanly. Returns ``None``
-    if the phrase contains neither joiner, or if any piece fails to
-    parse — never falls back to single-effect parsing on the original
-    (the caller does that).
+    if the phrase contains no recognized joiner, or if any piece
+    fails to parse — never falls back to single-effect parsing on the
+    original (the caller does that).
 
     The strict all-or-nothing rule keeps us from accidentally
     consuming joiner-bearing single effects (e.g. the
@@ -747,13 +813,18 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     as a standalone effect, so the ``, then `` split rejects and the
     full-phrase regex wins.
 
-    Joiner precedence: `` and `` is tried first; only if that joiner
-    is absent do we attempt a `` , then `` split. The order matters
-    because the two joiners can co-occur (a future ``draw a card and
-    you gain 1 life, then discard a card`` would have both) and
-    splitting on the leftmost-occurring joiner preserves the same
+    Joiner precedence: `` and `` is tried first; ``, then `` second;
+    sentence-boundary (``. ``) last. The order matters because the
+    joiners can co-occur (a future ``draw a card and you gain 1 life,
+    then discard a card`` would have both ``and`` and ``, then``) and
+    splitting on the leftmost-listed joiner preserves the same
     left-to-right resolve order the engine expects from ``Sequence``
-    regardless of which joiner the printing chose.
+    regardless of which joiner the printing chose. The sentence-
+    boundary split is last so single-effect primitives whose regex
+    contains an internal period (Codecracker Hound's two-sentence
+    look-at-top-two phrase) still match through the single-effect
+    dispatcher first; only when that fails AND no other joiner
+    applies do we carve at sentence boundaries.
 
     A compound where two or more sub-effects each require a target is
     also rejected (returns ``None``) — ``Sequence`` only supports a
@@ -765,6 +836,10 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
         pieces = phrase.split(" and ")
     elif ", then " in phrase:
         pieces = phrase.split(", then ")
+    elif _EFFECT_SENTENCE_BOUNDARY.search(phrase):
+        pieces = _split_effect_sentences(phrase)
+        if len(pieces) < 2:
+            return None
     else:
         return None
     parsed: list[Effect] = []
@@ -837,6 +912,21 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))
+    # ``put a +1/+1 counter on each of up to N target creatures`` —
+    # multi-target counter spread (Weftblade Enhancer). Tried BEFORE
+    # the bare-target regex below because the bare regex's ``target
+    # creature$`` tail won't match the ``each of up to`` shape anyway,
+    # but ordering more-specific before more-general is the convention
+    # here. The amount tail accepts digits and spelled-out small
+    # cardinals; both go through ``_parse_amount`` to land as the
+    # ``max_n`` int on the engine class.
+    m = _PUT_PLUS_ONE_COUNTER_ON_EACH_OF_UP_TO_N_TARGET_CREATURES.match(
+        phrase
+    )
+    if m is not None:
+        return PutPlusOneCounterOnEachOfUpToNTargetCreatures(
+            max_n=_parse_amount(m.group(1)),
+        )
     # ``put a +1/+1 counter on target creature you control`` — Rayblade
     # Trooper's ETB. Restricted variant: legal targets are creatures
     # the resolving controller controls. Tried BEFORE the bare ``target
@@ -911,6 +1001,11 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
+    if _EXILE_EACH_OPPONENTS_GRAVEYARD.match(phrase) is not None:
+        # ``exile each opponent's graveyard`` — Dauntless Scrapbot's
+        # first-half compound ETB. Untargeted graveyard wipe on every
+        # opponent.
+        return ExileEachOpponentsGraveyard()
     m = _EACH_OPPONENT_DISCARDS.match(phrase)
     if m is not None:
         # ``each opponent discards a card`` / ``each opponent discards
