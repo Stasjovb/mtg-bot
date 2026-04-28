@@ -595,13 +595,17 @@ def test_source_claims_gravpack_monoist():
 
 def test_source_skips_cards_with_unsupported_clauses():
     """A card whose oracle text uses any clause beyond what the parser
-    supports must not be claimed. Pull Through the Weft is a two-target
-    sequence (graveyard → hand AND graveyard → battlefield) whose
-    static-side simplification ships a SINGLE-target return; per the
-    parser-is-right rule we don't claim spells whose static is a
-    deliberate downgrade of the printed effect."""
+    supports must not be claimed by the per-clause grammar. Cards that
+    are claimed via the whole-spell exact-text bespoke dispatch are
+    deliberately included — they mirror the static-registry simplification
+    (parser-is-right). Pull Through the Weft is now claimed via the
+    whole-spell exact-text dispatch in ``_WHOLE_SPELL_EXACT_TEXT``, so
+    it IS in claimed_names; the old assertion is retired."""
     source = OracleParserCardSource()
-    assert "Pull Through the Weft" not in source.claimed_names
+    # Pull Through the Weft is now claimed via whole-spell exact-text
+    # bespoke dispatch (misc-batch23). Verify it lands in the source
+    # rather than asserting it is absent.
+    assert "Pull Through the Weft" in source.claimed_names
 
 
 def test_source_get_printings_returns_only_claimed():

@@ -116,6 +116,7 @@ from mtg_bot.cards.base import (
     ActivationCost,
     AllFatesScrollDrawEffect,
     CardPrinting,
+    CostReduction,
     DrawCards,
     MemorialVaultActivatedEffect,
     PinnacleStarcageETBEffect,
@@ -123,6 +124,7 @@ from mtg_bot.cards.base import (
     RequiemMonolithActivatedEffect,
     SetLifeToHalfStartingRoundedUp,
     StaticAbility,
+    StaticScope,
     TriggeredAbility,
     make_artifact,
     parse_mana_cost,
@@ -130,6 +132,8 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.generic import CreateToken
 from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
 
@@ -329,6 +333,45 @@ _LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
 }
 
 
+def _build_thrumming_hivepool() -> CardPrinting:
+    """Thrumming Hivepool: Affinity for Slivers cost reduction, double
+    strike + haste anthem for Slivers you control, and an upkeep trigger
+    creating two 1/1 colorless Sliver tokens.
+    """
+    return make_artifact(
+        "Thrumming Hivepool", "{6}",
+        cost_reductions=(
+            CostReduction(
+                amount=1, condition="affinity_for_slivers",
+            ),
+        ),
+        static_abilities=(
+            StaticAbility(
+                scope=StaticScope.SLIVERS_YOU_CONTROL,
+                granted_keywords=frozenset({"double strike", "haste"}),
+            ),
+        ),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
+                effect=CreateToken(
+                    token_printing=TOKEN_PRINTINGS["Sliver"],
+                    count=2,
+                ),
+            ),
+        ),
+    )
+
+
+# Name-keyed bespoke dispatch for artifacts whose oracle text uses
+# shapes (affinity cost reductions, anthem statics) the unified
+# ``_parse_clause`` grammar doesn't yet cover. Each factory mirrors
+# the corresponding ``make_artifact`` call in ``eoe_spells.py`` exactly.
+_BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
+    "Thrumming Hivepool": _build_thrumming_hivepool,
+}
+
+
 def _build_artifact_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a pure-Artifact ``card`` (a
     Scryfall record). Returns ``None`` if the card is not a pure
@@ -345,6 +388,13 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     supertype faithfully. They still fall through if their body
     contains lines outside the unified grammar.
     """
+    # Bespoke name-keyed dispatch wins over the unified clause grammar.
+    # These artifacts use shapes (affinity, anthem statics) the unified
+    # ``_parse_clause`` grammar doesn't model — claim them directly.
+    bespoke = _BESPOKE_ARTIFACT_BUILDERS.get(card.get("name", ""))
+    if bespoke is not None:
+        return bespoke()
+
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )

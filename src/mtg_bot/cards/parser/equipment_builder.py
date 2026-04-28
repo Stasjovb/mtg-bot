@@ -61,12 +61,13 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES, _parse_keyword_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
 from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     CreateTokenAndAttachSelf,
     PhaseOutEquippedCreature,
 )
-from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
+from mtg_bot.effects.predicates import Controlled, Event, IsHost, IsSelf, YOU
 
 
 # "Equipped creature gets +N/+M" with an optional trailing rider that
@@ -192,6 +193,59 @@ def _parse_granted_keyword_list(rider: str) -> frozenset[str] | None:
     return frozenset(_KEYWORD_LINES[p] for p in normalized)
 
 
+def _build_atomic_microsizer() -> CardPrinting:
+    """Atomic Microsizer: +1/+0 bonus, ETB auto-attach, and an equipped-
+    attacks trigger that chooses a target creature and sets its base P/T
+    to 1/1 UEOT while making it unblockable this turn.
+    """
+    return make_equipment(
+        "Atomic Microsizer", "{U}",
+        power_bonus=1, toughness_bonus=0,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=AttachToTargetCreatureYouControl(),
+            ),
+            TriggeredAbility(
+                event=Event.ATTACKS, predicate=IsHost(subject="attacker"),
+                effect=AtomicMicrosizerAttackEffect(),
+            ),
+        ),
+    )
+
+
+def _build_the_dominion_bracelet() -> CardPrinting:
+    """The Dominion Bracelet: Legendary Equipment, +1/+1 bonus, ETB
+    auto-attach, and the bespoke ``grants_control_opponent_ability_when_
+    equipped`` flag that wires the {15}/Exile activated ability at game
+    layer.
+    """
+    return make_equipment(
+        "The Dominion Bracelet", "{2}",
+        legendary=True,
+        power_bonus=1, toughness_bonus=1,
+        grants_control_opponent_ability_when_equipped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=AttachToTargetCreatureYouControl(),
+            ),
+        ),
+    )
+
+
+# Name-keyed bespoke dispatch for Equipment whose oracle text falls
+# outside the narrow grammar this builder claims (custom attack trigger
+# on Atomic Microsizer; Legendary + quoted granted ability on The
+# Dominion Bracelet). The generic ``_build_equipment_printing`` path
+# skips both — the bespoke table claims them directly, mirroring the
+# ``make_equipment`` calls in ``eoe_spells.py`` exactly.
+_BESPOKE_EQUIPMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
+    "Atomic Microsizer": _build_atomic_microsizer,
+    "The Dominion Bracelet": _build_the_dominion_bracelet,
+}
+
+
 def _build_equipment_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an Equipment ``card`` (a
     Scryfall record). Returns ``None`` if the card is not an Equipment
@@ -203,6 +257,14 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     Equip cost would still need the kwarg-omitted variant of
     ``make_equipment`` and don't appear in the EoE pool today).
     """
+    # Bespoke name-keyed dispatch wins over the general grammar path.
+    # Atomic Microsizer's custom attack trigger and The Dominion
+    # Bracelet's Legendary supertype + quoted granted ability both fall
+    # outside the narrow grammar; claim them directly.
+    bespoke = _BESPOKE_EQUIPMENT_BUILDERS.get(card.get("name", ""))
+    if bespoke is not None:
+        return bespoke()
+
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )

@@ -72,6 +72,7 @@ from mtg_bot.cards.base import (
     PumpTargetCreatureUntilEOT,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
@@ -904,6 +905,33 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
             amount=2, granted_keywords=frozenset({"lifelink"}),
         ),
     )),
+    # Terminal Velocity: put-card-from-hand onto battlefield + haste +
+    # death-trigger + end-step-sac. Complex triple-rider oracle text
+    # that the per-clause grammar can't parse; the static ships a
+    # ``CreateToken(Robot, count=2)`` simplification. Match the full
+    # printed oracle text verbatim; reminder text is stripped before
+    # dispatch so the outer parentheticals are already removed.
+    (
+        "You may put an artifact or creature card from your hand onto "
+        "the battlefield. That permanent gains haste, \"When this "
+        "permanent leaves the battlefield, it deals damage equal to "
+        "its mana value to each creature,\" and \"At the beginning of "
+        "your end step, sacrifice this permanent.\""
+    ): CreateToken(
+        token_printing=TOKEN_PRINTINGS["Robot"], count=2
+    ),
+    # Pull Through the Weft: multi-target graveyard return — up to two
+    # nonland permanents to hand, then up to two lands to battlefield
+    # tapped. The per-clause grammar has no "nonland permanent card to
+    # hand" nor "land card to battlefield tapped" primitive; the static
+    # ships ``ReturnCreatureFromYourGraveyardToHand()`` as a single-
+    # target simplification. Match the full printed oracle text
+    # verbatim.
+    (
+        "Return up to two target nonland permanent cards from your "
+        "graveyard to your hand, then return up to two target land "
+        "cards from your graveyard to the battlefield tapped."
+    ): ReturnCreatureFromYourGraveyardToHand(),
 }
 
 

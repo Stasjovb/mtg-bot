@@ -23,6 +23,9 @@ from mtg_bot.cards.parser.spacecraft_builder import _build_spacecraft_printing
 from mtg_bot.cards.parser.enchantment_builder import (
     _build_enchantment_printing,
 )
+from mtg_bot.cards.parser.planeswalker_builder import (
+    _build_planeswalker_printing,
+)
 from mtg_bot.cards.parser.special_guests_builder import (
     _build_special_guest_printing,
 )
@@ -58,6 +61,8 @@ class OracleParserCardSource:
             built = _build_special_guest_printing(card)
             if built is None:
                 built = _build_enchantment_printing(card)
+            if built is None:
+                built = _build_planeswalker_printing(card)
             if built is None:
                 built = _build_creature_printing(card)
             if built is None:

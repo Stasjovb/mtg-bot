@@ -45,6 +45,8 @@ from mtg_bot.effects import (
     EnchantedCreatureFightsTargetEffect,
     ExileOpponentsNonlandPermanentUntilLeaves,
     ExileTargetCreatureUntilSourceLeaves,
+    PainForAllDamageEchoEffect,
+    PainForAllETBEffect,
     SacrificeSelfUnlessVoidActive,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
@@ -283,6 +285,28 @@ def _build_hardlight_containment() -> CardPrinting:
     )
 
 
+def _build_pain_for_all() -> CardPrinting:
+    """Pain for All: Enchantment — Aura. No P/T bonus. Two triggers:
+    - ETB: enchanted creature deals damage equal to its power to any
+      other target (``PainForAllETBEffect``).
+    - Whenever enchanted creature is dealt damage, it deals that much
+      damage to each opponent (``PainForAllDamageEchoEffect``).
+    """
+    return make_aura(
+        "Pain for All", "{2}{R}",
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=PainForAllETBEffect(),
+            ),
+            TriggeredAbility(
+                event=Event.DEALT_DAMAGE, predicate=IsHost(),
+                effect=PainForAllDamageEchoEffect(),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: card name → factory
 # ---------------------------------------------------------------------------
@@ -305,6 +329,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Cryoshatter": _build_cryoshatter,
     "Meltstrider's Resolve": _build_meltstriders_resolve,
     "Hardlight Containment": _build_hardlight_containment,
+    "Pain for All": _build_pain_for_all,
 }
 
 
