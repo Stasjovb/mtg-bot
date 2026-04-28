@@ -99,6 +99,7 @@ def can_block(
 def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     from mtg_bot.turn import tap_permanent
 
+    declared: list = []
     for oid in attacker_ids:
         obj = next(
             (o for o in state.battlefield if o.id == oid), None
@@ -110,6 +111,7 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
             # the remaining attackers.
             continue
         obj.attacking = True
+        declared.append(obj)
         # Vigilance: attacking doesn't tap
         if "vigilance" not in effective_keywords(state, obj):
             tap_permanent(state, obj)
@@ -127,6 +129,41 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     # each Exalted permanent the attacker's controller has applies its
     # own +1/+1.
     _fire_exalted_pumps(state)
+    # Once-per-pass ``Event.YOU_ATTACK`` dispatch (DSK "Whenever you
+    # attack" family — Razorkin Hordecaller, Most Valuable Slayer,
+    # Lionheart Glimmer). Distinct from ``Event.ATTACKS`` which fires
+    # per-attacker: this one fires exactly ONCE when the active player
+    # has declared at least one attacker, with the attacking player as
+    # the subject. The trigger phrase "Whenever you attack" doesn't
+    # multiply with attacker count, so a single dispatch is the right
+    # semantic. Skipped entirely when no creature actually attacked
+    # (every requested attacker was unresolvable / fizzled).
+    _fire_you_attack_triggers(state, declared)
+
+
+def _fire_you_attack_triggers(state: GameState, declared: list) -> None:
+    """Fire ``Event.YOU_ATTACK`` once per declare-attackers pass when the
+    active player has actually attacked with at least one creature.
+
+    ``declared`` is the list of attacker ``GameObject``s that successfully
+    flipped to ``attacking=True`` during this call. The subject is the
+    common controller of those attackers (the active player); we read it
+    off the first attacker rather than trusting ``state.active_player_idx``
+    so a hypothetical edge case where the active player can attack with a
+    creature controlled by someone else (Threaten-style temporary control)
+    still routes the trigger through the right subject. In practice every
+    attacker shares the active player's id.
+    """
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    if not declared:
+        return
+    attacking_player = state.player_by_id(declared[0].controller_id)
+    dispatch_event(
+        state, Event.YOU_ATTACK, label="you_attack",
+        player=attacking_player,
+    )
 
 
 def _fire_exalted_pumps(state: GameState) -> None:

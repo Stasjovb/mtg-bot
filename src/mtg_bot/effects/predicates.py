@@ -141,6 +141,18 @@ class Event(str, Enum):
     # handles per-half triggers; the FULLY_UNLOCKED dispatch fires from
     # the unlock-action site at the transition moment).
     ROOM_FULLY_UNLOCKED = "room_fully_unlocked"
+    # The active player has just declared one or more attackers in this
+    # combat phase. Subject is the attacking Player (the active player —
+    # ``"player"``). Distinct from ``ATTACKS`` (per-attacker, fires once
+    # for each declared attacker): ``YOU_ATTACK`` fires exactly ONCE per
+    # declare-attackers pass when at least one creature attacked, with
+    # the attacking player as the subject. Models the DSK "Whenever you
+    # attack" trigger family (Razorkin Hordecaller, Most Valuable Slayer,
+    # Lionheart Glimmer) — the trigger doesn't multiply with attacker
+    # count, so the per-pass dispatch is the right semantic. The Player
+    # subject pairs with ``Controlled(YOU)`` for the "you" qualifier
+    # exactly like the turn-structure events.
+    YOU_ATTACK = "you_attack"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -165,6 +177,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_END_STEP: ("player",),
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
+    Event.YOU_ATTACK: ("player",),
 }
 
 

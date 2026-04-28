@@ -3128,6 +3128,16 @@ class PumpTargetCreatureUntilEOT(Effect):
     # like Perigee Beckoner's ETB ("another target creature you control
     # gets +2/+0 and gains [dies-rider]").
     exclude_self: bool = False
+    # "Target attacking creature ..." — restrict the legal-target pool to
+    # creatures currently flagged ``attacking=True``. Matches the DSK
+    # "Whenever you attack" rider on Most Valuable Slayer
+    # ("...target attacking creature gets +1/+0 and gains first strike
+    # until end of turn"). Independent of the controller filters
+    # (``you_control_only`` / ``opponents_only``); attackers are always
+    # the active player's so in practice the source's controller is
+    # also the attackers' controller, but keeping the flag orthogonal
+    # mirrors the engine class's other narrowing-flag conventions.
+    attacking_only: bool = False
 
     def requires_target(self) -> bool:
         return not self.optional
@@ -3148,6 +3158,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             if (o.printing.is_creature or o.temp_is_creature)
             and (not self.you_control_only or o.controller_id == controller_id)
             and (not self.opponents_only or o.controller_id != controller_id)
+            and (not self.attacking_only or o.attacking)
             and (
                 self.target_subtype is None
                 or self.target_subtype in effective_subtypes(state, o)

@@ -759,7 +759,7 @@ _YOU_MAY_PAY_THEN_EFFECT = re.compile(
 # turn." — pump + grant-keywords compound. The granted-keywords body
 # (between ``and gains `` and `` until end of turn``) is one or more
 # evergreen-keyword tokens joined by `` and `` and validated against the
-# keyword-line whitelist before the parsed effect is returned. Three
+# keyword-line whitelist before the parsed effect is returned. Four
 # subject-shapes share the same regex via the optional prefix groups:
 #
 # * Bare ``target creature gets ... UEOT`` (Rig for War, Dark Endurance).
@@ -767,19 +767,29 @@ _YOU_MAY_PAY_THEN_EFFECT = re.compile(
 #   Molecular Modifier — activated/triggered abilities not yet wired by
 #   the surrounding builders, but the effect primitive is in place).
 # * ``another target creature you control gets ... UEOT`` (Hardened
-#   Escort, Most Valuable Slayer — Duskmourn). The ``another`` qualifier
-#   excludes the trigger source from the legal pool, encoded by the
-#   engine class's ``exclude_self=True`` flag.
+#   Escort — Duskmourn). The ``another`` qualifier excludes the trigger
+#   source from the legal pool, encoded by the engine class's
+#   ``exclude_self=True`` flag.
+# * ``target attacking creature gets ... UEOT`` (Most Valuable Slayer —
+#   Duskmourn). The ``attacking`` qualifier narrows the legal pool to
+#   creatures currently flagged ``attacking=True``, encoded by the
+#   engine class's ``attacking_only=True`` flag. Mutually exclusive with
+#   the ``another``/``you control`` qualifiers in print (no DSK card
+#   layers them) but the regex captures each group independently so the
+#   handler can flip flags orthogonally — adding a hypothetical
+#   ``another target attacking creature you control gets ...`` line
+#   later wouldn't need further grammar work.
 #
 # Future cards with multiple keywords (``... and gains first strike and
-# reach UEOT``) parse through the same shape. The ``another`` and ``you
-# control`` groups are captured separately so the handler can flip the
-# matching engine flags independently — ``another`` always co-occurs
-# with ``you control`` in the surface forms in print today, but the
-# regex doesn't enforce that pairing because the engine's
-# ``exclude_self=True`` flag is meaningful even on bare-target effects.
+# reach UEOT``) parse through the same shape. The ``another``,
+# ``attacking``, and ``you control`` groups are captured separately so
+# the handler can flip the matching engine flags independently —
+# ``another`` always co-occurs with ``you control`` in the surface
+# forms in print today, but the regex doesn't enforce that pairing
+# because the engine's ``exclude_self=True`` flag is meaningful even on
+# bare-target effects.
 _PUMP_AND_GAIN_KEYWORDS_UEOT = re.compile(
-    r"^(another )?target creature (you control )?"
+    r"^(another )?target (attacking )?creature (you control )?"
     r"gets ([+-]\d+)/([+-]\d+) and gains "
     r"(.+) until end of turn$"
 )
@@ -1796,23 +1806,28 @@ def _parse_effect(phrase: str) -> Effect | None:
     # before more-general is the convention in this dispatcher.
     m = _PUMP_AND_GAIN_KEYWORDS_UEOT.match(phrase)
     if m is not None:
-        # Group layout: 1=``another `` prefix, 2=``you control ``,
-        # 3=power, 4=toughness, 5=granted-keywords body. The
-        # ``another`` qualifier excludes the trigger source from the
-        # legal target pool via ``exclude_self=True``; ``you control``
-        # restricts targets to the controller's own creatures via
-        # ``you_control_only=True``. Both flags compose so the
-        # ``another target creature you control`` surface lands with
-        # both flags flipped.
-        keywords = _parse_keyword_grant_body(m.group(5))
+        # Group layout: 1=``another `` prefix, 2=``attacking `` prefix,
+        # 3=``you control ``, 4=power, 5=toughness, 6=granted-keywords
+        # body. The ``another`` qualifier excludes the trigger source
+        # from the legal target pool via ``exclude_self=True``;
+        # ``you control`` restricts targets to the controller's own
+        # creatures via ``you_control_only=True``; ``attacking``
+        # restricts targets to creatures currently flagged
+        # ``attacking=True`` via ``attacking_only=True``. All three
+        # flags compose so the ``another target creature you control``
+        # surface lands with the first two flipped, and a hypothetical
+        # ``another target attacking creature you control`` would land
+        # with all three flipped.
+        keywords = _parse_keyword_grant_body(m.group(6))
         if keywords is None:
             return None
         return PumpTargetCreatureUntilEOT(
-            power_bonus=int(m.group(3)),
-            toughness_bonus=int(m.group(4)),
+            power_bonus=int(m.group(4)),
+            toughness_bonus=int(m.group(5)),
             granted_keywords=keywords,
-            you_control_only=m.group(2) is not None,
+            you_control_only=m.group(3) is not None,
             exclude_self=m.group(1) is not None,
+            attacking_only=m.group(2) is not None,
         )
     # ``target creature an opponent controls gets ±N/±M until end of
     # turn`` — opponent-controlled-only debuff/pump (Sinister

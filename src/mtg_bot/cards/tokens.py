@@ -161,4 +161,15 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
         subtypes=("Glimmer",),
         power=1, toughness=1,
     ),
+    # Gremlin: 1/1 red Gremlin creature token. Created by Razorkin
+    # Hordecaller's "Whenever you attack" trigger and by Gremlin
+    # Tamer's Eerie trigger. Vanilla 1/1 with no abilities — color
+    # isn't tracked on tokens (the engine derives color from
+    # ``mana_cost.colors()`` and tokens have an empty mana cost), so
+    # the printing surfaces as a colorless 1/1 Gremlin, mirroring the
+    # other color-bearing token printings (Insect, Spirit-to-be, etc.)
+    # that ship without an explicit color tag today.
+    "Gremlin": make_token_creature(
+        "Gremlin", 1, 1, subtypes=("Gremlin",),
+    ),
 }

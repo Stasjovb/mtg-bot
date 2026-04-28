@@ -688,6 +688,19 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "this enchantment enters": (Event.ENTERS, IsSelf()),
     "this Aura enters": (Event.ENTERS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
+    # ``Whenever you attack`` — DSK's once-per-declare-attackers trigger
+    # family (Razorkin Hordecaller, Most Valuable Slayer, Lionheart
+    # Glimmer). Distinct from ``"this creature attacks"`` (which fires
+    # per-attacker via ``Event.ATTACKS``): ``Event.YOU_ATTACK`` carries
+    # a single Player subject (``"player"``) and fires exactly ONCE per
+    # declare-attackers pass when the active player has attacked with
+    # at least one creature. ``Controlled(YOU)`` against a Player
+    # subject reads as "the attacking player is the source's controller"
+    # — same shape used by the turn-structure events
+    # (``BEGINNING_OF_UPKEEP`` etc.). The trigger doesn't multiply with
+    # attacker count, so the per-pass dispatch is the right semantic
+    # for the printed phrasing.
+    "you attack": (Event.YOU_ATTACK, Controlled(YOU)),
 }
 
 
