@@ -23,6 +23,12 @@ optional ETB triggers. The grammar this builder claims today covers:
   creature token and attach this Equipment to it."`` wired through
   ``CreateTokenAndAttachSelf`` against ``TOKEN_PRINTINGS["Robot"]`` —
   Auxiliary Boosters' bespoke ETB;
+- a single ETB trigger of the form
+  ``"When this Equipment enters, create a 1/1 white Glimmer
+  enchantment creature token."`` wired through bare ``CreateToken``
+  against ``TOKEN_PRINTINGS["Glimmer"]`` — Glimmerlight's ETB. Distinct
+  from the Auxiliary Boosters shape because the Equipment does NOT
+  attach to the created token;
 - Hylderblade's Void rider — a literal beginning-of-end-step
   attach-to-target-creature trigger gated on ``requires_void=True``
   (the engine's stand-in for the EoE intervening-if condition);
@@ -64,6 +70,7 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
 from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
+    CreateToken,
     CreateTokenAndAttachSelf,
     PhaseOutEquippedCreature,
 )
@@ -140,6 +147,21 @@ _ETB_ATTACH_UEOT_RE = re.compile(
 _ETB_CREATE_ROBOT_AND_ATTACH_LINE = (
     "When this Equipment enters, create a 2/2 colorless Robot artifact "
     "creature token and attach this Equipment to it."
+)
+
+
+# ETB create-Glimmer-token (NO attach) used by Glimmerlight. Distinct
+# from the Auxiliary Boosters shape: the printed line ends after the
+# token-creation clause and never says "and attach" — the Equipment
+# stays unattached on the battlefield. Matched as a literal so the
+# bare ``CreateToken(Glimmer, count=1)`` engine class survives, parallel
+# to the Robot-and-attach literal above. A future Equipment with a
+# different ETB-create-token-no-attach token would land as a sibling
+# entry rather than expanding into a parameterized regex (the EoE/DSK
+# pool today has exactly one such printing).
+_ETB_CREATE_GLIMMER_LINE = (
+    "When this Equipment enters, create a 1/1 white Glimmer "
+    "enchantment creature token."
 )
 
 
@@ -358,6 +380,18 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=CreateTokenAndAttachSelf(
                         token_printing=TOKEN_PRINTINGS["Robot"],
+                    ),
+                )
+            )
+            continue
+        # ETB create-Glimmer-token (no attach) — Glimmerlight.
+        if line == _ETB_CREATE_GLIMMER_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Glimmer"],
+                        count=1,
                     ),
                 )
             )
