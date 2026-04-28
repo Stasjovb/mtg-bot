@@ -5764,6 +5764,75 @@ class PutStunCounterOnTappedCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapAndStunUpToOneTargetCreature(Effect):
+    """Tap up to one target creature and put ``stun_amount`` stun
+    counters on it. Both effects apply to the same chosen target.
+
+    Matches Meat Locker's "tap up to one target creature and put two
+    stun counters on it." (DSK Room — door trigger). The "up to one"
+    qualifier makes the target slot optional: ``target_count_range``
+    flips to ``(0, 1)`` and ``requires_target`` flips to ``False`` so
+    the cast-site target-selection pipeline allows zero-target casts.
+
+    No controller restriction (unlike ``TapTargetOpponentPermanentAndStunIt``,
+    which is opponent-only) and no taps-state restriction (unlike
+    ``PutStunCounterOnTappedCreature``, which targets only already-tapped
+    creatures): Meat Locker can tap any creature, friend or foe, tapped
+    or untapped.
+    """
+
+    stun_amount: int = 2
+
+    def requires_target(self) -> bool:
+        return False
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        if not obj.tapped:
+            tap_permanent(state, obj)
+        from mtg_bot.game import add_stun_counters
+        add_stun_counters(state, obj, self.stun_amount)
+        state.log.append(
+            f"{obj.printing.name} tapped and gains "
+            f"{self.stun_amount} stun counters "
+            f"(now {obj.stun_counters})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"tap up to one target creature and put {self.stun_amount} "
+            f"stun counters on it"
+        )
+
+
+
+@dataclass(frozen=True)
 class TapAnotherTargetCreature(Effect):
     """Tap another target creature — target must not be the source.
 
