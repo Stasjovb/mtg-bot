@@ -1774,6 +1774,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         make_creature(
             "Steelswarm Operator", "{1}{U}", 1, 1,
             artifact=True,
+            subtypes=("Robot", "Soldier"),
             keywords={"flying"},
             activated_abilities=(
                 ActivatedAbility(

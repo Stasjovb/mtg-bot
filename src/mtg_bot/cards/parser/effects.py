@@ -340,14 +340,54 @@ _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
 # "Add {<color>}." — single coin of a single color. Mana ability surface
 # form. The captured letter is one of WUBRG (no colorless single-coin
 # add in EoE today; extend to ``[WUBRGC]`` if a future card needs it).
-# Note: this returns a bare AddManaToPool effect; the surrounding
-# ActivatedAbility built by the activated-grammar layer doesn't yet
-# auto-flag ``is_mana_ability=True`` — wiring that up is a separate
-# concern. Today no EoE card becomes parser-claimed solely by this
-# addition (Zookeeper Mechan / Steelswarm Operator both have a second
-# line the parser can't yet handle), so static-vs-parser parity is
-# unaffected.
+# The surrounding ActivatedAbility built by the activated-grammar layer
+# auto-flags ``is_mana_ability=True`` once the resulting effect is
+# recognized by ``_is_mana_ability_effect``, so the engine bypasses the
+# stack on activation per CR 605.
 _ADD_SINGLE_COLOR_MANA = re.compile(r"^add \{([WUBRG])\}$")
+# "Add {<color>}{<color>}." — two coins of a single color (Steelswarm
+# Operator's ``{T}: Add {U}{U}`` ability mints two restricted coins of
+# the same color). The captured letter is reused — the engine class
+# accepts a tuple of (color, amount) coins, so the produced effect is
+# ``AddManaToPool(produces=((c, 1), (c, 1)))``. Two coins is what EoE
+# prints today; if a future card uses ``Add {U}{U}{U}`` extend the
+# regex with another optional brace pair (or generalize to a parser
+# loop).
+_ADD_TWO_SAME_COLOR_MANA = re.compile(
+    r"^add \{([WUBRG])\}\{([WUBRG])\}$"
+)
+# "Add {<mana>}. Spend this mana only to <restriction>." —
+# restricted-mana ability whose produced coins are tagged with an
+# engine-side ``spend_restriction`` string at mint time. EoE wiring:
+#
+#   * ``Spend this mana only to cast an artifact spell`` →
+#     ``"artifact_spell"`` (Steelswarm Operator's first ability).
+#   * ``Spend this mana only to activate abilities of artifact
+#     sources`` → ``"artifact_activation"`` (Steelswarm Operator's
+#     second ability).
+#
+# Both restrictions are gated at cost-payment time by
+# ``_coin_satisfies_context`` in ``actions.py``. The captured mana
+# segment accepts either a single ``{<color>}`` or two of the same
+# color (``{<color>}{<color>}``) — extend the inner pattern if a future
+# printing mints a hybrid- or multi-color restricted batch. Tried
+# BEFORE the bare ``add {<color>}`` regex so the qualifier wins; the
+# bare regex's ``$`` anchor wouldn't match the multi-sentence shape
+# anyway, but ordering more-specific before more-general is the
+# convention here.
+_ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
+    r"^add (\{[WUBRG]\}(?:\{[WUBRG]\})?)\. "
+    r"Spend this mana only to "
+    r"(cast an artifact spell|activate abilities of artifact sources)$"
+)
+# Surface phrase → ``ActivationCost.spend_restriction`` string mapping
+# for the restricted-mana ability above. Each tail phrase below comes
+# from a real EoE printing's oracle text; the engine string is the key
+# expected by ``_coin_satisfies_context`` (``actions.py``).
+_SPEND_RESTRICTION_BY_PHRASE: dict[str, str] = {
+    "cast an artifact spell": "artifact_spell",
+    "activate abilities of artifact sources": "artifact_activation",
+}
 # "Target opponent loses N life" — pure life-loss spell/ability surface.
 # TargetOpponentLosesLife filters its legal-targets pool to opponents.
 _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
@@ -1181,6 +1221,42 @@ def _parse_effect(phrase: str) -> Effect | None:
         # spell's controller). Maps to the engine class with no
         # parameters — the surface form is a literal match.
         return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    # ``add {<mana>}. Spend this mana only to <restriction>`` —
+    # restricted-mana ability (Steelswarm Operator). Tried BEFORE the
+    # bare ``add {<color>}`` regex so the qualifier wins; the bare
+    # regex's ``$`` anchor wouldn't match the multi-sentence shape
+    # anyway, but ordering more-specific before more-general is the
+    # convention here. The mana segment is parsed by inspecting the
+    # captured brace expression — the regex enforces that it's exactly
+    # one or two same-color brace pairs but doesn't decompose them
+    # into engine coins, so we extract the colors directly.
+    m = _ADD_MANA_WITH_SPEND_RESTRICTION.match(phrase)
+    if m is not None:
+        mana_str = m.group(1)
+        restriction = _SPEND_RESTRICTION_BY_PHRASE[m.group(2)]
+        # The mana segment is one or two ``{<color>}`` brace pairs;
+        # ``parse_mana_cost`` would unpack them but for restricted-mana
+        # abilities the engine wants a tuple of single-coin entries
+        # (one ``(color, 1)`` per coin minted), so we walk the brace
+        # pairs directly.
+        colors = re.findall(r"\{([WUBRG])\}", mana_str)
+        return AddManaToPool(
+            produces=tuple((c, 1) for c in colors),
+            spend_restriction=restriction,
+        )
+    m = _ADD_TWO_SAME_COLOR_MANA.match(phrase)
+    if m is not None:
+        # Two same-color coin shape (``add {U}{U}``) — only same-color
+        # pairs reach this regex (the inner brace pattern captures both
+        # letters and we reject mismatched pairs to keep the engine's
+        # produced tuple simple). A mismatched pair like
+        # ``add {U}{R}`` falls through to the bare single-color regex
+        # and fails its anchor, so the card stays unclaimed (no EoE
+        # printing today uses dual-color two-coin add anyway).
+        if m.group(1) != m.group(2):
+            return None
+        c = m.group(1)
+        return AddManaToPool(produces=((c, 1), (c, 1)))
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))
