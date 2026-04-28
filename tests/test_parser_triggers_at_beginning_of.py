@@ -349,6 +349,25 @@ def test_void_prefix_does_not_strip_when_followed_by_when_whenever():
     )
 
 
+def test_compound_effect_with_you_draw_a_card_prefix():
+    # ``you draw a card and lose 1 life`` — Voidforged Titan / Decode
+    # Transmissions / Elegy Acolyte's printed compound. The leading
+    # ``you`` carries over from the original sentence's subject when
+    # the printing joins two effects with `` and ``; the splitter
+    # leaves the first piece reading as ``you draw a card``. The
+    # ``_DRAW_A_CARD`` regex's ``(?:you )?`` prefix mirrors the same
+    # tolerance that ``_LOSE_N_LIFE`` already had for the other half
+    # of the canonical pair.
+    from mtg_bot.cards.base import LoseLife, Sequence
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+
+    parsed = _parse_effect_phrase("you draw a card and lose 1 life")
+    assert parsed == Sequence(effects=(
+        DrawCards(amount=1),
+        LoseLife(amount=1),
+    ))
+
+
 def test_at_beginning_of_each_end_step_with_tapped_creatures_gate():
     # The tapped-creatures wrapper composes with the ``each end step``
     # predicate too. No EoE printing today combines ``each`` with the

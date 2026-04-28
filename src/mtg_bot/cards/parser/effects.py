@@ -117,8 +117,18 @@ _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
 _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
     r"^deals (\d+) damage to target creature an opponent controls$"
 )
-_DRAW_A_CARD = re.compile(r"^draw a card$")
-_DRAW_N_CARDS = re.compile(r"^draw (\d+) cards$")
+# Controller draws cards. The optional ``you `` prefix surfaces in
+# compound bodies like ``you draw a card and lose 1 life`` (Voidforged
+# Titan, Decode Transmissions, Elegy Acolyte) — the leading ``you`` is
+# carried over from the original sentence's subject when the printing
+# joins two effects with `` and `` and the splitter would otherwise
+# leave the first piece reading as ``you draw a card``. Mirrors the
+# ``(?:you )?`` shape on ``_LOSE_N_LIFE`` (the same ``you`` carry-over
+# on the other half of the canonical pair) — the ``you`` is purely
+# surface noise because the controller is already implicit in every
+# effect's resolve signature.
+_DRAW_A_CARD = re.compile(r"^(?:you )?draw a card$")
+_DRAW_N_CARDS = re.compile(r"^(?:you )?draw (\d+) cards$")
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on target creature$"
