@@ -310,6 +310,18 @@ _TAPPED_CREATURES_GATE_PREFIX = "if you control two or more tapped creatures, "
 _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "your end step": (Event.BEGINNING_OF_END_STEP, Controlled(YOU)),
     "each end step": (Event.BEGINNING_OF_END_STEP, Always()),
+    # ``At the beginning of combat on your turn`` — Molecular Modifier's
+    # pump-and-grant trigger and Ouroboroid's mass-counter trigger.
+    # Surface form pairs the ``BEGINNING_OF_COMBAT`` event with the
+    # ``Controlled(YOU)`` controller gate (the trigger fires only on
+    # the controller's own combat). Mirrors the ``your end step``
+    # / ``each X`` precedent: ``your X`` reads as
+    # ``Controlled(YOU)``; an ``each X`` variant would map to
+    # ``Always()``, but no EoE printing today carries
+    # ``each combat`` so only the controller-gated form is wired.
+    "combat on your turn": (
+        Event.BEGINNING_OF_COMBAT, Controlled(YOU),
+    ),
 }
 
 

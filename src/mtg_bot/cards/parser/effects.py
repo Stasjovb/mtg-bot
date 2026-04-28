@@ -32,6 +32,7 @@ from mtg_bot.cards.base import (
     DestroyTargetLand,
     DestroyTargetNoncreaturePermanent,
     DestroyTargetNonlandPermanent,
+    DiscardHandThenDrawN,
     DiscardSelf,
     DrawCards,
     EachOpponentDiscards,
@@ -56,6 +57,7 @@ from mtg_bot.cards.base import (
     PumpSelfUntilEOT,
     PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
+    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     PutStunCounterOnTappedCreature,
     PutPlusOneCounterOnCreatureYouControl,
@@ -64,7 +66,6 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnOpponentsCreature,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
-    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
@@ -622,6 +623,20 @@ _PUMP_AND_GAIN_KEYWORDS_UEOT = re.compile(
 # surface text.
 _OPTIONAL_DISCARD_THEN_DRAW = re.compile(
     rf"^you may discard a card\. If you do, "
+    rf"draw (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
+# "You may discard your hand. If you do, draw N cards." — Vaultguard
+# Trooper's tapped-creatures-gated end-step trigger inner effect (the
+# ``ConditionalOnTappedCreatures`` wrapper sits at the trigger-line
+# level, not inside the effect-phrase grammar). Distinct from the
+# single-card discard-then-draw above: discards the WHOLE hand, not a
+# single chosen card. Maps to ``DiscardHandThenDrawN(amount=N)``. The
+# amount tail accepts the Scryfall-printed forms — bare digits and
+# spelled-out small cardinals (``two`` is what Vaultguard prints);
+# ``a`` would collapse to 1 if a future card prints
+# ``draw a card`` after a hand discard.
+_OPTIONAL_DISCARD_HAND_THEN_DRAW = re.compile(
+    rf"^you may discard your hand\. If you do, "
     rf"draw (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
 # "You may sacrifice another creature or artifact. If you do, this
@@ -1737,6 +1752,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         token = m.group(1)
         amount = 1 if token == "a" else _parse_amount(token)
         return OptionalDiscardCardThenDrawN(amount=amount)
+    m = _OPTIONAL_DISCARD_HAND_THEN_DRAW.match(phrase)
+    if m is not None:
+        # ``you may discard your hand. If you do, draw N cards`` —
+        # Vaultguard Trooper's tapped-creatures-gated end-step trigger
+        # body. Distinct from the single-card discard above: discards
+        # the WHOLE hand, not a single chosen card. Tried AFTER the
+        # ``discard a card`` regex above because the two surface forms
+        # are disjoint (``a card`` vs ``your hand`` are non-overlapping
+        # tails) but ordering ``discard a card`` first matches the
+        # convention of bare-shape-before-variant that the rest of
+        # this dispatcher follows.
+        token = m.group(1)
+        amount = 1 if token == "a" else _parse_amount(token)
+        return DiscardHandThenDrawN(amount=amount)
     m = _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT.match(phrase)
     if m is not None:
         # More-specific shape (self-pump consequence) — produces the

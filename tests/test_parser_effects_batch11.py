@@ -193,10 +193,6 @@ def test_parse_effect_returns_none_for_malformed_optional_discard():
     assert _parse_effect(
         "you may discard a card and draw two cards"
     ) is None
-    # ``discard your hand`` is a different effect (DiscardHandThenDrawN).
-    assert _parse_effect(
-        "you may discard your hand. If you do, draw two cards"
-    ) is None
 
 
 # ---------- you may sac another for self-pump UEOT ----------

@@ -410,6 +410,7 @@ EOE_CREATURES: dict[str, CardPrinting] = {
         # until end of turn."
         make_creature(
             "Molecular Modifier", "{2}{R}", 2, 2,
+            subtypes=("Kavu", "Artificer"),
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
