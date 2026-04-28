@@ -32,8 +32,12 @@ Currently claimed:
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    ActivatedAbility,
+    ActivationCost,
     CardPrinting,
+    GainControlOfTargetSliverPermanently,
     OptionalPutLandFromHandOntoBattlefield,
+    SearchLibraryForCard,
     TriggeredAbility,
     parse_mana_cost,
 )
@@ -72,6 +76,38 @@ def _build_deafening_silence() -> CardPrinting:
         card_types=card_types,
         subtypes=subtypes,
         restricts_noncreature_spells_to_one_per_turn=True,
+    )
+
+
+def _build_sliver_overlord() -> CardPrinting:
+    type_line = "Legendary Creature — Sliver Mutant"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    mana_str = "{W}{U}{B}{R}{G}"
+    activation_cost = ActivationCost(
+        mana=parse_mana_cost("{3}"), mana_str="{3}",
+    )
+    return CardPrinting(
+        name="Sliver Overlord",
+        mana_cost_str=mana_str,
+        mana_cost=parse_mana_cost(mana_str),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        power=7,
+        toughness=7,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=activation_cost,
+                effect=SearchLibraryForCard(
+                    filter_name="sliver", max_mv=0, may_fail=True,
+                ),
+            ),
+            ActivatedAbility(
+                cost=activation_cost,
+                effect=GainControlOfTargetSliverPermanently(),
+            ),
+        ),
     )
 
 
@@ -116,6 +152,13 @@ _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
         "Whenever an opponent plays a land, you may put a land card from "
         "your hand onto the battlefield.",
         _build_burgeoning,
+    ),
+    "Sliver Overlord": (
+        "{3}: Search your library for a Sliver card, reveal that card, "
+        "put it into your hand, then shuffle.\n"
+        "{3}: Gain control of target Sliver. (This effect lasts "
+        "indefinitely.)",
+        _build_sliver_overlord,
     ),
 }
 

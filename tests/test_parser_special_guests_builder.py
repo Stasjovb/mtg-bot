@@ -56,6 +56,23 @@ def test_burgeoning_matches_static():
     assert parsed == SPECIAL_GUESTS_EOE["Burgeoning"]
 
 
+def test_sliver_overlord_matches_static():
+    card = {
+        "name": "Sliver Overlord",
+        "type_line": "Legendary Creature — Sliver Mutant",
+        "oracle_text": (
+            "{3}: Search your library for a Sliver card, reveal "
+            "that card, put it into your hand, then shuffle.\n"
+            "{3}: Gain control of target Sliver. (This effect "
+            "lasts indefinitely.)"
+        ),
+        "set": "spg",
+    }
+    parsed = _build_special_guest_printing(card)
+    assert parsed is not None
+    assert parsed == SPECIAL_GUESTS_EOE["Sliver Overlord"]
+
+
 def test_skips_non_spg_set():
     """Defensive: a same-named card from a non-spg set must not
     claim — the Special Guest dispatch is gated on set code."""
