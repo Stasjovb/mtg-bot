@@ -83,11 +83,21 @@ post-reminder-strip oracle line:
   total, rounded up.`` maps to ``SetLifeToHalfStartingRoundedUp``.
   Same per-arm fan-out shape Cryogen Relic uses for its compound
   enters-or-leaves trigger.
+* **Pinnacle Starcage** — both lines are literal-matched. The ETB
+  ``When this artifact enters, exile all artifacts and creatures
+  with mana value 2 or less until this artifact leaves the
+  battlefield.`` maps to a single self-ETB ``TriggeredAbility``
+  carrying ``PinnacleStarcageETBEffect``; the activation
+  ``{6}{W}{W}: Put each card exiled ... Sacrifice this artifact.``
+  maps to a single ``{6}{W}{W}``-cost ``ActivatedAbility`` carrying
+  ``PinnacleStarcageSacEffect`` (the sacrifice clause is part of the
+  effect body, not the cost — matching the static registry's
+  ``ActivationCost(mana=..., mana_str=...)`` without
+  ``sacrifice_self``).
 
-Pinnacle Starcage and Thrumming Hivepool still fall through — their
-oracles use shapes (``until this artifact leaves the battlefield``
-exile, ``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the
-parser doesn't yet model.
+Thrumming Hivepool still falls through — its oracle uses shapes
+(``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the parser
+doesn't yet model.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
@@ -108,6 +118,8 @@ from mtg_bot.cards.base import (
     CardPrinting,
     DrawCards,
     MemorialVaultActivatedEffect,
+    PinnacleStarcageETBEffect,
+    PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
     SetLifeToHalfStartingRoundedUp,
     StaticAbility,
@@ -118,7 +130,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.predicates import Controlled, Event, YOU
+from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
 
 # Literal oracle lines whose bespoke effect class lives in
@@ -168,6 +180,26 @@ def _requiem_monolith_activation() -> ActivatedAbility:
     )
 
 
+def _pinnacle_starcage_sac_activation() -> ActivatedAbility:
+    """Build Pinnacle Starcage's ``{6}{W}{W}`` activated ability.
+
+    The printed body — "Put each card exiled with this artifact into
+    its owner's graveyard, then create a 2/2 colorless Robot artifact
+    creature token for each card put into a graveyard this way.
+    Sacrifice this artifact." — is wrapped in a single bespoke
+    ``PinnacleStarcageSacEffect``. The ``Sacrifice this artifact``
+    clause is part of the effect body (not the cost), so the cost is
+    just the mana piece — matching the static registry shape exactly.
+    """
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{6}{W}{W}"),
+            mana_str="{6}{W}{W}",
+        ),
+        effect=PinnacleStarcageSacEffect(),
+    )
+
+
 def _all_fates_scroll_draw_activation() -> ActivatedAbility:
     """Build All-Fates Scroll's ``{7}, {T}, Sacrifice this artifact``
     activation drawing X cards (X = number of differently named lands
@@ -210,6 +242,14 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the "
     "number of differently named lands you control.":
         _all_fates_scroll_draw_activation,
+    # Pinnacle Starcage — bespoke "put exiled-with-this-artifact into
+    # graveyard, mint a Robot per, sacrifice this" body. Sacrifice
+    # phrase is part of the effect body, not the cost.
+    "{6}{W}{W}: Put each card exiled with this artifact into its "
+    "owner's graveyard, then create a 2/2 colorless Robot artifact "
+    "creature token for each card put into a graveyard this way. "
+    "Sacrifice this artifact.":
+        _pinnacle_starcage_sac_activation,
 }
 
 
@@ -241,6 +281,23 @@ def _endstone_play_or_cast_triggers() -> tuple[TriggeredAbility, ...]:
     )
 
 
+def _pinnacle_starcage_etb_trigger() -> tuple[TriggeredAbility, ...]:
+    """Pinnacle Starcage's ETB exile-until-leaves trigger. The bespoke
+    ``PinnacleStarcageETBEffect`` engine class encodes both halves of
+    the printed body — exile all artifacts and creatures with mana
+    value 2 or less, AND the "until this artifact leaves the
+    battlefield" return-on-leave delayed trigger. One ETB
+    ``TriggeredAbility`` with ``predicate=IsSelf()`` matches the
+    static-registry shape exactly."""
+    return (
+        TriggeredAbility(
+            event=Event.ENTERS,
+            predicate=IsSelf(),
+            effect=PinnacleStarcageETBEffect(),
+        ),
+    )
+
+
 def _endstone_end_step_set_life_trigger() -> tuple[TriggeredAbility, ...]:
     """The Endstone's beginning-of-end-step "life = half starting,
     rounded up" trigger. Bespoke ``SetLifeToHalfStartingRoundedUp``
@@ -262,6 +319,13 @@ _LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
     "At the beginning of your end step, your life total becomes "
     "half your starting life total, rounded up.":
         _endstone_end_step_set_life_trigger,
+    # Pinnacle Starcage — bespoke "exile artifacts/creatures MV<=2
+    # until this leaves" ETB. The "until this artifact leaves" return
+    # is wired by the bespoke effect class, not by a separate trigger.
+    "When this artifact enters, exile all artifacts and creatures "
+    "with mana value 2 or less until this artifact leaves the "
+    "battlefield.":
+        _pinnacle_starcage_etb_trigger,
 }
 
 

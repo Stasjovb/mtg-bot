@@ -235,18 +235,21 @@ def test_build_artifact_printing_skips_spacecraft():
 
 def test_build_artifact_printing_skips_unrecognized_line():
     """An artifact whose body contains a clause outside the unified
-    grammar (here a Pinnacle-Starcage-style mass-exile-with-zone-tracking
-    custom effect) skips silently - same fall-through behavior as the
-    other builders. We must never half-claim a printing by silently
-    dropping abilities the parser doesn't model yet."""
+    grammar AND outside the literal-line bespoke-effect tables skips
+    silently - same fall-through behavior as the other builders. We
+    must never half-claim a printing by silently dropping abilities the
+    parser doesn't model yet.
+
+    (Pinnacle Starcage's exact oracle text IS literal-matched today,
+    so a parallel hand-crafted card uses a structurally similar but
+    distinct surface form to exercise the fall-through path.)"""
     card = {
         "name": "Hand-Crafted Custom-Exile Artifact",
         "mana_cost": "{1}{W}{W}",
         "type_line": "Artifact",
         "oracle_text": (
-            "When this artifact enters, exile all artifacts and "
-            "creatures with mana value 2 or less until this artifact "
-            "leaves the battlefield."
+            "When this artifact enters, exile every nonland permanent "
+            "with mana value 4 or greater until end of turn."
         ),
     }
     assert _build_artifact_printing(card) is None
