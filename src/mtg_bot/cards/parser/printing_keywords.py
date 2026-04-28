@@ -131,3 +131,30 @@ def _parse_devour_line(line: str) -> int | None:
     if m is None:
         return None
     return int(m.group(1))
+
+
+# ``This creature enters tapped.`` — printing-level static replacement
+# (CR 614) flipping the existing ``enters_tapped: bool`` field on the
+# card printing. The engine already consults this field at ETB time
+# (``actions.put_into_battlefield`` and ``effects/combinators.py``);
+# the parser side has been missing the line recognizer. Surfaces on
+# Piranha Fly's two-line oracle text alongside Flying.
+#
+# A literal-string match is sufficient — no card today varies the
+# wording. A future printing whose surface text differs (``This
+# permanent enters tapped`` for a non-creature, or a numeric variant)
+# would land its own entry rather than parameterizing this one,
+# matching the ``Ward—Discard`` precedent above where each surface
+# gets its own 1:1 recognizer.
+_ENTERS_TAPPED_LINE = "This creature enters tapped."
+
+
+def _parse_enters_tapped_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level ``This creature
+    enters tapped.`` clause, else ``False``. Used by
+    ``creature_builder._build_creature_printing`` to flip the
+    ``enters_tapped`` kwarg on ``make_creature`` directly — distinct
+    from the triggered-ability path because the ETB-tapped behavior is
+    a static replacement effect, not an event-firing trigger.
+    """
+    return line.strip() == _ENTERS_TAPPED_LINE

@@ -97,6 +97,7 @@ from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
+    _parse_enters_tapped_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -1246,6 +1247,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward_discard_chosen = False
     ward_discard_random = False
     devour: int = 0
+    enters_tapped = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1290,6 +1292,15 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             devour = devour_n
+            continue
+        if _parse_enters_tapped_line(line):
+            # ``This creature enters tapped.`` — printing-level static
+            # replacement. Flips the ``enters_tapped`` kwarg below; the
+            # engine already consults the printing's ``enters_tapped``
+            # field at ETB. Idempotent: a hypothetical malformed
+            # printing with the line twice still ends up with the
+            # field set once.
+            enters_tapped = True
             continue
         cost_reduction = _parse_cost_reduction_line(line)
         if cost_reduction is not None:
@@ -1348,4 +1359,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
         devour_land_multiplier=devour,
+        enters_tapped=enters_tapped,
     )

@@ -2794,7 +2794,16 @@ def put_into_battlefield(
     """
     obj.zone = Zone.BATTLEFIELD
     obj.controller_id = controller_id
-    obj.tapped = False
+    # ``enters_tapped`` is the printing-level flag flipped by the
+    # land-builder (Planets, utility lands), the parser's new
+    # creature-side ``This creature enters tapped.`` recognizer
+    # (Piranha Fly), and the equivalent recognizers on other card
+    # types. The land path (``play_land``) reads the same field at its
+    # own ETB call site; mirroring the read here keeps both paths
+    # honoring the printed replacement effect uniformly. Defaults to
+    # ``False`` for every existing creature/spell that hasn't opted
+    # in, so the change is a no-op for the pre-existing pool.
+    obj.tapped = bool(obj.printing.enters_tapped)
     obj.summoning_sick = True
     # Impending: a spell cast for its impending cost enters with N
     # time counters and is suppressed-as-non-creature until the

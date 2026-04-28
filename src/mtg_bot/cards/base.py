@@ -911,6 +911,7 @@ def make_creature(
     impending: str | None = None,
     impending_count: int = 0,
     enchantment: bool = False,
+    enters_tapped: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -978,6 +979,7 @@ def make_creature(
         impending_cost=parse_mana_cost(impending) if impending else None,
         impending_cost_str=impending or "",
         impending_count=impending_count,
+        enters_tapped=enters_tapped,
     )
 
 
