@@ -288,3 +288,127 @@ def test_source_claims_meltstriders_gear():
     source = OracleParserCardSource()
     assert "Meltstrider's Gear" in source.claimed_names
     assert "Meltstrider's Gear" in source.get_printings()
+
+
+# Parser support for the second-batch Equipment shapes — Flash on the
+# Equipment itself, ETB attach with a UEOT-keyword grant rider, and the
+# ETB create-token-and-attach variant. These three shapes together cover
+# Squire's Lightblade, Illvoi Light Jammer, and Auxiliary Boosters.
+
+def test_build_equipment_printing_supports_flash_keyword_line():
+    """A standalone evergreen-keyword line on the Equipment itself
+    (printed as ``Flash``) is forwarded through ``keywords=...`` —
+    the equipment can then be cast at instant speed by the engine."""
+    card = {
+        "name": "Hand-Crafted Flash Blade",
+        "mana_cost": "{1}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "Flash\n"
+            "Equipped creature gets +1/+0.\n"
+            "Equip {2}"
+        ),
+    }
+    printing = _build_equipment_printing(card)
+    assert printing is not None
+    assert "flash" in printing.keywords
+    assert printing.equipment_bonuses == (1, 0, frozenset())
+
+
+def test_build_equipment_printing_supports_attach_with_ueot_grant_rider():
+    """The ETB attach trigger may carry a ``"That creature gains
+    <keyword> until end of turn."`` rider that the builder routes into
+    ``AttachToTargetCreatureYouControl(granted_keywords_ueot=...)``."""
+    card = {
+        "name": "Hand-Crafted UEOT Blade",
+        "mana_cost": "{W}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "When this Equipment enters, attach it to target creature "
+            "you control. That creature gains first strike until end "
+            "of turn.\n"
+            "Equipped creature gets +1/+0.\n"
+            "Equip {3}"
+        ),
+    }
+    printing = _build_equipment_printing(card)
+    assert printing is not None
+    assert printing.triggered_abilities == (
+        TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=AttachToTargetCreatureYouControl(
+                granted_keywords_ueot=frozenset({"first strike"}),
+            ),
+        ),
+    )
+
+
+def test_build_equipment_printing_skips_attach_ueot_unknown_keyword():
+    """An attach-UEOT rider naming a keyword outside the evergreen
+    whitelist skips the whole card — same safety as the static
+    ``and has <kw>`` rider."""
+    card = {
+        "name": "Hand-Crafted Bad UEOT Blade",
+        "mana_cost": "{W}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "When this Equipment enters, attach it to target creature "
+            "you control. That creature gains fakeword until end of "
+            "turn.\n"
+            "Equipped creature gets +1/+0.\n"
+            "Equip {3}"
+        ),
+    }
+    assert _build_equipment_printing(card) is None
+
+
+def test_build_equipment_printing_supports_create_robot_token_attach():
+    """The Auxiliary Boosters ETB shape — create a 2/2 Robot token and
+    attach the Equipment to it — is recognized as a literal-string
+    line and wired through ``CreateTokenAndAttachSelf``."""
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.effects.generic import CreateTokenAndAttachSelf
+
+    card = {
+        "name": "Hand-Crafted Robot Boosters",
+        "mana_cost": "{4}{W}",
+        "type_line": "Artifact — Equipment",
+        "oracle_text": (
+            "When this Equipment enters, create a 2/2 colorless Robot "
+            "artifact creature token and attach this Equipment to it.\n"
+            "Equipped creature gets +1/+2 and has flying.\n"
+            "Equip {3}"
+        ),
+    }
+    printing = _build_equipment_printing(card)
+    assert printing is not None
+    assert printing.triggered_abilities == (
+        TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=CreateTokenAndAttachSelf(
+                token_printing=TOKEN_PRINTINGS["Robot"],
+            ),
+        ),
+    )
+    assert printing.equipment_bonuses == (1, 2, frozenset({"flying"}))
+
+
+def test_source_claims_squires_lightblade():
+    """End-to-end: Squire's Lightblade is claimed via the Flash + ETB
+    attach + UEOT grant dispatch arms."""
+    source = OracleParserCardSource()
+    assert "Squire's Lightblade" in source.claimed_names
+
+
+def test_source_claims_illvoi_light_jammer():
+    """End-to-end: Illvoi Light Jammer is claimed via Flash + ETB
+    attach + UEOT hexproof rider."""
+    source = OracleParserCardSource()
+    assert "Illvoi Light Jammer" in source.claimed_names
+
+
+def test_source_claims_auxiliary_boosters():
+    """End-to-end: Auxiliary Boosters is claimed via the
+    create-Robot-token-and-attach ETB dispatch arm."""
+    source = OracleParserCardSource()
+    assert "Auxiliary Boosters" in source.claimed_names

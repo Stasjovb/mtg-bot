@@ -2,28 +2,36 @@
 
 Equipment is a narrow, uniform shape on Scryfall: keyword line(s) +
 one or more ``Equipped creature`` clauses + an ``Equip {N}`` line +
-optional ETB triggers. The grammar this builder claims today covers
-the simplest end-to-end shape:
+optional ETB triggers. The grammar this builder claims today covers:
 
 - a single static "``Equipped creature gets +N/+M``" clause, optionally
   with a trailing ``" and has <keyword>[, <keyword>...]"`` rider that
   grants printed evergreen keywords to the equipped creature;
 - a single "``Equipped creature has <keyword>``" clause as a standalone
   granted-keyword line;
-- a single ETB trigger of the literal form
+- a standalone evergreen-keyword line on the Equipment itself (most
+  often ``Flash``), routed to ``make_equipment(keywords=...)``;
+- a single ETB trigger of the form
   ``"When this Equipment enters, attach it to target creature you
-  control."`` that wires the canonical ``AttachToTargetCreatureYouControl``
-  effect via ``IsSelf`` ENTERS;
+  control."`` (canonical ``AttachToTargetCreatureYouControl`` via
+  ``IsSelf`` ENTERS), optionally with a trailing
+  ``" That creature gains <keyword> until end of turn."`` rider that
+  feeds ``granted_keywords_ueot=`` on the same effect — Squire's
+  Lightblade and Illvoi Light Jammer ride this shape;
+- a single ETB trigger of the form
+  ``"When this Equipment enters, create a 2/2 colorless Robot artifact
+  creature token and attach this Equipment to it."`` wired through
+  ``CreateTokenAndAttachSelf`` against ``TOKEN_PRINTINGS["Robot"]`` —
+  Auxiliary Boosters' bespoke ETB;
 - a closing ``"Equip {N}"`` line whose mana-cost token feeds
   ``make_equipment(equip_cost=...)``.
 
 Anything outside that shape — Void riders, ``Equipped creature has
-"<granted activated ability>"``, the on-attach UEOT keyword grants
-on Squire's Lightblade / Illvoi Light Jammer, the create-token-and-
-attach ETB on Auxiliary Boosters, the custom attack trigger on Atomic
-Microsizer, or any line the per-line dispatcher doesn't recognize —
-falls through and the Equipment is silently skipped, mirroring the
-creature/spell/land builders.
+"<granted activated ability>"``, the custom attack trigger on Atomic
+Microsizer, Robe of Stars' Astral Projection activated ability, or any
+line the per-line dispatcher doesn't recognize — falls through and the
+Equipment is silently skipped, mirroring the creature/spell/land
+builders.
 
 These line phrases are equipment-specific ("Equipped creature ...",
 "Equip {N}", "When this Equipment enters, ...") and don't fit the
@@ -40,10 +48,14 @@ from mtg_bot.cards.base import (
     TriggeredAbility,
     make_equipment,
 )
-from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+from mtg_bot.cards.parser.keywords import _KEYWORD_LINES, _parse_keyword_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.generic import AttachToTargetCreatureYouControl
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.generic import (
+    AttachToTargetCreatureYouControl,
+    CreateTokenAndAttachSelf,
+)
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -87,12 +99,36 @@ _EQUIP_LINE_RE = re.compile(
 )
 
 
-# Literal ETB attach trigger used by Hylderblade, Meltstrider's Gear,
-# and The Dominion Bracelet (among others). The exact phrasing is
-# uniform across printings, so a literal-string match is enough — no
-# sub-parsing needed.
+# Literal ETB attach trigger used by Meltstrider's Gear and several
+# other EoE Equipment cards. The exact phrasing is uniform across
+# printings, so a literal-string match is enough — no sub-parsing
+# needed.
 _ETB_ATTACH_LINE = (
     "When this Equipment enters, attach it to target creature you control."
+)
+
+
+# ETB attach with a UEOT-keyword grant rider. Squire's Lightblade
+# ("That creature gains first strike until end of turn.") and Illvoi
+# Light Jammer ("That creature gains hexproof until end of turn.") use
+# this shape. Only single-keyword riders are accepted; the keyword must
+# be in the evergreen whitelist. Reminder text on the keyword (e.g.
+# Illvoi's parenthetical hexproof gloss) is stripped before this regex
+# sees the line.
+_ETB_ATTACH_UEOT_RE = re.compile(
+    r"^When this Equipment enters, attach it to target creature you "
+    r"control\. That creature gains (.+?) until end of turn\.$"
+)
+
+
+# ETB create-token-and-attach trigger used by Auxiliary Boosters. The
+# token is a 2/2 colorless Robot artifact creature; the parser wires
+# this through ``CreateTokenAndAttachSelf`` against the engine's
+# canonical ``Robot`` token printing. The exact phrasing is literal —
+# the only Equipment in the EoE pool that creates a token in its ETB.
+_ETB_CREATE_ROBOT_AND_ATTACH_LINE = (
+    "When this Equipment enters, create a 2/2 colorless Robot artifact "
+    "creature token and attach this Equipment to it."
 )
 
 
@@ -147,6 +183,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     power_bonus = 0
     toughness_bonus = 0
     granted_keywords: set[str] = set()
+    self_keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
     equip_cost: str | None = None
 
@@ -195,9 +232,41 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 )
             )
             continue
+        # ETB attach + UEOT keyword grant on the chosen target.
+        m = _ETB_ATTACH_UEOT_RE.match(line)
+        if m is not None:
+            ueot_kw = _parse_granted_keyword_list(m.group(1))
+            if ueot_kw is None:
+                return None
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=AttachToTargetCreatureYouControl(
+                        granted_keywords_ueot=ueot_kw,
+                    ),
+                )
+            )
+            continue
+        # ETB create-Robot-token-and-attach (Auxiliary Boosters).
+        if line == _ETB_CREATE_ROBOT_AND_ATTACH_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateTokenAndAttachSelf(
+                        token_printing=TOKEN_PRINTINGS["Robot"],
+                    ),
+                )
+            )
+            continue
+        # Standalone evergreen-keyword line on the Equipment itself
+        # (most often "Flash"). Routed through the shared keyword-line
+        # parser so multi-keyword sentence-case lines also work.
+        kw_tuple = _parse_keyword_line(line)
+        if kw_tuple is not None:
+            self_keywords.update(kw_tuple)
+            continue
         # Anything else — Void rider, granted-quoted-ability, custom
-        # ETB token-create, custom attack trigger — falls through and
-        # we skip the whole card.
+        # attack trigger — falls through and we skip the whole card.
         return None
 
     if equip_cost is None:
@@ -209,6 +278,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         power_bonus=power_bonus,
         toughness_bonus=toughness_bonus,
         granted_keywords=frozenset(granted_keywords),
+        keywords=frozenset(self_keywords),
         triggered_abilities=tuple(triggers),
         equip_cost=equip_cost,
     )
