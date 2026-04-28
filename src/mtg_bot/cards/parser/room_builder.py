@@ -37,14 +37,21 @@ from mtg_bot.cards.base import (
     make_room,
     parse_mana_cost,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
+    CreateToken,
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
+    DiscardSelf,
+    DrawCards,
     EachOpponentLosesLife,
     GainLife,
+    LoseLife,
+    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     Sequence,
+    TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
     YOU,
@@ -163,6 +170,99 @@ def _build_glassworks_shattered_yard() -> CardPrinting:
     )
 
 
+def _build_grand_entryway_elegant_rotunda() -> CardPrinting:
+    """Grand Entryway // Elegant Rotunda ``{1}{W}`` // ``{2}{W}``.
+
+    Grand Entryway oracle:
+        When you unlock this door, create a 1/1 white Glimmer
+        enchantment creature token.
+
+    Elegant Rotunda oracle:
+        When you unlock this door, put a +1/+1 counter on each of up
+        to two target creatures.
+
+    Both halves are pure "When you unlock this door" triggers — the
+    same ``Event.ENTERS`` + ``IsSelf()`` shape that Glassworks uses,
+    routed through the ``unlocked_halves`` gate so each fires once
+    when its half becomes unlocked (cast-time or via UnlockRoomHalf).
+    Grand Entryway uses the existing ``"Glimmer"`` token in
+    ``TOKEN_PRINTINGS`` (the 1/1 white Glimmer enchantment-creature
+    token already wired for Tunnel Surveyor); Elegant Rotunda uses
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)``,
+    matching the same effect shape Weftblade Enhancer uses.
+    """
+    return make_room(
+        _half(
+            "Grand Entryway", "{1}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Glimmer"], count=1,
+                    ),
+                ),
+            ),
+        ),
+        _half(
+            "Elegant Rotunda", "{2}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=PutPlusOneCounterOnEachOfUpToNTargetCreatures(
+                        max_n=2,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _build_meat_locker_drowned_diner() -> CardPrinting:
+    """Meat Locker // Drowned Diner ``{2}{U}`` // ``{3}{U}{U}``.
+
+    Meat Locker oracle:
+        When you unlock this door, tap up to one target creature and
+        put two stun counters on it.
+
+    Drowned Diner oracle:
+        When you unlock this door, draw three cards, then discard a
+        card.
+
+    Both halves are pure door triggers. Meat Locker uses the new
+    ``TapAndStunUpToOneTargetCreature(stun_amount=2)`` primitive
+    (any creature, friend or foe; "up to one" means the door fires
+    even with no legal target). Drowned Diner threads
+    ``Sequence(DrawCards(3), DiscardSelf(1))`` through the resolve
+    pipeline — the existing primitives compose directly without a
+    new effect class.
+    """
+    return make_room(
+        _half(
+            "Meat Locker", "{2}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=TapAndStunUpToOneTargetCreature(stun_amount=2),
+                ),
+            ),
+        ),
+        _half(
+            "Drowned Diner", "{3}{U}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(
+                        effects=(
+                            DrawCards(amount=3),
+                            DiscardSelf(amount=1),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -170,6 +270,8 @@ def _build_glassworks_shattered_yard() -> CardPrinting:
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
     "Glassworks // Shattered Yard": _build_glassworks_shattered_yard,
+    "Grand Entryway // Elegant Rotunda": _build_grand_entryway_elegant_rotunda,
+    "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
 }
 
 

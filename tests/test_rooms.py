@@ -66,6 +66,9 @@ class _PickFirstAgent(Agent):
     def choose_target(self, state, player_id, legal_targets):
         return legal_targets[0] if legal_targets else None
 
+    def choose_discard(self, state, player_id, hand_card_ids):
+        return hand_card_ids[0]
+
 
 def _new_state():
     state = GameState()
@@ -521,3 +524,240 @@ def test_shattered_yard_locked_doesnt_ping():
     run_beginning_of_end_step_triggers(state)
     drain_stack(state)
     assert state.players[1].life == pre_opp_life
+
+
+# ---------------------------------------------------------------------------
+# Parser claims: Grand Entryway // Elegant Rotunda
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_grand_entryway_elegant_rotunda():
+    name = "Grand Entryway // Elegant Rotunda"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Grand Entryway", "Elegant Rotunda"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Grand Entryway"].mana_cost_str == "{1}{W}"
+    assert by_name["Elegant Rotunda"].mana_cost_str == "{2}{W}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Elegant Rotunda", "Grand Entryway"]
+
+
+def test_grand_entryway_creates_glimmer_token_on_unlock():
+    """Casting Grand Entryway unlocks that half and the door trigger
+    creates a 1/1 white Glimmer enchantment-creature token."""
+    state = _new_state()
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Grand Entryway // Elegant Rotunda"],
+        owner_id=0,
+    )
+    pre_bf = len(state.battlefield)
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Grand Entryway"),
+    )
+    drain_stack(state)
+    # Battlefield gained the Room itself plus a Glimmer token.
+    glimmers = [
+        o for o in state.battlefield if o.printing.name == "Glimmer"
+    ]
+    assert len(glimmers) == 1
+    assert glimmers[0].controller_id == 0
+    assert "Glimmer" in glimmers[0].printing.subtypes
+    assert "Enchantment" in glimmers[0].printing.card_types
+    assert "Creature" in glimmers[0].printing.card_types
+    # Sanity: Room is on the battlefield with Grand Entryway unlocked.
+    bf_room = next(o for o in state.battlefield if o.id == room_card.id)
+    assert bf_room.unlocked_halves == frozenset({"Grand Entryway"})
+    # The token plus the Room are net new permanents (room left hand).
+    assert len(state.battlefield) >= pre_bf + 2
+
+
+def test_grand_entryway_locked_does_not_make_token():
+    """If only Elegant Rotunda is unlocked, Grand Entryway's token
+    trigger does not fire."""
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Grand Entryway // Elegant Rotunda"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Elegant Rotunda"})
+    pre_glimmers = sum(
+        1 for o in state.battlefield if o.printing.name == "Glimmer"
+    )
+    # Re-fire the synthetic ENTERS dispatch — the half is locked, so
+    # nothing should land on the stack.
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    dispatch_event(state, Event.ENTERS, label="enters", obj=room)
+    drain_stack(state)
+    glimmers = sum(
+        1 for o in state.battlefield if o.printing.name == "Glimmer"
+    )
+    assert glimmers == pre_glimmers
+
+
+def test_elegant_rotunda_puts_counters_on_two_targets_on_unlock():
+    """Unlocking Elegant Rotunda fires +1/+1 counters on up to two
+    target creatures."""
+    state = _new_state()
+    bear_a = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    bear_b = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Grand Entryway // Elegant Rotunda"],
+        controller_id=0,
+    )
+    # Already-unlocked Grand Entryway (don't refire it); pay to unlock
+    # Elegant Rotunda. Three Plains cover {2}{W}.
+    room.unlocked_halves = frozenset({"Grand Entryway"})
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+
+    apply_action(
+        state, 0,
+        UnlockRoomHalf(card_id=room.id, half_name="Elegant Rotunda"),
+    )
+    drain_stack(state)
+    # The _PickFirstAgent picks the first legal target each call —
+    # max_n=2 → both bears get counters.
+    assert bear_a.plus_one_counters >= 1
+    assert bear_b.plus_one_counters >= 1
+
+
+# ---------------------------------------------------------------------------
+# Parser claims: Meat Locker // Drowned Diner
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_meat_locker_drowned_diner():
+    name = "Meat Locker // Drowned Diner"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Meat Locker", "Drowned Diner"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Meat Locker"].mana_cost_str == "{2}{U}"
+    assert by_name["Drowned Diner"].mana_cost_str == "{3}{U}{U}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Drowned Diner", "Meat Locker"]
+
+
+def test_meat_locker_taps_and_stuns_target_on_unlock():
+    """Casting Meat Locker unlocks it; the door trigger taps the
+    target creature and applies two stun counters."""
+    state = _new_state()
+    enemy = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Meat Locker // Drowned Diner"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Meat Locker"),
+    )
+    drain_stack(state)
+    assert enemy.tapped
+    assert enemy.stun_counters == 2
+
+
+def test_meat_locker_no_legal_target_is_noop():
+    """With no creatures on the battlefield the door trigger
+    resolves harmlessly (up-to-one optional target)."""
+    state = _new_state()
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Meat Locker // Drowned Diner"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Meat Locker"),
+    )
+    drain_stack(state)
+    # No crash; Room landed unlocked on Meat Locker.
+    bf_room = next(o for o in state.battlefield if o.id == room_card.id)
+    assert bf_room.unlocked_halves == frozenset({"Meat Locker"})
+
+
+def test_drowned_diner_draws_three_then_discards_on_unlock():
+    """Drowned Diner's door trigger draws 3 then discards 1 (net +2
+    cards in hand)."""
+    state = _new_state()
+    # Stock a 3-card library so DrawCards has something to draw.
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Meat Locker // Drowned Diner"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Meat Locker"})
+    # Pay to unlock Drowned Diner ({3}{U}{U}).
+    for _ in range(5):
+        _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    pre_hand = len(state.players[0].hand)
+    pre_grave = len(state.players[0].graveyard)
+    apply_action(
+        state, 0,
+        UnlockRoomHalf(card_id=room.id, half_name="Drowned Diner"),
+    )
+    drain_stack(state)
+    # +3 from Draw, -1 from DiscardSelf → net +2 in hand.
+    assert len(state.players[0].hand) == pre_hand + 2
+    # Discarded card landed in graveyard.
+    assert len(state.players[0].graveyard) == pre_grave + 1
+
+
+def test_drowned_diner_locked_does_not_fire_on_etb():
+    """Casting for the Meat Locker half doesn't fire the Drowned
+    Diner trigger."""
+    state = _new_state()
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Meat Locker // Drowned Diner"],
+        owner_id=0,
+    )
+    pre_hand = len(state.players[0].hand)
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Meat Locker"),
+    )
+    drain_stack(state)
+    # Casting drops the Room from hand → -1. No card draw fired
+    # (Drowned Diner locked, Meat Locker half doesn't draw).
+    assert len(state.players[0].hand) == pre_hand - 1
