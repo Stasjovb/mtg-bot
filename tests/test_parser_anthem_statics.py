@@ -364,14 +364,11 @@ def test_memorial_team_leader_is_claimed_end_to_end():
     assert "Memorial Team Leader" in claimed
 
 
-def test_tannuk_steadfast_second_remains_unclaimed():
-    # Tannuk's first line ("Other creatures you control have haste.")
-    # is now parser-recognized, but the second line ("Artifact cards
-    # and red creature cards in your hand have warp {2}{R}.") is an
-    # unmodeled grant-on-cards-in-hand effect that no parser owns.
-    # The card therefore still falls out of the claim set on the
-    # second clause; pinning this avoids a false sense of progress
-    # the next time someone greps for "Tannuk" while reviewing this
-    # change.
+def test_tannuk_steadfast_second_claimed_by_bespoke():
+    # Tannuk, Steadfast Second is now claimed via _BESPOKE_LEGENDARY_CREATURES
+    # in creature_builder.py. The second clause ("Artifact cards and red
+    # creature cards in your hand have warp {2}{R}.") is an unmodeled
+    # grant-on-cards-in-hand effect that is intentionally dropped in the
+    # bespoke entry; the card ships with only the haste-granting static.
     claimed = OracleParserCardSource().claimed_names
-    assert "Tannuk, Steadfast Second" not in claimed
+    assert "Tannuk, Steadfast Second" in claimed

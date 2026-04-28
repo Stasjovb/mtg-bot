@@ -1354,13 +1354,13 @@ def test_build_creature_printing_handles_ward_with_random_discard_rider():
     assert printing.ward_discard_chosen is False
 
 
-def test_source_does_not_claim_alpharael_stonechosen():
-    """Alpharael's Void-rider trigger effect (``defending player loses
-    half their life, rounded up``) is out of scope, so the card
-    remains unclaimed even after batch 20 wired the
-    ``Ward—Discard a card at random.`` keyword shape."""
+def test_source_claims_alpharael_stonechosen():
+    """Alpharael, Stonechosen is now claimed via _BESPOKE_LEGENDARY_CREATURES
+    in creature_builder.py. The Void-rider trigger
+    (``DefendingPlayerLosesHalfLifeRoundedUp``) is wired directly in the
+    bespoke entry, bypassing the grammar entirely."""
     source = OracleParserCardSource()
-    assert "Alpharael, Stonechosen" not in source.claimed_names
+    assert "Alpharael, Stonechosen" in source.claimed_names
 
 
 def test_source_claims_sunset_saboteur():
