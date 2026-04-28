@@ -177,3 +177,54 @@ def test_piggy_bank_claimed_by_parser():
     # bare-name token grammar resolving against the new Treasure
     # registry entry.
     assert "Piggy Bank" in _claimed_names()
+
+
+# ---------- ``another target creature you control`` pump+grant ----------
+
+
+def test_parse_another_target_creature_you_control_pump_and_grant():
+    # The ``another`` qualifier on the existing pump+grant primitive
+    # excludes the trigger source from the legal target pool. Pairs
+    # with ``you control`` to gate targets to OTHER creatures the
+    # controller controls; both flags are flipped on the produced
+    # engine class.
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    phrase = (
+        "another target creature you control gets +1/+0 and gains "
+        "indestructible until end of turn"
+    )
+    parsed = _parse_effect_phrase(phrase)
+    assert parsed == PumpTargetCreatureUntilEOT(
+        power_bonus=1,
+        toughness_bonus=0,
+        granted_keywords=frozenset({"indestructible"}),
+        you_control_only=True,
+        exclude_self=True,
+    )
+
+
+def test_pump_and_grant_bare_form_unchanged():
+    # Belt-and-suspenders that adding the optional ``another `` prefix
+    # to the regex didn't accidentally widen or narrow the bare
+    # ``target creature gets ...`` shape. The bare form must continue
+    # to produce ``you_control_only=False, exclude_self=False``.
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    parsed = _parse_effect_phrase(
+        "target creature gets +2/+2 and gains trample until end of turn"
+    )
+    assert parsed == PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"trample"}),
+        you_control_only=False,
+        exclude_self=False,
+    )
+
+
+def test_hardened_escort_claimed_by_parser():
+    # Hardened Escort ``{2}{W}`` 2/2 Human Soldier. Single oracle
+    # line: ``Whenever this creature attacks, another target creature
+    # you control gets +1/+0 and gains indestructible until end of
+    # turn.`` Claims via the existing this-creature-attacks trigger
+    # predicate and the new ``another``-qualified pump+grant primitive.
+    assert "Hardened Escort" in _claimed_names()
