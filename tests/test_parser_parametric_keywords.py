@@ -225,25 +225,15 @@ def test_build_creature_printing_skips_qualified_hexproof():
 # ---------- end-to-end EoE source claim ----------
 
 
-def test_source_does_not_claim_survey_mechan():
-    """Survey Mechan's oracle text is::
-
-        Flying
-        Hexproof
-        {10}, Sacrifice this creature: It deals 3 damage to any
-        target. Target player draws three cards and gains 3 life.
-        This ability costs {X} less to activate, where X is the
-        number of differently named lands you control.
-
-    Adding ``Hexproof`` to ``_KEYWORD_LINES`` lets the keyword line
-    parse, but the activated ability with its bespoke ``X``-based
-    cost reduction has no generic-grammar surface form. The card
-    still falls through and remains unclaimed — this batch only
-    rounds out the evergreen list for any future bare-Hexproof
-    creature printing.
+def test_source_claims_survey_mechan():
+    """Survey Mechan is now claimed via ``_BESPOKE_ARTIFACT_CREATURES``
+    in ``creature_builder.py`` (artifact-creature-batch22).  The shipped
+    printing is a simplified vanilla: flying only, dropping hexproof and
+    the bespoke {10}/sac activated ability, matching the static registry
+    entry exactly.
     """
     source = OracleParserCardSource()
-    assert "Survey Mechan" not in source.claimed_names
+    assert "Survey Mechan" in source.claimed_names
 
 
 def test_source_claims_nutrient_block():
