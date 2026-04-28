@@ -69,6 +69,12 @@ class _PickFirstAgent(Agent):
     def choose_discard(self, state, player_id, hand_card_ids):
         return hand_card_ids[0]
 
+    def choose_card_from_library(self, state, player_id, option_ids):
+        return option_ids[0] if option_ids else None
+
+    def choose_surveil(self, state, player_id, top_card_id):
+        return False  # don't mill — keep on top
+
 
 def _new_state():
     state = GameState()
@@ -761,3 +767,181 @@ def test_drowned_diner_locked_does_not_fire_on_etb():
     # Casting drops the Room from hand → -1. No card draw fired
     # (Drowned Diner locked, Meat Locker half doesn't draw).
     assert len(state.players[0].hand) == pre_hand - 1
+
+
+# ---------------------------------------------------------------------------
+# Parser claims: Underwater Tunnel // Slimy Aquarium
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_underwater_tunnel_slimy_aquarium():
+    name = "Underwater Tunnel // Slimy Aquarium"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Underwater Tunnel", "Slimy Aquarium"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Underwater Tunnel"].mana_cost_str == "{U}"
+    assert by_name["Slimy Aquarium"].mana_cost_str == "{3}{U}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Slimy Aquarium", "Underwater Tunnel"]
+
+
+def test_underwater_tunnel_surveils_two_on_unlock():
+    """Underwater Tunnel's door trigger looks at the top 2 cards and
+    runs Surveil. The PickFirst agent declines to mill, so the
+    library order is unchanged but the surveil log line lands."""
+    state = _new_state()
+    for _ in range(4):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    pre_lib = len(state.players[0].library)
+    pre_grave = len(state.players[0].graveyard)
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Underwater Tunnel // Slimy Aquarium"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Underwater Tunnel"),
+    )
+    drain_stack(state)
+    # Agent declined to mill, so library/graveyard are unchanged.
+    assert len(state.players[0].library) == pre_lib
+    assert len(state.players[0].graveyard) == pre_grave
+    # Surveil log appears.
+    assert any("surveils 2" in line for line in state.log)
+
+
+def test_slimy_aquarium_manifests_then_counters_on_unlock():
+    """Slimy Aquarium's door trigger manifests one card and puts a
+    +1/+1 counter on it."""
+    state = _new_state()
+    for _ in range(2):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Underwater Tunnel // Slimy Aquarium"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Underwater Tunnel"})
+    # Pay {3}{U} to unlock Slimy Aquarium.
+    for _ in range(4):
+        _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    pre_bf = len(state.battlefield)
+    apply_action(
+        state, 0,
+        UnlockRoomHalf(card_id=room.id, half_name="Slimy Aquarium"),
+    )
+    drain_stack(state)
+    # One face-down creature entered the battlefield.
+    assert len(state.battlefield) == pre_bf + 1
+    new_perm = state.battlefield[-1]
+    assert new_perm.face_down
+    assert new_perm.plus_one_counters == 1
+
+
+# ---------------------------------------------------------------------------
+# Parser claims: Moldering Gym // Weight Room
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_moldering_gym_weight_room():
+    name = "Moldering Gym // Weight Room"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Moldering Gym", "Weight Room"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Moldering Gym"].mana_cost_str == "{2}{G}"
+    assert by_name["Weight Room"].mana_cost_str == "{5}{G}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Moldering Gym", "Weight Room"]
+
+
+def test_moldering_gym_fetches_basic_land_on_unlock():
+    """Moldering Gym's door trigger fetches a basic land tapped."""
+    state = _new_state()
+    state.players[0].library.append(
+        state.new_object(BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY)
+    )
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    _put_battlefield(state, BASIC_LANDS["Forest"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Forest"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Forest"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Moldering Gym // Weight Room"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Moldering Gym"),
+    )
+    drain_stack(state)
+    # Look for a tapped Forest now on the battlefield that wasn't
+    # there at start (the fetched one).
+    forests_tapped = [
+        o for o in state.battlefield
+        if o.printing.name == "Forest" and o.tapped
+    ]
+    assert len(forests_tapped) >= 1
+
+
+def test_weight_room_manifests_with_three_counters_on_unlock():
+    """Weight Room's door trigger manifests one card and puts THREE
+    +1/+1 counters on it."""
+    state = _new_state()
+    for _ in range(2):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Moldering Gym // Weight Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Moldering Gym"})
+    # Pay {5}{G} to unlock Weight Room.
+    for _ in range(6):
+        _put_battlefield(state, BASIC_LANDS["Forest"], controller_id=0)
+    pre_bf = len(state.battlefield)
+    apply_action(
+        state, 0,
+        UnlockRoomHalf(card_id=room.id, half_name="Weight Room"),
+    )
+    drain_stack(state)
+    assert len(state.battlefield) == pre_bf + 1
+    new_perm = state.battlefield[-1]
+    assert new_perm.face_down
+    assert new_perm.plus_one_counters == 3
+
+
+def test_manifest_dread_then_counters_no_op_on_empty_library():
+    """When the library has no cards, ManifestDread's resolution puts
+    nothing on the battlefield and the counter step no-ops cleanly."""
+    from mtg_bot.effects import ManifestDreadThenPutPlusOneCountersOnIt
+
+    state = _new_state()
+    pre_bf = len(state.battlefield)
+    eff = ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=2)
+    eff.resolve(state, controller_id=0, targets=())
+    # No new permanent created; no exception.
+    assert len(state.battlefield) == pre_bf

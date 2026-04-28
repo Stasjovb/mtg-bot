@@ -47,10 +47,13 @@ from mtg_bot.effects import (
     EachOpponentLosesLife,
     GainLife,
     LoseLife,
+    ManifestDreadThenPutPlusOneCountersOnIt,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    SearchLibraryForBasicLandTapped,
     Sequence,
+    Surveil,
     TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
@@ -263,6 +266,87 @@ def _build_meat_locker_drowned_diner() -> CardPrinting:
     )
 
 
+def _build_underwater_tunnel_slimy_aquarium() -> CardPrinting:
+    """Underwater Tunnel // Slimy Aquarium ``{U}`` // ``{3}{U}``.
+
+    Underwater Tunnel oracle:
+        When you unlock this door, surveil 2.
+
+    Slimy Aquarium oracle:
+        When you unlock this door, manifest dread, then put a +1/+1
+        counter on that creature.
+
+    Both halves are pure door triggers. Underwater Tunnel uses the
+    existing ``Surveil(amount=2)`` primitive; Slimy Aquarium uses the
+    new ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=1)``
+    primitive — manifest dread then drop the counter on the just-
+    manifested face-down 2/2.
+    """
+    return make_room(
+        _half(
+            "Underwater Tunnel", "{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Surveil(amount=2),
+                ),
+            ),
+        ),
+        _half(
+            "Slimy Aquarium", "{3}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
+                        counter_amount=1,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _build_moldering_gym_weight_room() -> CardPrinting:
+    """Moldering Gym // Weight Room ``{2}{G}`` // ``{5}{G}``.
+
+    Moldering Gym oracle:
+        When you unlock this door, search your library for a basic
+        land card, put it onto the battlefield tapped, then shuffle.
+
+    Weight Room oracle:
+        When you unlock this door, manifest dread, then put three
+        +1/+1 counters on that creature.
+
+    Both halves are pure door triggers. Moldering Gym uses the
+    existing ``SearchLibraryForBasicLandTapped`` primitive (the same
+    one Lander tokens activate); Weight Room reuses
+    ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3)`` from
+    Slimy Aquarium with the bigger counter payload.
+    """
+    return make_room(
+        _half(
+            "Moldering Gym", "{2}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SearchLibraryForBasicLandTapped(),
+                ),
+            ),
+        ),
+        _half(
+            "Weight Room", "{5}{G}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
+                        counter_amount=3,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -272,6 +356,9 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Glassworks // Shattered Yard": _build_glassworks_shattered_yard,
     "Grand Entryway // Elegant Rotunda": _build_grand_entryway_elegant_rotunda,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
+    "Underwater Tunnel // Slimy Aquarium":
+        _build_underwater_tunnel_slimy_aquarium,
+    "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
 }
 
 
