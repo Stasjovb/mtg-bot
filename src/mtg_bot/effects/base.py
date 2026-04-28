@@ -192,6 +192,13 @@ class ActivationCost:
     # "Activate only if you control a creature with power 4 or
     # greater." Bonders' Enclave. Legal-actions gate only.
     requires_own_creature_power_at_least: int = 0
+    # "Activate only if you control a <T1> or a <T2>." Duskmourn Verge
+    # cycle (Blazemire Verge, Floodfarm Verge, …). The tuple holds the
+    # land-subtype names (e.g. ``("Plains", "Island")``); legal-actions
+    # checks at least one of those subtypes appears on a permanent the
+    # activator controls. Empty tuple disables the gate. Order does not
+    # matter; matching is OR'd across the tuple.
+    requires_control_of_subtype: tuple[str, ...] = ()
 
     def describe(self) -> str:
         parts: list[str] = []

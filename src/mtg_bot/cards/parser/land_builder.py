@@ -821,6 +821,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if restricted_mana is not None:
         return restricted_mana
+    verge = _try_build_verge_dual_land(
+        card, text, supertypes, subtypes,
+    )
+    if verge is not None:
+        return verge
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1594,6 +1599,80 @@ def _try_build_restricted_mana_land(
                     produces=(("C", len(pips)),),
                     spend_restriction=tag,
                 ),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Duskmourn "Verge cycle" dual lands (Blazemire Verge, Floodfarm Verge,
+# Gloomlake Verge, Hushwood Verge, Thornspire Verge). Plain ``Land``,
+# no supertypes/subtypes, exactly two lines:
+#   1. ``{T}: Add {<C1>}.``
+#   2. ``{T}: Add {<C2>}. Activate only if you control a <T1> or a
+#      <T2>.``
+# The first ability is unconditional; the second produces the partner
+# color but is gated on the activator controlling at least one
+# permanent of either of the two named subtypes (always basic-land
+# subtypes on Verges). The gate threads through ``ActivationCost.
+# requires_control_of_subtype``; legal_actions consults effective_subtypes.
+_VERGE_FIRST_LINE_RE = re.compile(r"^\{T\}: Add \{([WUBRGC])\}\.$")
+_VERGE_SECOND_LINE_RE = re.compile(
+    r"^\{T\}: Add \{(?P<color>[WUBRGC])\}\. "
+    r"Activate only if you control an? (?P<t1>[A-Z][a-z]+) "
+    r"or an? (?P<t2>[A-Z][a-z]+)\.$"
+)
+
+
+def _try_build_verge_dual_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Verge-dual ``CardPrinting`` if ``text`` matches the
+    two-line Duskmourn Verge shape, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The two colors
+    must differ; the gated second activation requires the activator to
+    control a permanent whose effective subtypes include at least one
+    of the two named subtypes (capitalized words on the right of the
+    "Activate only if you control a X or a Y" clause).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    first = _VERGE_FIRST_LINE_RE.match(lines[0])
+    if first is None:
+        return None
+    second = _VERGE_SECOND_LINE_RE.match(lines[1])
+    if second is None:
+        return None
+    c1 = first.group(1)
+    c2 = second.group("color")
+    if c1 == c2:
+        return None
+    t1 = second.group("t1")
+    t2 = second.group("t2")
+    return make_utility_land(
+        card["name"],
+        produces=frozenset({c1, c2}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=((c1, 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True,
+                    requires_control_of_subtype=(t1, t2),
+                ),
+                effect=AddManaToPool(produces=((c2, 1),)),
                 is_mana_ability=True,
             ),
         ),

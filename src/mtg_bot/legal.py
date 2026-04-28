@@ -597,6 +597,21 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_big:
                     continue
+            if ability.cost.requires_control_of_subtype:
+                # Duskmourn Verge cycle: "Activate only if you control
+                # a <T1> or a <T2>." The activator must control at
+                # least one permanent whose effective subtypes include
+                # any of the listed names.
+                wanted = ability.cost.requires_control_of_subtype
+                has_subtype = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and any(
+                        st in effective_subtypes(state, o2) for st in wanted
+                    )
+                )
+                if not has_subtype:
+                    continue
             if ability.cost.exile_granting_equipment:
                 # The granting equipment must still be attached to
                 # the source. Legal when there's any equipment with
