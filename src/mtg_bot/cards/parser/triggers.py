@@ -92,6 +92,7 @@ from mtg_bot.effects.predicates import (
     IsNontoken,
     IsPlayer,
     IsSelf,
+    IsTapped,
     OpponentControlsMoreLandsThanYou,
     Predicate,
     SpellsCastThisTurn,
@@ -316,6 +317,40 @@ _VOID_GATE_PREFIX = (
 _TAPPED_CREATURES_GATE_PREFIX = "if you control two or more tapped creatures, "
 
 
+# DSK Survival ability-word prefix — when the trigger line starts with
+# ``Survival — At the beginning of <when>, …`` the prefix is a marker
+# that the produced ``TriggeredAbility`` is the Survival post-combat-
+# main fire. The ability word itself carries no rules consequence
+# (CR 207.2c — ability words are flavor-only labels), so we strip the
+# prefix and let the body parse through the same path as any other
+# ``At the beginning of …`` line. Detecting it explicitly here keeps
+# the strip surface narrow: the generic ``_strip_ability_word_prefix``
+# helper above only removes ability-word prefixes in front of
+# ``When``/``Whenever`` bodies (its lookahead guards against accidental
+# matches in type-line strings), so the ``Survival — At …`` shape
+# doesn't flow through it. Mirrors the ``Void — `` precedent
+# (``_VOID_PREFIX``) — same shape, no flag because Survival's gate is
+# the standard ``IsTapped`` intervening-if predicate, not an engine-
+# wide flag like ``requires_void``.
+_SURVIVAL_PREFIX = "Survival — "
+
+
+# Survival-rider middle clause — the "intervening-if" surface text on a
+# Survival ``At the beginning of your second main phase`` line. The
+# body parser strips this prefix and AND-s the
+# ``IsSelf() & IsTapped()`` predicate onto the trigger's base
+# predicate, so the resulting ``TriggeredAbility`` fires only when the
+# source is tapped at the start of its controller's second main phase.
+# Two surface variants exist in print: the canonical
+# ``"if this creature is tapped, "`` (every non-named printing) and a
+# named-self variant where the printing's own short name appears in
+# place of ``"this creature"`` (Kona, Rescue Beastie / Rip, Spawn
+# Hunter). The named variant is normalized into the canonical
+# ``"this creature"`` form by ``_substitute_self_name`` before this
+# lookup runs, so we only need to recognize the canonical phrase here.
+_SURVIVAL_GATE_PREFIX = "if this creature is tapped, "
+
+
 # Time-condition phrases for the ``At the beginning of`` line shape →
 # tuple of (Event, Predicate). The condition is the verbatim oracle
 # phrase between ``At the beginning of`` and the first ``, ``
@@ -348,6 +383,19 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # ``each combat`` so only the controller-gated form is wired.
     "combat on your turn": (
         Event.BEGINNING_OF_COMBAT, Controlled(YOU),
+    ),
+    # ``At the beginning of your second main phase`` — DSK Survival
+    # ability-word trigger. Every printed Survival creature in
+    # Duskmourn carries the same surface shape:
+    # ``Survival — At the beginning of your second main phase, if this
+    # creature is tapped, <effect>.`` The ``Controlled(YOU)`` arm gates
+    # to the active player's own post-combat main; the ``if this
+    # creature is tapped`` intervening-if clause is handled separately
+    # by ``_parse_at_the_beginning_of_line`` (it AND-s an
+    # ``IsSelf() & IsTapped()`` predicate onto the trigger). Mirrors
+    # the ``your end step`` / ``combat on your turn`` precedent.
+    "your second main phase": (
+        Event.BEGINNING_OF_POSTCOMBAT_MAIN, Controlled(YOU),
     ),
 }
 
@@ -886,6 +934,7 @@ def _substitute_self_name(line: str, name: str) -> str:
 def _parse_at_the_beginning_of_line(
     match: "re.Match[str]",
     requires_void: bool = False,
+    is_survival: bool = False,
 ) -> TriggeredAbility | None:
     """Body parser for ``At the beginning of <when>, <effect>.`` lines.
 
@@ -941,6 +990,31 @@ def _parse_at_the_beginning_of_line(
         return TriggeredAbility(
             event=event, predicate=predicate, effect=inner,
             requires_void=True,
+        )
+    # Survival rider — the line was preceded by a ``Survival — ``
+    # prefix. The body must carry the verbatim ``if this creature is
+    # tapped, `` middle clause; strip it and parse the remainder as a
+    # bare effect. The intervening-if gate becomes the predicate
+    # ``IsSelf() & IsTapped()``, AND-ed onto the trigger's base
+    # predicate (``Controlled(YOU)``) so the firing condition reads
+    # "the source's controller is the active player AND the source is
+    # tapped" — matching CR 603.4 trigger-time intervening-if check on
+    # the dispatched event. Tried BEFORE the tapped-creatures effect-
+    # wrapper below because the two prefixes are distinguished by the
+    # caller's ``is_survival`` flag (no printing today combines a
+    # Survival rider with a tapped-creatures gate). Mirrors the Void
+    # rider precedent above structurally.
+    if is_survival:
+        if not body.startswith(_SURVIVAL_GATE_PREFIX):
+            return None
+        inner_phrase = body[len(_SURVIVAL_GATE_PREFIX):]
+        inner = _parse_effect_phrase(inner_phrase)
+        if inner is None:
+            return None
+        return TriggeredAbility(
+            event=event,
+            predicate=predicate & IsSelf() & IsTapped(),
+            effect=inner,
         )
     # Tapped-creatures effect-wrapper variant: ``if you control two or
     # more tapped creatures, <inner-effect>``. Detect the prefix, parse
@@ -1068,10 +1142,28 @@ def _parse_triggered_ability_line(
     ):
         at_line = at_line[len(_VOID_PREFIX):]
         requires_void = True
+    # ``Survival — `` ability-word prefix on an ``At the beginning of``
+    # body. Strip the prefix and thread the flag through to the body
+    # parser, which will then expect the canonical ``if this creature
+    # is tapped, `` middle clause and AND
+    # ``IsSelf() & IsTapped()`` onto the trigger predicate. Mirrors
+    # the ``Void —`` strip above structurally — both prefixes attach
+    # to a turn-structure trigger and modify how the body parses, but
+    # ``Survival`` lands its gate as a predicate (no engine flag) while
+    # ``Void`` sets the ``requires_void`` flag.
+    is_survival = False
+    if (
+        at_line.startswith(_SURVIVAL_PREFIX)
+        and at_line[len(_SURVIVAL_PREFIX):].startswith("At the beginning of ")
+    ):
+        at_line = at_line[len(_SURVIVAL_PREFIX):]
+        is_survival = True
     at_match = _AT_THE_BEGINNING_OF_LINE.match(at_line)
     if at_match is not None:
         parsed = _parse_at_the_beginning_of_line(
-            at_match, requires_void=requires_void,
+            at_match,
+            requires_void=requires_void,
+            is_survival=is_survival,
         )
         if parsed is not None:
             return parsed
