@@ -80,6 +80,48 @@ _SPELL_VOID_DAMAGE_REPLACEMENT = (
 )
 
 
+# Sentence-boundary splitter for multi-sentence oracle-text lines.
+# Some EoE printings pack two effect sentences onto a single oracle
+# line separated by ``. `` rather than ``\n`` (e.g. Radiant Strike's
+# ``"Destroy target artifact or tapped creature. You gain 3 life."``).
+# We carve the line at the period-then-uppercase boundary so each
+# sentence flows through the per-clause parser independently.
+#
+# The negative lookahead for ``If you do,`` keeps the splitter from
+# breaking the ``You may pay/sacrifice/discard {COST}. If you do,
+# <inner-effect>.`` family of compound primitives — those are matched
+# as a single phrase by ``_YOU_MAY_PAY_THEN_EFFECT`` /
+# ``_OPTIONAL_DISCARD_THEN_DRAW`` / ``_OPTIONAL_SAC_ANOTHER_FOR_*``
+# down in ``effects``, and the embedded sentence boundary inside
+# those phrases is required (the regexes match a literal ``\. ``
+# between the cost and the consequence).
+#
+# Decimal numbers and abbreviations don't appear in MTG oracle text,
+# so a simple ``period + whitespace + uppercase`` boundary suffices —
+# no need for a fuller sentence tokenizer.
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=\.)\s+(?=[A-Z])(?!If you do,)")
+
+
+def _split_sentences(line: str) -> list[str]:
+    """Split a single oracle-text line at sentence boundaries.
+
+    Returns ``[line]`` unchanged when the line contains no internal
+    boundary. Otherwise returns the list of per-sentence pieces, each
+    with surrounding whitespace stripped. Empty pieces are filtered
+    out so a stray double-period or trailing whitespace doesn't
+    inject blank clauses.
+
+    The boundary is ``period + whitespace + uppercase letter``, with
+    a negative lookahead for ``If you do,`` so the
+    ``You may pay/sacrifice/discard {COST}. If you do, …`` compound
+    primitives don't get split — those are matched as a single phrase
+    by the effect grammar and the embedded sentence boundary inside
+    them is load-bearing.
+    """
+    pieces = [p.strip() for p in _SENTENCE_BOUNDARY_RE.split(line)]
+    return [p for p in pieces if p]
+
+
 # Spell-only keyword preamble: a leading clause that's just a static
 # keyword followed by its parenthesized reminder text. The keyword
 # line itself contributes no ``Effect`` — its behavior is wired via
@@ -197,8 +239,18 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     less to cast if <condition>.`` cost-reduction riders are likewise
     dropped here — the rule is captured separately by
     ``_detect_cost_reductions`` and threaded onto the resulting
-    ``CardPrinting`` via the ``cost_reductions`` kwarg. Returns
-    ``None`` if any surviving clause fails to parse.
+    ``CardPrinting`` via the ``cost_reductions`` kwarg.
+
+    A single oracle-text line that packs two effect sentences
+    separated by ``. `` (Radiant Strike's
+    ``"Destroy target artifact or tapped creature. You gain 3 life."``,
+    Sami's Curiosity's ``"You gain 2 life. Create a Lander token."``)
+    is further carved at the sentence boundary by ``_split_sentences``
+    after reminder-text stripping and cost-reduction dropping. Each
+    resulting sentence is then a clause in its own right — the
+    Sequence combinator path picks them up the same way it would for
+    a printing that put each sentence on its own ``\\n``-separated
+    line. Returns ``None`` if any surviving clause fails to parse.
     """
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
@@ -222,6 +274,13 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     clauses = [
         c for c in clauses if _parse_cost_reduction_line(c) is None
     ]
+    # Carve any line that packs two effect sentences on a single
+    # ``. ``-separated line into independent clauses. Done AFTER
+    # reminder-text stripping (so quoted/parenthesized inner periods
+    # don't fire) and AFTER cost-reduction dropping (so a multi-
+    # sentence rider — none ship today, but defensive — never gets
+    # half-dropped). Single-sentence clauses round-trip unchanged.
+    clauses = [s for c in clauses for s in _split_sentences(c)]
     if not clauses:
         return None
     if len(clauses) == 1:
