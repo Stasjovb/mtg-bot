@@ -1,14 +1,14 @@
 """Tests for batch-19 whole-spell exact-text dispatch additions in
 ``parser.spell_builder``.
 
-Batch 19 extends ``_WHOLE_SPELL_EXACT_TEXT`` with two counterspell
-shapes whose printed riders aren't modeled engine-side. Both
-spells' STATIC entries ship the bare ``CounterTargetSpell()`` —
-the rider is dropped because the relevant engine machinery isn't
-in place. Per the parser-is-right rule the parser only claims a
-deliberately-simplified spell when the base mechanic still matches
-the printed effect (a counterspell is still a counterspell once the
-rider's gone); when the static stand-in changes the spell's *intent*
+Batch 19 extends ``_WHOLE_SPELL_EXACT_TEXT`` with three new entries —
+two counterspell shapes whose static drops a printed rider, and one
+3-mode modal whose per-mode primitives are one-offs. Per the parser-
+is-right rule the parser only claims a deliberately-simplified spell
+when the base mechanic still matches the printed effect (a
+counterspell is still a counterspell once the rider's gone; a modal
+spell stays modal even if a per-mode sub-effect drops planeswalker
+targeting). When the static stand-in changes the spell's *intent*
 entirely (e.g. Pull Through the Weft's dual-target sequence becoming
 a single-target return; Terminal Velocity's put-from-hand composite
 becoming a token-creation spell), the parser stays unclaimed. The
@@ -30,6 +30,20 @@ Newly claimed spells:
   counter Mana Leak shape. The trailing parenthesized Lander
   reminder text is stripped before dispatch.
 
+* **Archenemy's Charm** ``{B}{B}{B}`` Instant — Choose-one modal
+  with three one-off-per-mode primitives:
+  ``ExileTargetCreature()``,
+  ``ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1)``,
+  and
+  ``PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+  amount=2, granted_keywords={'lifelink'})``. The per-mode parser
+  can't claim it (none of the three mode lines parse as standalone
+  spell-effect phrases); whole-spell exact-text dispatch returns the
+  full ``ModalChooseOne``. Mode 1's ``or planeswalker`` and Mode 2's
+  ``and/or planeswalker`` simplifications mirror Warping Wail's
+  same-shape Mode 1 (planeswalkers aren't fully modeled in the EoE
+  pool yet).
+
 Each spell is exercised by:
   - A claim test confirming the parser's ``claimed_names`` includes
     it (end-to-end via the parser source).
@@ -44,7 +58,13 @@ Each spell is exercised by:
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import CounterTargetSpell
+from mtg_bot.cards.base import (
+    CounterTargetSpell,
+    ExileTargetCreature,
+    ModalChooseOne,
+    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+    ReturnUpToNCreaturesFromYourGraveyardToHand,
+)
 from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
@@ -96,6 +116,36 @@ def test_dispatch_divert_disaster_returns_engine_class():
         "If they do, you create a Lander token."
     )
     assert eff == CounterTargetSpell()
+
+
+def test_archenemys_charm_claimed_by_parser():
+    # Archenemy's Charm ``{B}{B}{B}`` Instant — 3-mode Choose-one
+    # modal whose per-mode primitives are one-off engine classes.
+    # Whole-spell exact-text dispatch returns the full
+    # ``ModalChooseOne`` the static side ships.
+    assert "Archenemy's Charm" in _claimed_names()
+
+
+def test_dispatch_archenemys_charm_returns_engine_class():
+    # Archenemy's Charm's printed text is a multi-line modal — the
+    # dispatch key carries the ``Choose one —`` header on its own
+    # line plus three bullet mode lines, with literal ``\n`` between
+    # them (no reminder text to strip in this spell).
+    eff = _try_whole_spell_exact_text(
+        "Choose one —\n"
+        "• Exile target creature or planeswalker.\n"
+        "• Return one or two target creature and/or planeswalker "
+        "cards from your graveyard to your hand.\n"
+        "• Put two +1/+1 counters on target creature you control. "
+        "It gains lifelink until end of turn."
+    )
+    assert eff == ModalChooseOne(modes=(
+        ExileTargetCreature(),
+        ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1),
+        PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+            amount=2, granted_keywords=frozenset({"lifelink"}),
+        ),
+    ))
 
 
 def test_dispatch_unrelated_text_returns_none():
