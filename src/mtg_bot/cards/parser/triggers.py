@@ -632,6 +632,17 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
         (Event.ENTERS, IsSelf()),
         (Event.ATTACKS, IsSelf()),
     ),
+    # ``When this artifact enters or leaves the battlefield`` (Cryogen
+    # Relic) — fires once on entry and once on leave. Mirrors the
+    # static-registry layout for Cryogen Relic, which carries two
+    # separate ``TriggeredAbility`` entries (ENTERS+IsSelf, then
+    # LEAVES_BATTLEFIELD+IsSelf) with the same effect. The type-blind
+    # ``IsSelf()`` predicate handles the artifact identity check —
+    # mirrors the ``"this artifact enters"`` entry above.
+    "this artifact enters or leaves the battlefield": (
+        (Event.ENTERS, IsSelf()),
+        (Event.LEAVES_BATTLEFIELD, IsSelf()),
+    ),
 }
 
 

@@ -235,17 +235,17 @@ def test_build_artifact_printing_skips_spacecraft():
 
 def test_build_artifact_printing_skips_unrecognized_line():
     """An artifact whose body contains a clause outside the unified
-    grammar (here a composite ``"enters or leaves"`` trigger) skips
-    silently - same fall-through behavior as the other builders. We
-    must never half-claim a printing by silently dropping abilities
+    grammar (here a zone-change ``is put into a graveyard`` trigger)
+    skips silently - same fall-through behavior as the other builders.
+    We must never half-claim a printing by silently dropping abilities
     the parser doesn't model yet."""
     card = {
-        "name": "Hand-Crafted Composite-Trigger Artifact",
-        "mana_cost": "{1}{U}",
+        "name": "Hand-Crafted Zone-Change-Trigger Artifact",
+        "mana_cost": "{1}",
         "type_line": "Artifact",
         "oracle_text": (
-            "When this artifact enters or leaves the battlefield, "
-            "draw a card."
+            "When this artifact is put into a graveyard from "
+            "the battlefield, draw a card."
         ),
     }
     assert _build_artifact_printing(card) is None

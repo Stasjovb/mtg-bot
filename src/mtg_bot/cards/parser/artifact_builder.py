@@ -28,23 +28,25 @@ quoted granted abilities, or any line the unified parser doesn't
 recognize — falls through and the artifact is silently skipped,
 mirroring the creature/spell/land/equipment/spacecraft builders.
 
-Today the only Edge of Eternities pure-artifact whose oracle text fits
-end-to-end is **Melded Moxite**:
+Today the EoE pure-artifacts the unified clause grammar claims are:
 
-    When this artifact enters, you may discard a card. If you do,
-    draw two cards.
-    {3}, Sacrifice this artifact: Create a tapped 2/2 colorless Robot
-    artifact creature token.
+* **Melded Moxite** — typed-self ETB optional discard-then-draw plus a
+  ``{3}, Sacrifice this artifact`` token-creating activation.
+* **Thaumaton Torpedo** — single ``{6}, {T}, Sacrifice this artifact``
+  activation with a ``destroy target nonland permanent`` payload and
+  the inline ``This ability costs {3} less to activate if you attacked
+  with a Spacecraft this turn.`` cost-reduction rider.
+* **Cryogen Relic** — compound ``"enters or leaves the battlefield"``
+  trigger drawing a card on each arm, plus a ``{1}{U}, Sacrifice this
+  artifact`` activation that puts a stun counter on up to one tapped
+  creature.
 
-Both lines parse via ``_parse_clause`` (the ETB phrase ``"this
-artifact enters"`` is a known typed-self trigger phrase, and the
-``OptionalDiscardCardThenDrawN``/``CreateToken`` effects are in the
-unified effect grammar). Other EoE pure artifacts carry custom
-effects (Pinnacle Starcage, Requiem Monolith, Memorial Vault,
-All-Fates Scroll, The Endstone, Thrumming Hivepool) or grammar
-shapes that the unified parser doesn't yet model (Cryogen Relic's
-"enters or leaves" composite, Nutrient Block's
-"is put into a graveyard" zone-change trigger), and fall through.
+Other EoE pure artifacts carry custom effects (Pinnacle Starcage,
+Requiem Monolith, Memorial Vault, All-Fates Scroll, The Endstone,
+Thrumming Hivepool) or grammar shapes the unified parser doesn't yet
+model (Nutrient Block's ``"is put into a graveyard"`` zone-change
+trigger, Dubious Delicacy's ``up to one`` optional negative pump),
+and fall through.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this

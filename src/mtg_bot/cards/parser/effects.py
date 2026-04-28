@@ -57,6 +57,7 @@ from mtg_bot.cards.base import (
     PumpTargetArtifactOrCreatureUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+    PutStunCounterOnTappedCreature,
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnOpponentsCreature,
@@ -701,6 +702,15 @@ _TAP_TARGET_OPPONENT_PERMANENT_AND_STUN_IT = re.compile(
     r"^tap target artifact or creature an opponent controls "
     r"and put a stun counter on it$"
 )
+# "Put a stun counter on up to one target tapped creature." — Cryogen
+# Relic's activated ability. Maps to the existing
+# ``PutStunCounterOnTappedCreature`` engine class whose
+# ``legal_targets`` filters the battlefield to currently-tapped
+# creatures and whose ``resolve`` is a no-op when no target is chosen
+# (the ``up to one`` optionality fizzles cleanly if the pool is empty).
+_PUT_STUN_COUNTER_UP_TO_ONE_TAPPED = re.compile(
+    r"^put a stun counter on up to one target tapped creature$"
+)
 # "Discard a card" / "you discard a card" / "you discard N cards" —
 # controller-discards. The bare ``discard a card`` surface is what
 # appears post-compound-split for ``draw a card, then discard a card``
@@ -1316,6 +1326,13 @@ def _parse_effect(phrase: str) -> Effect | None:
         # apply to the same chosen target — the ``and`` is an
         # intra-effect conjunction, not a compound joiner.
         return TapTargetOpponentPermanentAndStunIt()
+    if _PUT_STUN_COUNTER_UP_TO_ONE_TAPPED.match(phrase) is not None:
+        # ``put a stun counter on up to one target tapped creature`` —
+        # Cryogen Relic's activated payload. ``up to one`` resolves as
+        # a no-op fizzle when no legal target is chosen; the engine
+        # class's ``legal_targets`` filters to currently-tapped
+        # creatures.
+        return PutStunCounterOnTappedCreature()
     if _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM.match(
         phrase
     ) is not None:
