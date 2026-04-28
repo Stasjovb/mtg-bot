@@ -20,6 +20,9 @@ from mtg_bot.cards.parser.creature_builder import _build_creature_printing
 from mtg_bot.cards.parser.equipment_builder import _build_equipment_printing
 from mtg_bot.cards.parser.land_builder import _build_land_printing
 from mtg_bot.cards.parser.spacecraft_builder import _build_spacecraft_printing
+from mtg_bot.cards.parser.enchantment_builder import (
+    _build_enchantment_printing,
+)
 from mtg_bot.cards.parser.special_guests_builder import (
     _build_special_guest_printing,
 )
@@ -53,6 +56,8 @@ class OracleParserCardSource:
             # builder gates on ``card.set == "spg"`` so it can't claim
             # main-set cards.
             built = _build_special_guest_printing(card)
+            if built is None:
+                built = _build_enchantment_printing(card)
             if built is None:
                 built = _build_creature_printing(card)
             if built is None:
