@@ -1,22 +1,34 @@
 """Tests for batch-19 whole-spell exact-text dispatch additions in
 ``parser.spell_builder``.
 
-Batch 19 extends ``_WHOLE_SPELL_EXACT_TEXT`` with simplified-static
-counterspell shapes whose printed riders aren't modeled engine-side:
+Batch 19 extends ``_WHOLE_SPELL_EXACT_TEXT`` with two counterspell
+shapes whose printed riders aren't modeled engine-side. Both
+spells' STATIC entries ship the bare ``CounterTargetSpell()`` —
+the rider is dropped because the relevant engine machinery isn't
+in place. Per the parser-is-right rule the parser only claims a
+deliberately-simplified spell when the base mechanic still matches
+the printed effect (a counterspell is still a counterspell once the
+rider's gone); when the static stand-in changes the spell's *intent*
+entirely (e.g. Pull Through the Weft's dual-target sequence becoming
+a single-target return; Terminal Velocity's put-from-hand composite
+becoming a token-creation spell), the parser stays unclaimed. The
+shared ``test_source_skips_cards_with_unsupported_clauses`` test
+guards that boundary on Pull Through the Weft.
+
+Newly claimed spells:
 
 * **Unravel** ``{1}{U}{U}`` Instant — ``Counter target spell. If the
   amount of mana spent to cast that spell was less than its mana
-  value, you draw a card.`` The static ships the bare
-  ``CounterTargetSpell()`` and drops the mana-spent-conditional draw
-  rider; the engine doesn't track per-spell cast-time mana
-  accounting. The whole-spell tier mirrors that simplification.
+  value, you draw a card.`` The static drops the mana-spent-
+  conditional draw rider; the engine doesn't track per-spell cast-
+  time mana accounting.
 
 * **Divert Disaster** ``{1}{U}`` Instant — ``Counter target spell
   unless its controller pays {2}. If they do, you create a Lander
-  token.`` The static ships the bare ``CounterTargetSpell()`` (no
-  pay-cost branching, no Lander creation) — the engine doesn't yet
-  model the pay-cost-or-counter Mana Leak shape. The trailing
-  parenthesized Lander reminder text is stripped before dispatch.
+  token.`` The static drops both the pay-cost branching and the
+  Lander rider — the engine doesn't yet model the pay-cost-or-
+  counter Mana Leak shape. The trailing parenthesized Lander
+  reminder text is stripped before dispatch.
 
 Each spell is exercised by:
   - A claim test confirming the parser's ``claimed_names`` includes
