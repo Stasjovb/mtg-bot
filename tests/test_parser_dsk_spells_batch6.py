@@ -45,6 +45,13 @@ Cards claimed in this batch:
   "Enchantment"}))``; mode 2 is dropped per the parser-is-right
   precedent set by Archenemy's Charm (claim a well-modeled mode of a
   multi-mode modal rather than leaving the spell unclaimed).
+
+* **Untimely Malfunction** ``{1}{R}`` Instant — three-mode modal
+  whose modes 2 ("Change the target of target spell or ability...")
+  and 3 ("One or two target creatures can't block this turn.") have
+  no per-mode primitives. Whole-spell dispatch simplifies to mode 1's
+  ``DestroyTargetArtifact()``; modes 2 and 3 are dropped per the
+  parser-is-right precedent set by Get Out / Archenemy's Charm.
 """
 
 from __future__ import annotations
@@ -207,3 +214,37 @@ def test_get_out_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Get Out"]
     assert p.mana_cost_str == "{U}{U}"
+
+
+# ---------- Untimely Malfunction ----------
+
+def test_untimely_malfunction_claimed_by_parser():
+    # Untimely Malfunction ``{1}{R}`` Instant — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (3-mode modal: destroy artifact / redirect spell /
+    # creatures can't block) to mode 1's ``DestroyTargetArtifact()``.
+    assert "Untimely Malfunction" in _claimed_names()
+
+
+def test_untimely_malfunction_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``DestroyTargetArtifact()`` engine class — base
+    # mechanic preserved (artifact destruction), modes 2 and 3
+    # dropped per parser-is-right.
+    from mtg_bot.cards.base import DestroyTargetArtifact
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Untimely Malfunction"]
+    assert p.spell_effect == DestroyTargetArtifact()
+
+
+def test_untimely_malfunction_is_instant():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Untimely Malfunction"]
+    assert "Instant" in p.card_types
+
+
+def test_untimely_malfunction_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Untimely Malfunction"]
+    assert p.mana_cost_str == "{1}{R}"

@@ -59,6 +59,7 @@ from mtg_bot.cards.base import (
     DealDamageToTargetCreatureWithExcessLanderRider,
     DealNDamageToEachCreature,
     DepressurizeEffect,
+    DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
@@ -1193,6 +1194,32 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     ): CounterTargetSpell(
         filter_types=frozenset({"Creature", "Enchantment"}),
     ),
+    # Untimely Malfunction (Duskmourn) ``{1}{R}`` Instant — three-mode
+    # modal: ``• Destroy target artifact.``, ``• Change the target of
+    # target spell or ability with a single target.``, and ``• One or
+    # two target creatures can't block this turn.``. The static side
+    # simplifies to bare ``DestroyTargetArtifact()`` (mode 1) because:
+    # (1) the per-mode parser (``_parse_modal_choose_one``) can't
+    #     claim this spell — modes 2 and 3 don't parse as standalone
+    #     spell-effect phrases (the engine has no
+    #     ``ChangeTargetOfSpellOrAbility`` redirect primitive, and no
+    #     per-creature ``cant_block_this_turn`` flag — same gap as
+    #     Trial of Agony's can't-block rider);
+    # (2) mode 1 is a faithful, well-modeled artifact destruction —
+    #     ``DestroyTargetArtifact()`` exactly captures the printed
+    #     scope, the same primitive Untimely Malfunction's mode 1
+    #     exact-text would land on.
+    # Same parser-is-right precedent as Get Out — claim a well-modeled
+    # mode of a multi-mode modal rather than leaving the spell
+    # unclaimed; modes 2 and 3 are dropped because they have no
+    # per-mode primitive.
+    (
+        "Choose one —\n"
+        "• Destroy target artifact.\n"
+        "• Change the target of target spell or ability with a "
+        "single target.\n"
+        "• One or two target creatures can't block this turn."
+    ): DestroyTargetArtifact(),
 }
 
 
