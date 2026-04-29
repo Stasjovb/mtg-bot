@@ -3296,7 +3296,10 @@ def test_specimen_freighter_attacks_trigger_mills_4_from_each_opponent():
         _PRINTINGS["Specimen Freighter"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(freighter)
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     attacks_ability = next(
         ab for ab in freighter.printing.triggered_abilities
         if ab.event == Event.ATTACKS and ab.predicate == IsSelf()

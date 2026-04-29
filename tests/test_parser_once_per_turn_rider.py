@@ -23,12 +23,15 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.object_predicates import (
+    IsArtifact,
+)
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
-    IsArtifact,
     IsSelf,
+    Subject,
+    YOU,
 )
 
 from mtg_bot.cards.source import get_active_source
@@ -55,7 +58,7 @@ def test_once_per_turn_rider_sets_flag_on_predicate_path():
     # Predicate is the existing ``another artifact you control enters``
     # phrase mapping — IsArtifact & Controlled(YOU) & ~IsSelf().
     assert parsed.predicate == (
-        IsArtifact() & Controlled(YOU) & ~IsSelf()
+        Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf()
     )
     assert parsed.effect == CreateToken(
         token_printing=TOKEN_PRINTINGS["Robot"], count=1,

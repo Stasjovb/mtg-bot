@@ -33,12 +33,15 @@ from mtg_bot.cards import (
     parse_mana_cost,
 )
 from mtg_bot.cards.base import DrawCards, make_creature
-from mtg_bot.effects.predicates import (
-    EVENT_SUBJECTS,
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     IsEnchantment,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    EVENT_SUBJECTS,
+    Event,
+    Subject,
+    YOU,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
@@ -99,22 +102,25 @@ def test_is_enchantment_matches_enchantment_subject():
     )
     obj = _put_battlefield(state, enchantment)
     assert "Enchantment" in enchantment.card_types
-    assert IsEnchantment().matches(state, {"obj": obj}, source=obj)
+    assert Subject("obj", IsEnchantment()).matches(
+        state, {"obj": obj}, source=obj,
+    )
 
 
 def test_is_enchantment_rejects_non_enchantment_subject():
     state = _new_state()
     bear = _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"])
-    assert not IsEnchantment().matches(state, {"obj": bear}, source=bear)
+    assert not Subject("obj", IsEnchantment()).matches(
+        state, {"obj": bear}, source=bear,
+    )
 
 
 def test_is_enchantment_handles_missing_subject():
-    # ``subject="missing"`` resolves to None — predicate evaluates false
-    # rather than raising. Mirrors the convention every other
-    # subject-scoped predicate uses (IsCreature / IsArtifact / etc.).
+    # ``Subject("missing", …)`` resolves to None — predicate evaluates
+    # false rather than raising.
     state = _new_state()
     bear = _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"])
-    assert not IsEnchantment(subject="missing").matches(
+    assert not Subject("missing", IsEnchantment()).matches(
         state, {"obj": bear}, source=bear,
     )
 
@@ -124,7 +130,7 @@ def test_is_enchantment_rejects_player_subject():
     # false rather than raising.
     state = _new_state()
     bear = _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"])
-    assert not IsEnchantment(subject="player").matches(
+    assert not Subject("player", IsEnchantment()).matches(
         state, {"player": state.players[0]}, source=bear,
     )
 

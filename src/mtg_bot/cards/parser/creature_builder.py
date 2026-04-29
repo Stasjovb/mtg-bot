@@ -123,19 +123,26 @@ from mtg_bot.cards.parser.printing_keywords import (
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.predicates import (
-    YOU,
-    Always,
-    Controlled,
-    Delirium,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasSubtype,
     IsArtifact,
     IsCreature,
     IsLand,
-    IsSelf,
     IsTapped,
+)
+from mtg_bot.effects.state_predicates import (
+    Delirium,
     SpellsCastThisTurn,
+)
+from mtg_bot.effects.predicates import (
+    YOU,
+    Always,
+    Controlled,
+    Event,
+    IsSelf,
+    Source,
+    StateBound,
+    Subject,
 )
 
 
@@ -183,7 +190,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     event=Event.IS_CAST,
                     predicate=(
                         Controlled(YOU, subject="controller")
-                        & SpellsCastThisTurn(n=2)
+                        & StateBound(SpellsCastThisTurn(n=2))
                     ),
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Drone"], count=1,
@@ -201,7 +208,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     event=Event.IS_CAST,
                     predicate=(
                         Controlled(YOU, subject="controller")
-                        & SpellsCastThisTurn(n=2)
+                        & StateBound(SpellsCastThisTurn(n=2))
                     ),
                     effect=ModalChooseOne(modes=(
                         CreateToken(
@@ -267,7 +274,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             keywords={"reach"},
             triggered_abilities=(
                 TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
                     effect=TerritorialBruntarLandfallEffect(),
                 ),
             ),
@@ -410,7 +417,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             grants_play_lands_from_graveyard=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
                     effect=SelfMill(amount=1),
                 ),
             ),
@@ -430,7 +437,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS,
                     predicate=(
-                        HasSubtype("Kavu") & Controlled(YOU) & ~IsSelf()
+                        Subject(None, HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()
                     ),
                     effect=PossibilityTechnicianETBEffect(),
                 ),
@@ -609,7 +616,7 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_POSTCOMBAT_MAIN,
-                    predicate=Controlled(YOU) & IsSelf() & IsTapped(),
+                    predicate=Controlled(YOU) & IsSelf() & Source(IsTapped()),
                     effect=HouseCartographerSurvivalEffect(),
                 ),
             ),
@@ -712,7 +719,7 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.IS_CAST,
                     predicate=(
-                        IsArtifact(subject="spell")
+                        Subject("spell", IsArtifact())
                         & Controlled(YOU, subject="controller")
                     ),
                     effect=CreateToken(
@@ -860,7 +867,7 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP,
-                    predicate=Controlled(YOU) & Delirium(),
+                    predicate=Controlled(YOU) & StateBound(Delirium()),
                     effect=OsseousSticktwisterEndStepEffect(),
                 ),
             ),
@@ -885,7 +892,7 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ATTACKS,
-                    predicate=IsSelf() & Delirium(),
+                    predicate=IsSelf() & StateBound(Delirium()),
                     effect=WickerfolkThresherAttackEffect(),
                 ),
             ),
@@ -992,7 +999,7 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.LEAVES_BATTLEFIELD,
-                    predicate=IsCreature() & Controlled(YOU) & ~IsSelf(),
+                    predicate=Subject(None, IsCreature()) & Controlled(YOU) & ~IsSelf(),
                     effect=Sequence(effects=(
                         PutPlusOneCounterOnSelf(amount=1),
                         GainLife(amount=1),
@@ -1046,7 +1053,7 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.ENTERS,
-                    predicate=(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
+                    predicate=Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
                     effect=GainLife(amount=1),
                 ),
                 TriggeredAbility(
@@ -1079,7 +1086,7 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
             legendary=True,
             triggered_abilities=(
                 TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
                     effect=TannukEnsignLandfallEffect(),
                 ),
             ),

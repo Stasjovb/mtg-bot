@@ -86,16 +86,19 @@ from mtg_bot.effects import (
     TractorBeamETBEffect,
     WeftwalkingETBEffect,
 )
+from mtg_bot.effects.object_predicates import (
+    IsArtifact,
+    IsCreature,
+    IsLand,
+    IsNontoken,
+)
 from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
-    IsArtifact,
-    IsCreature,
     IsHost,
-    IsLand,
-    IsNontoken,
     IsSelf,
+    Subject,
 )
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_restricts_noncreature_spells_line,
@@ -160,7 +163,7 @@ def _build_sothera_the_supervoid() -> CardPrinting:
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.DIES,
-                predicate=IsCreature() & Controlled(YOU),
+                predicate=Subject(None, IsCreature()) & Controlled(YOU),
                 effect=SotheraExileOpponentCreatureEffect(),
             ),
             TriggeredAbility(
@@ -177,7 +180,7 @@ def _build_terrasymbiosis() -> CardPrinting:
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.COUNTERS_ADDED,
-                predicate=IsCreature() & Controlled(YOU),
+                predicate=Subject(None, IsCreature()) & Controlled(YOU),
                 effect=DrawCardsEqualToResolvingCounterAmount(),
                 once_per_turn=True,
             ),
@@ -191,7 +194,7 @@ def _build_weapons_manufacturing() -> CardPrinting:
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.ENTERS,
-                predicate=IsArtifact() & IsNontoken() & Controlled(YOU) & ~IsSelf(),
+                predicate=Subject(None, IsArtifact() & IsNontoken()) & Controlled(YOU) & ~IsSelf(),
                 effect=CreateToken(
                     token_printing=TOKEN_PRINTINGS["Munitions"],
                     count=1,
@@ -223,7 +226,7 @@ def _build_eusocial_engineering() -> CardPrinting:
         warp="{1}{G}",
         triggered_abilities=(
             TriggeredAbility(
-                event=Event.ENTERS, predicate=IsLand() & Controlled(YOU),
+                event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
                 effect=CreateToken(
                     token_printing=TOKEN_PRINTINGS["Robot"],
                     count=1,

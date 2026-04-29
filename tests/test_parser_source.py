@@ -60,7 +60,10 @@ def test_parse_clause_strips_surrounding_whitespace():
 
 
 def test_parse_clause_recognizes_etb_damage_to_any_target():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     parsed = _parse_clause(
         "When this creature enters, it deals 3 damage to any target."
     )
@@ -291,7 +294,10 @@ def test_parse_trigger_phrase_recognizes_etb():
     # than the legacy string-key dict. The string-key lookup returns
     # ``None`` for migrated phrases.
     from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     assert _parse_trigger_phrase("this creature enters") is None
     assert _parse_predicate_trigger_phrase(
         "this creature enters"
@@ -305,7 +311,10 @@ def test_parse_trigger_phrase_recognizes_dies():
     # return ``None`` so a card claiming the phrase doesn't accidentally
     # land on the obsolete string-key code path.
     from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     assert _parse_trigger_phrase("this creature dies") is None
     assert _parse_predicate_trigger_phrase(
         "this creature dies"
@@ -319,7 +328,10 @@ def test_parse_trigger_phrase_recognizes_attacks():
     # return ``None`` so a card claiming the phrase doesn't accidentally
     # land on the obsolete string-key code path.
     from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     assert _parse_trigger_phrase("this creature attacks") is None
     assert _parse_predicate_trigger_phrase(
         "this creature attacks"
@@ -331,7 +343,10 @@ def test_parse_trigger_phrase_strips_whitespace():
     # and the predicate-style lookups; here we exercise the predicate
     # path because ``this creature enters`` migrated.
     from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     assert _parse_predicate_trigger_phrase(
         "  this creature enters  "
     ) == (Event.ENTERS, IsSelf())
@@ -382,7 +397,10 @@ def test_parse_effect_phrase_returns_none_for_unknown():
 
 
 def test_parse_triggered_ability_line_full_etb_damage():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "When this creature enters, it deals 5 damage to any target."
     )
@@ -396,7 +414,10 @@ def test_parse_triggered_ability_line_full_dies_create_robot():
     """Gravpack Monoist's full dies-trigger line. Phase 4 migrated
     ``this creature dies`` to the predicate-style path; the parser now
     yields ``event=Event.DIES, predicate=IsSelf()``."""
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "When this creature dies, "
         "create a tapped 2/2 colorless Robot artifact creature token."
@@ -439,7 +460,10 @@ def test_parse_triggered_ability_line_rejects_unknown_effect():
 
 
 def test_parse_triggered_ability_line_full_etb_draw_a_card():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "When this creature enters, draw a card."
     )
@@ -450,7 +474,10 @@ def test_parse_triggered_ability_line_full_etb_draw_a_card():
 
 
 def test_parse_triggered_ability_line_full_etb_gain_life():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "When this creature enters, you gain 2 life."
     )
@@ -463,7 +490,10 @@ def test_parse_triggered_ability_line_full_etb_gain_life():
 def test_parse_triggered_ability_line_full_attacks_deals_damage():
     """Phase 5: ``this creature attacks`` parses to predicate-style
     ``event=Event.ATTACKS, predicate=IsSelf()``."""
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "Whenever this creature attacks, "
         "it deals 1 damage to any target."
@@ -475,7 +505,10 @@ def test_parse_triggered_ability_line_full_attacks_deals_damage():
 
 
 def test_parse_triggered_ability_line_full_dies_draw_cards_plural():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     result = _parse_triggered_ability_line(
         "When this creature dies, draw 2 cards."
     )
@@ -528,7 +561,10 @@ _NEBULA_DRAGON_CARD = {
 
 
 def test_build_creature_printing_handles_nebula_dragon():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     printing = _build_creature_printing(_NEBULA_DRAGON_CARD)
     assert printing is not None
     assert printing.name == "Nebula Dragon"

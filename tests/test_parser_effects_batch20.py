@@ -56,11 +56,14 @@ from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+from mtg_bot.effects.object_predicates import (
+    IsLand,
+)
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
-    IsLand,
+    Subject,
+    YOU,
 )
 
 
@@ -97,7 +100,7 @@ def test_mightform_harmonizer_landfall_trigger_line():
     parsed = _parse_triggered_ability_line(line)
     assert parsed == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsLand() & Controlled(YOU),
+        predicate=Subject(None, IsLand()) & Controlled(YOU),
         effect=DoubleTargetCreaturesPowerUEOT(),
     )
 

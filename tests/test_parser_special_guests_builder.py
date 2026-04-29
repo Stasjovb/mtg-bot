@@ -65,7 +65,9 @@ def test_burgeoning_falls_through_to_enchantment_builder():
     generalized ``you may put a (creature|land) card from your hand
     onto the battlefield`` regex (shared with Sledge-Class Seedship's
     creature variant)."""
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     card = {
         "name": "Burgeoning",
         "type_line": "Enchantment",

@@ -54,7 +54,10 @@ from mtg_bot.cards.parser.spacecraft_builder import (
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.effects.generic import Surveil
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 def test_build_spacecraft_printing_claims_tier_gated_etb_trigger():

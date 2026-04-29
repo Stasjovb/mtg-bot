@@ -76,7 +76,10 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 # Type-qualified self-ETB / self-attack trigger phrases — every entry

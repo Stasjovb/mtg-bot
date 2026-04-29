@@ -29,24 +29,32 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasCounter,
     IsArtifact,
     IsCreature,
-    IsSelf,
+)
+from mtg_bot.effects.state_predicates import (
     SpellsCastThisTurn,
 )
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
+    IsSelf,
+    StateBound,
+    Subject,
+    YOU,
+)
 
 
-_COUNTER_DIES_PRED = IsCreature() & Controlled(YOU) & HasCounter("+1/+1")
+_COUNTER_DIES_PRED = (
+    Subject(None, IsCreature() & HasCounter("+1/+1")) & Controlled(YOU)
+)
 _SECOND_SPELL_PRED = (
-    Controlled(YOU, subject="controller") & SpellsCastThisTurn(n=2)
+    Controlled(YOU, subject="controller") & StateBound(SpellsCastThisTurn(n=2))
 )
 _SAC_CREATURE_OR_ARTIFACT_PRED = (
-    (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()
+    Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()
 )
 
 
@@ -69,7 +77,7 @@ def test_second_spell_each_turn_end_to_end():
     # End-to-end Illvoi Operative oracle text — entirely one line of
     # the form ``Whenever <condition>, <effect>.``. The condition
     # resolves to predicate-style ``Event.IS_CAST`` +
-    # ``Controlled(YOU, "controller") & SpellsCastThisTurn(n=2)``;
+    # ``Controlled(YOU, "controller") & StateBound(SpellsCastThisTurn(n=2))``;
     # the effect resolves via the existing unified effect grammar's
     # ``put a +1/+1 counter on this creature`` rule.
     parsed = _parse_triggered_ability_line(

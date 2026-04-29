@@ -78,13 +78,7 @@ from mtg_bot.cards.parser.effects import (
     _parse_amount,
     _parse_effect_phrase,
 )
-from mtg_bot.effects.predicates import (
-    OPPONENT,
-    YOU,
-    Always,
-    Controlled,
-    Delirium,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasCounter,
     HasKeyword,
     HasPowerAtMost,
@@ -94,12 +88,25 @@ from mtg_bot.effects.predicates import (
     IsLand,
     IsNontoken,
     IsPlayer,
-    IsSelf,
     IsTapped,
+)
+from mtg_bot.effects.state_predicates import (
+    Delirium,
     OpponentControlsMoreLandsThanYou,
-    Predicate,
     SpellsCastThisTurn,
     VoidActive,
+)
+from mtg_bot.effects.predicates import (
+    OPPONENT,
+    YOU,
+    Always,
+    Controlled,
+    Event,
+    IsSelf,
+    Predicate,
+    Source,
+    StateBound,
+    Subject,
 )
 
 
@@ -477,7 +484,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # when present in oracle text, is stripped by
     # ``_strip_ability_word_prefix`` before this lookup runs.
     "a land you control enters": (
-        Event.ENTERS, IsLand() & Controlled(YOU),
+        Event.ENTERS, Subject(None, IsLand()) & Controlled(YOU),
     ),
     # Artifact-enters-you-control. Both ``an artifact you control
     # enters`` (Mm'menon, Uthros Exile) and ``another artifact you
@@ -489,10 +496,10 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # behavioral impact — preserving that here keeps the migration
     # behavior-identical to the legacy fire path.
     "an artifact you control enters": (
-        Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+        Event.ENTERS, Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
     "another artifact you control enters": (
-        Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+        Event.ENTERS, Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
     # ``Whenever an opponent plays a land`` — Burgeoning. The
     # ``Event.PLAYS_LAND`` dispatch carries ``("land", "controller")``
@@ -558,7 +565,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # have that qualifier so we keep it broad).
     "a creature you control with a +1/+1 counter on it dies": (
         Event.DIES,
-        IsCreature() & Controlled(YOU) & HasCounter("+1/+1"),
+        Subject(None, IsCreature() & HasCounter("+1/+1")) & Controlled(YOU),
     ),
     # ``Whenever you cast your second spell each turn`` — phase 8
     # migrated from ``trigger="second_spell_each_turn"`` to the
@@ -573,7 +580,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # Station Monitor.
     "you cast your second spell each turn": (
         Event.IS_CAST,
-        Controlled(YOU, subject="controller") & SpellsCastThisTurn(n=2),
+        Controlled(YOU, subject="controller") & StateBound(SpellsCastThisTurn(n=2)),
     ),
     # ``Whenever you sacrifice another creature or artifact`` — phase
     # 8 migrated from ``trigger="sacrifice_creature_or_artifact"``.
@@ -584,7 +591,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # skip in ``turn.sacrifice``). Used by Lightless Evangel.
     "you sacrifice another creature or artifact": (
         Event.IS_SACRIFICED,
-        (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
+        Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
     # ``Whenever this creature deals combat damage to a player``
     # (Illvoi Infiltrator). Phase 9 migrated from
@@ -601,7 +608,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # subject="source") & IsPlayer(subject="target")`` here.
     "this creature deals combat damage to a player": (
         Event.DEALS_COMBAT_DAMAGE,
-        IsSelf(subject="source") & IsPlayer(subject="target"),
+        IsSelf(subject="source") & Subject("target", IsPlayer()),
     ),
     # ``Whenever this creature blocks a creature with flying``
     # (Skystinger). Phase 9 migrated from
@@ -615,7 +622,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # — when those land in the card pool.
     "this creature blocks a creature with flying": (
         Event.BLOCKS,
-        IsSelf(subject="blocker") & HasKeyword("flying", subject="attacker"),
+        IsSelf(subject="blocker") & Subject("attacker", HasKeyword("flying")),
     ),
     # ``Whenever a creature you control dies`` (Sothera, the
     # Supervoid). Batch 9. Broader than the existing
@@ -628,7 +635,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # event resolves through the dispatcher's ``extra_observers``
     # path).
     "a creature you control dies": (
-        Event.DIES, IsCreature() & Controlled(YOU),
+        Event.DIES, Subject(None, IsCreature()) & Controlled(YOU),
     ),
     # ``Whenever you sacrifice an artifact`` (Biotech Specialist).
     # Batch 9. Distinct from the existing
@@ -643,7 +650,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # same phrase without re-introducing self-fire.
     "you sacrifice an artifact": (
         Event.IS_SACRIFICED,
-        IsArtifact() & Controlled(YOU) & ~IsSelf(),
+        Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
     # ``Whenever a creature you control deals combat damage to a
     # player`` (Starwinder). Batch 9. Broader than the existing
@@ -658,9 +665,9 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # Starwinder predicate exactly.
     "a creature you control deals combat damage to a player": (
         Event.DEALS_COMBAT_DAMAGE,
-        IsCreature(subject="source")
+        Subject("source", IsCreature())
         & Controlled(YOU, subject="source")
-        & IsPlayer(subject="target"),
+        & Subject("target", IsPlayer()),
     ),
     # ``Whenever one or more creatures you control deal combat damage
     # to a player`` (Locker Room — DSK Room half). Same per-event
@@ -681,9 +688,9 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # printings carrying both wordings stay correct.
     "one or more creatures you control deal combat damage to a player": (
         Event.DEALS_COMBAT_DAMAGE,
-        IsCreature(subject="source")
+        Subject("source", IsCreature())
         & Controlled(YOU, subject="source")
-        & IsPlayer(subject="target"),
+        & Subject("target", IsPlayer()),
         True,
     ),
     # ``Whenever a nontoken creature you control with a +1/+1
@@ -695,10 +702,8 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # exactly.
     "a nontoken creature you control with a +1/+1 counter on it dies": (
         Event.DIES,
-        IsCreature()
-        & Controlled(YOU)
-        & IsNontoken()
-        & HasCounter("+1/+1"),
+        Subject(None, IsCreature() & IsNontoken() & HasCounter("+1/+1"))
+        & Controlled(YOU),
     ),
     # ``Whenever another creature or artifact you control enters``
     # (Weftstalker Ardent). Batch 9. Compound type qualifier — the
@@ -712,7 +717,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # precedent if it ever ships.
     "another creature or artifact you control enters": (
         Event.ENTERS,
-        (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
+        Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf(),
     ),
     # Batch 11 — type-qualified self-ETB / self-attack family. Every
     # entry in this group maps to the same ``IsSelf()`` predicate as
@@ -771,7 +776,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # the existing fixed-text trigger phrasebook.
     "another creature you control with power 2 or less enters": (
         Event.ENTERS,
-        IsCreature() & Controlled(YOU) & HasPowerAtMost(n=2) & ~IsSelf(),
+        Subject(None, IsCreature() & HasPowerAtMost(n=2)) & Controlled(YOU) & ~IsSelf(),
     ),
     # ``When you unlock this door`` — Duskmourn Room door triggers. The
     # canonical static-side wiring uses ``Event.ENTERS`` + ``IsSelf()``
@@ -869,7 +874,7 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
     # ``_unlock_room_half`` at the unlock-action transition; the
     # event subject ``"room"`` is the Room ``GameObject`` itself.
     "an enchantment you control enters and whenever you fully unlock a Room": (
-        (Event.ENTERS, IsEnchantment() & Controlled(YOU)),
+        (Event.ENTERS, Subject(None, IsEnchantment()) & Controlled(YOU)),
         (Event.ROOM_FULLY_UNLOCKED, Controlled(YOU, subject="room")),
     ),
 }
@@ -902,7 +907,7 @@ _COLLAPSED_PREDICATE_TRIGGER_PHRASES: dict[
     # Susurian Voidborn predicate exactly.
     "this creature or another creature or artifact you control dies": (
         Event.DIES,
-        (IsCreature() | IsArtifact()) & Controlled(YOU),
+        Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU),
     ),
 }
 
@@ -941,12 +946,12 @@ def _parse_compound_predicate_trigger_phrase(
 # both prefixed and bare wordings of the Void rider.
 _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "an opponent controls more lands than you": (
-        OpponentControlsMoreLandsThanYou()
+        StateBound(OpponentControlsMoreLandsThanYou())
     ),
     (
         "a nonland permanent left the battlefield this turn "
         "or a spell was warped this turn"
-    ): VoidActive(),
+    ): StateBound(VoidActive()),
     # Duskmourn "Delirium" gate — the canonical printed phrasing of
     # the four-card-types-in-graveyard threshold. Pairs with the
     # generic ``Delirium — `` ability-word prefix that strips through
@@ -955,7 +960,7 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # Mirrors the ``VoidActive()`` gate's role for the EoE Void
     # mechanic — same shape, different trigger-time game-state check.
     "there are four or more card types among cards in your graveyard": (
-        Delirium()
+        StateBound(Delirium())
     ),
     # DSK Enduring cycle: "When this creature dies, if it was a
     # creature, return it to the battlefield under its owner's
@@ -978,7 +983,7 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # we register it so parser/static parity stays exact and the
     # gate is in place if a future engine change ever loosened the
     # call-site ``was_creature`` check.
-    "it was a creature": IsCreature(),
+    "it was a creature": Subject(None, IsCreature()),
 }
 
 
@@ -997,7 +1002,7 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
 # Void / opponent-more-lands gates have no printed trailing form).
 _TRAILING_IF_PHRASES: dict[str, Predicate] = {
     "you have four or more card types among cards in your graveyard": (
-        Delirium()
+        StateBound(Delirium())
     ),
 }
 
@@ -1016,7 +1021,7 @@ def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
 # silently widening the other surface form's grammar.
 _INTERVENING_WHILE_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
-        Delirium()
+        StateBound(Delirium())
     ),
 }
 
@@ -1220,7 +1225,7 @@ def _parse_at_the_beginning_of_line(
             return None
         return TriggeredAbility(
             event=event,
-            predicate=predicate & IsSelf() & IsTapped(),
+            predicate=predicate & IsSelf() & Source(IsTapped()),
             effect=inner,
         )
     # Tapped-creatures effect-wrapper variant: ``if you control two or

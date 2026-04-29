@@ -69,7 +69,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.generic import CreateToken
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 def _claimed_names() -> frozenset[str]:

@@ -57,8 +57,8 @@ from mtg_bot.cards.parser.triggers import (
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects.predicates import (
-    EVENT_SUBJECTS,
     Controlled,
+    EVENT_SUBJECTS,
     Event,
     YOU,
 )

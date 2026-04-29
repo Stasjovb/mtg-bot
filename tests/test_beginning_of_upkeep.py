@@ -12,7 +12,11 @@ from mtg_bot.cards.base import make_artifact, make_creature
 from mtg_bot.effects import (
     ConditionalIfYouControlAtLeast, GainLife, TriggeredAbility,
 )
-from mtg_bot.effects.predicates import YOU, Controlled, Event
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
+    YOU,
+)
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_beginning_of_upkeep_triggers
 

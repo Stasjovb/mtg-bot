@@ -234,7 +234,10 @@ def test_build_spacecraft_printing_claims_larval_scoutlander():
     from mtg_bot.effects.combinators import (
         OptionalSacLandOrLanderForBasicLandRamp,
     )
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
 
     card = {
         "name": "Larval Scoutlander",
@@ -282,7 +285,10 @@ def test_build_spacecraft_printing_claims_the_seriema():
     from mtg_bot.cards.base import StaticAbility
     from mtg_bot.effects.base import StaticScope as _Scope
     from mtg_bot.effects.generic import SearchLibraryForCard
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
 
     card = {
         "name": "The Seriema",
@@ -335,7 +341,10 @@ def test_build_spacecraft_printing_claims_rescue_skiff():
     from mtg_bot.effects.generic import (
         ReturnCreatureFromYourGraveyardToBattlefield,
     )
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
 
     card = {
         "name": "Rescue Skiff",

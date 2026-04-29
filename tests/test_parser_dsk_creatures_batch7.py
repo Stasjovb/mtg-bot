@@ -31,7 +31,9 @@ def test_boilerbilges_ripper_carries_etb_trigger():
     # ``BoilerbilgesRipperETBEffect`` ETB trigger and the printed P/T,
     # not some near-miss substitute.
     from mtg_bot.effects import BoilerbilgesRipperETBEffect
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     src = OracleParserCardSource()
     br = src.get_printings()["Boilerbilges Ripper"]
     assert br.is_creature
@@ -115,7 +117,9 @@ def test_fanatic_of_the_harrowing_carries_etb_trigger():
     # Belt-and-suspenders: the claimed printing must carry the
     # ``FanaticOfTheHarrowingETBEffect`` ETB trigger.
     from mtg_bot.effects import FanaticOfTheHarrowingETBEffect
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     src = OracleParserCardSource()
     fh = src.get_printings()["Fanatic of the Harrowing"]
     assert fh.is_creature
@@ -217,7 +221,9 @@ def test_infernal_phantom_carries_dies_damage_effect():
     # trigger. The Eerie pair (ENTERS + ROOM_FULLY_UNLOCKED) plus the
     # DIES trigger gives 3 total triggered abilities on the printing.
     from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     src = OracleParserCardSource()
     ip = src.get_printings()["Infernal Phantom"]
     dies_triggers = [
@@ -361,7 +367,9 @@ def test_house_cartographer_carries_survival_trigger():
     # ``BEGINNING_OF_POSTCOMBAT_MAIN`` trigger with the standard
     # Survival predicate (controller-gate AND IsSelf AND IsTapped).
     from mtg_bot.effects import HouseCartographerSurvivalEffect
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     src = OracleParserCardSource()
     hc = src.get_printings()["House Cartographer"]
     assert hc.is_creature

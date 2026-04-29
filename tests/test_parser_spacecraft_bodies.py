@@ -32,7 +32,10 @@ from mtg_bot.effects.generic import (
     CreateToken,
     Surveil,
 )
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 

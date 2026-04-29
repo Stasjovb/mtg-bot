@@ -29,7 +29,10 @@ from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import OptionalDiscardCardThenDrawN
 from mtg_bot.effects.generic import GainLife
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 _MELDED_MOXITE_CARD = {

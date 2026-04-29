@@ -699,7 +699,11 @@ def test_stationed_spacecraft_takes_combat_damage_and_can_die():
 
 
 def test_skittermaw_has_menace_and_void_end_step_ability():
-    from mtg_bot.effects.predicates import YOU, Controlled, Event
+    from mtg_bot.effects.predicates import (
+        Controlled,
+        Event,
+        YOU,
+    )
 
     mw = _PRINTINGS["Insatiable Skittermaw"]
     assert "menace" in mw.keywords

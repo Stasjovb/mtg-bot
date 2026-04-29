@@ -37,13 +37,17 @@ from mtg_bot.cards.parser.triggers import (
     _parse_triggered_ability_line,
 )
 from mtg_bot.cards.source import get_active_source
+from mtg_bot.effects.object_predicates import (
+    IsTapped,
+)
 from mtg_bot.effects.predicates import (
-    EVENT_SUBJECTS,
-    YOU,
     Controlled,
+    EVENT_SUBJECTS,
     Event,
     IsSelf,
-    IsTapped,
+    Source,
+    Subject,
+    YOU,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
@@ -89,37 +93,35 @@ def test_event_postcombat_main_subject_is_player():
 
 
 def test_is_tapped_true_for_tapped_subject():
-    pred = IsTapped()
+    pred = Subject("obj", IsTapped())
     obj = _FakeObject(tapped=True)
     src = _FakeObject(id=42)
     assert pred.matches(_FakeState(), {"obj": obj}, src) is True
 
 
 def test_is_tapped_false_for_untapped_subject():
-    pred = IsTapped()
+    pred = Subject("obj", IsTapped())
     obj = _FakeObject(tapped=False)
     src = _FakeObject(id=42)
     assert pred.matches(_FakeState(), {"obj": obj}, src) is False
 
 
 def test_is_tapped_explicit_player_subject_is_false():
-    # An EXPLICIT ``subject="player"`` reads the named slot. Players
+    # ``Subject("player", IsTapped())`` reads the named slot. Players
     # have no ``tapped`` attribute, so the predicate evaluates false
-    # rather than raising. Mirrors HasKeyword / HasCounter precedent
-    # for player-only subject slots.
-    pred = IsTapped(subject="player")
+    # rather than raising.
+    pred = Subject("player", IsTapped())
     player = _FakePlayer(id=1)
     src = _FakeObject(id=42)
     assert pred.matches(_FakeState(), {"player": player}, src) is False
 
 
-def test_is_tapped_default_subject_player_falls_back_to_source():
-    # ``IsTapped()`` (subject=None) on a turn-structure event whose
-    # only subject is a Player falls back to checking the SOURCE's
-    # tapped state — that's the surface meaning of "this creature is
-    # tapped" on the DSK Survival ability-word trigger. The source
-    # is the survivor permanent; the player subject is unrelated.
-    pred = IsTapped()
+def test_source_is_tapped_falls_back_to_source():
+    # ``Source(IsTapped())`` checks the SOURCE's tapped state — the
+    # surface meaning of "this creature is tapped" on the DSK Survival
+    # ability-word trigger. The source is the survivor permanent; the
+    # event's player subject is unrelated.
+    pred = Source(IsTapped())
     player = _FakePlayer(id=1)
     src_tapped = _FakeObject(id=42, tapped=True)
     src_untapped = _FakeObject(id=42, tapped=False)
@@ -153,18 +155,18 @@ def test_is_self_with_permanent_subject_uses_identity():
 
 
 def test_is_tapped_false_when_subject_missing():
-    # A predicate keyed on a missing subject slot evaluates false
-    # rather than KeyError'ing.
-    pred = IsTapped(subject="missing")
+    # ``Subject("missing", IsTapped())`` resolves to no obj — predicate
+    # evaluates false rather than KeyError'ing.
+    pred = Subject("missing", IsTapped())
     src = _FakeObject(id=42)
     assert pred.matches(_FakeState(), {}, src) is False
 
 
 def test_is_tapped_named_subject_lookup():
-    # Subject-keyed lookup pulls the named slot rather than the
-    # default. Matches the shape used for compound predicates whose
-    # event has multiple subject slots.
-    pred = IsTapped(subject="attacker")
+    # ``Subject(slot, IsTapped())`` pulls the named slot. Matches the
+    # shape used for compound predicates whose event has multiple
+    # subject slots.
+    pred = Subject("attacker", IsTapped())
     attacker = _FakeObject(tapped=True)
     blocker = _FakeObject(tapped=False)
     src = _FakeObject(id=42)
@@ -199,7 +201,7 @@ def test_survival_line_parses_with_gain_life_body():
     )
     assert parsed == TriggeredAbility(
         event=Event.BEGINNING_OF_POSTCOMBAT_MAIN,
-        predicate=Controlled(YOU) & IsSelf() & IsTapped(),
+        predicate=Controlled(YOU) & IsSelf() & Source(IsTapped()),
         effect=GainLife(amount=2),
     )
 
@@ -215,7 +217,7 @@ def test_survival_line_parses_with_target_counter_body():
     )
     assert parsed == TriggeredAbility(
         event=Event.BEGINNING_OF_POSTCOMBAT_MAIN,
-        predicate=Controlled(YOU) & IsSelf() & IsTapped(),
+        predicate=Controlled(YOU) & IsSelf() & Source(IsTapped()),
         effect=PutPlusOneCounterOnTargetCreature(amount=1),
     )
 
@@ -288,7 +290,7 @@ def test_cautious_survivor_carries_predicate_style_trigger():
     # exact AND-tree shape mirrors the parser's left-leaning compose:
     # ``Controlled(YOU) & IsSelf() & IsTapped()`` is
     # ``And(And(Controlled, IsSelf), IsTapped)``.
-    assert ab.predicate == Controlled(YOU) & IsSelf() & IsTapped()
+    assert ab.predicate == Controlled(YOU) & IsSelf() & Source(IsTapped())
 
 
 def test_parser_claims_shrewd_storyteller():

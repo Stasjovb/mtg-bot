@@ -55,34 +55,38 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasCounter,
     IsArtifact,
     IsCreature,
     IsNontoken,
     IsPlayer,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
     IsSelf,
+    Subject,
+    YOU,
 )
 
 
 # Reused predicate aliases — one per new phrase, mirroring the
 # ``_PREDICATE_TRIGGER_PHRASES`` table entries verbatim so a parser
 # refactor that drifts the predicate shape gets caught here.
-_CREATURE_YOU_CONTROL_DIES_PRED = IsCreature() & Controlled(YOU)
-_SAC_ARTIFACT_PRED = IsArtifact() & Controlled(YOU) & ~IsSelf()
+_CREATURE_YOU_CONTROL_DIES_PRED = Subject(None, IsCreature()) & Controlled(YOU)
+_SAC_ARTIFACT_PRED = Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf()
 _YOUR_CREATURE_COMBAT_DAMAGE_PRED = (
-    IsCreature(subject="source")
+    Subject("source", IsCreature())
     & Controlled(YOU, subject="source")
-    & IsPlayer(subject="target")
+    & Subject("target", IsPlayer())
 )
 _NONTOKEN_COUNTER_DIES_PRED = (
-    IsCreature() & Controlled(YOU) & IsNontoken() & HasCounter("+1/+1")
+    Subject(None, IsCreature() & IsNontoken() & HasCounter("+1/+1"))
+    & Controlled(YOU)
 )
 _CREATURE_OR_ARTIFACT_ENTERS_PRED = (
-    (IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()
+    Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()
 )
 
 

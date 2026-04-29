@@ -270,7 +270,10 @@ def test_utility_land_with_triggered_abilities():
     """make_utility_land threads triggered_abilities too."""
     from mtg_bot.cards import make_utility_land
     from mtg_bot.effects import GainLife, TriggeredAbility
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     p = make_utility_land(
         "test",
         triggered_abilities=(

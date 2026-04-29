@@ -23,13 +23,17 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasPowerAtMost,
     IsCreature,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
     IsSelf,
+    StateBound,
+    Subject,
+    YOU,
 )
 
 
@@ -54,7 +58,7 @@ def test_has_power_at_most_matches_low_power_creature():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(obj)
-    p = HasPowerAtMost(n=2)
+    p = Subject("obj", HasPowerAtMost(n=2))
     # ``Wild Bear`` is a 2/2 — power == 2, threshold == 2, predicate true.
     assert p.matches(state, {"obj": obj}, source=obj) is True
 
@@ -71,7 +75,7 @@ def test_has_power_at_most_rejects_higher_power_creature():
     big = make_creature("BigFixture", "{2}{G}", 3, 3)
     obj = state.new_object(big, owner_id=0, zone=Zone.BATTLEFIELD)
     state.battlefield.append(obj)
-    p = HasPowerAtMost(n=2)
+    p = Subject("obj", HasPowerAtMost(n=2))
     assert p.matches(state, {"obj": obj}, source=obj) is False
 
 
@@ -89,7 +93,7 @@ def test_has_power_at_most_rejects_player_subject():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(src)
-    p = HasPowerAtMost(n=2)
+    p = Subject("obj", HasPowerAtMost(n=2))
     assert p.matches(state, {"obj": p0}, source=src) is False
 
 
@@ -106,7 +110,7 @@ def test_has_power_at_most_handles_missing_subject():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(src)
-    p = HasPowerAtMost(n=2, subject="missing")
+    p = Subject("missing", HasPowerAtMost(n=2))
     assert p.matches(state, {"obj": src}, source=src) is False
 
 
@@ -127,7 +131,9 @@ def test_parse_another_creature_with_power_2_or_less_enters_trigger():
     assert parsed == TriggeredAbility(
         event=Event.ENTERS,
         predicate=(
-            IsCreature() & Controlled(YOU) & HasPowerAtMost(n=2) & ~IsSelf()
+            Subject(None, IsCreature() & HasPowerAtMost(n=2))
+            & Controlled(YOU)
+            & ~IsSelf()
         ),
         effect=PumpSelfUntilEOT(power_bonus=2, toughness_bonus=0),
     )
@@ -418,8 +424,10 @@ def test_parse_intervening_while_trigger_line():
         TriggeredAbility,
     )
     from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
-    from mtg_bot.effects.predicates import (
+    from mtg_bot.effects.state_predicates import (
         Delirium,
+    )
+    from mtg_bot.effects.predicates import (
         Event,
         IsSelf,
     )
@@ -431,7 +439,7 @@ def test_parse_intervening_while_trigger_line():
     parsed = _parse_triggered_ability_line(line)
     assert parsed == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=PumpSelfUntilEOT(
             power_bonus=2, toughness_bonus=0,
             granted_keywords=frozenset({"menace"}),
@@ -460,7 +468,7 @@ def test_hand_that_feeds_claimed_by_parser():
     # and gains menace until end of turn.`` Claims via the existing
     # ``Delirium —`` ability-word prefix strip + the new
     # intervening-``while`` line shape feeding the existing
-    # ``Delirium()`` gate predicate, with the body parsing through the
+    # ``StateBound(Delirium())`` gate predicate, with the body parsing through the
     # relaxed ``it``-or-``this creature`` self-pump-and-grant grammar.
     assert "Hand That Feeds" in _claimed_names()
 

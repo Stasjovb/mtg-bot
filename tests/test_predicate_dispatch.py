@@ -15,16 +15,19 @@ from mtg_bot.cards.base import (
     TriggeredAbility,
     make_creature,
 )
-from mtg_bot.effects.predicates import (
-    Always,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasKeyword,
     IsCreature,
     IsLand,
     IsPlayer,
+)
+from mtg_bot.effects.predicates import (
+    Always,
+    Controlled,
+    Event,
     IsSelf,
     Never,
+    Subject,
     YOU,
 )
 from mtg_bot.game import GameState, Player, Zone
@@ -72,7 +75,7 @@ def _landfall_creature():
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.ENTERS,
-                predicate=IsLand() & Controlled(by=YOU),
+                predicate=Subject(None, IsLand()) & Controlled(by=YOU),
                 effect=GainLife(amount=2),
             ),
         ),
@@ -272,7 +275,7 @@ def _self_combat_damage_creature():
                 event=Event.DEALS_COMBAT_DAMAGE,
                 predicate=(
                     IsSelf(subject="source")
-                    & IsPlayer(subject="target")
+                    & Subject("target", IsPlayer())
                 ),
                 effect=DrawCards(amount=1),
             ),
@@ -352,7 +355,7 @@ def _blocks_flier_creature():
                 event=Event.BLOCKS,
                 predicate=(
                     IsSelf(subject="blocker")
-                    & HasKeyword("flying", subject="attacker")
+                    & Subject("attacker", HasKeyword("flying"))
                 ),
                 effect=GainLife(amount=2),
             ),

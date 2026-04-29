@@ -60,12 +60,13 @@ from mtg_bot.effects import (
     PumpTargetCreatureUntilEOT,
     Sequence,
 )
+from mtg_bot.effects.state_predicates import LoneAttackerForYou
 from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
     IsSelf,
-    LoneAttackerForYou,
+    StateBound,
 )
 
 
@@ -142,7 +143,7 @@ def _build_derelict_attic_widows_walk() -> CardPrinting:
             triggered_abilities=(
                 TriggeredAbility(
                     event=Event.YOU_ATTACK,
-                    predicate=Controlled(YOU) & LoneAttackerForYou(),
+                    predicate=Controlled(YOU) & StateBound(LoneAttackerForYou()),
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=1,
                         toughness_bonus=0,
