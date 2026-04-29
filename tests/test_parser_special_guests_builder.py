@@ -57,7 +57,15 @@ def test_deafening_silence_falls_through_to_enchantment_builder():
     assert ds.restricts_noncreature_spells_to_one_per_turn is True
 
 
-def test_burgeoning_matches_static():
+def test_burgeoning_falls_through_to_enchantment_builder():
+    """Burgeoning is no longer claimed by the special-guests dispatch —
+    the opponent-plays-land trigger is recognized by the enchantment
+    builder's unified oracle-text fallback, which produces the same
+    ``OptionalPutLandFromHandOntoBattlefield`` effect via the
+    generalized ``you may put a (creature|land) card from your hand
+    onto the battlefield`` regex (shared with Sledge-Class Seedship's
+    creature variant)."""
+    from mtg_bot.effects.predicates import Event
     card = {
         "name": "Burgeoning",
         "type_line": "Enchantment",
@@ -67,9 +75,11 @@ def test_burgeoning_matches_static():
         ),
         "set": "spg",
     }
-    parsed = _build_special_guest_printing(card)
-    assert parsed is not None
-    assert parsed == _PRINTINGS["Burgeoning"]
+    assert _build_special_guest_printing(card) is None
+    # End-to-end: the active source still claims it (via enchantment).
+    burgeoning = _PRINTINGS["Burgeoning"]
+    assert len(burgeoning.triggered_abilities) == 1
+    assert burgeoning.triggered_abilities[0].event == Event.PLAYS_LAND
 
 
 def test_sliver_overlord_matches_static():

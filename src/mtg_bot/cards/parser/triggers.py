@@ -79,6 +79,7 @@ from mtg_bot.cards.parser.effects import (
     _parse_effect_phrase,
 )
 from mtg_bot.effects.predicates import (
+    OPPONENT,
     YOU,
     Always,
     Controlled,
@@ -489,6 +490,15 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     ),
     "another artifact you control enters": (
         Event.ENTERS, IsArtifact() & Controlled(YOU) & ~IsSelf(),
+    ),
+    # ``Whenever an opponent plays a land`` — Burgeoning. The
+    # ``Event.PLAYS_LAND`` dispatch carries ``("land", "controller")``
+    # subjects (see `effects/predicates.py` ``_EVENT_SUBJECTS``); the
+    # ``Controlled(OPPONENT, subject="controller")`` predicate gates the
+    # firing pool to land-plays whose acting player is an opponent of
+    # the source's controller.
+    "an opponent plays a land": (
+        Event.PLAYS_LAND, Controlled(by=OPPONENT, subject="controller"),
     ),
     # ``When this creature dies`` — the source's own death (Gravpack
     # Monoist's create-Robot trigger and the synthetic ``draw 2 cards``

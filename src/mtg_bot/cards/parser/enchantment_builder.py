@@ -101,6 +101,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_restricts_noncreature_spells_line,
 )
 from mtg_bot.cards.parser.text import _strip_reminder_text
+from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 
 
 # ---------------------------------------------------------------------------
@@ -744,21 +745,40 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
     return _build_enchantment_via_oracle_text(card)
 
 
+# Allowlist of names that may claim through the generic oracle-text
+# fallback path below. Mirrors the room builder's
+# ``_UNIFIED_ROOM_NAMES`` precedent — incremental migration: only
+# names listed here can be reached by ``_build_enchantment_via_
+# oracle_text``, so adding a new name to the allowlist is the
+# explicit opt-in for that card. Other enchantments still take the
+# name-dispatched bespoke factory path (or fall through to silent
+# skip).
+_UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
+    "Deafening Silence",
+    "Burgeoning",
+})
+
+
 def _build_enchantment_via_oracle_text(
     card: dict,
 ) -> CardPrinting | None:
     """Fallback path: claim an Enchantment whose entire oracle text
-    consists of recognized printing-level static lines, building the
-    printing via ``make_enchantment`` with the matching kwargs flipped.
+    parses through recognized line shapes — printing-flag statics
+    (Deafening Silence) or triggered-ability lines (Burgeoning).
 
-    The grammar is intentionally narrow today — the only line shape
-    recognized here is Deafening Silence's noncreature-spell
-    restriction. Returns ``None`` for any card with an unrecognized
-    line so the silent-skip path mirrors the rest of the parser.
+    Gated on ``_UNIFIED_ENCHANTMENT_NAMES`` so the path only attempts
+    cards that have been explicitly migrated. Returns ``None`` for
+    any card with an unrecognized line so the silent-skip path
+    mirrors the rest of the parser.
     """
+    name = card.get("name", "")
+    if name not in _UNIFIED_ENCHANTMENT_NAMES:
+        return None
+
     text = card.get("oracle_text", "")
     legendary = "Legendary" in card.get("type_line", "")
     restricts_noncreature_spells = False
+    triggers: list[TriggeredAbility] = []
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -767,14 +787,20 @@ def _build_enchantment_via_oracle_text(
         if _parse_restricts_noncreature_spells_line(line):
             restricts_noncreature_spells = True
             continue
-        # Anything else — Aura grammar, triggered abilities, activated
-        # abilities, or unrecognized statics — falls through to the
-        # silent-skip path.
+        parsed_trigger = _parse_triggered_ability_line(line, name=name)
+        if parsed_trigger is not None:
+            if isinstance(parsed_trigger, tuple):
+                triggers.extend(parsed_trigger)
+            else:
+                triggers.append(parsed_trigger)
+            continue
+        # Anything else — Aura grammar, activated abilities, unrecognized
+        # statics — falls through to the silent-skip path.
         return None
 
-    if not restricts_noncreature_spells:
-        # No printing-flag line was recognized — leave the card for a
-        # future grammar slice rather than emit a blank Enchantment.
+    if not restricts_noncreature_spells and not triggers:
+        # Nothing recognized — leave the card for a future grammar
+        # slice rather than emit a blank Enchantment.
         return None
 
     return make_enchantment(
@@ -784,4 +810,5 @@ def _build_enchantment_via_oracle_text(
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells
         ),
+        triggered_abilities=tuple(triggers),
     )
