@@ -311,6 +311,29 @@ class GameObject:
     # automatically — same write-through-cache shape the +1/+1 counter
     # pump path uses for layer-7d P/T contributions.
     flying_counters: int = 0
+    # DSK Haunted Screen "Activate only once" tracking. The printed
+    # rider on Haunted Screen's ``{7}: …`` activation reads "Activate
+    # only once." which the engine simulates by latching this flag to
+    # ``True`` the first time the bespoke ``HauntedScreenActivatedEffect``
+    # resolves; subsequent activations of the same ability silently
+    # no-op at resolve time. The flag is per-``GameObject`` so a
+    # blink-and-recast (a fresh ``GameObject`` instance) gets a fresh
+    # one-shot — matches CR 706.2 ("a permanent that has changed zones
+    # is a new object").
+    has_activated_once_only_ability: bool = False
+    # Permanent layer-4 ``add_type "creature"`` write-through cache.
+    # Set by effects that turn a non-creature permanent into a
+    # creature INDEFINITELY (Haunted Screen's ``It becomes a 0/0
+    # Spirit creature in addition to its other types.``), as opposed
+    # to the UEOT manland-animation flow that uses ``temp_is_creature``
+    # and is cleared at cleanup. ``is_creature_now`` consults both
+    # caches; cleanup leaves this one alone so the type-change persists
+    # across turns. Mirrors a layer-4 ``add_type`` registry entry with
+    # ``expires_at=None`` — the cache is the read path, the registry
+    # entry holds the layer metadata for future layer-aware ordering
+    # work. Distinct from ``temp_is_creature`` because each one's
+    # cleanup story is different.
+    permanent_is_creature: bool = False
 
 
 def is_void_active(state: GameState) -> bool:
@@ -451,6 +474,7 @@ def is_creature_now(obj: GameObject) -> bool:
         obj.printing.is_creature
         or is_stationed(obj)
         or obj.temp_is_creature
+        or obj.permanent_is_creature
     )
 
 

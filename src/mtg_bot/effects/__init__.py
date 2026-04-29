@@ -222,6 +222,7 @@ from mtg_bot.effects.bespoke import (
     FamishedWorldsireETBEffect,
     FocusFireEffect,
     GhostVacuumActivatedEffect,
+    HauntedScreenActivatedEffect,
     KavaronHarrierAttackEffect,
     MemorialVaultActivatedEffect,
     MonoistCircuitFeederETBEffect,

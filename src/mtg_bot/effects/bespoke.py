@@ -3462,3 +3462,100 @@ class GhostVacuumActivatedEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class HauntedScreenActivatedEffect(Effect):
+    """Haunted Screen's ``{7}: Put seven +1/+1 counters on this artifact.
+    It becomes a 0/0 Spirit creature in addition to its other types.
+    Activate only once.``
+
+    The "Activate only once" rider is honored by the bespoke effect
+    rather than by the legal/actions activation gate — the resolve site
+    checks ``GameObject.has_activated_once_only_ability`` and silently
+    no-ops if the flag is already set, then latches it on the FIRST
+    successful resolve. The activator pays the {7} either way (the
+    payment side is the legal-actions / activation pipeline's
+    responsibility); the body's no-op ensures a wasted activation
+    never re-applies the layer-4 type-change or stacks more counters.
+    Same shape ``MonoistCircuitFeederETBEffect`` uses for ETB-only
+    bookkeeping that survives a re-fire — the flag is checked-then-
+    latched at the top of resolve.
+
+    First-time resolve writes three permanent registry entries:
+
+      - layer 4 ``add_type "creature"`` — read by ``is_creature_now``
+        via the new ``GameObject.permanent_is_creature`` write-through
+        cache. The cache survives cleanup (unlike ``temp_is_creature``)
+        so the type-change persists across turns.
+      - layer 4 ``add_subtype "Spirit"`` — read by
+        ``effective_subtypes`` walking the registry.
+      - layer 7 sublayer 1 ``set_base_pt (0, 0)`` — read by
+        ``_compute_effective_pt`` via ``_registry_set_base_pt``.
+
+    Plus seven +1/+1 counters via ``add_plus_one_counters`` (so a
+    Loading Zone-style counter doubler upstream stacks correctly), and
+    the ``has_activated_once_only_ability`` latch.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import add_plus_one_counters
+
+        source = state.resolving_source
+        if source is None:
+            return
+        if source.has_activated_once_only_ability:
+            state.log.append(
+                f"{source.printing.name}'s once-only activation has "
+                f"already resolved — silent no-op"
+            )
+            return
+        source.has_activated_once_only_ability = True
+        # Permanent type-change: write the layer-4 ``add_type`` /
+        # ``add_subtype`` and layer-7 sublayer-1 ``set_base_pt`` entries
+        # with ``expires_at=None`` so cleanup leaves them in place. The
+        # ``permanent_is_creature`` write-through cache lets
+        # ``is_creature_now`` short-circuit without consulting the
+        # registry on every read.
+        source.permanent_is_creature = True
+        state.add_continuous_effect(
+            source_id=source.id, layer=4, kind="add_type",
+            target_id=source.id, params=("creature",),
+            expires_at=None,
+            description=f"{source.printing.name} becomes a creature",
+        )
+        state.add_continuous_effect(
+            source_id=source.id, layer=4, kind="add_subtype",
+            target_id=source.id, params=("Spirit",),
+            expires_at=None,
+            description=(
+                f"{source.printing.name} becomes a Spirit"
+            ),
+        )
+        state.add_continuous_effect(
+            source_id=source.id, layer=7, sublayer=1,
+            kind="set_base_pt",
+            target_id=source.id, params=(0, 0),
+            expires_at=None,
+            description=(
+                f"{source.printing.name} base 0/0"
+            ),
+        )
+        # Seven +1/+1 counters — routed through ``add_plus_one_counters``
+        # so Loading Zone-style counter doublers fold in correctly.
+        add_plus_one_counters(state, source, 7)
+        state.log.append(
+            f"{source.printing.name} becomes a 0/0 Spirit creature "
+            f"with seven +1/+1 counters"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put seven +1/+1 counters on this artifact; it becomes a "
+            "0/0 Spirit creature in addition to its other types "
+            "(activate only once)"
+        )
+
+
+
