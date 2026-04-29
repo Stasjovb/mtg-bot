@@ -225,6 +225,90 @@ def _parse_restricts_noncreature_spells_line(line: str) -> bool:
     return line.strip() == _RESTRICTS_NONCREATURE_SPELLS_LINE
 
 
+# ``If one or more tokens would be created under your control, twice
+# that many of those tokens are created instead.`` — Exalted Sunborn's
+# printed token-doubler replacement effect. The engine wires the
+# replacement off the printing-level ``is_token_doubler`` flag (rather
+# than a generic ``StaticAbility`` shape, since token replacement
+# happens at create-token resolution rather than as a creature-relative
+# continuous effect). Matched as a literal string — Exalted Sunborn is
+# the only card in the pool with this exact surface today; "broader
+# grammar deferred until a second example exists" (e.g. a hypothetical
+# Anointed-Procession-style enchantment with the same shape would land
+# its own recognizer or, if a parameter varies, parameterize this one).
+_TOKEN_DOUBLER_LINE = (
+    "If one or more tokens would be created under your control, "
+    "twice that many of those tokens are created instead."
+)
+
+
+def _parse_token_doubler_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level token-doubler
+    replacement clause, else ``False``. Flips the ``is_token_doubler``
+    kwarg on ``make_creature``; the engine reads the flag at
+    create-token resolution time and doubles the count.
+    """
+    return line.strip() == _TOKEN_DOUBLER_LINE
+
+
+# ``If a permanent entering the battlefield causes a triggered ability
+# of a permanent you control to trigger, that ability triggers an
+# additional time.`` — Starfield Vocalist's printed ETB-trigger
+# doubler. The engine wires the extra-trigger replacement off the
+# printing-level ``extra_etb_trigger`` int field (incremented on the
+# permanent; the trigger pipeline reads the controller's battlefield
+# total). Matched as a literal string — Starfield Vocalist is the only
+# card in the pool with this exact surface today; "broader grammar
+# deferred until a second example exists" (a hypothetical
+# Panharmonicon-style printing with the same shape would either land
+# its own recognizer or, if a parameter such as the trigger count
+# varies, parameterize this one).
+_EXTRA_ETB_TRIGGER_LINE = (
+    "If a permanent entering the battlefield causes a triggered "
+    "ability of a permanent you control to trigger, that ability "
+    "triggers an additional time."
+)
+
+
+def _parse_extra_etb_trigger_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    Panharmonicon-style ETB-trigger doubler clause, else ``False``.
+    Adds 1 to the ``extra_etb_trigger`` kwarg on ``make_creature``;
+    the engine reads the controller's battlefield total at trigger
+    enqueue time and adds that many extra firings.
+    """
+    return line.strip() == _EXTRA_ETB_TRIGGER_LINE
+
+
+# ``As long as you have one or fewer cards in hand, if you would draw
+# one or more cards, you draw that many cards plus one instead.`` —
+# Quantum Riddler's printed draw-replacement static. The engine wires
+# the replacement off the printing-level
+# ``replaces_draw_with_extra_when_hand_at_most_one`` flag (rather than
+# a generic ``StaticAbility`` shape, since draw replacement happens at
+# draw resolution time and reads the controller's hand size). Matched
+# as a literal string — Quantum Riddler is the only card in the pool
+# with this exact surface today; "broader grammar deferred until a
+# second example exists" (a future printing whose hand-size threshold
+# differs would parameterize this recognizer's threshold capture).
+_REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE = (
+    "As long as you have one or fewer cards in hand, if you would "
+    "draw one or more cards, you draw that many cards plus one "
+    "instead."
+)
+
+
+def _parse_replaces_draw_when_hand_at_most_one_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level draw-replacement
+    clause for hand-size at-most-one, else ``False``. Flips the
+    ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg on
+    ``make_creature``; the engine reads the flag at draw resolution
+    time and adds one extra card when the controller's hand is at
+    most one card.
+    """
+    return line.strip() == _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

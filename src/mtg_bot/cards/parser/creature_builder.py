@@ -111,9 +111,12 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
+    _parse_extra_etb_trigger_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
+    _parse_replaces_draw_when_hand_at_most_one_line,
+    _parse_token_doubler_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -294,15 +297,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Exalted Sunborn {3}{W}{W} 4/5 Angel Wizard — flying, lifelink,
-        # warp {1}{W}. Static: token doubler.
-        "Exalted Sunborn": make_creature(
-            "Exalted Sunborn", "{3}{W}{W}", 4, 5,
-            subtypes=("Angel", "Wizard"),
-            keywords={"flying", "lifelink"},
-            warp="{1}{W}",
-            is_token_doubler=True,
-        ),
         # Territorial Bruntar {4}{R}{R} 6/6 Beast — reach.
         # Landfall: exile top until nonland, may cast this turn.
         "Territorial Bruntar": make_creature(
@@ -396,14 +390,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=SearchLibraryForEquipmentToBattlefield(),
                 ),
             ),
-        ),
-        # Starfield Vocalist {3}{U} 3/4 — warp {1}{U}.
-        # Static: ETB-triggered abilities trigger an additional time
-        # (extra_etb_trigger=1).
-        "Starfield Vocalist": make_creature(
-            "Starfield Vocalist", "{3}{U}", 3, 4,
-            warp="{1}{U}",
-            extra_etb_trigger=1,
         ),
         # Elegy Acolyte {2}{B}{B} 4/4 Human Cleric — lifelink.
         # Void trigger: at beginning of end step, if void is active,
@@ -601,22 +587,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=(
                         PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
                     ),
-                ),
-            ),
-        ),
-        # Quantum Riddler {3}{U}{U} 4/6 Sphinx — flying, warp {1}{U}.
-        # ETB draw a card. Static: if hand ≤ 1 card, each draw draws
-        # one additional card (replaces_draw_with_extra_when_hand_at_
-        # most_one=True).
-        "Quantum Riddler": make_creature(
-            "Quantum Riddler", "{3}{U}{U}", 4, 6,
-            keywords={"flying"},
-            warp="{1}{U}",
-            replaces_draw_with_extra_when_hand_at_most_one=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DrawCards(amount=1),
                 ),
             ),
         ),
@@ -1417,6 +1387,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
+    is_token_doubler = False
+    extra_etb_trigger = 0
+    replaces_draw_with_extra_when_hand_at_most_one = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1512,6 +1485,44 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # set once.
             nonbasic_lands_are_mountains = True
             continue
+        if _parse_token_doubler_line(line):
+            # ``If one or more tokens would be created under your
+            # control, twice that many of those tokens are created
+            # instead.`` — Exalted Sunborn's printed token-doubler
+            # replacement effect. Flips the ``is_token_doubler`` kwarg
+            # below; the engine consumes the flag at create-token
+            # resolution time and doubles the count. Idempotent: a
+            # malformed printing with the line twice ends up with the
+            # field set once.
+            is_token_doubler = True
+            continue
+        if _parse_extra_etb_trigger_line(line):
+            # ``If a permanent entering the battlefield causes a
+            # triggered ability of a permanent you control to trigger,
+            # that ability triggers an additional time.`` — Starfield
+            # Vocalist's Panharmonicon-style ETB-trigger doubler.
+            # Increments the ``extra_etb_trigger`` kwarg below; the
+            # engine reads the controller's battlefield total at
+            # trigger enqueue time and adds that many extra firings.
+            # Accumulating rather than overwriting matches the
+            # static-registry semantics — multiple copies on the same
+            # printing would each contribute one extra firing (no card
+            # in the pool today carries the line twice, but the int
+            # field handles it).
+            extra_etb_trigger += 1
+            continue
+        if _parse_replaces_draw_when_hand_at_most_one_line(line):
+            # ``As long as you have one or fewer cards in hand, if you
+            # would draw one or more cards, you draw that many cards
+            # plus one instead.`` — Quantum Riddler's printed
+            # draw-replacement static. Flips the
+            # ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg
+            # below; the engine consumes the flag at draw resolution
+            # time and adds one extra card when the controller's hand
+            # is at most one card. Idempotent: a malformed printing
+            # with the line twice ends up with the field set once.
+            replaces_draw_with_extra_when_hand_at_most_one = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1606,4 +1617,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_minus_one_counters_from_hand_cast
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        is_token_doubler=is_token_doubler,
+        extra_etb_trigger=extra_etb_trigger,
+        replaces_draw_with_extra_when_hand_at_most_one=(
+            replaces_draw_with_extra_when_hand_at_most_one
+        ),
     )
