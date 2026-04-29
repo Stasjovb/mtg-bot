@@ -53,10 +53,12 @@ from mtg_bot.cards.base import (
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     CutPropulsionEffect,
     DealDamageAnyTarget,
+    DealDamageToTargetCreature,
     DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
     DealNDamageToEachCreature,
     DepressurizeEffect,
+    DestroyTargetCreature,
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
     DrawCards,
@@ -951,6 +953,73 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "graveyard to your hand, then return up to two target land "
         "cards from your graveyard to the battlefield tapped."
     ): ReturnCreatureFromYourGraveyardToHand(),
+    # Scorching Dragonfire (Duskmourn) — 3-damage burn to creature/
+    # planeswalker plus an "if it would die this turn, exile it
+    # instead" replacement-effect rider. The static side simplifies
+    # to bare ``DealDamageToTargetCreature(amount=3)`` because:
+    # (1) the engine doesn't model planeswalkers as targets — every
+    # other DSK/EoE primitive that prints "creature or planeswalker"
+    # likewise drops the planeswalker scope (Archenemy's Charm,
+    # Warping Wail mode 1 precedent);
+    # (2) the engine doesn't model "if it would die this turn, exile
+    # it instead" replacement effects — there's no GameObject
+    # ``exile_if_dies_this_turn`` flag to set, and adding one would
+    # require touching ``game.py`` and the SBA / die-trigger pipeline
+    # (Mutinous Massacre / Singularity Rupture precedent: complex die-
+    # replacement riders are out of scope for whole-spell dispatch).
+    # Same parser-is-right precedent as Unravel / Divert Disaster —
+    # claim the bare base mechanic (3-damage burn) and drop the
+    # rider rather than leaving the spell unclaimed for an unmodeled
+    # rider.
+    (
+        "Scorching Dragonfire deals 3 damage to target creature or "
+        "planeswalker. If that creature or planeswalker would die "
+        "this turn, exile it instead."
+    ): DealDamageToTargetCreature(amount=3),
+    # Unwanted Remake (Duskmourn) — bare destroy-target-creature plus
+    # an "Its controller manifests dread" rider. The static side
+    # simplifies to bare ``DestroyTargetCreature()`` because the
+    # engine's ``ManifestDread`` primitive resolves at the
+    # caster's hand (the controller_id passed into resolve), not at
+    # the destroyed creature's CONTROLLER's hand. Adding "manifest by
+    # the destroyed permanent's controller" would require a new
+    # back-reference plumbing through ``ManifestDread`` to read off a
+    # different player than the resolving controller — a non-trivial
+    # widening that would also need engine-side wiring beyond the
+    # parser. Same parser-is-right simplification as Unravel / Divert
+    # Disaster: claim the bare base mechanic (creature destroy) and
+    # drop the rider that requires unmodeled engine plumbing.
+    # Reminder text inside the parenthetical is stripped before
+    # dispatch.
+    (
+        "Destroy target creature. Its controller manifests dread."
+    ): DestroyTargetCreature(),
+    # Jump Scare (Duskmourn) — pump-target-creature plus a type-
+    # change rider ("becomes a Horror enchantment creature in
+    # addition to its other types"). The static side simplifies to
+    # bare ``PumpTargetCreatureUntilEOT(power_bonus=2,
+    # toughness_bonus=2, granted_keywords={"flying"})`` because the
+    # engine doesn't model UEOT type-line additions on targeted
+    # creatures — the closest aura plumbing
+    # (``attached_grants_subtype``) is single-subtype Aura-only and
+    # doesn't add a card type (Enchantment) on top of the target.
+    # Same parser-is-right simplification as Unravel / Divert
+    # Disaster: claim the bare base mechanic (pump UEOT + flying
+    # grant) and drop the type-change rider. The leading
+    # ``Until end of turn,`` adverb is part of the dispatch key so
+    # the surface form matches verbatim — the per-clause grammar
+    # parses ``target creature gets +2/+2 and gains flying until
+    # end of turn`` (trailing UEOT) but not the leading-UEOT shape,
+    # so the whole-spell tier is the right place.
+    (
+        "Until end of turn, target creature gets +2/+2, gains "
+        "flying, and becomes a Horror enchantment creature in "
+        "addition to its other types."
+    ): PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"flying"}),
+    ),
 }
 
 
