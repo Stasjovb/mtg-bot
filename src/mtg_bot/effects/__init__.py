@@ -166,6 +166,7 @@ from mtg_bot.effects.generic import (
     TakeExtraTurnAfterThisOne,
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
+    TapUpToOneTargetCreature,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
     TargetOpponentLosesLife,

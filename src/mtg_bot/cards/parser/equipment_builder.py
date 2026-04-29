@@ -86,6 +86,7 @@ from mtg_bot.effects.generic import (
     CreateTokenAndAttachSelf,
     ManifestDreadThenAttachSelf,
     PhaseOutEquippedCreature,
+    TapUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import Controlled, Event, IsHost, IsSelf, YOU
 
@@ -193,6 +194,20 @@ _ETB_CREATE_GLIMMER_LINE = (
 _ETB_MANIFEST_DREAD_AND_ATTACH_LINE = (
     "When this Equipment enters, manifest dread, then attach this "
     "Equipment to that creature."
+)
+
+
+# Baseball Bat's equipped-attacks "tap up to one target creature."
+# trigger. The bare ``tap up to one target creature`` payload is the
+# new generic ``TapUpToOneTargetCreature`` engine class — sibling to
+# ``TapAnotherTargetCreature`` (Starport Security, strict-1, source-
+# excluded) and ``TapTargetArtifactOrCreature`` (Mental Modulation,
+# strict-1, broader filter). Each engine class carries its own
+# legal-target / target-count contract, so we don't try to fold them
+# into a single parameterized class. ``IsHost(subject="attacker")``
+# matches the equipped-creature-attacks trigger condition.
+_EQUIPPED_ATTACKS_TAP_UP_TO_ONE_LINE = (
+    "Whenever equipped creature attacks, tap up to one target creature."
 )
 
 
@@ -454,6 +469,20 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ManifestDreadThenAttachSelf(),
+                )
+            )
+            continue
+        # Baseball Bat's equipped-attacks tap-up-to-one trigger —
+        # generic ``TapUpToOneTargetCreature`` engine class with
+        # ``IsHost(subject="attacker")`` matching the equipped-creature-
+        # attacks trigger condition. The 0-target choice is honored at
+        # cast-time selection (the agent may decline to target).
+        if line == _EQUIPPED_ATTACKS_TAP_UP_TO_ONE_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ATTACKS,
+                    predicate=IsHost(subject="attacker"),
+                    effect=TapUpToOneTargetCreature(),
                 )
             )
             continue

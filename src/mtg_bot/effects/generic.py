@@ -6203,6 +6203,62 @@ class TapAnotherTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapUpToOneTargetCreature(Effect):
+    """Tap up to one target creature.
+
+    Matches Baseball Bat's "Whenever equipped creature attacks, tap up
+    to one target creature." printed surface form. The target slot is
+    optional (``target_count_range = (0, 1)``); a 0-target resolution
+    is a silent no-op (the controller chose not to target any
+    creature). With 1 target, the chosen creature is tapped via
+    ``turn.tap_permanent`` (no-op if already tapped).
+
+    Sibling to ``TapTargetArtifactOrCreature`` (Mental Modulation —
+    strict 1-target, broader filter) and ``TapAnotherTargetCreature``
+    (Starport Security — strict 1-target, source-excluded). Each lives
+    on its own engine class because the legal-target pool and the
+    optional/required dichotomy differ.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        tap_permanent(state, obj)
+
+    def describe(self) -> str:
+        return "tap up to one target creature"
+
+
+
+@dataclass(frozen=True)
 class TapTargetArtifactOrCreature(Effect):
     """Tap target artifact or creature. Matches Mental Modulation's middle
     clause. No-op if the target is already tapped.

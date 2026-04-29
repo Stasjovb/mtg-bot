@@ -255,3 +255,169 @@ def test_saw_effect_no_op_without_resolving_source():
     )
     # No exception, nothing changed.
     assert len(state.battlefield) == 0
+
+
+# ---------- Baseball Bat: equipped-attacks tap-up-to-one ----------
+
+def test_baseball_bat_claimed_by_parser():
+    # Baseball Bat ``{G}{W}`` Artifact - Equipment - claimed via the
+    # new literal trigger line in ``equipment_builder``. The
+    # ``Whenever equipped creature attacks, tap up to one target
+    # creature.`` body maps to the new generic
+    # ``TapUpToOneTargetCreature`` engine class.
+    assert "Baseball Bat" in _claimed_names()
+
+
+def test_baseball_bat_carries_attacks_trigger_with_tap_effect():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the equipped-attacks trigger via the new generic
+    # ``TapUpToOneTargetCreature`` engine class. The trigger event is
+    # ATTACKS gated by ``IsHost(subject="attacker")``.
+    from mtg_bot.effects import TapUpToOneTargetCreature
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Baseball Bat"]
+    attacks_triggers = [
+        t for t in p.triggered_abilities
+        if t.event == Event.ATTACKS
+    ]
+    assert len(attacks_triggers) == 1
+    assert isinstance(
+        attacks_triggers[0].effect, TapUpToOneTargetCreature,
+    )
+
+
+def test_baseball_bat_carries_etb_attach_and_pump():
+    # The ETB ``When this Equipment enters, attach it to target
+    # creature you control.`` line lands as an ENTERS trigger, the
+    # ``Equipped creature gets +1/+1.`` lands on
+    # ``equipment_bonuses``, and the ``Equip {3}`` lands as a
+    # synthesized activated ability.
+    from mtg_bot.effects import AttachToTargetCreatureYouControl
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Baseball Bat"]
+    etb_triggers = [
+        t for t in p.triggered_abilities
+        if t.event == Event.ENTERS
+    ]
+    assert len(etb_triggers) == 1
+    assert isinstance(
+        etb_triggers[0].effect, AttachToTargetCreatureYouControl,
+    )
+    assert p.equipment_bonuses == (1, 1, frozenset())
+    equip_costs = [
+        a.cost.mana_str for a in p.activated_abilities
+        if a.cost.mana_str
+    ]
+    assert "{3}" in equip_costs
+
+
+# ---------- TapUpToOneTargetCreature engine class ----------
+
+def test_tap_up_to_one_target_creature_target_range():
+    # Up-to-one means 0 or 1 target, distinguishing this from sibling
+    # ``TapAnotherTargetCreature`` (strict 1) and
+    # ``TapTargetArtifactOrCreature`` (strict 1).
+    from mtg_bot.effects import TapUpToOneTargetCreature
+
+    eff = TapUpToOneTargetCreature()
+    assert eff.requires_target() is True
+    assert eff.target_count_range() == (0, 1)
+
+
+def test_tap_up_to_one_target_creature_legal_targets_includes_all_creatures():
+    # The legal-target pool is ALL creatures on the battlefield
+    # (controller-agnostic and source-agnostic) - the printed surface
+    # form has no controller restriction.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import TapUpToOneTargetCreature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    yours = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    theirs = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[yours, theirs],
+    )
+    legal = TapUpToOneTargetCreature().legal_targets(state, controller_id=0)
+    assert ("creature", 1) in legal
+    assert ("creature", 2) in legal
+
+
+def test_tap_up_to_one_target_creature_taps_chosen():
+    # End-to-end resolve: with one target, the chosen creature is
+    # tapped via ``turn.tap_permanent``.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import TapUpToOneTargetCreature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    target = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    assert target.tapped is False
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[target],
+    )
+    TapUpToOneTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", 2),)
+    )
+    assert target.tapped is True
+
+
+def test_tap_up_to_one_target_creature_no_targets_is_noop():
+    # 0-target resolution is a silent no-op (the controller chose not
+    # to target any creature).
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import TapUpToOneTargetCreature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    target = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[target],
+    )
+    TapUpToOneTargetCreature().resolve(
+        state, controller_id=0, targets=()
+    )
+    assert target.tapped is False
+
+
+def test_tap_up_to_one_target_creature_describe():
+    from mtg_bot.effects import TapUpToOneTargetCreature
+
+    assert TapUpToOneTargetCreature().describe() == (
+        "tap up to one target creature"
+    )
+
+
+def test_tap_up_to_one_target_creature_invalid_target_is_noop():
+    # Defensive: if the target is non-creature (engine misuse) or no
+    # battlefield object matches the id, the effect is a silent no-op
+    # rather than raising.
+    from mtg_bot.effects import TapUpToOneTargetCreature
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    # Wrong kind.
+    TapUpToOneTargetCreature().resolve(
+        state, controller_id=0, targets=(("permanent", 999),),
+    )
+    # Missing object.
+    TapUpToOneTargetCreature().resolve(
+        state, controller_id=0, targets=(("creature", 999),),
+    )
