@@ -1012,9 +1012,19 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
     ``max_mv``: when set, restricts the legal target pool to creature
     cards with mana value ≤ ``max_mv``. Models Surgical Suite's "with
     mana value 3 or less" rider. None = no mana-value restriction.
+
+    ``or_enchantment`` widens the legal-target pool to also include
+    enchantment cards in the graveyard. Matches oracle text "return
+    target creature or enchantment card from your graveyard to the
+    battlefield" — Rescue Skiff's ETB body. Mirrors the ``or_spacecraft``
+    flag on ``ReturnCreatureFromYourGraveyardToHand`` (Fell Gravship).
     """
 
     max_mv: "int | None" = None
+    # When True, enchantment cards in the graveyard are also legal
+    # targets. Matches "return target creature or enchantment card from
+    # your graveyard to the battlefield" — Rescue Skiff.
+    or_enchantment: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -1026,7 +1036,10 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
         return [
             ("graveyard_creature", c.id)
             for c in p.graveyard
-            if c.printing.is_creature
+            if (
+                c.printing.is_creature
+                or (self.or_enchantment and c.printing.is_enchantment)
+            )
             and (
                 self.max_mv is None
                 or c.printing.mana_cost.total <= self.max_mv
@@ -1056,9 +1069,12 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
         put_into_battlefield(state, card, controller_id)
 
     def describe(self) -> str:
+        type_phrase = (
+            "creature or enchantment" if self.or_enchantment else "creature"
+        )
         return (
-            "return target creature card from your graveyard to the "
-            "battlefield"
+            f"return target {type_phrase} card from your graveyard to the "
+            f"battlefield"
         )
 
 

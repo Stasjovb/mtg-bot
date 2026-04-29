@@ -198,13 +198,45 @@ def test_build_spacecraft_printing_skips_missing_power_toughness():
 
 def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
     """A Spacecraft with an ETB trigger whose effect phrase isn't in
-    the unified effect grammar (e.g. Rescue Skiff's ``"return target
-    creature or enchantment card from your graveyard to the
-    battlefield"``) falls through ``_parse_clause`` and the whole
-    card skips - we never half-claim a Spacecraft by silently
-    dropping its ETB."""
+    the unified effect grammar (synthetic ``"draw a card for each blue
+    creature you control"`` rider isn't claimed by any
+    per-each-non-multicolored recognizer today) falls through
+    ``_parse_clause`` and the whole card skips - we never half-claim a
+    Spacecraft by silently dropping its ETB."""
     card = {
         "name": "Hand-Crafted Spacecraft With Unparseable ETB",
+        "mana_cost": "{5}{W}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "5",
+        "toughness": "6",
+        "oracle_text": (
+            "When this Spacecraft enters, draw a card for each blue "
+            "creature you control.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 10+.)\n"
+            "10+ | Flying"
+        ),
+    }
+    assert _build_spacecraft_printing(card) is None
+
+
+def test_build_spacecraft_printing_claims_rescue_skiff():
+    """Rescue Skiff's printed ETB body — ``return target creature or
+    enchantment card from your graveyard to the battlefield`` — is
+    claimed by the unified effect grammar via the
+    ``or_enchantment=True`` rider on
+    ``ReturnCreatureFromYourGraveyardToBattlefield``. The whole card
+    parses through the Spacecraft grammar to the same shape the
+    bespoke factory built (Station 10+ flying, ETB graveyard
+    reanimation widened to creatures-or-enchantments)."""
+    from mtg_bot.effects.generic import (
+        ReturnCreatureFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    card = {
+        "name": "Rescue Skiff",
         "mana_cost": "{5}{W}",
         "type_line": "Artifact — Spacecraft",
         "power": "5",
@@ -218,7 +250,17 @@ def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
             "10+ | Flying"
         ),
     }
-    assert _build_spacecraft_printing(card) is None
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 10
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert len(printing.triggered_abilities) == 1
+    trig = printing.triggered_abilities[0]
+    assert trig.event == Event.ENTERS
+    assert trig.predicate == IsSelf()
+    assert trig.effect == ReturnCreatureFromYourGraveyardToBattlefield(
+        or_enchantment=True,
+    )
 
 
 def test_build_spacecraft_printing_skips_multi_tier_card():

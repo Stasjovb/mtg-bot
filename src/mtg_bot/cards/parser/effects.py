@@ -1001,6 +1001,19 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature card from your graveyard to the battlefield$"
 )
+# "Return target creature or enchantment card from your graveyard to
+# the battlefield" — Rescue Skiff's ETB body (the only EoE/DSK printing
+# of this exact widened-pool shape today). Maps to
+# ``ReturnCreatureFromYourGraveyardToBattlefield(or_enchantment=True)``,
+# mirroring the ``or_spacecraft=True`` rider on the to-hand sibling
+# (Fell Gravship). Tried BEFORE the bare ``return target creature card
+# from your graveyard to the battlefield`` regex below for the more-
+# specific-first convention; the bare regex's ``$`` anchor on
+# ``battlefield`` would not match the ``or enchantment`` rider anyway.
+_RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return target creature or enchantment card from your graveyard "
+    r"to the battlefield$"
+)
 # "Return target creature card with mana value N or less from your
 # graveyard to the battlefield" — narrowed-by-MV reanimation. Surgical
 # Suite's door trigger ("with mana value 3 or less") is the EoE/DSK
@@ -2730,6 +2743,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         # reanimator. Mirrors the to-hand sibling's max_mv rider.
         return ReturnCreatureFromYourGraveyardToBattlefield(
             max_mv=int(m.group(1)),
+        )
+    if _RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``return target creature or enchantment card from your
+        # graveyard to the battlefield`` — Rescue Skiff's ETB body.
+        # Tried BEFORE the bare ``return target creature card`` regex
+        # below for the more-specific-first convention; the bare regex's
+        # ``$`` anchor on ``battlefield`` would not match the
+        # ``or enchantment`` rider anyway. ``or_enchantment=True``
+        # widens the engine class's legal-target pool to include
+        # enchantment cards in the graveyard alongside creature cards,
+        # mirroring the ``or_spacecraft`` flag on
+        # ``ReturnCreatureFromYourGraveyardToHand`` (Fell Gravship).
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            or_enchantment=True,
         )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase

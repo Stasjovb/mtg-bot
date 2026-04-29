@@ -122,7 +122,6 @@ from mtg_bot.effects.generic import (
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
-    ReturnCreatureFromYourGraveyardToBattlefield,
     SearchLibraryForCard,
     TargetArtifactBecomesCreatureUEOT,
     TargetPlayerLosesLife,
@@ -156,19 +155,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                     effect=OptionalSacLandOrLanderForBasicLandRamp(
                         land_count=2,
                     ),
-                ),
-            ),
-        ),
-        # Rescue Skiff: ETB return target creature from your graveyard to the
-        # battlefield. Station 10+ flying.
-        make_spacecraft(
-            "Rescue Skiff", "{5}{W}", 5, 6,
-            station_threshold=10,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
                 ),
             ),
         ),
