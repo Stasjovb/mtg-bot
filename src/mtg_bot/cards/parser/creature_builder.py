@@ -114,6 +114,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
+    _parse_token_doubler_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -293,15 +294,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=AstelliReclaimerETBEffect(),
                 ),
             ),
-        ),
-        # Exalted Sunborn {3}{W}{W} 4/5 Angel Wizard — flying, lifelink,
-        # warp {1}{W}. Static: token doubler.
-        "Exalted Sunborn": make_creature(
-            "Exalted Sunborn", "{3}{W}{W}", 4, 5,
-            subtypes=("Angel", "Wizard"),
-            keywords={"flying", "lifelink"},
-            warp="{1}{W}",
-            is_token_doubler=True,
         ),
         # Territorial Bruntar {4}{R}{R} 6/6 Beast — reach.
         # Landfall: exile top until nonland, may cast this turn.
@@ -1417,6 +1409,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
+    is_token_doubler = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1512,6 +1505,17 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # set once.
             nonbasic_lands_are_mountains = True
             continue
+        if _parse_token_doubler_line(line):
+            # ``If one or more tokens would be created under your
+            # control, twice that many of those tokens are created
+            # instead.`` — Exalted Sunborn's printed token-doubler
+            # replacement effect. Flips the ``is_token_doubler`` kwarg
+            # below; the engine consumes the flag at create-token
+            # resolution time and doubles the count. Idempotent: a
+            # malformed printing with the line twice ends up with the
+            # field set once.
+            is_token_doubler = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1606,4 +1610,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_minus_one_counters_from_hand_cast
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
+        is_token_doubler=is_token_doubler,
     )

@@ -225,6 +225,32 @@ def _parse_restricts_noncreature_spells_line(line: str) -> bool:
     return line.strip() == _RESTRICTS_NONCREATURE_SPELLS_LINE
 
 
+# ``If one or more tokens would be created under your control, twice
+# that many of those tokens are created instead.`` — Exalted Sunborn's
+# printed token-doubler replacement effect. The engine wires the
+# replacement off the printing-level ``is_token_doubler`` flag (rather
+# than a generic ``StaticAbility`` shape, since token replacement
+# happens at create-token resolution rather than as a creature-relative
+# continuous effect). Matched as a literal string — Exalted Sunborn is
+# the only card in the pool with this exact surface today; "broader
+# grammar deferred until a second example exists" (e.g. a hypothetical
+# Anointed-Procession-style enchantment with the same shape would land
+# its own recognizer or, if a parameter varies, parameterize this one).
+_TOKEN_DOUBLER_LINE = (
+    "If one or more tokens would be created under your control, "
+    "twice that many of those tokens are created instead."
+)
+
+
+def _parse_token_doubler_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level token-doubler
+    replacement clause, else ``False``. Flips the ``is_token_doubler``
+    kwarg on ``make_creature``; the engine reads the flag at
+    create-token resolution time and doubles the count.
+    """
+    return line.strip() == _TOKEN_DOUBLER_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard
