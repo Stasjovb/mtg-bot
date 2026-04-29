@@ -72,6 +72,7 @@ from mtg_bot.cards.base import (
     OptionalPutLandFromHandOntoBattlefield,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
@@ -1401,6 +1402,28 @@ _OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD = re.compile(
 _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT = re.compile(
     r"^you may sacrifice another creature or artifact\. If you do, "
     r"this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "You may sacrifice a land or Lander. If you do, search your library
+# for up to N basic land cards, put them onto the battlefield tapped,
+# then shuffle." — Larval Scoutlander's ETB body (the only EoE/DSK
+# printing fitting this exact shape today). Maps to
+# ``OptionalSacLandOrLanderForBasicLandRamp(land_count=N)`` whose
+# resolve handles the optional sac + tutor-tapped sequence via the
+# existing combinator. Captures the count tail (spelled-out small
+# cardinal, e.g. ``two``) for forward-compat with any future printing
+# that varies the count. Literal-line otherwise: the leading "you may
+# sacrifice a land or Lander" subject is unique to this card today;
+# broader generalization (parameterizing the sacrificed object's
+# noun phrase, or merging with the ``OptionalSacAnotherForEffect``
+# shape) is deferred until a second printing with a varying
+# sacrificed-object surface ships, at which point the right move is a
+# parameterized regex over <subject> and <inner-effect> with the
+# inner phrase parsed recursively through ``_parse_effect_phrase``.
+_OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP = re.compile(
+    rf"^you may sacrifice a land or Lander\. If you do, "
+    rf"search your library for up to "
+    rf"(\d+|{_SMALL_CARDINAL_PATTERN}) basic land cards, "
+    rf"put them onto the battlefield tapped, then shuffle$"
 )
 # "You may sacrifice another creature or artifact. If you do, <inner-
 # effect>." — the general ``OptionalSacAnotherForEffect`` wrapper.
@@ -3257,6 +3280,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         return OptionalSacAnotherForPumpSelfUEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
+        )
+    m = _OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP.match(phrase)
+    if m is not None:
+        # ``you may sacrifice a land or Lander. If you do, search your
+        # library for up to N basic land cards, put them onto the
+        # battlefield tapped, then shuffle.`` — Larval Scoutlander's
+        # ETB body. Tried BEFORE the generic
+        # ``_OPTIONAL_SAC_ANOTHER_FOR_EFFECT`` so the specialized
+        # land-or-Lander shape wins; the generic regex's
+        # ``creature or artifact`` subject wouldn't match this anyway,
+        # but the more-specific-first ordering is the convention here.
+        # Maps to ``OptionalSacLandOrLanderForBasicLandRamp(land_count=
+        # N)`` which already implements the optional sac + tutor-tapped
+        # sequence as a single combinator.
+        return OptionalSacLandOrLanderForBasicLandRamp(
+            land_count=_parse_amount(m.group(1)),
         )
     m = _OPTIONAL_SAC_ANOTHER_FOR_EFFECT.match(phrase)
     if m is not None:

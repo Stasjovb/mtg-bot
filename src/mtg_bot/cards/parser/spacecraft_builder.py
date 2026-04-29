@@ -114,9 +114,6 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.combinators import (
-    OptionalSacLandOrLanderForBasicLandRamp,
-)
 from mtg_bot.effects.generic import (
     DealDamageToTargetCreature,
     EachOpponentDiscardsOrLosesLife,
@@ -143,21 +140,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Larval Scoutlander: ETB optional sac land or Lander → search for up
-        # to two basic lands onto battlefield tapped. Station 7+ flying.
-        make_spacecraft(
-            "Larval Scoutlander", "{2}{G}", 3, 3,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=OptionalSacLandOrLanderForBasicLandRamp(
-                        land_count=2,
-                    ),
-                ),
-            ),
-        ),
         # Entropic Battlecruiser: 1+ tier — whenever an opponent discards a
         # card, that player loses 3 life. Attack trigger — each opponent
         # discards a card or loses 3 life. Station 8+ flying + deathtouch.

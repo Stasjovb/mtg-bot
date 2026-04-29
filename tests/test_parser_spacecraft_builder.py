@@ -221,6 +221,51 @@ def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
     assert _build_spacecraft_printing(card) is None
 
 
+def test_build_spacecraft_printing_claims_larval_scoutlander():
+    """Larval Scoutlander's printed ETB body — ``you may sacrifice a
+    land or Lander. If you do, search your library for up to two basic
+    land cards, put them onto the battlefield tapped, then shuffle`` —
+    is claimed by the unified effect grammar via the new
+    ``_OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP`` recognizer
+    that wraps ``OptionalSacLandOrLanderForBasicLandRamp(land_count=
+    2)``. The captured count tail accepts spelled-out small cardinals
+    so a future printing varying the count parses without further
+    grammar work."""
+    from mtg_bot.effects.combinators import (
+        OptionalSacLandOrLanderForBasicLandRamp,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    card = {
+        "name": "Larval Scoutlander",
+        "mana_cost": "{2}{G}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "When this Spacecraft enters, you may sacrifice a land or "
+            "Lander. If you do, search your library for up to two "
+            "basic land cards, put them onto the battlefield tapped, "
+            "then shuffle.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 7+.)\n"
+            "7+ | Flying"
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 7
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert len(printing.triggered_abilities) == 1
+    trig = printing.triggered_abilities[0]
+    assert trig.event == Event.ENTERS
+    assert trig.predicate == IsSelf()
+    assert trig.effect == OptionalSacLandOrLanderForBasicLandRamp(
+        land_count=2,
+    )
+
+
 def test_build_spacecraft_printing_claims_the_seriema():
     """The Seriema's printed body parses through the unified clause
     grammar to a Legendary Spacecraft with:
