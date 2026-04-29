@@ -28,6 +28,10 @@ Currently supports three land kinds:
 - **Opening-hand luck-counter lands** (Gemstone Caverns) — claimed
   by ``_try_build_opening_hand_luck_counter_land`` for the static
   "always has a luck counter" simplification.
+- **Chosen-color Cave lands** (Sunken Citadel) — claimed by
+  ``_try_build_chosen_color_cave_land`` for the simplified
+  "any-color" static collapse of the printed
+  "as it enters, choose a color" clause.
 """
 
 from __future__ import annotations
@@ -496,27 +500,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Sunken Citadel: Land — Cave, enters tapped. {T}: Add one "any"
-        # mana. {T}: Add two "any" mana (land-activation restricted).
-        # The choose-a-color-on-ETB is simplified to "any" color.
-        "Sunken Citadel": make_utility_land(
-            "Sunken Citadel", subtypes_str="Cave", enters_tapped=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("any", 1),)),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(
-                        produces=(("any", 2),),
-                        spend_restriction="land_activation",
-                    ),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
         # Lotus Field: Hexproof. Enters tapped. ETB sac 2 lands.
         # {T}: Add three mana of any one color.
         "Lotus Field": make_utility_land(
@@ -827,6 +810,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if gemstone is not None:
         return gemstone
+    chosen_color_cave = _try_build_chosen_color_cave_land(
+        card, text, supertypes, subtypes,
+    )
+    if chosen_color_cave is not None:
+        return chosen_color_cave
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2116,6 +2104,88 @@ def _try_build_opening_hand_luck_counter_land(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
                 effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Chosen-color Cave land. ``Land — Cave`` (no supertypes, single
+# ``Cave`` subtype), exactly three lines:
+#   1. ``This land enters tapped. As it enters, choose a color.``
+#   2. ``{T}: Add one mana of the chosen color.``
+#   3. ``{T}: Add two mana of the chosen color. Spend this mana only to
+#      activate abilities of land sources.``
+#
+# The ``As it enters, choose a color`` clause and the per-activation
+# "of the chosen color" specifier are simplified on the static side to
+# the ``"any"`` color (the engine's mana primitive doesn't carry a
+# per-permanent chosen-color slot for lands today). The two
+# activations land as separate mana abilities: the first unrestricted,
+# the second tagged with ``spend_restriction="land_activation"``.
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring notes deferred generalization. Sunken Citadel is
+# the only EoS land matching this chosen-color-Cave shape; broader
+# grammar (parameterized over the second-line restriction phrase, or
+# extended to non-Cave chosen-color lands) deferred until a sibling
+# printing exists.
+_CHOSEN_COLOR_CAVE_LINE_1 = "This land enters tapped. As it enters, choose a color."
+_CHOSEN_COLOR_CAVE_LINE_2 = "{T}: Add one mana of the chosen color."
+_CHOSEN_COLOR_CAVE_LINE_3 = (
+    "{T}: Add two mana of the chosen color. Spend this mana only to "
+    "activate abilities of land sources."
+)
+
+
+def _try_build_chosen_color_cave_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a chosen-color Cave ``CardPrinting`` if ``text`` matches
+    the strict three-line Sunken Citadel shape, else ``None``.
+
+    ``Land — Cave`` only (no supertypes, single ``Cave`` subtype). The
+    static-side simplification maps "the chosen color" to the
+    engine's ``"any"`` color tag for both produced amounts; the second
+    activation carries a ``spend_restriction="land_activation"`` tag.
+
+    Per parser/CLAUDE.md: a literal-line recognizer is acceptable
+    here because Sunken Citadel is "the only card in the current data
+    pool that fits that printed surface" and "broader grammar deferred
+    until a second example exists" (e.g. another chosen-color Cave or
+    a non-Cave chosen-color land that simplifies the same way).
+    """
+    if supertypes:
+        return None
+    if subtypes != ("Cave",):
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 3:
+        return None
+    if lines[0] != _CHOSEN_COLOR_CAVE_LINE_1:
+        return None
+    if lines[1] != _CHOSEN_COLOR_CAVE_LINE_2:
+        return None
+    if lines[2] != _CHOSEN_COLOR_CAVE_LINE_3:
+        return None
+    return make_utility_land(
+        card["name"], subtypes_str="Cave", enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 2),),
+                    spend_restriction="land_activation",
+                ),
                 is_mana_ability=True,
             ),
         ),
