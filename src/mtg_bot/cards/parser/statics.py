@@ -85,6 +85,45 @@ from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 
 
+# Ability-word prefix stripper for static lines. Mirrors the trigger-
+# layer ``_ABILITY_WORD_PREFIX`` regex but anchors on the static-line
+# bodies the parser already accepts (``As long as``,
+# ``This creature gets``, ``Creatures you control``, ``Other creatures
+# you control``, and ``Each creature you control``). Ability words have
+# no rules consequence (CR 207.2c) so the stripped prefix simply
+# disappears; the body underneath parses through the existing
+# self-scope, anthem-scope, and counter-gated grammars unchanged.
+#
+# The regex is conservative: it only matches when the body looks like
+# one of the static surface families above, so a line that happens to
+# start with ``Foo — `` for some other reason (a triggered-ability
+# ``<Word> — Whenever ...`` line, say) doesn't get clobbered here. A
+# trigger-layer prefix would already have been stripped before the
+# clause dispatcher reached the static path; the static stripper exists
+# specifically for the Delirium static surface where the body is a
+# ``This creature gets`` / ``Creatures you control`` line, not a
+# ``When``/``Whenever`` line.
+_STATIC_ABILITY_WORD_PREFIX = re.compile(
+    r"^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — "
+    r"(?=As long as |This creature gets |[Cc]reatures you control |"
+    r"[Oo]ther creatures you control |Each creature you control )"
+)
+
+
+def _strip_static_ability_word_prefix(line: str) -> str:
+    """Strip a generic ``<Ability Word> — `` prefix from ``line`` when
+    one precedes a recognized static-line body.
+
+    Static ability words (Duskmourn's Delirium, principally) carry no
+    rules meaning per CR 207.2c, so the parser doesn't need to know
+    which ability word it's looking at — the substance lives entirely
+    in the body that follows. Returns ``line`` unchanged when no such
+    prefix is present, mirroring the ``_strip_ability_word_prefix``
+    helper in ``triggers.py``.
+    """
+    return _STATIC_ABILITY_WORD_PREFIX.sub("", line, count=1)
+
+
 _STATIC_ABILITY_LINE = re.compile(
     r"^As long as (?P<condition>.+?), this creature gets "
     r"\+(?P<power>\d+)/\+(?P<toughness>\d+)"
@@ -133,6 +172,20 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
     # ability only when the total clears the threshold.
     "there are two or more unlocked doors among Rooms you control": {
         "requires_unlocked_doors_among_rooms": 2
+    },
+    # Duskmourn "Delirium" gate. Wildfire Wickerfolk prints
+    # ``Delirium — This creature gets +1/+1 and has trample as long as
+    # there are four or more card types among cards in your graveyard.``
+    # — the ``Delirium —`` ability word strips through
+    # ``_strip_static_ability_word_prefix`` (no rules consequence per
+    # CR 207.2c) and the trailing ``as long as`` tail lands here. Maps
+    # to ``requires_delirium=True``; the engine gate walks the
+    # controller's graveyard, counts distinct card types, and applies
+    # the ability only when the total clears four. Same threshold as
+    # the trigger-side ``Delirium()`` predicate so static and trigger
+    # evaluations agree on game-state semantics.
+    "there are four or more card types among cards in your graveyard": {
+        "requires_delirium": True
     },
 }
 
@@ -314,7 +367,7 @@ def _parse_static_ability_line(line: str) -> StaticAbility | None:
     and keeping that path first minimizes diff churn for the existing
     test corpus.
     """
-    stripped = line.strip()
+    stripped = _strip_static_ability_word_prefix(line.strip())
     m = _STATIC_ABILITY_LINE.match(stripped)
     if m is None:
         m = _STATIC_ABILITY_LINE_TRAILING.match(stripped)

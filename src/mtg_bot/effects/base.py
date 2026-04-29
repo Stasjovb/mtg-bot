@@ -342,6 +342,15 @@ class StaticAbility:
     # with both halves unlocked counts as two doors here, mirroring the
     # printed "doors" wording exactly.
     requires_unlocked_doors_among_rooms: int = 0
+    # DSK "Delirium" gate: when ``True`` the ability is inert unless the
+    # source's controller has at least four distinct card types among
+    # cards in their graveyard (CR 205.2a card-type taxonomy — supertypes
+    # and subtypes don't count). Mirrors the
+    # ``mtg_bot.effects.predicates.Delirium`` predicate's runtime check
+    # so static and trigger evaluations of "Delirium —" share the same
+    # game-state semantics; the field is False by default so existing
+    # statics (no Delirium gate) keep their always-on behaviour.
+    requires_delirium: bool = False
     # DSK Rooms: when this static lives on a Room half, this is the
     # half-name (matches a key in ``CardPrinting.room_halves``). While
     # the half is locked (not in ``unlocked_halves``), the ability is
@@ -405,6 +414,29 @@ class StaticAbility:
                 and "Room" in o.printing.subtypes
             )
             if total_doors < self.requires_unlocked_doors_among_rooms:
+                return False
+        # "As long as there are four or more card types among cards in
+        # your graveyard" gate (DSK Delirium). Walks the controller's
+        # graveyard once and counts distinct card-type entries from the
+        # comprehensive-rules taxonomy; short-circuits as soon as the
+        # running set hits four. Mirrors the
+        # ``mtg_bot.effects.predicates.Delirium`` predicate's check so
+        # the static and trigger sides agree on game-state semantics.
+        if self.requires_delirium:
+            if state is None:
+                return False
+            from mtg_bot.effects.predicates import _DELIRIUM_CARD_TYPES
+            controller = state.player_by_id(source.controller_id)
+            seen: set[str] = set()
+            for card in controller.graveyard:
+                for t in card.printing.card_types:
+                    if t in _DELIRIUM_CARD_TYPES:
+                        seen.add(t)
+                        if len(seen) >= 4:
+                            break
+                if len(seen) >= 4:
+                    break
+            if len(seen) < 4:
                 return False
         if self.scope == StaticScope.SELF:
             return target.id == source.id
