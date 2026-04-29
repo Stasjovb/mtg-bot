@@ -64,6 +64,7 @@ from mtg_bot.cards.base import (
     ReturnTargetLandFromGraveyardToHand,
     SacrificeNLandsYouControl,
     SacrificeSelfUnlessTapPermanent,
+    SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     Sequence,
     SwitchSourcePowerToughnessUEOT,
@@ -831,6 +832,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if low_life_dual is not None:
         return low_life_dual
+    fetch = _try_build_fetch_land(
+        card, text, supertypes, subtypes,
+    )
+    if fetch is not None:
+        return fetch
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1679,6 +1685,65 @@ def _try_build_verge_dual_land(
                 ),
                 effect=AddManaToPool(produces=((c2, 1),)),
                 is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Pure tap-and-sac fetch lands (Terramorphic Expanse). A plain
+# ``Land`` (no supertypes, no subtypes) whose ENTIRE oracle text is
+# the single line:
+#
+#     {T}, Sacrifice this land: <BODY>.
+#
+# Distinct from ``_try_build_tap_sac_utility_land`` which gates on a
+# preceding ``{T}: Add {C}.`` line. Bodies are on a per-card whitelist
+# pinning the exact surface form to a fresh ``Effect`` instance. The
+# produces set is empty — these lands tap only to pay their own
+# sacrifice activation, never to mint mana.
+_FETCH_LAND_BODIES: dict[str, "callable"] = {
+    "Search your library for a basic land card, put it onto the "
+    "battlefield tapped, then shuffle":
+        lambda: SearchLibraryForBasicLandTapped(count=1),
+}
+
+
+def _try_build_fetch_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a fetch-land ``CardPrinting`` if ``text`` is a single
+    ``{T}, Sacrifice this land: <BODY>.`` line whose body is on
+    ``_FETCH_LAND_BODIES``, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The cost is
+    ``tap_self`` + ``sacrifice_self``; ``produces`` stays empty —
+    fetch lands are not a mana source.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    line = text.strip()
+    if "\n" in line:
+        return None
+    m = _TAP_AND_SAC_SELF_RE.match(line)
+    if m is None:
+        return None
+    body = m.group("body")
+    factory = _FETCH_LAND_BODIES.get(body)
+    if factory is None:
+        return None
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    tap_self=True, sacrifice_self=True,
+                ),
+                effect=factory(),
             ),
         ),
     )
