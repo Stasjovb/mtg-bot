@@ -43,6 +43,7 @@ from mtg_bot.cards.base import (
     DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
     EachOpponentLosesLife,
+    EachOpponentMillsCards,
     EachPlayerDraws,
     Effect,
     EnduringDiesReturnAsEnchantmentEffect,
@@ -84,6 +85,7 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnTargetPermanentYouControlToOwnersHand,
+    ReturnUpToNTargetCreaturesToOwnersHands,
     SearchLibraryForCard,
     SelfMill,
     Sequence,
@@ -685,6 +687,22 @@ _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
     r"^return up to one other target permanent you control "
     r"to its owner's hand$"
 )
+# "Return up to N target non-Spacecraft creatures to their owners'
+# hands" — Specimen Freighter's ETB body. Maps to
+# ``ReturnUpToNTargetCreaturesToOwnersHands(max_n=N,
+# exclude_spacecraft=True)`` whose ``legal_targets`` filters to
+# non-Spacecraft creatures and ``target_count_range`` returns
+# ``(0, max_n)``. The amount tail accepts the spelled-out small
+# cardinal Scryfall prints (``two`` on Specimen Freighter) plus
+# bare digits for any future printing carrying a different bound.
+# The ``non-Spacecraft`` qualifier is verbatim from the oracle text;
+# only Specimen Freighter in the current pool prints this filter, but
+# the bound is parameterized so a future ``return up to three target
+# non-Spacecraft creatures …`` printing lands on the same regex.
+_RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS = re.compile(
+    rf"^return up to (\d+|{_SMALL_CARDINAL_PATTERN}) target "
+    rf"non-Spacecraft creatures to their owners' hands$"
+)
 # "Return target creature card from your graveyard to your hand" —
 # graveyard-to-hand reanimation surface.
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
@@ -1063,6 +1081,17 @@ _OPTIONAL_SAC_ANOTHER_FOR_EFFECT = re.compile(
 # further grammar work. ``a`` collapses to count=1 in the handler.
 _EACH_OPPONENT_DISCARDS = re.compile(
     rf"^each opponent discards (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
+# "Defending player mills N cards" — Specimen Freighter's attack
+# trigger body. The defending-player surface is the multiplayer-aware
+# wording for an attack-trigger mill; the engine simplifies this to
+# "each opponent mills N" via ``EachOpponentMillsCards(amount=N)``,
+# which is correct in 2-player and a documented approximation in
+# multiplayer (per the engine class docstring). The amount tail
+# accepts spelled-out small cardinals (``four`` on Specimen
+# Freighter) plus bare digits for any future printing.
+_DEFENDING_PLAYER_MILLS_N_CARDS = re.compile(
+    rf"^defending player mills (\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
 # "Exile target creature or Spacecraft." — Gravkill's printed surface.
 # The static ``cards/eoe_spells.py`` Gravkill entry intentionally fudges
@@ -1904,6 +1933,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         token = m.group(1)
         count = 1 if token == "a" else _parse_amount(token)
         return EachOpponentDiscards(count=count)
+    m = _DEFENDING_PLAYER_MILLS_N_CARDS.match(phrase)
+    if m is not None:
+        # ``defending player mills N cards`` — Specimen Freighter's
+        # attack-trigger body. Maps to ``EachOpponentMillsCards(amount=N)``
+        # which is correct in 2-player and a documented approximation
+        # in multiplayer (per the engine class docstring). Amount
+        # accepts digits and spelled-out small cardinals.
+        return EachOpponentMillsCards(amount=_parse_amount(m.group(1)))
     # ``create a Lander token. At the beginning of the end step on
     # your next turn, sacrifice that token`` — Kav Landseeker's ETB.
     # Tried BEFORE the bare token-creation dispatcher because the
@@ -2099,6 +2136,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         # via ``state.resolving_source``).
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
+        )
+    m = _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS.match(
+        phrase
+    )
+    if m is not None:
+        # ``return up to N target non-Spacecraft creatures to their
+        # owners' hands`` — Specimen Freighter's ETB. The
+        # ``non-Spacecraft`` qualifier flips
+        # ``ReturnUpToNTargetCreaturesToOwnersHands.exclude_spacecraft``
+        # to True (legal pool excludes stationed and unstationed
+        # Spacecraft alike); ``max_n=N`` is the captured bound. Amount
+        # accepts digits and spelled-out small cardinals.
+        return ReturnUpToNTargetCreaturesToOwnersHands(
+            max_n=_parse_amount(m.group(1)),
+            exclude_spacecraft=True,
         )
     m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV.match(phrase)
     if m is not None:

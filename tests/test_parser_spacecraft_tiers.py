@@ -192,10 +192,11 @@ def test_build_spacecraft_printing_tier_gated_plus_standalone_trigger():
 def test_build_spacecraft_printing_skips_tier_gated_unparseable_effect():
     """A tier-gated trigger whose body parses as a recognized trigger
     phrase but whose effect phrase is outside the unified effect
-    grammar (here ``defending player mills four cards``) falls
-    through ``_parse_clause`` and the whole card skips. Locks in
-    that the tier-gated arm never silently drops the effect — same
-    fall-through invariant the standalone-trigger arm holds."""
+    grammar (here ``draw a card for each multicolored permanent you
+    control`` — Infinite Guideline Station's bespoke attack-trigger
+    body) falls through ``_parse_clause`` and the whole card skips.
+    Locks in that the tier-gated arm never silently drops the effect
+    — same fall-through invariant the standalone-trigger arm holds."""
     card = {
         "name": "Hand-Crafted Tier-Gated Unparseable Spacecraft",
         "mana_cost": "{4}{U}",
@@ -206,8 +207,8 @@ def test_build_spacecraft_printing_skips_tier_gated_unparseable_effect():
             "Station (Tap another creature you control: Put charge "
             "counters equal to its power on this Spacecraft. Station "
             "only as a sorcery. It's an artifact creature at 7+.)\n"
-            "3+ | Whenever this Spacecraft attacks, defending player "
-            "mills four cards.\n"
+            "3+ | Whenever this Spacecraft attacks, draw a card for "
+            "each multicolored permanent you control.\n"
             "7+ | Flying"
         ),
     }

@@ -120,13 +120,11 @@ from mtg_bot.effects.generic import (
     DrawCardPerMulticoloredPermanent,
     DrawCards,
     EachOpponentDiscardsOrLosesLife,
-    EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     PumpSelfUntilEOT,
     PutPlusOneCounterOnEachCreatureYouControl,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
-    ReturnUpToNTargetCreaturesToOwnersHands,
     SearchLibraryForCard,
     SelfMill,
     TargetArtifactBecomesCreatureUEOT,
@@ -263,26 +261,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
-        # Specimen Freighter: ETB return up to two non-Spacecraft creatures to
-        # owners' hands. Whenever attacks, each opponent mills 4. Station 9+
-        # flying.
-        make_spacecraft(
-            "Specimen Freighter", "{5}{U}", 4, 7,
-            station_threshold=9,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnUpToNTargetCreaturesToOwnersHands(
-                        max_n=2, exclude_spacecraft=True,
-                    ),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=EachOpponentMillsCards(amount=4),
                 ),
             ),
         ),
