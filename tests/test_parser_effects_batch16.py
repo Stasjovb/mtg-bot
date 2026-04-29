@@ -97,10 +97,12 @@ def test_depressurize_claimed_by_parser():
 
 
 def test_focus_fire_claimed_by_parser():
-    # Focus Fire ``{W}`` Instant — variable-X burn (2 plus creatures
-    # and/or Spacecraft you control). The X-formula syntax has no
-    # corresponding primitive in the per-clause grammar, so the spell
-    # is claimed via the whole-spell exact-text dispatcher.
+    # Focus Fire ``{W}`` Instant — variable-X burn (N plus creatures
+    # and/or Spacecraft you control). Claimed via the per-clause
+    # grammar (effects.py's
+    # ``_DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT``
+    # recognizer, parameterized over the integer base, mapping to
+    # ``FocusFireEffect(base=N)``).
     assert "Focus Fire" in _claimed_names()
 
 
@@ -162,16 +164,21 @@ def test_dispatch_depressurize_returns_engine_class():
 
 
 def test_dispatch_focus_fire_returns_engine_class():
-    # Focus Fire's X-formula reads "2 plus the number of creatures
-    # and/or Spacecraft you control"; the engine class's ``base=2``
-    # field captures the additive constant and the rest is
-    # computed at resolve time.
-    eff = _try_whole_spell_exact_text(
+    # Focus Fire migrated from the whole-spell exact-text tier to the
+    # per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT``);
+    # whole-spell dispatch now falls through. End-to-end claim
+    # verified via the active source's printing — the recognizer's
+    # captured ``base=2`` integer parameterizes the engine class.
+    assert _try_whole_spell_exact_text(
         "Focus Fire deals X damage to target attacking or blocking "
         "creature, where X is 2 plus the number of creatures and/or "
         "Spacecraft you control."
-    )
-    assert eff == FocusFireEffect(base=2)
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    p = get_active_source().get_printings().get("Focus Fire")
+    assert p is not None
+    assert p.spell_effect == FocusFireEffect(base=2)
 
 
 def test_dispatch_diplomatic_relations_returns_engine_class():

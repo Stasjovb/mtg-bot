@@ -58,6 +58,7 @@ from mtg_bot.cards.base import (
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
     ExorciseEffect,
+    FocusFireEffect,
     GainLife,
     GrantUnblockableUEOT,
     LookAtTopNRevealOrCounter,
@@ -289,6 +290,27 @@ _DEAL_DAMAGE_COUNT_SOURCE_DISPATCH: dict[str, type] = {
     "artifacts you control": DealDamageToOpponentCreatureByArtifactCount,
     "cards in your hand": DealDamageToOpponentCreatureByCardsInHand,
 }
+# "<source> deals X damage to target attacking or blocking creature,
+# where X is N plus the number of creatures and/or Spacecraft you
+# control." — Focus Fire `{R}` Sorcery: variable-X burn whose X is a
+# fixed integer base plus a count of friendly creatures and Spacecraft
+# at resolve time. The capture group is the integer base ``N`` (matches
+# Focus Fire's printed ``2``); maps to ``FocusFireEffect(base=N)``
+# whose ``_amount`` walks ``state.battlefield`` for friendly creatures
+# and Spacecraft at resolve time.
+#
+# Currently only Focus Fire in the EoE pool fits this shape, but the
+# regex captures the integer base as a parameter so a future printing
+# with a different base (``where X is 3 plus ...`` etc.) lands on the
+# same primitive without further grammar work — the
+# parameterized-recognizer-preferred form per parser CLAUDE.md.
+# Lives in the per-clause grammar (rather than the whole-spell exact-
+# text tier) to claim future cards with this shape automatically.
+_DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT = re.compile(
+    r"^deals X damage to target attacking or blocking creature, "
+    r"where X is (\d+) plus the number of creatures and/or "
+    r"Spacecraft you control$"
+)
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
 # than a creature; ``DealDamageToTargetOpponent(amount=N)`` filters
@@ -2087,6 +2109,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         cls = _DEAL_DAMAGE_COUNT_SOURCE_DISPATCH.get(m.group(1))
         if cls is not None:
             return cls()
+    # ``deals X damage to target attacking or blocking creature, where
+    # X is N plus the number of creatures and/or Spacecraft you
+    # control`` — Focus Fire's body (after the ``<Name> `` prefix
+    # strip in ``_normalize_spell_effect_phrase``). The captured
+    # integer base parameterizes ``FocusFireEffect(base=N)``; the
+    # dynamic +creatures-and-Spacecraft count is read at resolve
+    # time inside the engine class. See the regex's docstring for
+    # the deferred-generalization plan when a second card with this
+    # shape ships.
+    m = _DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT.match(
+        phrase
+    )
+    if m is not None:
+        return FocusFireEffect(base=int(m.group(1)))
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare

@@ -69,7 +69,6 @@ from mtg_bot.cards.base import (
     EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
-    FocusFireEffect,
     GainLife,
     LoseLife,
     ManifestDread,
@@ -479,15 +478,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or less, destroy it."
     ): DepressurizeEffect(power_penalty=3),
-    # Focus Fire: variable-X burn whose X reads "2 plus the number of
-    # creatures and/or Spacecraft you control". The bespoke engine
-    # class computes X at resolve time; the parser dispatches on the
-    # printed surface form.
-    (
-        "Focus Fire deals X damage to target attacking or blocking "
-        "creature, where X is 2 plus the number of creatures and/or "
-        "Spacecraft you control."
-    ): FocusFireEffect(base=2),
     # Diplomatic Relations: pump-and-grant-vigilance on your creature
     # plus a fight-shaped damage rider where the chosen first target
     # deals damage equal to its (post-pump) power to a chosen second
