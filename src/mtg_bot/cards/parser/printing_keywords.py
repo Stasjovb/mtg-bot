@@ -202,6 +202,29 @@ def _parse_nonbasic_lands_are_mountains_line(line: str) -> bool:
     return line.strip() == _NONBASIC_LANDS_ARE_MOUNTAINS_LINE
 
 
+# ``Each player can't cast more than one noncreature spell each turn.``
+# — Deafening Silence's printed static. The engine wires the cast-
+# pipeline gate off the printing-level
+# ``restricts_noncreature_spells_to_one_per_turn`` flag (rather than a
+# generic ``StaticAbility`` shape, since the cast-restriction lives
+# pre-stack and isn't a creature-relative continuous effect). Matched
+# as a literal string; a future card with a similar restriction would
+# get its own recognizer here.
+_RESTRICTS_NONCREATURE_SPELLS_LINE = (
+    "Each player can't cast more than one noncreature spell each turn."
+)
+
+
+def _parse_restricts_noncreature_spells_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level Deafening
+    Silence static, else ``False``. Flips the
+    ``restricts_noncreature_spells_to_one_per_turn`` kwarg on
+    ``make_enchantment``; the engine reads the flag in the cast pipeline
+    to gate noncreature spell casts after the first per turn.
+    """
+    return line.strip() == _RESTRICTS_NONCREATURE_SPELLS_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

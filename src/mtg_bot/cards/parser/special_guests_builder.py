@@ -41,22 +41,6 @@ from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import Controlled, Event, _Controller
 
 
-def _build_deafening_silence() -> CardPrinting:
-    type_line = "Enchantment"
-    supertypes, card_types, subtypes = _parse_type_line(type_line)
-    mana_str = "{W}"
-    return CardPrinting(
-        name="Deafening Silence",
-        mana_cost_str=mana_str,
-        mana_cost=parse_mana_cost(mana_str),
-        type_line=type_line,
-        supertypes=supertypes,
-        card_types=card_types,
-        subtypes=subtypes,
-        restricts_noncreature_spells_to_one_per_turn=True,
-    )
-
-
 def _build_sliver_overlord() -> CardPrinting:
     type_line = "Legendary Creature — Sliver Mutant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -118,10 +102,6 @@ def _build_burgeoning() -> CardPrinting:
 # the parser falls through to the silent-skip path rather than
 # claiming a card whose text no longer matches the modeled flag.
 _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
-    "Deafening Silence": (
-        "Each player can't cast more than one noncreature spell each turn.",
-        _build_deafening_silence,
-    ),
     "Burgeoning": (
         "Whenever an opponent plays a land, you may put a land card from "
         "your hand onto the battlefield.",
