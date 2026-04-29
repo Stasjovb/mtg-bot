@@ -639,6 +639,26 @@ class CardPrinting:
     # Multiple sources stack. Matches Bioengineered Future. Consumed in
     # actions.put_into_battlefield.
     grants_etb_counter_per_land_entered_this_turn: bool = False
+    # ETB replacement: when this creature would enter the battlefield, if
+    # ``state.creatures_died_this_turn > 0`` it enters with one +1/+1
+    # counter on it instead. Matches Cackling Slasher's
+    # ``This creature enters with a +1/+1 counter on it if a creature
+    # died this turn.`` clause. Consumed in
+    # ``actions.put_into_battlefield``; the death tracker increments in
+    # ``turn.move_off_battlefield`` whenever any creature is graveyarded
+    # and resets at cleanup. The check uses ``> 0`` rather than ``>= 1``
+    # to defend against any future signed-int regressions, but the
+    # tracker is always non-negative.
+    enters_with_plus_one_counter_if_creature_died_this_turn: bool = False
+    # ETB replacement: when this creature is cast from its controller's
+    # hand and resolves onto the battlefield, it enters with N -1/-1
+    # counters on it. Matches Patched Plaything's
+    # ``This creature enters with two -1/-1 counters on it if you cast
+    # it from your hand.`` clause. Consumed in
+    # ``actions.put_into_battlefield``; the cast-from-hand origin is
+    # recorded on the GameObject via ``cast_via_hand`` at cast time
+    # (``actions._cast_spell``). 0 disables the replacement.
+    enters_with_minus_one_counters_from_hand_cast: int = 0
     # Aura enchant restriction. Auras default to enchanting creatures;
     # Hardlight Containment enchants artifacts (and our machinery
     # wouldn't find a legal target otherwise). Accepts "creature" or
@@ -986,6 +1006,8 @@ def make_creature(
     enters_tapped: bool = False,
     must_be_blocked_if_able: bool = False,
     landcycling: tuple[str, str] | None = None,
+    enters_with_plus_one_counter_if_creature_died_this_turn: bool = False,
+    enters_with_minus_one_counters_from_hand_cast: int = 0,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -1056,6 +1078,12 @@ def make_creature(
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
         landcycling=landcycling,
+        enters_with_plus_one_counter_if_creature_died_this_turn=(
+            enters_with_plus_one_counter_if_creature_died_this_turn
+        ),
+        enters_with_minus_one_counters_from_hand_cast=(
+            enters_with_minus_one_counters_from_hand_cast
+        ),
     )
 
 

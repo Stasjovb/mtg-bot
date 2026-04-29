@@ -124,6 +124,17 @@ class GameObject:
     # a blink-and-recast under the printed cost doesn't reactivate
     # the suppression). Mirrors the ``cast_via_warp`` precedent.
     cast_via_impending: bool = False
+    # Set True at cast time when this card was cast from its
+    # controller's hand (the normal cast path), distinct from casts
+    # originating from exile (warped, impulse, Possibility-Technician),
+    # the top of the library (Mm'menon grant), or the graveyard
+    # (Timeline Culler warp-from-graveyard). Cleared at ETB after the
+    # cast-from-hand-only ETB hooks read it (so a blink-and-recast
+    # path doesn't carry stale provenance). Consumed by the
+    # ``enters_with_minus_one_counters_from_hand_cast`` ETB
+    # replacement (Patched Plaything). Default False — only the
+    # ``actions._cast_spell`` cast-from-hand branch flips it on.
+    cast_via_hand: bool = False
     # Stun counters: a permanent with stun counters doesn't untap during
     # its controller's untap step — instead one stun counter is removed.
     stun_counters: int = 0
@@ -2022,6 +2033,15 @@ class GameState:
     # turns: if the queue is non-empty, the next turn's active player
     # is the head of the queue instead of the natural next alive player.
     extra_turn_queue: list[int] = field(default_factory=list)
+    # Per-turn count of creatures that have died (moved from battlefield
+    # to graveyard while reading as creatures) regardless of controller.
+    # Incremented in ``turn.move_off_battlefield`` for every dies event
+    # the engine fires. Reset by ``run_cleanup_step``. Consumed by
+    # ETB replacement effects keyed on ``a creature died this turn``
+    # (Cackling Slasher's printed +1/+1 counter rider). The tracker
+    # COUNTS deaths from any player — the printed clause doesn't
+    # specify "you control", so a dies on either side suffices.
+    creatures_died_this_turn: int = 0
 
     def active_player(self) -> Player:
         return self.players[self.active_player_idx]
@@ -2584,5 +2604,6 @@ class GameState:
                 self.prevent_combat_damage_this_turn
             ),
             extra_turn_queue=list(self.extra_turn_queue),
+            creatures_died_this_turn=self.creatures_died_this_turn,
         )
         return new_state

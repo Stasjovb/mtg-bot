@@ -254,6 +254,15 @@ def move_off_battlefield(
 
     # Fire "when this creature dies" triggers if applicable.
     if destination == "graveyard" and was_creature:
+        # Bump the per-turn death tracker BEFORE firing dies triggers
+        # so an in-trigger ETB-replacement that reads
+        # ``state.creatures_died_this_turn`` (via the
+        # ``enters_with_plus_one_counter_if_creature_died_this_turn``
+        # printing flag, e.g. Cackling Slasher) sees this very death
+        # too. The tracker counts EVERY creature death — both players,
+        # token or non-token — matching Cackling Slasher's
+        # unqualified "if a creature died this turn" surface.
+        state.creatures_died_this_turn += 1
         _fire_dies_triggers(state, obj)
 
     # Predicate-style ``Event.DIES`` dispatch. Phase-4 widens the
@@ -1014,6 +1023,11 @@ def run_cleanup_step(state: GameState) -> None:
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
+    # Reset the per-turn creature-death tracker (Cackling Slasher's
+    # "if a creature died this turn" rider). The tracker is incremented
+    # in ``move_off_battlefield`` for every creature dies event the
+    # engine fires; clearing it here scopes the rider to a single turn.
+    state.creatures_died_this_turn = 0
     # Darkness-style combat-damage prevention expires at end of turn.
     state.prevent_combat_damage_this_turn = False
     # Reset per-player spell counters for "your Nth spell" triggers.

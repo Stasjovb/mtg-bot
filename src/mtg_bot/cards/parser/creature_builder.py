@@ -98,6 +98,8 @@ from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
     _parse_enters_tapped_line,
+    _parse_enters_with_minus_one_counters_from_hand_cast_line,
+    _parse_enters_with_plus_one_counter_if_creature_died_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_ward_discard_line,
@@ -1252,6 +1254,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     enters_tapped = False
     must_be_blocked_if_able = False
     landcycling: tuple[str, str] | None = None
+    enters_with_plus_one_counter_if_creature_died_this_turn = False
+    enters_with_minus_one_counters_from_hand_cast = 0
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1305,6 +1309,28 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing with the line twice still ends up with the
             # field set once.
             enters_tapped = True
+            continue
+        if _parse_enters_with_plus_one_counter_if_creature_died_line(line):
+            # ``This creature enters with a +1/+1 counter on it if a
+            # creature died this turn.`` — printing-level ETB
+            # replacement. Flips the matching kwarg below; the engine
+            # reads ``state.creatures_died_this_turn`` at ETB and adds
+            # one +1/+1 counter when positive (Cackling Slasher).
+            enters_with_plus_one_counter_if_creature_died_this_turn = True
+            continue
+        n_minus = _parse_enters_with_minus_one_counters_from_hand_cast_line(
+            line,
+        )
+        if n_minus is not None:
+            # ``This creature enters with N -1/-1 counters on it if you
+            # cast it from your hand.`` — printing-level ETB
+            # replacement. The cast-from-hand origin is tracked on the
+            # GameObject via ``cast_via_hand`` set in
+            # ``actions._cast_spell``'s cast-from-hand branch and
+            # cleared on every other cast path; the engine adds N
+            # -1/-1 counters at ETB only when the flag is set
+            # (Patched Plaything).
+            enters_with_minus_one_counters_from_hand_cast = n_minus
             continue
         if _parse_must_be_blocked_line(line):
             # ``This creature must be blocked if able.`` — printing-
@@ -1391,4 +1417,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
         landcycling=landcycling,
+        enters_with_plus_one_counter_if_creature_died_this_turn=(
+            enters_with_plus_one_counter_if_creature_died_this_turn
+        ),
+        enters_with_minus_one_counters_from_hand_cast=(
+            enters_with_minus_one_counters_from_hand_cast
+        ),
     )

@@ -1500,6 +1500,16 @@ def _cast_spell(
         # counter init to avoid double-application if a future
         # effect blinks the permanent.
         card.cast_via_impending = bool(use_impending)
+        # Cast-from-hand provenance flag. Distinct from ``cast_via_warp``
+        # / ``cast_via_impending``: a warp-from-hand or impending-from-
+        # hand cast still originated from the hand (the printed cost
+        # alternative is paid by the caller in either case). The two
+        # paths that DON'T set this flag are warp-from-graveyard
+        # (Timeline Culler) and cast-from-exile / cast-from-top-of-
+        # library, both handled in the elif/else branches below.
+        # Consumed by the ``enters_with_minus_one_counters_from_hand_
+        # cast`` ETB replacement (Patched Plaything).
+        card.cast_via_hand = True
         if use_warp:
             state.spell_warped_this_turn = True
             # Pay the warp ability's "Pay N life" rider, if any (Timeline
@@ -1526,6 +1536,11 @@ def _cast_spell(
         cast_from_outside_hand = True
         p.graveyard.remove(card)
         card.cast_via_warp = True
+        # Defensive clear: a card that previously sat on the battlefield
+        # (and therefore had ``cast_via_hand`` set) carries the flag
+        # into the graveyard. Reset it here so the cast-from-hand-only
+        # ETB hooks don't fire on a graveyard-origin cast.
+        card.cast_via_hand = False
         state.spell_warped_this_turn = True
         life_cost = card.printing.warp_additional_life_cost
         if life_cost > 0:
@@ -1561,6 +1576,10 @@ def _cast_spell(
             card.playable_from_exile_this_turn = False
             card.play_from_exile_requires_kavu = False
             card.cast_via_warp = False
+            # Cast from exile is NOT a cast from hand — clear any stale
+            # provenance flag from a prior hand-cast so cast-from-hand-
+            # only ETB hooks don't fire on this resolution.
+            card.cast_via_hand = False
         else:
             # Cast from top of library (Mm'menon grant). Legal only
             # for the topmost card, and only if the controller has a
@@ -1579,6 +1598,8 @@ def _cast_spell(
                 cost = card.printing.mana_cost
                 cast_from_outside_hand = True
                 card.cast_via_warp = False
+                # Cast from top of library is NOT a cast from hand.
+                card.cast_via_hand = False
             else:  # pragma: no cover - defensive (legal_actions gates)
                 raise ValueError(
                     f"card {card_id} not castable by P{player_id}"
@@ -2926,6 +2947,42 @@ def put_into_battlefield(
         obj.time_counters = obj.printing.impending_count
         obj.impending_active = True
     obj.cast_via_impending = False
+    # Cast-from-hand-only ETB replacement: enters with N -1/-1 counters
+    # if cast from hand (Patched Plaything's "if you cast it from your
+    # hand" rider). Read from the GameObject's ``cast_via_hand`` flag
+    # which is set in ``_cast_spell``'s cast-from-hand branch and
+    # cleared by every other cast path. Applied BEFORE the +1/+1
+    # counter ETB replacements below so the SBA-driven pairwise
+    # cancellation has both kinds of counters in place at the next
+    # SBA pass — same ordering rule as printed multi-counter ETB
+    # replacements. Always cleared after read so a future blink doesn't
+    # re-apply the counters under the printed cost.
+    if (
+        obj.cast_via_hand
+        and obj.printing.enters_with_minus_one_counters_from_hand_cast > 0
+    ):
+        from mtg_bot.game import add_minus_one_counters
+        add_minus_one_counters(
+            state, obj,
+            obj.printing.enters_with_minus_one_counters_from_hand_cast,
+        )
+    obj.cast_via_hand = False
+    # Death-tracker-gated ETB replacement: enters with one +1/+1
+    # counter on it if a creature died this turn (Cackling Slasher).
+    # Read from the global ``state.creatures_died_this_turn`` tracker
+    # which the ``move_off_battlefield`` site increments on every
+    # creature death and the cleanup step resets. Predates the
+    # ``add_plus_one_counters`` site below so the Loading-Zone-style
+    # doubler interacts with this counter the same way it does with
+    # ``enters_with_counters_from_x``.
+    if (
+        obj.printing.is_creature
+        and obj.printing
+        .enters_with_plus_one_counter_if_creature_died_this_turn
+        and state.creatures_died_this_turn > 0
+    ):
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, 1)
     # Snapshot the moment of ETB for static-effect timestamp use
     # (Magus / Dryad layer-4 synthesizing in effective_subtypes,
     # Painter's Servant layer-5, Humility layer-6/7b). Bump

@@ -207,6 +207,80 @@ _LANDCYCLING_LINE = re.compile(
 )
 
 
+_ENTERS_WITH_PLUS_ONE_IF_DEATH_LINE = (
+    "This creature enters with a +1/+1 counter on it if a creature died "
+    "this turn."
+)
+
+
+def _parse_enters_with_plus_one_counter_if_creature_died_line(
+    line: str,
+) -> bool:
+    """Return ``True`` if ``line`` is the printing-level ``This creature
+    enters with a +1/+1 counter on it if a creature died this turn.``
+    clause, else ``False``.
+
+    Surfaces on Cackling Slasher's two-line oracle alongside Deathtouch.
+    A literal-string match is sufficient — no card today varies the
+    wording. The matching engine field
+    (``CardPrinting.enters_with_plus_one_counter_if_creature_died_this_
+    turn``) is consumed in ``actions.put_into_battlefield``, which
+    reads ``state.creatures_died_this_turn`` (incremented in
+    ``turn.move_off_battlefield`` and reset at cleanup) and adds a
+    +1/+1 counter when the tracker is positive.
+    """
+    return line.strip() == _ENTERS_WITH_PLUS_ONE_IF_DEATH_LINE
+
+
+# Spelled-cardinal -1/-1 ETB rider for cast-from-hand. Surfaces on
+# Patched Plaything (DSK Toy) as
+# ``This creature enters with two -1/-1 counters on it if you cast it
+# from your hand.``. The cardinal is captured so a future Plaything
+# variant with a different count (one, three, etc.) would map to the
+# same engine field with the appropriate value. The literal-string
+# fallback for ``two`` matches the only printing today; if a future
+# printing prints the digit ``2`` the regex's ``\d+`` arm picks it up
+# without any grammar change.
+_ENTERS_WITH_MINUS_ONE_FROM_HAND_LINE = re.compile(
+    r"^This creature enters with "
+    r"(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"-1/-1 counters? on it if you cast it from your hand\.$"
+)
+
+_NUMBER_WORD_TO_INT: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _parse_enters_with_minus_one_counters_from_hand_cast_line(
+    line: str,
+) -> int | None:
+    """Return ``N`` (the count of -1/-1 counters) if ``line`` is the
+    printing-level ``This creature enters with N -1/-1 counters on it
+    if you cast it from your hand.`` clause, else ``None``.
+
+    Patched Plaything is the only DSK printing carrying this surface
+    (``two`` -1/-1 counters). The regex accepts both spelled-out
+    cardinals (one through ten) and a digit fallback so a forward-
+    looking printing with a different count or numerical surface
+    lands the same field. The matching engine field
+    (``CardPrinting.enters_with_minus_one_counters_from_hand_cast``)
+    is consumed in ``actions.put_into_battlefield`` only when the
+    GameObject's ``cast_via_hand`` flag is set — the cast-from-exile
+    / library / graveyard paths clear that flag, so the rider stays
+    inert on those resolutions (matching the printed "if you cast
+    it from your hand" gate).
+    """
+    m = _ENTERS_WITH_MINUS_ONE_FROM_HAND_LINE.match(line.strip())
+    if m is None:
+        return None
+    raw = m.group("count")
+    if raw.isdigit():
+        return int(raw)
+    return _NUMBER_WORD_TO_INT[raw]
+
+
 def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
     """Return ``(land_subtype, mana_cost_str)`` if ``line`` is a
     basic-landcycling clause (``<Land>cycling {cost}``), else ``None``.
