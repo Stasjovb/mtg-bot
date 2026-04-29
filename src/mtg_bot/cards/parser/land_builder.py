@@ -25,6 +25,9 @@ Currently supports three land kinds:
   the produced color and drops Station + tier-gated abilities.
 - **EoE bespoke lands** — Command Bridge (EoE Land with
   sac-self-unless-tap ETB) claimed by name in ``_BESPOKE_EOE_LANDS``.
+- **Opening-hand luck-counter lands** (Gemstone Caverns) — claimed
+  by ``_try_build_opening_hand_luck_counter_land`` for the static
+  "always has a luck counter" simplification.
 """
 
 from __future__ import annotations
@@ -603,19 +606,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Gemstone Caverns: Legendary. Opening-hand replacement effect
-        # (not modeled — treated as always having a luck counter).
-        # {T}: Add one mana of any color.
-        "Gemstone Caverns": make_utility_land(
-            "Gemstone Caverns", legendary=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("any", 1),)),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
     }
 
 
@@ -832,6 +822,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if optional_copy_cave is not None:
         return optional_copy_cave
+    gemstone = _try_build_opening_hand_luck_counter_land(
+        card, text, supertypes, subtypes,
+    )
+    if gemstone is not None:
+        return gemstone
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2037,6 +2032,93 @@ def _try_build_optional_copy_cave_land(
     return make_utility_land(
         card["name"], subtypes_str="Cave",
         optional_copy_land_from_graveyard=True,
+    )
+
+
+# Opening-hand luck-counter land. Plain ``Legendary Land`` (legendary
+# supertype, no subtypes), exactly two lines:
+#   1. ``If this card is in your opening hand and you're not the
+#      starting player, you may begin the game with <NAME> on the
+#      battlefield with a luck counter on it. If you do, exile a card
+#      from your hand.``
+#   2. ``{T}: Add {C}. If <NAME> has a luck counter on it, instead add
+#      one mana of any color.``
+#
+# Both lines reference the card name (matched generically via the
+# captured ``<NAME>`` placeholder, so the recognizer doesn't hard-code
+# "Gemstone Caverns"). The opening-hand replacement on line 1 isn't
+# modeled by the engine; the static side simplifies the card to "always
+# has a luck counter on it" which collapses line 2's conditional to its
+# "instead" branch — a single tap-for-any-color mana ability. The
+# recognizer mirrors that simplification.
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring "explicitly notes why it isn't generalized today
+# (typically: 'only card in the pool with this shape; broader grammar
+# deferred until a second example exists')." Gemstone Caverns is the
+# only EoS land with this opening-hand-replacement-plus-conditional-
+# tap shape; deferred generalization to a parameterized luck-counter
+# template would happen if a sibling printing appears.
+_OPENING_HAND_LUCK_COUNTER_LINE_RE = re.compile(
+    r"^If this card is in your opening hand and you're not the "
+    r"starting player, you may begin the game with (?P<name1>.+) on "
+    r"the battlefield with a luck counter on it\. If you do, exile a "
+    r"card from your hand\.$"
+)
+_LUCK_COUNTER_TAP_LINE_RE = re.compile(
+    r"^\{T\}: Add \{C\}\. If (?P<name2>.+) has a luck counter on it, "
+    r"instead add one mana of any color\.$"
+)
+
+
+def _try_build_opening_hand_luck_counter_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return an opening-hand luck-counter ``CardPrinting`` if ``text``
+    matches the strict two-line Gemstone Caverns shape, else ``None``.
+
+    ``Legendary Land`` only (legendary supertype, no subtypes). Both
+    captured ``<NAME>`` placeholders must equal ``card["name"]`` (the
+    card refers to itself by name). The static side simplifies the
+    opening-hand replacement to "always has a luck counter", collapsing
+    the conditional tap line to a single ``AddManaToPool(produces=(
+    ("any", 1),))`` activation.
+
+    Per parser/CLAUDE.md: literal-line recognizers are acceptable only
+    when "exactly one card in the current data pool fits that printed
+    surface" and the docstring explicitly notes deferred generalization.
+    Gemstone Caverns is the only EoS land matching this shape; broader
+    grammar deferred until a second example exists.
+    """
+    if supertypes != ("Legendary",):
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    m1 = _OPENING_HAND_LUCK_COUNTER_LINE_RE.match(lines[0])
+    if m1 is None:
+        return None
+    m2 = _LUCK_COUNTER_TAP_LINE_RE.match(lines[1])
+    if m2 is None:
+        return None
+    name = card["name"]
+    if m1.group("name1") != name or m2.group("name2") != name:
+        return None
+    return make_utility_land(
+        card["name"], legendary=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
     )
 
 
