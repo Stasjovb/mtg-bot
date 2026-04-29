@@ -44,6 +44,7 @@ from mtg_bot.effects import (
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByCardsInHand,
+    DestroyAllCreatures,
     DiscardSelf,
     DrawCards,
     EachOpponentLosesLife,
@@ -698,6 +699,50 @@ def _build_roaring_furnace_steaming_sauna() -> CardPrinting:
     )
 
 
+def _build_restricted_office_lecture_hall() -> CardPrinting:
+    """Restricted Office // Lecture Hall ``{2}{W}{W}`` // ``{5}{U}{U}``.
+
+    Restricted Office oracle:
+        When you unlock this door, destroy all creatures with power 3
+        or greater.
+
+    Lecture Hall oracle:
+        Other permanents you control have hexproof.
+
+    Restricted Office is a pure door trigger using the new ``min_power=
+    3`` rider on ``DestroyAllCreatures`` — same Wrath shape as Split
+    Up's tap-state filters but gating victim selection on
+    ``effective_power >= 3`` so layer-7 pumps and +1/+1 counters are
+    accounted for at resolve time.
+
+    Lecture Hall is a static "Other permanents you control have
+    hexproof" continuous ability. Hexproof is engine-unenforced
+    metadata in this codebase — no targeting site checks for it on
+    creatures or non-creature permanents — so the static is an honest
+    no-op (same observable behavior as Steaming Sauna's "no maximum
+    hand size" arm: the rule it would suspend isn't enforced anyway,
+    so unconditionally not-enforcing-it is equivalent). When hexproof
+    becomes engine-enforced in the future, the static gains a real
+    effect via the StaticAbility ``room_half`` gate already wired in
+    ``_active_static_abilities``; until then the half is purely a
+    cost-and-name placeholder so the parser can claim the Room.
+    """
+    return make_room(
+        _half(
+            "Restricted Office", "{2}{W}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DestroyAllCreatures(min_power=3),
+                ),
+            ),
+        ),
+        _half(
+            "Lecture Hall", "{5}{U}{U}",
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -717,6 +762,8 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
     "Roaring Furnace // Steaming Sauna":
         _build_roaring_furnace_steaming_sauna,
+    "Restricted Office // Lecture Hall":
+        _build_restricted_office_lecture_hall,
 }
 
 

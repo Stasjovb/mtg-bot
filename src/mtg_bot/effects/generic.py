@@ -6475,24 +6475,37 @@ class DestroyAllCreatures(Effect):
     ``tapped_only`` / ``untapped_only`` narrow the wrath to only
     creatures matching that tap-state (Split Up's modal "destroy all
     tapped creatures" / "destroy all untapped creatures"). Mutually
-    exclusive — at most one may be True. The default (both False) is
-    the unrestricted Wrath shape.
+    exclusive — at most one may be True.
+
+    ``min_power`` (default 0 = no filter) narrows the wrath to only
+    creatures whose ``effective_power`` is at least that threshold —
+    Restricted Office's "destroy all creatures with power 3 or
+    greater". The threshold is read against ``effective_power`` so
+    any layer-7 pump or counters apply at resolve time. The default
+    (all filters off) is the unrestricted Wrath shape.
     """
 
     tapped_only: bool = False
     untapped_only: bool = False
+    min_power: int = 0
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.turn import destroy
+        from mtg_bot.game import effective_power
 
         victims = [o for o in state.battlefield if o.printing.is_creature]
         if self.tapped_only:
             victims = [o for o in victims if o.tapped]
         elif self.untapped_only:
             victims = [o for o in victims if not o.tapped]
+        if self.min_power > 0:
+            victims = [
+                o for o in victims
+                if effective_power(state, o) >= self.min_power
+            ]
         for obj in victims:
             state.log.append(f"{obj.printing.name} is destroyed (wrath)")
             destroy(state, obj)
@@ -6502,6 +6515,11 @@ class DestroyAllCreatures(Effect):
             return "destroy all tapped creatures"
         if self.untapped_only:
             return "destroy all untapped creatures"
+        if self.min_power > 0:
+            return (
+                f"destroy all creatures with power {self.min_power} or "
+                f"greater"
+            )
         return "destroy all creatures"
 
 

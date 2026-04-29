@@ -1904,3 +1904,107 @@ def test_deal_damage_to_opponent_creature_by_cards_in_hand_describe():
     assert "cards in your hand" in desc
     assert "creature" in desc
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Restricted Office // Lecture Hall
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_restricted_office_lecture_hall():
+    name = "Restricted Office // Lecture Hall"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Restricted Office", "Lecture Hall"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Restricted Office"].mana_cost_str == "{2}{W}{W}"
+    assert by_name["Lecture Hall"].mana_cost_str == "{5}{U}{U}"
+    # Only Restricted Office contributes a triggered ability — Lecture
+    # Hall's "Other permanents you control have hexproof" is an honest
+    # no-op static (hexproof is unenforced metadata in this engine).
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Restricted Office"]
+
+
+def test_restricted_office_destroys_only_power3_or_greater_creatures():
+    """Casting Restricted Office unlocks the half; the door trigger
+    destroys creatures with effective_power >= 3 — smaller creatures
+    survive."""
+    state = _new_state()
+    # Two enemy creatures with different powers. Wild Bear is 2/2 — too
+    # small to die to the wrath. Make a 4/4 by stacking +1/+1 counters.
+    small_bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    big_bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    big_bear.plus_one_counters = 2  # 4/4 — at or above the 3 threshold.
+    # Pay {2}{W}{W} — 4 Plains.
+    for _ in range(4):
+        _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Restricted Office // Lecture Hall"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Restricted Office"),
+    )
+    drain_stack(state)
+    # 4/4 dies, 2/2 survives.
+    assert big_bear not in state.battlefield
+    assert small_bear in state.battlefield
+
+
+def test_restricted_office_locked_does_not_wrath():
+    """If only Lecture Hall is unlocked, Restricted Office's wrath
+    trigger does not fire when the Room re-enters via dispatch_event."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    state = _new_state()
+    big_bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    big_bear.plus_one_counters = 2  # 4/4.
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Restricted Office // Lecture Hall"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Lecture Hall"})
+    dispatch_event(state, Event.ENTERS, label="enters", obj=room)
+    drain_stack(state)
+    # Big bear survives — Restricted Office's wrath was gated by
+    # the locked half.
+    assert big_bear in state.battlefield
+
+
+def test_destroy_all_creatures_min_power_filter_describe():
+    """The describe() string surfaces the power-floor wording."""
+    from mtg_bot.effects import DestroyAllCreatures
+
+    eff = DestroyAllCreatures(min_power=3)
+    assert eff.describe() == "destroy all creatures with power 3 or greater"
+
+
+def test_destroy_all_creatures_min_power_filter_resolve():
+    """``min_power=N`` only kills creatures whose effective_power is at
+    least N. Tested in isolation against a hand-rolled battlefield."""
+    from mtg_bot.effects import DestroyAllCreatures
+
+    state = _new_state()
+    weakling = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )  # 2/2.
+    bruiser = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    bruiser.plus_one_counters = 1  # 3/3 — just at the threshold.
+    DestroyAllCreatures(min_power=3).resolve(state, controller_id=0)
+    assert weakling in state.battlefield
+    assert bruiser not in state.battlefield
+
