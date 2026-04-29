@@ -17,16 +17,22 @@ from mtg_bot.cards.source import get_active_source
 _PRINTINGS = get_active_source().get_printings()
 
 
-def test_magus_of_the_moon_matches_static():
+def test_magus_of_the_moon_falls_through_to_creature_builder():
+    """Magus is no longer claimed by the special-guests dispatch — the
+    ``Nonbasic lands are Mountains.`` static is recognized in the
+    creature builder via ``_parse_nonbasic_lands_are_mountains_line``,
+    which sets the printing-level flag. The special-guests builder
+    returns ``None`` so the chain falls through to the creature
+    builder."""
     card = {
         "name": "Magus of the Moon",
         "type_line": "Creature — Human Wizard",
         "oracle_text": "Nonbasic lands are Mountains.",
         "set": "spg",
     }
-    parsed = _build_special_guest_printing(card)
-    assert parsed is not None
-    assert parsed == _PRINTINGS["Magus of the Moon"]
+    assert _build_special_guest_printing(card) is None
+    # End-to-end: the active source still claims it (via creature builder).
+    assert _PRINTINGS["Magus of the Moon"].nonbasic_lands_are_mountains is True
 
 
 def test_deafening_silence_matches_static():

@@ -168,17 +168,19 @@ def test_build_equipment_printing_skips_non_artifact():
     assert _build_equipment_printing(card) is None
 
 
-def test_build_equipment_printing_skips_legendary_equipment():
-    """Legendary Equipment is out of scope for this batch — even when
-    its body looks simple, we skip rather than silently strip the
-    ``Legendary`` supertype off the printing."""
+def test_build_equipment_printing_claims_legendary_equipment():
+    """Legendary Equipment with a body the grammar otherwise claims is
+    routed through ``make_equipment(legendary=True)``; the supertype
+    survives onto the produced ``CardPrinting``."""
     card = {
         "name": "Hand-Crafted Legendary Blade",
         "mana_cost": "{2}",
         "type_line": "Legendary Artifact — Equipment",
         "oracle_text": "Equipped creature gets +1/+1.\nEquip {1}",
     }
-    assert _build_equipment_printing(card) is None
+    result = _build_equipment_printing(card)
+    assert result is not None
+    assert "Legendary" in result.supertypes
 
 
 def test_build_equipment_printing_skips_when_equip_cost_missing():

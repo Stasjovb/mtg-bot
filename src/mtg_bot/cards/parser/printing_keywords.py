@@ -181,6 +181,27 @@ def _parse_must_be_blocked_line(line: str) -> bool:
     return line.strip() == _MUST_BE_BLOCKED_LINE
 
 
+# ``Nonbasic lands are Mountains.`` — Magus of the Moon's printed
+# static effect. The engine wires the layer-4 type-replacement off
+# the printing-level ``nonbasic_lands_are_mountains`` flag (rather
+# than a generic ``StaticAbility`` shape, since the type replacement
+# isn't a creature-relative continuous effect). Matched as a literal
+# string; a future card with the same shape but different source
+# (Blood Moon-style enchantment) would route through whatever
+# oracle-text parser owns its card type and reuse the same flag.
+_NONBASIC_LANDS_ARE_MOUNTAINS_LINE = "Nonbasic lands are Mountains."
+
+
+def _parse_nonbasic_lands_are_mountains_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    ``Nonbasic lands are Mountains.`` clause, else ``False``. Flips the
+    ``nonbasic_lands_are_mountains`` kwarg on ``make_creature`` /
+    ``make_enchantment``; the engine reads the flag at land ETB and
+    layer-4 type-replacement application time.
+    """
+    return line.strip() == _NONBASIC_LANDS_ARE_MOUNTAINS_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

@@ -77,6 +77,7 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnOpponentsCreature,
+    PutLoyaltyCounterOnSelf,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
@@ -263,6 +264,17 @@ _PUT_PLUS_ONE_COUNTER_ON_TARGET_OPPONENT_CREATURE = re.compile(
 )
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on this creature$"
+)
+# Tezzeret, Cruel Captain's artifact-enters trigger body. The phrase
+# routes through the same name-substitution pass as the +1/+1 counter
+# variant above (``_substitute_self_name`` rewrites ``Tezzeret`` to
+# ``this creature`` before lookup), so the planeswalker builder shares
+# the unified trigger-body grammar with creature builders. Maps to
+# ``PutLoyaltyCounterOnSelf(amount=1)``; the engine class reads
+# ``state.resolving_source`` at resolve time and bumps its
+# ``loyalty_counters`` field.
+_PUT_LOYALTY_COUNTER_ON_THIS_CREATURE = re.compile(
+    r"^put a loyalty counter on this creature$"
 )
 # "Put a +1/+1 counter on each of up to N target creatures" —
 # multi-target counter spread (Weftblade Enhancer's ETB uses ``two``).
@@ -1678,6 +1690,8 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnTargetCreature(amount=1)
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnSelf(amount=1)
+    if _PUT_LOYALTY_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
+        return PutLoyaltyCounterOnSelf(amount=1)
     # ``put a +1/+1 counter on each creature you control other than
     # this creature`` — Dawnstrike Vanguard's end-step trigger body
     # (gated by the tapped-creatures wrapper at the trigger-line

@@ -214,12 +214,14 @@ def test_atomic_microsizer_is_equipment():
     assert "Equipment" in result.subtypes
 
 
-def test_atomic_microsizer_has_two_triggers():
+def test_atomic_microsizer_has_one_trigger():
     card = _equipment_card("Atomic Microsizer", "{U}",
                             _ATOMIC_MICROSIZER_ORACLE)
     result = _build_equipment_printing(card)
     assert result is not None
-    assert len(result.triggered_abilities) == 2
+    # Oracle text prints only the equipped-creature-attacks trigger;
+    # the parser doesn't synthesize a spurious ETB auto-attach.
+    assert len(result.triggered_abilities) == 1
 
 
 def test_atomic_microsizer_power_bonus():

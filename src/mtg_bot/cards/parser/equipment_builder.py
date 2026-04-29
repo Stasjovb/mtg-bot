@@ -211,6 +211,22 @@ _EQUIPPED_ATTACKS_TAP_UP_TO_ONE_LINE = (
 )
 
 
+# Atomic Microsizer's equipped-attacks trigger — choose-up-to-one
+# target creature that becomes unblockable and base 1/1 UEOT. The
+# whole printed line maps 1:1 to ``AtomicMicrosizerAttackEffect()``,
+# whose resolve threads the unblockable flag and the temp base-P/T
+# override onto the chosen target. Only Equipment in the EoE pool
+# carrying this exact shape, so a literal-line match is sufficient —
+# same pattern as the Saw / Baseball Bat / Hylderblade lines below.
+# ``IsHost(subject="attacker")`` matches the equipped-creature-
+# attacks trigger condition.
+_EQUIPPED_ATTACKS_MICROSIZER_LINE = (
+    "Whenever equipped creature attacks, choose up to one target "
+    "creature. That creature can't be blocked this turn and has base "
+    "power and toughness 1/1 until end of turn."
+)
+
+
 # Saw's equipped-attacks "may sacrifice a permanent other than that
 # creature or this Equipment. If you do, draw a card." trigger. The
 # legal-sacrifice pool ("permanent other than ...") doesn't fit the
@@ -241,6 +257,35 @@ _VOID_END_STEP_ATTACH_LINE = (
     "Void — At the beginning of your end step, if a nonland "
     "permanent left the battlefield this turn or a spell was warped "
     "this turn, attach this Equipment to target creature you control."
+)
+
+
+# The Dominion Bracelet's "equipped creature gets +1/+1 and has
+# <quoted-activated-ability>" line. The quoted granted ability is
+# ``{15}, Exile The Dominion Bracelet: You control target opponent
+# during their next turn.`` plus an X-cost-reduction rider and a
+# sorcery-speed restriction. The static side wires this whole shape
+# through one printing-level boolean
+# (``grants_control_opponent_ability_when_equipped=True``) which
+# layers ``DOMINION_BRACELET_GRANTED_ABILITY`` onto the equipped
+# creature; the parser mirrors that simplification by matching the
+# verbatim line and setting both the +1/+1 bonus and the printing
+# flag in one step.
+#
+# The line is matched as a literal because the embedded mana-cost
+# tokens, the long quoted-ability body, and the trailing
+# ``Activate only as a sorcery."`` close-quote don't fit any
+# generalizable per-clause grammar — only Equipment in the EoE pool
+# carrying this shape, same precedent as the Atomic Microsizer
+# attack-trigger literal above. Reminder text inside the trailing
+# parenthetical is stripped before this regex sees the line.
+_EQUIPPED_GETS_AND_HAS_DOMINION_BRACELET_LINE = (
+    'Equipped creature gets +1/+1 and has '
+    '"{15}, Exile The Dominion Bracelet: '
+    'You control target opponent during their next turn. '
+    "This ability costs {X} less to activate, "
+    "where X is this creature's power. "
+    'Activate only as a sorcery."'
 )
 
 
@@ -278,59 +323,6 @@ def _parse_granted_keyword_list(rider: str) -> frozenset[str] | None:
     return frozenset(_KEYWORD_LINES[p] for p in normalized)
 
 
-def _build_atomic_microsizer() -> CardPrinting:
-    """Atomic Microsizer: +1/+0 bonus, ETB auto-attach, and an equipped-
-    attacks trigger that chooses a target creature and sets its base P/T
-    to 1/1 UEOT while making it unblockable this turn.
-    """
-    return make_equipment(
-        "Atomic Microsizer", "{U}",
-        power_bonus=1, toughness_bonus=0,
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.ENTERS, predicate=IsSelf(),
-                effect=AttachToTargetCreatureYouControl(),
-            ),
-            TriggeredAbility(
-                event=Event.ATTACKS, predicate=IsHost(subject="attacker"),
-                effect=AtomicMicrosizerAttackEffect(),
-            ),
-        ),
-    )
-
-
-def _build_the_dominion_bracelet() -> CardPrinting:
-    """The Dominion Bracelet: Legendary Equipment, +1/+1 bonus, ETB
-    auto-attach, and the bespoke ``grants_control_opponent_ability_when_
-    equipped`` flag that wires the {15}/Exile activated ability at game
-    layer.
-    """
-    return make_equipment(
-        "The Dominion Bracelet", "{2}",
-        legendary=True,
-        power_bonus=1, toughness_bonus=1,
-        grants_control_opponent_ability_when_equipped=True,
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.ENTERS, predicate=IsSelf(),
-                effect=AttachToTargetCreatureYouControl(),
-            ),
-        ),
-    )
-
-
-# Name-keyed bespoke dispatch for Equipment whose oracle text falls
-# outside the narrow grammar this builder claims (custom attack trigger
-# on Atomic Microsizer; Legendary + quoted granted ability on The
-# Dominion Bracelet). The generic ``_build_equipment_printing`` path
-# skips both — the bespoke table claims them directly, mirroring the
-# ``make_equipment`` calls in ``eoe_spells.py`` exactly.
-_BESPOKE_EQUIPMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Atomic Microsizer": _build_atomic_microsizer,
-    "The Dominion Bracelet": _build_the_dominion_bracelet,
-}
-
-
 def _build_equipment_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an Equipment ``card`` (a
     Scryfall record). Returns ``None`` if the card is not an Equipment
@@ -342,29 +334,12 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     Equip cost would still need the kwarg-omitted variant of
     ``make_equipment`` and don't appear in the EoE pool today).
     """
-    # Bespoke name-keyed dispatch wins over the general grammar path.
-    # Atomic Microsizer's custom attack trigger and The Dominion
-    # Bracelet's Legendary supertype + quoted granted ability both fall
-    # outside the narrow grammar; claim them directly.
-    bespoke = _BESPOKE_EQUIPMENT_BUILDERS.get(card.get("name", ""))
-    if bespoke is not None:
-        return bespoke()
-
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )
     if "Artifact" not in card_types:
         return None
     if "Equipment" not in subtypes:
-        return None
-    # Legendary Equipment exists (The Dominion Bracelet) but its oracle
-    # text uses a ``has "<granted activated ability>"`` shape we don't
-    # claim. The supertype itself is fine for the builder; if we ever
-    # claim a legendary printing we'll route the supertype through
-    # ``make_equipment(legendary=True)``. For now skip them defensively
-    # so a Legendary Equipment whose body happens to look simple isn't
-    # silently stripped of its supertype.
-    if "Legendary" in supertypes:
         return None
 
     text = card.get("oracle_text", "")
@@ -375,6 +350,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     triggers: list[TriggeredAbility] = []
     activated: list[ActivatedAbility] = []
     equip_cost: str | None = None
+    grants_control_opponent_ability = False
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -391,6 +367,19 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 # overwrite.
                 return None
             equip_cost = m.group(1)
+            continue
+        # The Dominion Bracelet's "+1/+1 and has <quoted granted ability>"
+        # literal line — sets the +1/+1 bonus and the
+        # ``grants_control_opponent_ability_when_equipped`` printing flag
+        # in one step. Tried BEFORE the generic ``_EQUIPPED_CREATURE_GETS_
+        # RE`` so the literal wins on the bracelet's exact surface form;
+        # the generic regex's trailing ``\.$`` anchor wouldn't match the
+        # close-quote tail anyway, but ordering literal-first keeps the
+        # precedence intent visible.
+        if line == _EQUIPPED_GETS_AND_HAS_DOMINION_BRACELET_LINE:
+            power_bonus = 1
+            toughness_bonus = 1
+            grants_control_opponent_ability = True
             continue
         # "Equipped creature gets +N/+M[ and has <keyword>...]"
         m = _EQUIPPED_CREATURE_GETS_RE.match(line)
@@ -472,6 +461,20 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 )
             )
             continue
+        # Atomic Microsizer's equipped-attacks trigger — choose-up-to-
+        # one target creature becomes unblockable + base 1/1 UEOT. The
+        # whole printed line maps to ``AtomicMicrosizerAttackEffect()``;
+        # ``IsHost(subject="attacker")`` matches the equipped-creature-
+        # attacks trigger condition.
+        if line == _EQUIPPED_ATTACKS_MICROSIZER_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ATTACKS,
+                    predicate=IsHost(subject="attacker"),
+                    effect=AtomicMicrosizerAttackEffect(),
+                )
+            )
+            continue
         # Baseball Bat's equipped-attacks tap-up-to-one trigger —
         # generic ``TapUpToOneTargetCreature`` engine class with
         # ``IsHost(subject="attacker")`` matching the equipped-creature-
@@ -549,6 +552,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     return make_equipment(
         name=card["name"],
         cost=card["mana_cost"],
+        legendary="Legendary" in supertypes,
         power_bonus=power_bonus,
         toughness_bonus=toughness_bonus,
         granted_keywords=frozenset(granted_keywords),
@@ -556,4 +560,7 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         triggered_abilities=tuple(triggers),
         activated_abilities=tuple(activated),
         equip_cost=equip_cost,
+        grants_control_opponent_ability_when_equipped=(
+            grants_control_opponent_ability
+        ),
     )

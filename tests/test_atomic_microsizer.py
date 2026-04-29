@@ -120,10 +120,11 @@ def test_equipment_attacks_trigger_fires():
     assert targets_with_override[0].temp_unblockable
 
 
-def test_microsizer_printing_has_both_triggers():
+def test_microsizer_printing_has_attack_trigger():
     m = _PRINTINGS["Atomic Microsizer"]
     triggers = {_legacy_or_inferred_key(ab, m) for ab in m.triggered_abilities}
-    assert "etb" in triggers
-    assert "equipped_creature_attacks" in triggers
-    # Printed +1/+0 bonus preserved from stand-in.
+    # Oracle text prints only the equipped-creature-attacks trigger;
+    # no ETB auto-attach line, so no ETB trigger on the parser output.
+    assert triggers == {"equipped_creature_attacks"}
+    # Printed +1/+0 bonus.
     assert m.equipment_bonuses[0] == 1

@@ -7,8 +7,8 @@ models via a bespoke printing-level flag rather than a generic
 ``StaticAbility`` or ``TriggeredAbility``. These cards don't fit the
 per-builder grammar cleanly:
 
-- They're across multiple card types (Creature for Magus of the Moon,
-  Enchantment for Deafening Silence) — no one builder owns them.
+- They span multiple card types (Enchantment for Deafening Silence,
+  Legendary Creature for Sliver Overlord) — no one builder owns them.
 - Their printed effect maps 1:1 to a single ``CardPrinting`` boolean
   flag, so claiming via grammar would route through a ``StaticAbility``
   or ``TriggeredAbility`` shape that doesn't match the static side.
@@ -20,10 +20,6 @@ mapping line; the surface-form check is the entire safety story.
 
 Currently claimed:
 
-- **Magus of the Moon** (Special Guest): 2/2 Human Wizard whose only
-  ability is the printing-level ``nonbasic_lands_are_mountains=True``
-  flag (the engine wires the layer-7 type-replacement effect off this
-  flag).
 - **Deafening Silence** (Special Guest): Enchantment whose only
   ability is the printing-level
   ``restricts_noncreature_spells_to_one_per_turn=True`` flag.
@@ -43,24 +39,6 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import Controlled, Event, _Controller
-
-
-def _build_magus_of_the_moon() -> CardPrinting:
-    type_line = "Creature — Human Wizard"
-    supertypes, card_types, subtypes = _parse_type_line(type_line)
-    mana_str = "{2}{R}"
-    return CardPrinting(
-        name="Magus of the Moon",
-        mana_cost_str=mana_str,
-        mana_cost=parse_mana_cost(mana_str),
-        type_line=type_line,
-        supertypes=supertypes,
-        card_types=card_types,
-        subtypes=subtypes,
-        power=2,
-        toughness=2,
-        nonbasic_lands_are_mountains=True,
-    )
 
 
 def _build_deafening_silence() -> CardPrinting:
@@ -140,10 +118,6 @@ def _build_burgeoning() -> CardPrinting:
 # the parser falls through to the silent-skip path rather than
 # claiming a card whose text no longer matches the modeled flag.
 _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
-    "Magus of the Moon": (
-        "Nonbasic lands are Mountains.",
-        _build_magus_of_the_moon,
-    ),
     "Deafening Silence": (
         "Each player can't cast more than one noncreature spell each turn.",
         _build_deafening_silence,
