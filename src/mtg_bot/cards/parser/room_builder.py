@@ -152,46 +152,6 @@ def _build_funeral_room_awakening_hall() -> CardPrinting:
     )
 
 
-def _build_glassworks_shattered_yard() -> CardPrinting:
-    """Glassworks // Shattered Yard ``{2}{R}`` // ``{4}{R}``.
-
-    Glassworks oracle:
-        When you unlock this door, this Room deals 4 damage to
-        target creature an opponent controls.
-
-    Shattered Yard oracle:
-        At the beginning of your end step, this Room deals 1 damage
-        to each opponent.
-
-    Glassworks is an ENTERS-event self-trigger gated on the
-    Glassworks half being unlocked. Shattered Yard is a
-    BEGINNING_OF_END_STEP trigger gated on ``Controlled(YOU)``
-    (your end step). Both halves use existing damage effects
-    (``DealDamageToOpponentCreature``, ``DealDamageEachOpponent``).
-    """
-    return make_room(
-        _half(
-            "Glassworks", "{2}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageToOpponentCreature(amount=4),
-                ),
-            ),
-        ),
-        _half(
-            "Shattered Yard", "{4}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_END_STEP,
-                    predicate=Controlled(YOU),
-                    effect=DealDamageEachOpponent(amount=1),
-                ),
-            ),
-        ),
-    )
-
-
 def _build_meat_locker_drowned_diner() -> CardPrinting:
     """Meat Locker // Drowned Diner ``{2}{U}`` // ``{3}{U}{U}``.
 
@@ -813,7 +773,6 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
-    "Glassworks // Shattered Yard": _build_glassworks_shattered_yard,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
     "Underwater Tunnel // Slimy Aquarium":
         _build_underwater_tunnel_slimy_aquarium,
@@ -842,6 +801,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 # the unified path the set and the bespoke table both drop to zero
 # and the gate goes away with them.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
+    "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
 })
 
