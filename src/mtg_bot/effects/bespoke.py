@@ -3638,3 +3638,65 @@ class SplitskinDollETBEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class ArabellaAttackEffect(Effect):
+    """Arabella, Abandoned Doll's attack trigger:
+
+    "Whenever Arabella attacks, it deals X damage to each opponent and
+    you gain X life, where X is the number of creatures you control with
+    power 2 or less."
+
+    X is computed once at resolve time as the count of creatures the
+    controller controls whose ``effective_power`` is 2 or less. The
+    source itself counts when its own effective power is 2 or less (the
+    printed clause says "creatures you control" with no "other"
+    exclusion). The damage is dealt by the source via ``_apply_damage``
+    so lifelink / replacement effects on the source cohabit cleanly.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        x = 0
+        for o in state.battlefield:
+            if o.controller_id != controller_id:
+                continue
+            if not o.printing.is_creature:
+                continue
+            try:
+                p_val = effective_power(state, o)
+            except Exception:
+                continue
+            if p_val <= 2:
+                x += 1
+        if x <= 0:
+            return
+        # Damage each opponent X. ``_apply_damage`` routes through the
+        # standard damage pipeline so lifelink / replacement effects fire
+        # off the source as expected.
+        for opp in state.players:
+            if opp.id == controller_id or opp.has_lost:
+                continue
+            _apply_damage(state, ("player", opp.id), x)
+            state.log.append(
+                f"Arabella deals {x} to P{opp.id} (life: {opp.life})"
+            )
+        # Gain X life.
+        you = state.player_by_id(controller_id)
+        you.life += x
+        state.log.append(
+            f"P{controller_id} gains {x} life (Arabella) — life: {you.life}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "Arabella deals X damage to each opponent and you gain X "
+            "life, where X is the number of creatures you control with "
+            "power 2 or less"
+        )
+
+
+

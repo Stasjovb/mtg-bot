@@ -41,6 +41,7 @@ from mtg_bot.cards.base import (
     ActivationCost,
     AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
+    ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
     CardPrinting,
     ConditionalIfSourcePowerAtLeast,
@@ -1179,6 +1180,25 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.BEGINNING_OF_END_STEP, predicate=Always(),
                     effect=IfGainedLifeThisTurnUntapSelf(),
+                ),
+            ),
+        ),
+        # ── DSK artifacts batch 3 ─────────────────────────────────────
+        # Arabella, Abandoned Doll {R}{W} 1/3 Legendary Artifact Creature
+        # — Toy. "Whenever Arabella attacks, it deals X damage to each
+        # opponent and you gain X life, where X is the number of
+        # creatures you control with power 2 or less." Bespoke effect
+        # computes X at resolve time via ``effective_power`` so pump and
+        # counter-modifications are reflected.
+        "Arabella, Abandoned Doll": make_creature(
+            "Arabella, Abandoned Doll", "{R}{W}", 1, 3,
+            artifact=True,
+            legendary=True,
+            subtypes=("Toy",),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=ArabellaAttackEffect(),
                 ),
             ),
         ),

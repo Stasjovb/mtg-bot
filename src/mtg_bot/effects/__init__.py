@@ -207,6 +207,7 @@ from mtg_bot.effects.bespoke import (
     AllFatesScrollDrawEffect,
     AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
+    ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
     BiosynthicBurstEffect,

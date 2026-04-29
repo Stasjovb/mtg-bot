@@ -149,6 +149,7 @@ from mtg_bot.effects import (
     AddOneManaOfChosenPermanentColor,
     AllFatesScrollDrawEffect,
     AlpharaelDreamingAcolyteDiscardEffect,
+    ArabellaAttackEffect,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
     AstelliReclaimerETBEffect,
