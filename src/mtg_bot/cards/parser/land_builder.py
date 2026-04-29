@@ -289,40 +289,6 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact flying UEOT.
-        # {1},{T}: Target Blinkmoth gets +1/+1 UEOT.
-        # Animation at index 0, explicit mana-tap at index 1, pump at index 2.
-        "Blinkmoth Nexus": make_utility_land(
-            "Blinkmoth Nexus",
-            produces=frozenset({"C"}),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                    ),
-                    effect=BecomeLandCreatureUEOT(
-                        power=1, toughness=1,
-                        granted_keywords=frozenset({"flying"}),
-                        granted_subtype="Blinkmoth",
-                    ),
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("C", 1),)),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                        tap_self=True,
-                    ),
-                    effect=PumpTargetCreatureUntilEOT(
-                        power_bonus=1, toughness_bonus=1,
-                        target_subtype="Blinkmoth",
-                    ),
-                ),
-            ),
-        ),
         # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Insect, Rat,
         # Spider, Squirrel, or Snake.
         "Swarmyard": make_utility_land(
@@ -726,6 +692,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if contested_war_zone is not None:
         return contested_war_zone
+    blinkmoth_nexus = _try_build_blinkmoth_nexus_land(
+        card, text, supertypes, subtypes,
+    )
+    if blinkmoth_nexus is not None:
+        return blinkmoth_nexus
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2724,6 +2695,118 @@ def _try_build_contested_war_zone_land(
                 effect=PumpCreaturesYouControlUntilEOT(
                     power_bonus=1, toughness_bonus=0,
                     attacking_only=True,
+                ),
+            ),
+        ),
+    )
+
+
+# Blinkmoth Nexus — plain ``Land`` (no supertypes, no subtypes) whose
+# oracle text is the strict three-line shape:
+#   1. ``{T}: Add {C}.``
+#   2. ``{1}: This land becomes a 1/1 Blinkmoth artifact creature with
+#      flying until end of turn. It's still a land.``
+#   3. ``{1}, {T}: Target Blinkmoth creature gets +1/+1 until end of
+#      turn.``
+#
+# Distinct from Inkmoth Nexus (which fits the two-line
+# ``_try_build_paid_effect_utility_land`` arm via its dropped
+# ``{T}: Add {C}.`` followed by a single animation activation; it
+# lacks the third-line subtype-targeted pump). Blinkmoth Nexus
+# carries three abilities on the static side: an explicit mana
+# ability for line 1, a no-tap animation activation for line 2 (which
+# grants the ``Blinkmoth`` subtype to the animated land), and a
+# tap-and-pay-{1} activation for line 3 (pumps a Blinkmoth-subtyped
+# creature). The static side sets ``produces=frozenset({"C"})``
+# (because the explicit mana ability is modeled, unlike Inkmoth's
+# fall-through ``{T}: Add {C}.``).
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring "explicitly notes why it isn't generalized today
+# (typically: 'only card in the pool with this shape; broader grammar
+# deferred until a second example exists')." Blinkmoth Nexus is the
+# only EoS land with this three-line ``{T}: Add {C}.`` plus
+# subtype-granting animation plus subtype-targeted pump shape;
+# broader grammar (parameterized over the granted subtype, the P/T,
+# and the keyword set) deferred until a sibling printing exists.
+_BLINKMOTH_NEXUS_TAP_FOR_C_LINE = "{T}: Add {C}."
+_BLINKMOTH_NEXUS_ANIMATE_LINE = (
+    "{1}: This land becomes a 1/1 Blinkmoth artifact creature with "
+    "flying until end of turn. It's still a land."
+)
+_BLINKMOTH_NEXUS_PUMP_LINE = (
+    "{1}, {T}: Target Blinkmoth creature gets +1/+1 until end of turn."
+)
+
+
+def _try_build_blinkmoth_nexus_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Blinkmoth-Nexus-shape ``CardPrinting`` if ``text``
+    matches the strict three-line ``{T}: Add {C}.`` +
+    Blinkmoth-animation + Blinkmoth-pump shape on a plain ``Land``
+    type line, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). Both line-1
+    (explicit mana ability) and lines 2-3 (animation + subtype-targeted
+    pump) are modeled on the resulting printing's
+    ``activated_abilities``. ``produces=frozenset({"C"})`` is set
+    because the line-1 mana ability is explicit (mirrors the static
+    side, distinct from Inkmoth Nexus which drops the line and falls
+    through to the engine's auto-tap-for-cost generic-mana fallback).
+
+    Per parser/CLAUDE.md: a literal-line recognizer is acceptable
+    here because Blinkmoth Nexus is "the only card in the current
+    data pool that fits that printed surface" and "broader grammar
+    deferred until a second example exists" (e.g. another land with
+    a subtype-granting animation plus a subtype-targeted pump
+    activation).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _BLINKMOTH_NEXUS_TAP_FOR_C_LINE:
+        return None
+    if lines[1] != _BLINKMOTH_NEXUS_ANIMATE_LINE:
+        return None
+    if lines[2] != _BLINKMOTH_NEXUS_PUMP_LINE:
+        return None
+    return make_utility_land(
+        card["name"],
+        produces=frozenset({"C"}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                ),
+                effect=BecomeLandCreatureUEOT(
+                    power=1, toughness=1,
+                    granted_keywords=frozenset({"flying"}),
+                    granted_subtype="Blinkmoth",
+                ),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"), mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=1, toughness_bonus=1,
+                    target_subtype="Blinkmoth",
                 ),
             ),
         ),
