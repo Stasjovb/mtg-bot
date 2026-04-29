@@ -37,6 +37,20 @@ to, and otherwise return the literal ``ability.trigger`` field.
 
 from __future__ import annotations
 
+from mtg_bot.effects.object_predicates import (
+    HasCounter,
+    HasKeyword,
+    HasSubtype,
+    IsArtifact,
+    IsCreature,
+    IsLand,
+    IsNontoken,
+    IsPlayer,
+    ObjectAnd,
+    ObjectNot,
+    ObjectOr,
+)
+from mtg_bot.effects.state_predicates import SpellsCastThisTurn
 from mtg_bot.effects.predicates import (
     OPPONENT,
     YOU,
@@ -44,47 +58,79 @@ from mtg_bot.effects.predicates import (
     And,
     Controlled,
     Event,
-    HasCounter,
-    HasKeyword,
-    HasSubtype,
-    IsArtifact,
-    IsCreature,
     IsHost,
-    IsLand,
-    IsNontoken,
-    IsPlayer,
     IsSelf,
     Not,
     Or,
-    SpellsCastThisTurn,
+    StateBound,
+    Subject,
 )
 
 
 def _flatten_and(pred):
-    """Flatten a left-associated And tree into a list of leaves."""
+    """Flatten a left-associated trigger-level ``And`` tree into a list
+    of trigger-level leaves. Subject / Source / StateBound / IsSelf /
+    IsHost / Controlled / Not / Or stay as-is — callers that want to
+    look INSIDE a Subject's ObjectPredicate tree use
+    ``_object_atoms_in`` to walk the inner tree.
+    """
     if isinstance(pred, And):
         return _flatten_and(pred.left) + _flatten_and(pred.right)
     return [pred]
 
 
+def _object_atoms_in(pred):
+    """Walk an ObjectPredicate tree (ObjectAnd / ObjectOr / atoms) and
+    return the flattened list of atomic ObjectPredicates. Stops at Or
+    boundaries (returns the Or itself as a single 'leaf' so callers
+    can pattern-match on its operand types — same convention the
+    pre-refactor leaf walker used)."""
+    if isinstance(pred, ObjectAnd):
+        return _object_atoms_in(pred.left) + _object_atoms_in(pred.right)
+    return [pred]
+
+
+def _subject_inner_atoms(leaves, slot=None):
+    """Across the given trigger-level leaves, return the flattened set
+    of inner ObjectPredicate atoms inside any matching Subject(slot, …)
+    binding. ``slot=None`` means "any slot" — useful for the legacy
+    keys that didn't disambiguate by slot. Returns a list (preserving
+    duplicates) so callers can examine ``isinstance(atom, Or)`` etc."""
+    atoms = []
+    for leaf in leaves:
+        if not isinstance(leaf, Subject):
+            continue
+        if slot is not None and leaf.slot != slot:
+            continue
+        atoms.extend(_object_atoms_in(leaf.inner))
+    return atoms
+
+
 def _legacy_key_for_enters(ability) -> str | None:
     """Map a predicate-style ENTERS ability back to its legacy key."""
     leaves = _flatten_and(ability.predicate)
-    types = {type(leaf) for leaf in leaves}
-    has_self = IsSelf in types
+    has_self = any(isinstance(leaf, IsSelf) for leaf in leaves)
     has_not_self = any(
         isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
         for leaf in leaves
     )
-    has_land = IsLand in types
-    has_artifact = IsArtifact in types
-    has_nontoken = IsNontoken in types
-    has_controlled = Controlled in types
+    has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
+    inner_atoms = _subject_inner_atoms(leaves)
+    inner_types = {type(a) for a in inner_atoms}
+    has_land = IsLand in inner_types
+    has_artifact = IsArtifact in inner_types
+    has_nontoken = IsNontoken in inner_types
+    has_creature = IsCreature in inner_types
     kavu_subtype = any(
-        isinstance(leaf, HasSubtype) and leaf.name == "Kavu"
-        for leaf in leaves
+        isinstance(a, HasSubtype) and a.name == "Kavu"
+        for a in inner_atoms
     )
-    has_or = any(isinstance(leaf, Or) for leaf in leaves)
+    # Object-tier Or (creature or artifact).
+    has_creature_or_artifact_or = any(
+        isinstance(a, ObjectOr)
+        and {type(a.left), type(a.right)} == {IsCreature, IsArtifact}
+        for a in inner_atoms
+    )
     # Self ETB.
     if has_self and len(leaves) == 1:
         return "etb"
@@ -97,13 +143,9 @@ def _legacy_key_for_enters(ability) -> str | None:
     # Nontoken artifact.
     if has_artifact and has_nontoken and has_controlled and has_not_self:
         return "nontoken_artifact_enters_you_control"
-    # Creature-or-artifact (Or in the predicate tree).
-    if has_or and has_controlled and has_not_self:
-        for leaf in leaves:
-            if isinstance(leaf, Or):
-                inner_types = {type(leaf.left), type(leaf.right)}
-                if {IsCreature, IsArtifact} == inner_types:
-                    return "creature_or_artifact_enters_you_control"
+    # Creature-or-artifact (ObjectOr inside a Subject).
+    if has_creature_or_artifact_or and has_controlled and has_not_self:
+        return "creature_or_artifact_enters_you_control"
     # Plain artifact.
     if has_artifact and has_controlled and has_not_self and not has_nontoken:
         return "artifact_enters_you_control"
@@ -113,16 +155,25 @@ def _legacy_key_for_enters(ability) -> str | None:
 def _legacy_key_for_dies(ability) -> str | None:
     """Map a predicate-style DIES ability back to its legacy key."""
     leaves = _flatten_and(ability.predicate)
-    types = {type(leaf) for leaf in leaves}
-    has_self = IsSelf in types
-    has_creature = IsCreature in types
-    has_artifact = IsArtifact in types
-    has_nontoken = IsNontoken in types
-    has_controlled = Controlled in types
-    has_or = any(isinstance(leaf, Or) for leaf in leaves)
-    has_plus_one_counter = any(
-        isinstance(leaf, HasCounter) and leaf.kind == "+1/+1"
+    has_self = any(isinstance(leaf, IsSelf) for leaf in leaves)
+    has_not_self = any(
+        isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
         for leaf in leaves
+    )
+    has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
+    inner_atoms = _subject_inner_atoms(leaves)
+    inner_types = {type(a) for a in inner_atoms}
+    has_creature = IsCreature in inner_types
+    has_artifact = IsArtifact in inner_types
+    has_nontoken = IsNontoken in inner_types
+    has_plus_one_counter = any(
+        isinstance(a, HasCounter) and a.kind == "+1/+1"
+        for a in inner_atoms
+    )
+    has_creature_or_artifact_or = any(
+        isinstance(a, ObjectOr)
+        and {type(a.left), type(a.right)} == {IsCreature, IsArtifact}
+        for a in inner_atoms
     )
     # Self dies.
     if has_self and len(leaves) == 1:
@@ -133,20 +184,13 @@ def _legacy_key_for_dies(ability) -> str | None:
             return "nontoken_creature_you_control_with_counter_dies"
         return "creature_you_control_with_counter_dies"
     # Your creature OR artifact dies (Susurian Voidborn / Sothera).
-    if has_or and has_controlled and not any(
-        isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
-        for leaf in leaves
-    ):
-        for leaf in leaves:
-            if isinstance(leaf, Or):
-                inner_types = {type(leaf.left), type(leaf.right)}
-                if {IsCreature, IsArtifact} == inner_types:
-                    return "your_creature_or_artifact_dies"
+    if has_creature_or_artifact_or and has_controlled and not has_not_self:
+        return "your_creature_or_artifact_dies"
     # Sothera-style: creature you control dies (no Or, no counter).
     if (
         has_creature and has_controlled
         and not has_plus_one_counter
-        and not has_or
+        and not has_creature_or_artifact_or
         and not has_nontoken
     ):
         return "your_creature_or_artifact_dies"
@@ -159,14 +203,14 @@ def _legacy_key_for_leaves(ability) -> str | None:
     pattern collapses cleanly to LEAVES_BATTLEFIELD since both death
     and exile leave the battlefield."""
     leaves = _flatten_and(ability.predicate)
-    types = {type(leaf) for leaf in leaves}
-    has_self = IsSelf in types
+    has_self = any(isinstance(leaf, IsSelf) for leaf in leaves)
     has_not_self = any(
         isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
         for leaf in leaves
     )
-    has_creature = IsCreature in types
-    has_controlled = Controlled in types
+    has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
+    inner_atoms = _subject_inner_atoms(leaves)
+    has_creature = IsCreature in {type(a) for a in inner_atoms}
     # Self leaves.
     if has_self and len(leaves) == 1:
         return "leaves_battlefield"
@@ -177,19 +221,9 @@ def _legacy_key_for_leaves(ability) -> str | None:
 
 
 def _legacy_key_for_attacks(ability, source_printing=None) -> str | None:
-    """Map a predicate-style ATTACKS ability back to its legacy key.
-
-    Phase 5 migrated the bare ``IsSelf()`` shape ("this creature
-    attacks"); phase 7 migrated the aura/equipment relational variants
-    ``enchanted_creature_attacks`` and ``equipped_creature_attacks``
-    via the new ``IsHost(subject="attacker")`` predicate. The
-    aura-vs-equipment distinction is determined by the source
-    printing's type (``is_aura`` vs Equipment subtype) since both
-    relational forms share the same predicate shape.
-    """
+    """Map a predicate-style ATTACKS ability back to its legacy key."""
     leaves = _flatten_and(ability.predicate)
-    types = {type(leaf) for leaf in leaves}
-    if IsSelf in types and len(leaves) == 1:
+    if len(leaves) == 1 and isinstance(leaves[0], IsSelf):
         return "attacks"
     # Aura/Equipment "Whenever enchanted/equipped creature attacks":
     # IsHost(subject="attacker") on the aura/Equipment as the source.
@@ -235,17 +269,19 @@ def _legacy_key_for_dealt_damage(ability) -> str | None:
 def _legacy_key_for_is_cast(ability) -> str | None:
     """Map a predicate-style IS_CAST ability back to its legacy key.
 
-    Three shapes recognized in this batch:
+    Three shapes recognized:
       - ``Controlled(YOU, "controller")`` alone → spell half of
         ``cast_spell_or_play_land``.
-      - ``IsArtifact("spell") & Controlled(YOU, "controller")`` →
-        ``cast_artifact_spell``.
-      - ``Controlled(YOU, "controller") & SpellsCastThisTurn(n=2)`` →
-        ``second_spell_each_turn``.
+      - ``Subject("spell", IsArtifact()) & Controlled(YOU, "controller")``
+        → ``cast_artifact_spell``.
+      - ``Controlled(YOU, "controller") & StateBound(SpellsCastThisTurn(n=2))``
+        → ``second_spell_each_turn``.
     """
     leaves = _flatten_and(ability.predicate)
     has_artifact_spell = any(
-        isinstance(leaf, IsArtifact) and leaf.subject == "spell"
+        isinstance(leaf, Subject)
+        and leaf.slot == "spell"
+        and any(isinstance(a, IsArtifact) for a in _object_atoms_in(leaf.inner))
         for leaf in leaves
     )
     has_controlled_you_controller = any(
@@ -255,7 +291,9 @@ def _legacy_key_for_is_cast(ability) -> str | None:
         for leaf in leaves
     )
     has_second_spell = any(
-        isinstance(leaf, SpellsCastThisTurn) and leaf.n == 2
+        isinstance(leaf, StateBound)
+        and isinstance(leaf.inner, SpellsCastThisTurn)
+        and leaf.inner.n == 2
         for leaf in leaves
     )
     if has_second_spell and has_controlled_you_controller:
@@ -308,13 +346,15 @@ def _legacy_key_for_discards_card(ability) -> str | None:
 
 def _legacy_key_for_counters_added(ability) -> str | None:
     """Map a predicate-style COUNTERS_ADDED ability back to its legacy
-    key. Only shape today is ``IsCreature() & Controlled(YOU)`` on the
-    receiving creature (Terrasymbiosis)."""
+    key. Only shape today is ``Subject(None, IsCreature()) &
+    Controlled(YOU)`` on the receiving creature (Terrasymbiosis)."""
     leaves = _flatten_and(ability.predicate)
-    types = {type(leaf) for leaf in leaves}
+    inner_atoms = _subject_inner_atoms(leaves)
+    has_creature = any(isinstance(a, IsCreature) for a in inner_atoms)
+    has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
     if (
-        IsCreature in types
-        and Controlled in types
+        has_creature
+        and has_controlled
         and len(leaves) == 2
     ):
         return "counters_added_to_your_creature"
@@ -326,18 +366,20 @@ def _legacy_key_for_is_sacrificed(ability) -> str | None:
     key.
 
     Two shapes:
-      - ``IsArtifact() & Controlled(YOU) & ~IsSelf()`` (Biotech
-        Specialist) → ``sacrifice_artifact``.
-      - ``(IsCreature() | IsArtifact()) & Controlled(YOU) & ~IsSelf()``
-        (Lightless Evangel) → ``sacrifice_creature_or_artifact``.
+      - ``Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf()``
+        (Biotech Specialist) → ``sacrifice_artifact``.
+      - ``Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU)
+        & ~IsSelf()`` (Lightless Evangel) →
+        ``sacrifice_creature_or_artifact``.
     """
     leaves = _flatten_and(ability.predicate)
+    inner_atoms = _subject_inner_atoms(leaves)
     has_or_creature_artifact = any(
-        isinstance(leaf, Or)
-        and {type(leaf.left), type(leaf.right)} == {IsCreature, IsArtifact}
-        for leaf in leaves
+        isinstance(a, ObjectOr)
+        and {type(a.left), type(a.right)} == {IsCreature, IsArtifact}
+        for a in inner_atoms
     )
-    has_artifact = any(isinstance(leaf, IsArtifact) for leaf in leaves)
+    has_artifact = any(isinstance(a, IsArtifact) for a in inner_atoms)
     has_controlled = any(isinstance(leaf, Controlled) for leaf in leaves)
     has_not_self = any(
         isinstance(leaf, Not) and isinstance(leaf.inner, IsSelf)
@@ -433,18 +475,15 @@ def _legacy_key_for_predicate(ability, source_printing=None) -> str | None:
 
 def _legacy_key_for_deals_combat_damage(ability) -> str | None:
     """Map a predicate-style DEALS_COMBAT_DAMAGE ability back to its
-    legacy key. Three shapes recognized in phase 9:
+    legacy key.
 
-    - ``IsSelf(subject="source") & IsPlayer(subject="target")`` →
+    - ``IsSelf(subject="source") & Subject("target", IsPlayer())`` →
       ``combat_damage_to_player`` (Illvoi Infiltrator).
-    - ``IsCreature(subject="source") & Controlled(YOU, subject=
-      "source") & IsPlayer(subject="target")`` →
+    - ``Subject("source", IsCreature()) & Controlled(YOU, "source") &
+      Subject("target", IsPlayer())`` →
       ``your_creature_combat_damage_to_player`` (Starwinder).
-    - ``IsCreature(subject="source") & Controlled(YOU, subject=
-      "target")`` → ``creature_deals_combat_damage_to_you``
-      (Contested War Zone) — the ``Controlled(YOU, "target")`` clause
-      checks "the damaged player IS the source ability's controller",
-      which is the same check the legacy walk did.
+    - ``Subject("source", IsCreature()) & Controlled(YOU, "target")`` →
+      ``creature_deals_combat_damage_to_you`` (Contested War Zone).
     """
     leaves = _flatten_and(ability.predicate)
     has_self_source = any(
@@ -452,7 +491,9 @@ def _legacy_key_for_deals_combat_damage(ability) -> str | None:
         for leaf in leaves
     )
     has_creature_source = any(
-        isinstance(leaf, IsCreature) and leaf.subject == "source"
+        isinstance(leaf, Subject)
+        and leaf.slot == "source"
+        and any(isinstance(a, IsCreature) for a in _object_atoms_in(leaf.inner))
         for leaf in leaves
     )
     has_controlled_you_source = any(
@@ -468,7 +509,9 @@ def _legacy_key_for_deals_combat_damage(ability) -> str | None:
         for leaf in leaves
     )
     has_player_target = any(
-        isinstance(leaf, IsPlayer) and leaf.subject == "target"
+        isinstance(leaf, Subject)
+        and leaf.slot == "target"
+        and any(isinstance(a, IsPlayer) for a in _object_atoms_in(leaf.inner))
         for leaf in leaves
     )
     if has_self_source and has_player_target:
@@ -488,8 +531,9 @@ def _legacy_key_for_blocks(ability) -> str | None:
     """Map a predicate-style BLOCKS ability back to its legacy key.
 
     Only shape today:
-    - ``IsSelf(subject="blocker") & HasKeyword("flying", subject=
-      "attacker")`` → ``blocks_creature_with_flying`` (Skystinger).
+    - ``IsSelf(subject="blocker") & Subject("attacker",
+      HasKeyword("flying"))`` → ``blocks_creature_with_flying``
+      (Skystinger).
     """
     leaves = _flatten_and(ability.predicate)
     has_self_blocker = any(
@@ -497,9 +541,12 @@ def _legacy_key_for_blocks(ability) -> str | None:
         for leaf in leaves
     )
     has_flying_attacker = any(
-        isinstance(leaf, HasKeyword)
-        and leaf.name == "flying"
-        and leaf.subject == "attacker"
+        isinstance(leaf, Subject)
+        and leaf.slot == "attacker"
+        and any(
+            isinstance(a, HasKeyword) and a.name == "flying"
+            for a in _object_atoms_in(leaf.inner)
+        )
         for leaf in leaves
     )
     if has_self_blocker and has_flying_attacker:

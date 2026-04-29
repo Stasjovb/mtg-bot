@@ -14,7 +14,7 @@ support lands as:
 
 * New ``_INTERVENING_IF_PHRASES`` entry: the canonical printed
   gate ``"there are four or more card types among cards in your
-  graveyard"`` maps to ``Delirium()``. The Delirium ability-word
+  graveyard"`` maps to ``StateBound(Delirium())``. The Delirium ability-word
   prefix (``Delirium — ``) carries no rules consequence — it strips
   through the existing generic ``_strip_ability_word_prefix`` helper
   with no Delirium-specific code path needed.
@@ -39,7 +39,15 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trailing_if_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import Delirium, Event, IsSelf, Predicate
+from mtg_bot.effects.state_predicates import (
+    Delirium,
+)
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+    Predicate,
+    StateBound,
+)
 
 
 # ---------- _parse_intervening_if_phrase: positive lookups ----------
@@ -47,7 +55,7 @@ from mtg_bot.effects.predicates import Delirium, Event, IsSelf, Predicate
 
 def test_intervening_if_phrasebook_includes_delirium():
     phrase = "there are four or more card types among cards in your graveyard"
-    assert _parse_intervening_if_phrase(phrase) == Delirium()
+    assert _parse_intervening_if_phrase(phrase) == StateBound(Delirium())
 
 
 def test_intervening_if_phrasebook_strips_surrounding_whitespace_for_delirium():
@@ -58,7 +66,7 @@ def test_intervening_if_phrasebook_strips_surrounding_whitespace_for_delirium():
         "  there are four or more card types among cards in your "
         "graveyard  "
     )
-    assert _parse_intervening_if_phrase(phrase) == Delirium()
+    assert _parse_intervening_if_phrase(phrase) == StateBound(Delirium())
 
 
 # ---------- _parse_triggered_ability_line: end-to-end ----------
@@ -75,7 +83,7 @@ def test_intervening_if_delirium_attack_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -89,7 +97,7 @@ def test_intervening_if_delirium_etb_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -105,7 +113,7 @@ def test_intervening_if_delirium_ability_word_prefix_stripped():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -119,7 +127,7 @@ def test_intervening_if_delirium_ability_word_prefix_on_etb():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -132,7 +140,7 @@ def test_trailing_if_phrasebook_includes_delirium():
     # phrasing — ``you have ...`` instead of ``there are ...`` — but
     # the predicate is the same.
     phrase = "you have four or more card types among cards in your graveyard"
-    assert _parse_trailing_if_phrase(phrase) == Delirium()
+    assert _parse_trailing_if_phrase(phrase) == StateBound(Delirium())
 
 
 def test_trailing_if_phrasebook_strips_surrounding_whitespace():
@@ -140,7 +148,7 @@ def test_trailing_if_phrasebook_strips_surrounding_whitespace():
         "  you have four or more card types among cards in your "
         "graveyard  "
     )
-    assert _parse_trailing_if_phrase(phrase) == Delirium()
+    assert _parse_trailing_if_phrase(phrase) == StateBound(Delirium())
 
 
 def test_trailing_if_phrasebook_rejects_unknown_phrase():
@@ -157,7 +165,7 @@ def test_trailing_if_delirium_attack_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -169,7 +177,7 @@ def test_trailing_if_delirium_etb_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -184,7 +192,7 @@ def test_trailing_if_delirium_with_ability_word_prefix():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -240,7 +248,7 @@ def test_middle_clause_takes_precedence_over_trailing():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & Delirium(),
+        predicate=IsSelf() & StateBound(Delirium()),
         effect=DrawCards(amount=1),
     )
 
@@ -251,13 +259,13 @@ def test_middle_clause_takes_precedence_over_trailing():
 def test_delirium_phrase_lives_in_intervening_if_table():
     phrase = "there are four or more card types among cards in your graveyard"
     assert phrase in _INTERVENING_IF_PHRASES
-    assert _INTERVENING_IF_PHRASES[phrase] == Delirium()
+    assert _INTERVENING_IF_PHRASES[phrase] == StateBound(Delirium())
 
 
 def test_delirium_phrase_lives_in_trailing_if_table():
     phrase = "you have four or more card types among cards in your graveyard"
     assert phrase in _TRAILING_IF_PHRASES
-    assert _TRAILING_IF_PHRASES[phrase] == Delirium()
+    assert _TRAILING_IF_PHRASES[phrase] == StateBound(Delirium())
 
 
 def test_trailing_if_phrasebook_keys_map_to_predicates():
@@ -318,7 +326,7 @@ def _make_state(types_in_yard: list[tuple[str, ...]]) -> _FakeState:
 
 def test_delirium_false_with_empty_graveyard():
     state = _make_state([])
-    assert Delirium().matches(state, {}, _StubSource()) is False
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is False
 
 
 def test_delirium_false_with_three_distinct_types():
@@ -327,7 +335,7 @@ def test_delirium_false_with_three_distinct_types():
         ("Land",),
         ("Sorcery",),
     ])
-    assert Delirium().matches(state, {}, _StubSource()) is False
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is False
 
 
 def test_delirium_true_with_four_distinct_types():
@@ -337,7 +345,7 @@ def test_delirium_true_with_four_distinct_types():
         ("Sorcery",),
         ("Instant",),
     ])
-    assert Delirium().matches(state, {}, _StubSource()) is True
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is True
 
 
 def test_delirium_true_with_more_than_four_distinct_types():
@@ -349,14 +357,14 @@ def test_delirium_true_with_more_than_four_distinct_types():
         ("Enchantment",),
         ("Artifact",),
     ])
-    assert Delirium().matches(state, {}, _StubSource()) is True
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is True
 
 
 def test_delirium_counts_distinct_types_not_card_count():
     # Eight Creature cards in the yard still count as ONE type. This
     # is the most common false-positive shape — guard against it.
     state = _make_state([("Creature",)] * 8)
-    assert Delirium().matches(state, {}, _StubSource()) is False
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is False
 
 
 def test_delirium_multitype_card_contributes_all_its_types():
@@ -369,7 +377,7 @@ def test_delirium_multitype_card_contributes_all_its_types():
         ("Land",),
         ("Sorcery",),
     ])
-    assert Delirium().matches(state, {}, _StubSource()) is True
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is True
 
 
 def test_delirium_ignores_supertypes_and_subtypes():
@@ -389,7 +397,7 @@ def test_delirium_ignores_supertypes_and_subtypes():
         # against the canonical type set and ignores them.
         ("Legendary", "Goblin", "Basic"),
     ])
-    assert Delirium().matches(state, {}, _StubSource()) is False
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is False
 
 
 def test_delirium_short_circuits_on_threshold_hit():
@@ -414,7 +422,7 @@ def test_delirium_short_circuits_on_threshold_hit():
         _Bomb(),  # would be reached only if we don't short-circuit
     ])
     state = _FakeState(players=[p])
-    assert Delirium().matches(state, {}, _StubSource()) is True
+    assert StateBound(Delirium()).matches(state, {}, _StubSource()) is True
 
 
 def test_delirium_uses_source_controller_not_other_players():
@@ -431,10 +439,10 @@ def test_delirium_uses_source_controller_not_other_players():
     ])
     state = _FakeState(players=[p_self, p_opp])
     src = _StubSource(controller_id=0)
-    assert Delirium().matches(state, {}, src) is False
+    assert StateBound(Delirium()).matches(state, {}, src) is False
     # Re-host the source under the opponent and the predicate flips.
     src_opp = _StubSource(controller_id=1)
-    assert Delirium().matches(state, {}, src_opp) is True
+    assert StateBound(Delirium()).matches(state, {}, src_opp) is True
 
 
 def test_delirium_false_when_source_controller_unknown():
@@ -448,4 +456,4 @@ def test_delirium_false_when_source_controller_unknown():
         ("Instant",),
     ])
     src = _StubSource(controller_id=99)
-    assert Delirium().matches(state, {}, src) is False
+    assert StateBound(Delirium()).matches(state, {}, src) is False

@@ -176,7 +176,10 @@ def test_wandering_fumarole_swap_toggles_back():
 
 
 def test_raging_ravine_grants_attacks_trigger():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     from mtg_bot.game import effective_triggered_abilities
 
     state = _new_state()
@@ -247,7 +250,10 @@ def test_become_land_creature_appends_granted_abilities():
         cost=ActivationCost(),
         effect=SwitchSourcePowerToughnessUEOT(),
     )
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     sample_trig = TriggeredAbility(
         event=Event.ATTACKS, predicate=IsSelf(),
         effect=PutPlusOneCounterOnSelf(amount=1),

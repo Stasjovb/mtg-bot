@@ -17,7 +17,7 @@ two trailing-rider gates on ``StaticAbility``.
   ``_STATIC_CONDITION_KWARGS`` entry. The engine's
   ``StaticAbility.applies_to`` evaluates the gate by walking the
   controller's graveyard and counting distinct card types — same
-  semantics as the trigger-side ``Delirium()`` predicate.
+  semantics as the trigger-side ``StateBound(Delirium())`` predicate.
 """
 
 from __future__ import annotations

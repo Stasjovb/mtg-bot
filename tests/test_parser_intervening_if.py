@@ -7,10 +7,10 @@ AND-s the resulting ``Predicate`` onto the trigger's base event
 predicate. Two gate phrases land in this batch:
 
 * ``"an opponent controls more lands than you"`` — Sunstar
-  Expansionist's ETB. Predicate ``OpponentControlsMoreLandsThanYou()``.
+  Expansionist's ETB. Predicate ``StateBound(OpponentControlsMoreLandsThanYou())``.
 * ``"a nonland permanent left the battlefield this turn or a spell
   was warped this turn"`` — the Void rider on Roving Actuator (ETB)
-  and Alpharael, Stonechosen (attack). Predicate ``VoidActive()``,
+  and Alpharael, Stonechosen (attack). Predicate ``StateBound(VoidActive())``,
   which delegates to the engine's ``is_void_active`` helper so the
   trigger-time check matches the ``requires_void`` static-flag
   semantics already in place.
@@ -46,11 +46,14 @@ from mtg_bot.cards.parser.triggers import (
     _parse_intervening_if_phrase,
     _parse_triggered_ability_line,
 )
+from mtg_bot.effects.state_predicates import (
+    OpponentControlsMoreLandsThanYou,
+    VoidActive,
+)
 from mtg_bot.effects.predicates import (
     Event,
     IsSelf,
-    OpponentControlsMoreLandsThanYou,
-    VoidActive,
+    StateBound,
 )
 
 
@@ -60,7 +63,7 @@ from mtg_bot.effects.predicates import (
 def test_intervening_if_phrasebook_includes_opponent_more_lands():
     assert (
         _parse_intervening_if_phrase("an opponent controls more lands than you")
-        == OpponentControlsMoreLandsThanYou()
+        == StateBound(OpponentControlsMoreLandsThanYou())
     )
 
 
@@ -69,7 +72,7 @@ def test_intervening_if_phrasebook_includes_void_active():
         "a nonland permanent left the battlefield this turn or a spell "
         "was warped this turn"
     )
-    assert _parse_intervening_if_phrase(phrase) == VoidActive()
+    assert _parse_intervening_if_phrase(phrase) == StateBound(VoidActive())
 
 
 def test_intervening_if_phrasebook_strips_surrounding_whitespace():
@@ -80,7 +83,7 @@ def test_intervening_if_phrasebook_strips_surrounding_whitespace():
     # the strip.
     assert (
         _parse_intervening_if_phrase("  an opponent controls more lands than you  ")
-        == OpponentControlsMoreLandsThanYou()
+        == StateBound(OpponentControlsMoreLandsThanYou())
     )
 
 
@@ -98,7 +101,7 @@ def test_intervening_if_etb_opponent_more_lands():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & OpponentControlsMoreLandsThanYou(),
+        predicate=IsSelf() & StateBound(OpponentControlsMoreLandsThanYou()),
         effect=DrawCards(amount=1),
     )
 
@@ -119,7 +122,7 @@ def test_intervening_if_etb_with_lander_create_effect():
     assert expected_effect is not None
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & OpponentControlsMoreLandsThanYou(),
+        predicate=IsSelf() & StateBound(OpponentControlsMoreLandsThanYou()),
         effect=expected_effect,
     )
 
@@ -136,7 +139,7 @@ def test_intervening_if_void_attack_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & VoidActive(),
+        predicate=IsSelf() & StateBound(VoidActive()),
         effect=DrawCards(amount=1),
     )
 
@@ -154,7 +157,7 @@ def test_intervening_if_void_ability_word_prefix_stripped():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & VoidActive(),
+        predicate=IsSelf() & StateBound(VoidActive()),
         effect=DrawCards(amount=1),
     )
 
@@ -169,7 +172,7 @@ def test_intervening_if_void_etb_predicate():
     )
     assert _parse_triggered_ability_line(line) == TriggeredAbility(
         event=Event.ENTERS,
-        predicate=IsSelf() & VoidActive(),
+        predicate=IsSelf() & StateBound(VoidActive()),
         effect=DrawCards(amount=1),
     )
 
@@ -219,7 +222,9 @@ def test_intervening_if_phrasebook_keys_match_predicate_types():
     # check that a future addition doesn't accidentally land a tuple
     # or a string in there. Mirrors the equivalent integrity check on
     # ``_PREDICATE_TRIGGER_PHRASES``.
-    from mtg_bot.effects.predicates import Predicate
+    from mtg_bot.effects.predicates import (
+        Predicate,
+    )
 
     for phrase, pred in _INTERVENING_IF_PHRASES.items():
         assert isinstance(pred, Predicate), (
@@ -259,7 +264,7 @@ def test_void_active_predicate_reflects_engine_helper():
     # for this gate.
     s = _two_player_state()
     src = _StubSource(controller_id=0)
-    pred = VoidActive()
+    pred = StateBound(VoidActive())
     assert pred.matches(s, {}, src) is False
     s.permanent_left_battlefield_this_turn = True
     assert pred.matches(s, {}, src) is True
@@ -280,7 +285,7 @@ def test_opponent_more_lands_predicate_counts_battlefield():
 
     s = _two_player_state()
     src = _StubSource(controller_id=0)
-    pred = OpponentControlsMoreLandsThanYou()
+    pred = StateBound(OpponentControlsMoreLandsThanYou())
     assert pred.matches(s, {}, src) is False  # no lands at all
 
     land_printing = CardPrinting(
@@ -318,7 +323,7 @@ def test_opponent_more_lands_predicate_skips_lost_players():
 
     s = _two_player_state()
     src = _StubSource(controller_id=0)
-    pred = OpponentControlsMoreLandsThanYou()
+    pred = StateBound(OpponentControlsMoreLandsThanYou())
     land_printing = CardPrinting(
         name="Plains",
         mana_cost_str="",

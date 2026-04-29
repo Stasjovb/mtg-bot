@@ -41,11 +41,14 @@ from mtg_bot.cards.parser.triggers import (
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.effects.generic import PumpSelfUntilEOT
+from mtg_bot.effects.object_predicates import (
+    IsEnchantment,
+)
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
-    IsEnchantment,
+    Subject,
+    YOU,
 )
 
 
@@ -82,7 +85,7 @@ def test_parser_eerie_ability_word_strip_and_compound_arms():
     assert len(result) == 2
     enters_arm, room_arm = result
     assert enters_arm.event is Event.ENTERS
-    assert enters_arm.predicate == IsEnchantment() & Controlled(YOU)
+    assert enters_arm.predicate == Subject(None, IsEnchantment()) & Controlled(YOU)
     assert enters_arm.effect == DrawCards(amount=1)
     assert room_arm.event is Event.ROOM_FULLY_UNLOCKED
     assert room_arm.predicate == Controlled(YOU, subject="room")
@@ -212,7 +215,7 @@ def test_parser_claimed_eerie_cards_have_two_eerie_arms():
         enters_eerie = [
             t for t in p.triggered_abilities
             if t.event is Event.ENTERS
-            and t.predicate == IsEnchantment() & Controlled(YOU)
+            and t.predicate == Subject(None, IsEnchantment()) & Controlled(YOU)
         ]
         room_eerie = [
             t for t in p.triggered_abilities

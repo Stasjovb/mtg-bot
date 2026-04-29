@@ -38,11 +38,13 @@ from mtg_bot.cards.parser.triggers import (
     _parse_triggered_ability_line,
 )
 from mtg_bot.effects.predicates import (
-    YOU,
     Always,
     Controlled,
     Event,
+    IsSelf,
     Predicate,
+    StateBound,
+    YOU,
 )
 
 
@@ -254,7 +256,7 @@ def test_at_beginning_of_void_prefix_sets_requires_void_flag():
     # or a spell was warped this turn,`` is elided — both replaced by
     # the ``requires_void=True`` flag on the produced
     # ``TriggeredAbility``. The trigger predicate stays at
-    # ``Controlled(YOU)``; the gate is NOT modeled as a ``VoidActive()``
+    # ``Controlled(YOU)``; the gate is NOT modeled as a ``StateBound(VoidActive())``
     # predicate AND because the static-registry layout uses the
     # ``requires_void`` flag instead — parity here is structural.
     parsed = _parse_triggered_ability_line(
@@ -327,14 +329,19 @@ def test_void_prefix_does_not_strip_when_followed_by_when_whenever():
     # remainder starts with ``At the beginning of`` — ``Void — Whenever
     # this creature attacks, …`` (Alpharael, Stonechosen) flows
     # through the existing generic ability-word strip + intervening-
-    # if path instead, producing a predicate-AND ``VoidActive()``
+    # if path instead, producing a predicate-AND ``StateBound(VoidActive())``
     # trigger (separately tested in ``test_parser_intervening_if``).
     # Defensive: if the at-shape Void strip ever stole this line, the
     # produced trigger would have ``requires_void=True`` AND no event
     # match, which is broken; this test guards against that
     # regression by asserting the When/Whenever path still claims the
     # line.
-    from mtg_bot.effects.predicates import IsSelf, VoidActive
+    from mtg_bot.effects.state_predicates import (
+        VoidActive,
+    )
+    from mtg_bot.effects.predicates import (
+        IsSelf,
+    )
 
     parsed = _parse_triggered_ability_line(
         "Void — Whenever this creature attacks, "
@@ -344,7 +351,7 @@ def test_void_prefix_does_not_strip_when_followed_by_when_whenever():
     )
     assert parsed == TriggeredAbility(
         event=Event.ATTACKS,
-        predicate=IsSelf() & VoidActive(),
+        predicate=IsSelf() & StateBound(VoidActive()),
         effect=DrawCards(amount=1),
     )
 

@@ -13,12 +13,13 @@ from dataclasses import dataclass, field
 import pytest
 
 from mtg_bot.effects.base import TriggeredAbility
+from mtg_bot.effects.object_predicates import IsLand
 from mtg_bot.effects.predicates import (
     Always,
     Event,
-    IsLand,
     IsSelf,
     Never,
+    Subject,
 )
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
@@ -107,7 +108,7 @@ def test_matches_event_with_no_predicate_treats_as_always():
 
 def test_matches_event_returns_false_when_predicate_fails():
     src = FakeObject(printing=FakePrinting(card_types=("Creature",)))
-    ab = _ab_predicate(predicate=IsLand())
+    ab = _ab_predicate(predicate=Subject(None, IsLand()))
     # Subject is a creature, predicate requires Land — must not fire.
     assert ab.matches_event(
         Event.ENTERS, {"obj": src}, src, state=None

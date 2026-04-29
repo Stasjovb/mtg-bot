@@ -11,7 +11,9 @@ to share a primitive).
 from __future__ import annotations
 
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.effects.predicates import Event
+from mtg_bot.effects.predicates import (
+    Event,
+)
 
 
 def _claimed_names() -> frozenset[str]:
@@ -470,9 +472,11 @@ def test_wickerfolk_thresher_carries_attacks_trigger_with_delirium_gate():
     # Belt-and-suspenders that the produced ``CardPrinting`` carries
     # the attack trigger via the bespoke
     # ``WickerfolkThresherAttackEffect`` engine class, with the
-    # ``Delirium()`` predicate composed as an intervening-if gate.
+    # ``StateBound(Delirium())`` predicate composed as an intervening-if gate.
     from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.effects.predicates import Delirium
+    from mtg_bot.effects.state_predicates import (
+        Delirium,
+    )
 
     p = OracleParserCardSource().get_printings()["Wickerfolk Thresher"]
     assert p.power == 5 and p.toughness == 4
@@ -483,7 +487,7 @@ def test_wickerfolk_thresher_carries_attacks_trigger_with_delirium_gate():
     ]
     assert len(attacks) == 1
     assert isinstance(attacks[0].effect, WickerfolkThresherAttackEffect)
-    # Delirium() should be present in the predicate tree.
+    # StateBound(Delirium()) should be present in the predicate tree.
     pred_repr = repr(attacks[0].predicate)
     assert "Delirium" in pred_repr
 

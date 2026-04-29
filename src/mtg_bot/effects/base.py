@@ -439,7 +439,7 @@ class StaticAbility:
         if self.requires_delirium:
             if state is None:
                 return False
-            from mtg_bot.effects.predicates import _DELIRIUM_CARD_TYPES
+            from mtg_bot.effects.state_predicates import _DELIRIUM_CARD_TYPES
             controller = state.player_by_id(source.controller_id)
             seen: set[str] = set()
             for card in controller.graveyard:
@@ -598,9 +598,10 @@ class TriggeredAbility:
         # (the only PLAYS_LAND-rider that exposes describe() in tests
         # today is Burgeoning, which is the opponent-form).
         if self.event is not None and not self.trigger:
+            from mtg_bot.effects.object_predicates import IsArtifact
+            from mtg_bot.effects.state_predicates import SpellsCastThisTurn
             from mtg_bot.effects.predicates import (
-                Controlled, OPPONENT, YOU, IsArtifact,
-                SpellsCastThisTurn,
+                Controlled, OPPONENT, StateBound, Subject, YOU,
             )
             event_prefix_map = {
                 "enters": "When ~ enters the battlefield",
@@ -658,13 +659,21 @@ class TriggeredAbility:
                     return [p]
 
                 leaves = _leaves(self.predicate)
-                if any(isinstance(lf, SpellsCastThisTurn) and lf.n == 2
-                       for lf in leaves):
+                if any(
+                    isinstance(lf, StateBound)
+                    and isinstance(lf.inner, SpellsCastThisTurn)
+                    and lf.inner.n == 2
+                    for lf in leaves
+                ):
                     prefix = (
                         "Whenever you cast your second spell each turn"
                     )
-                elif any(isinstance(lf, IsArtifact) and lf.subject == "spell"
-                         for lf in leaves):
+                elif any(
+                    isinstance(lf, Subject)
+                    and lf.slot == "spell"
+                    and isinstance(lf.inner, IsArtifact)
+                    for lf in leaves
+                ):
                     prefix = "Whenever you cast an artifact spell"
                 else:
                     prefix = event_prefix_map.get(

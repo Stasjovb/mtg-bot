@@ -27,7 +27,9 @@ Cards newly claimed in this batch:
 from __future__ import annotations
 
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.effects.predicates import Event
+from mtg_bot.effects.predicates import (
+    Event,
+)
 
 
 def _claimed_names() -> frozenset[str]:

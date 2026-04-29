@@ -45,12 +45,15 @@ from mtg_bot.effects import (
     DrawCards,
     GainLife,
 )
+from mtg_bot.effects.object_predicates import (
+    IsCreature,
+)
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
-    IsCreature,
     IsSelf,
+    StateBound,
+    YOU,
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
@@ -600,7 +603,9 @@ def test_grand_entryway_locked_does_not_make_token():
     # Re-fire the synthetic ENTERS dispatch — the half is locked, so
     # nothing should land on the stack.
     from mtg_bot.actions import dispatch_event
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     dispatch_event(state, Event.ENTERS, label="enters", obj=room)
     drain_stack(state)
     glimmers = sum(
@@ -1229,7 +1234,9 @@ def test_derelict_attic_locked_does_not_fire():
     """If only Widow's Walk is unlocked, Derelict Attic's draw / life-
     loss trigger doesn't fire on a refired ENTERS dispatch."""
     from mtg_bot.actions import dispatch_event
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
 
     state = _new_state()
     for _ in range(3):
@@ -1339,7 +1346,9 @@ def test_lone_attacker_predicate_ignores_opponent_attacker():
     """The LoneAttackerForYou predicate is true ONLY when the lone
     attacker is controlled by the source's controller. An opponent's
     lone attacker doesn't fire your Widow's Walk."""
-    from mtg_bot.effects.predicates import LoneAttackerForYou
+    from mtg_bot.effects.state_predicates import (
+        LoneAttackerForYou,
+    )
 
     state = _new_state()
     # Room belongs to P0; the lone attacker belongs to P1.
@@ -1353,14 +1362,16 @@ def test_lone_attacker_predicate_ignores_opponent_attacker():
         state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
     )
     bear.attacking = True
-    pred = LoneAttackerForYou()
+    pred = StateBound(LoneAttackerForYou())
     assert pred.matches(state, {}, room) is False
 
 
 def test_lone_attacker_predicate_is_false_with_no_attackers():
     """No attackers → predicate is false (length check fails before
     the controller-id branch)."""
-    from mtg_bot.effects.predicates import LoneAttackerForYou
+    from mtg_bot.effects.state_predicates import (
+        LoneAttackerForYou,
+    )
 
     state = _new_state()
     room = _put_battlefield(
@@ -1368,7 +1379,7 @@ def test_lone_attacker_predicate_is_false_with_no_attackers():
         _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
         controller_id=0,
     )
-    pred = LoneAttackerForYou()
+    pred = StateBound(LoneAttackerForYou())
     assert pred.matches(state, {}, room) is False
 
 
@@ -1424,7 +1435,9 @@ def test_ritual_chamber_locked_does_not_make_token():
     """If only Unholy Annex is unlocked, Ritual Chamber's token
     trigger does not fire."""
     from mtg_bot.actions import dispatch_event
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
 
     state = _new_state()
     room = _put_battlefield(
@@ -1963,7 +1976,9 @@ def test_restricted_office_locked_does_not_wrath():
     """If only Lecture Hall is unlocked, Restricted Office's wrath
     trigger does not fire when the Room re-enters via dispatch_event."""
     from mtg_bot.actions import dispatch_event
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
 
     state = _new_state()
     big_bear = _put_battlefield(
@@ -2205,7 +2220,9 @@ def test_mirror_room_locked_does_not_create_token():
     """If only Fractured Realm is unlocked, Mirror Room's door trigger
     does not fire on a synthetic ENTERS dispatch."""
     from mtg_bot.actions import dispatch_event
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
 
     state = _new_state()
     _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)

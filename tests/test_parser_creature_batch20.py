@@ -113,13 +113,16 @@ from mtg_bot.cards.parser.triggers import (
     _parse_collapsed_predicate_trigger_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     IsArtifact,
     IsCreature,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
     IsSelf,
+    Subject,
+    YOU,
 )
 
 
@@ -232,7 +235,7 @@ def test_weftstalker_ardent_etb_trigger_line():
     assert parsed == TriggeredAbility(
         event=Event.ENTERS,
         predicate=(
-            (IsCreature() | IsArtifact())
+            Subject(None, IsCreature() | IsArtifact())
             & Controlled(YOU)
             & ~IsSelf()
         ),
@@ -256,7 +259,7 @@ def test_parse_collapsed_creature_or_artifact_dies_phrase():
         "this creature or another creature or artifact you control dies"
     ) == (
         Event.DIES,
-        (IsCreature() | IsArtifact()) & Controlled(YOU),
+        Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU),
     )
 
 
@@ -282,7 +285,7 @@ def test_susurian_voidborn_trigger_line_end_to_end():
     parsed = _parse_triggered_ability_line(line)
     assert parsed == TriggeredAbility(
         event=Event.DIES,
-        predicate=(IsCreature() | IsArtifact()) & Controlled(YOU),
+        predicate=Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU),
         effect=Sequence(
             effects=(
                 TargetOpponentLosesLife(amount=1),

@@ -19,7 +19,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.equipment_builder import _build_equipment_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.effects.generic import AttachToTargetCreatureYouControl
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 _MELTSTRIDERS_GEAR_CARD = {
@@ -422,7 +425,10 @@ def test_build_equipment_printing_supports_hylderblade_void_rider():
     line builds a ``BEGINNING_OF_END_STEP``-event triggered ability
     with ``requires_void=True`` — the engine's stand-in for the EoE
     Void intervening-if check."""
-    from mtg_bot.effects.predicates import Controlled, YOU
+    from mtg_bot.effects.predicates import (
+        Controlled,
+        YOU,
+    )
 
     card = {
         "name": "Hylderblade",

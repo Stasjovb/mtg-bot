@@ -47,10 +47,10 @@ from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
     IsSelf,
+    YOU,
 )
 
 

@@ -45,13 +45,17 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     IsCreature,
     IsPlayer,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
     IsSelf,
+    StateBound,
+    Subject,
+    YOU,
 )
 
 
@@ -107,7 +111,7 @@ def test_parse_enduring_dies_trigger_line():
     parsed = _parse_triggered_ability_line(line, name="Enduring Curiosity")
     assert parsed == TriggeredAbility(
         event=Event.DIES,
-        predicate=IsSelf() & IsCreature(),
+        predicate=IsSelf() & Subject(None, IsCreature()),
         effect=EnduringDiesReturnAsEnchantmentEffect(),
     )
 
@@ -126,7 +130,7 @@ def test_parse_enduring_dies_trigger_line_innocence():
     parsed = _parse_triggered_ability_line(line, name="Enduring Innocence")
     assert parsed == TriggeredAbility(
         event=Event.DIES,
-        predicate=IsSelf() & IsCreature(),
+        predicate=IsSelf() & Subject(None, IsCreature()),
         effect=EnduringDiesReturnAsEnchantmentEffect(),
     )
 
@@ -379,7 +383,7 @@ def test_enduring_curiosity_carries_dies_trigger():
     assert len(dies) == 1
     assert dies[0] == TriggeredAbility(
         event=Event.DIES,
-        predicate=IsSelf() & IsCreature(),
+        predicate=IsSelf() & Subject(None, IsCreature()),
         effect=EnduringDiesReturnAsEnchantmentEffect(),
     )
 
@@ -399,9 +403,9 @@ def test_enduring_curiosity_carries_combat_damage_trigger():
     assert cd[0].effect == DrawCards(amount=1)
     # Predicate composes "creature you control source" + "player target".
     assert cd[0].predicate == (
-        IsCreature(subject="source")
+        Subject("source", IsCreature())
         & Controlled(YOU, subject="source")
-        & IsPlayer(subject="target")
+        & Subject("target", IsPlayer())
     )
 
 

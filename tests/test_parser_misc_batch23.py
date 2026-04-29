@@ -333,7 +333,9 @@ def test_tezzeret_loyalty_4():
 
 
 def test_tezzeret_has_artifact_enters_trigger():
-    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.predicates import (
+        Event,
+    )
     card = _planeswalker_card(
         "Tezzeret, Cruel Captain", "{3}", _TEZZERET_ORACLE,
         type_line="Legendary Planeswalker — Tezzeret",

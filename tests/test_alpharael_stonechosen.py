@@ -136,7 +136,10 @@ def test_alpharael_printing_metadata():
     assert "Legendary" in a.supertypes
     assert a.ward_discard_random is True
     assert a.warp_cost_str == "{2}{B}"
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     ab = a.triggered_abilities[0]
     assert ab.event == Event.ATTACKS
     assert ab.predicate == IsSelf()

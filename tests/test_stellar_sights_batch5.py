@@ -208,7 +208,11 @@ def test_inventors_fair_tutors_an_artifact():
 def test_inventors_fair_has_upkeep_trigger():
     """The upkeep gain-1-life trigger is now wired (with the 3+
     artifacts condition)."""
-    from mtg_bot.effects.predicates import YOU, Controlled, Event
+    from mtg_bot.effects.predicates import (
+        Controlled,
+        Event,
+        YOU,
+    )
 
     p = _PRINTINGS["Inventors' Fair"]
     assert len(p.triggered_abilities) == 1

@@ -41,18 +41,23 @@ from mtg_bot.cards.parser.triggers import (
     _parse_trigger_phrase,
     _parse_triggered_ability_line,
 )
-from mtg_bot.effects.predicates import (
-    YOU,
-    Controlled,
-    Event,
+from mtg_bot.effects.object_predicates import (
     HasKeyword,
     IsArtifact,
     IsPlayer,
+)
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
     IsSelf,
+    Subject,
+    YOU,
 )
 
 
-_ARTIFACT_ENTERS_PRED = IsArtifact() & Controlled(YOU) & ~IsSelf()
+_ARTIFACT_ENTERS_PRED = (
+    Subject(None, IsArtifact()) & Controlled(YOU) & ~IsSelf()
+)
 
 
 # ---------- this creature becomes tapped ----------
@@ -134,7 +139,7 @@ def test_parse_predicate_trigger_phrase_recognizes_combat_damage_to_player():
         "this creature deals combat damage to a player"
     ) == (
         Event.DEALS_COMBAT_DAMAGE,
-        IsSelf(subject="source") & IsPlayer(subject="target"),
+        IsSelf(subject="source") & Subject("target", IsPlayer()),
     )
     # Legacy lookup must NOT also claim the phrase.
     assert _parse_trigger_phrase(
@@ -152,7 +157,7 @@ def test_combat_damage_to_player_end_to_end():
     )
     assert parsed == TriggeredAbility(
         event=Event.DEALS_COMBAT_DAMAGE,
-        predicate=IsSelf(subject="source") & IsPlayer(subject="target"),
+        predicate=IsSelf(subject="source") & Subject("target", IsPlayer()),
         effect=DrawCards(amount=1),
     )
 
@@ -171,7 +176,7 @@ def test_parse_predicate_trigger_phrase_recognizes_blocks_creature_with_flying()
     ) == (
         Event.BLOCKS,
         IsSelf(subject="blocker")
-        & HasKeyword("flying", subject="attacker"),
+        & Subject("attacker", HasKeyword("flying")),
     )
     # Legacy lookup must NOT also claim the phrase.
     assert _parse_trigger_phrase(
@@ -192,7 +197,7 @@ def test_blocks_creature_with_flying_end_to_end():
         event=Event.BLOCKS,
         predicate=(
             IsSelf(subject="blocker")
-            & HasKeyword("flying", subject="attacker")
+            & Subject("attacker", HasKeyword("flying"))
         ),
         effect=DrawCards(amount=1),
     )

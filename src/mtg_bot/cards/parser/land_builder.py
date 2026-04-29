@@ -93,7 +93,8 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
+from mtg_bot.effects.object_predicates import IsCreature
+from mtg_bot.effects.predicates import YOU, Controlled, Event, IsSelf, Subject
 
 
 _COLOR_WORD_TO_LETTER: dict[str, str] = {
@@ -2679,7 +2680,7 @@ def _try_build_contested_war_zone_land(
             TriggeredAbility(
                 event=Event.DEALS_COMBAT_DAMAGE,
                 predicate=(
-                    IsCreature(subject="source")
+                    Subject("source", IsCreature())
                     & Controlled(YOU, subject="target")
                 ),
                 effect=ChangeControllerToCombatDamageSource(),

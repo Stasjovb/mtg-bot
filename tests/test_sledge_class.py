@@ -116,7 +116,10 @@ def test_sledge_class_attack_trigger_fires_when_attacking():
 
 
 def test_sledge_class_printing_has_attacks_trigger():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     s = _PRINTINGS["Sledge-Class Seedship"]
     triggers = [
         ab for ab in s.triggered_abilities

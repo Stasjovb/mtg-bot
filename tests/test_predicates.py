@@ -1,8 +1,10 @@
-"""Tests for the predicate-trigger model.
+"""Tests for the trigger-combinator predicate layer.
 
-Phase 1 deliverable: pure data-model tests. The engine integration
-(dispatching events, firing predicate-style triggers) lands on top of
-this; those tests live in test_predicate_dispatch.py.
+The leaf atoms moved into ``mtg_bot.effects.object_predicates`` and
+``mtg_bot.effects.state_predicates``; this module covers the
+combinators that bind those leaves into trigger-time predicates —
+Subject, Source, StateBound, the source-aware IsSelf / IsHost /
+Controlled trigger predicates, and Always / Never / And / Or / Not.
 """
 
 from __future__ import annotations
@@ -11,27 +13,35 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from mtg_bot.effects.object_predicates import (
+    HasCounter,
+    HasKeyword,
+    IsArtifact,
+    IsCreature,
+    IsLand,
+    IsTapped,
+)
+from mtg_bot.effects.state_predicates import (
+    SpellsCastThisTurn,
+    VoidActive,
+)
 from mtg_bot.effects.predicates import (
-    EVENT_SUBJECTS,
-    YOU,
     Always,
     And,
     Controlled,
+    EVENT_SUBJECTS,
     Event,
-    HasCounter,
-    HasKeyword,
-    HasSubtype,
-    IsArtifact,
-    IsCreature,
     IsHost,
-    IsLand,
-    IsNontoken,
-    IsPlayer,
     IsSelf,
     Never,
     Not,
     Or,
     Predicate,
+    Source,
+    StateBound,
+    Subject,
+    TriggerPredicate,
+    YOU,
 )
 
 
@@ -57,6 +67,12 @@ class FakeObject:
     loyalty_counters: int = 0
     # Attachment id (an aura/Equipment's host) — None means unattached.
     attached_to: int | None = None
+    tapped: bool = False
+
+
+@dataclass
+class FakePlayer:
+    id: int = 0
 
 
 @dataclass
@@ -89,6 +105,14 @@ def test_multi_subject_events_have_named_slots():
     assert EVENT_SUBJECTS[Event.DEALS_COMBAT_DAMAGE] == ("source", "target")
 
 
+# ---------- Predicate is the alias for TriggerPredicate ----------
+
+def test_predicate_is_trigger_predicate_alias():
+    """Backwards-compat: ``Predicate`` and ``TriggerPredicate`` refer to
+    the same ABC."""
+    assert Predicate is TriggerPredicate
+
+
 # ---------- Always / Never ----------
 
 def test_always_is_true():
@@ -113,10 +137,7 @@ def test_is_self_false_when_subject_is_other_object():
 
 
 def test_is_self_uses_default_subject_for_single_subject_events():
-    """When ``subject=None`` and the dispatched mapping has one entry,
-    the predicate targets that entry."""
     src = _src()
-    # Single subject — bare IsSelf() works.
     assert IsSelf().matches(FakeState(), {"attacker": src}, src) is True
 
 
@@ -128,32 +149,30 @@ def test_is_self_with_named_subject():
     assert not IsSelf(subject="attacker").matches(FakeState(), subjects, src)
 
 
+def test_is_self_player_subject_is_tautology():
+    """``IsSelf()`` (subject=None) on a Player-only event subject reads
+    as 'the source IS itself' and evaluates true — the source-self
+    check is what the surface text means there."""
+    src = _src()
+    player = FakePlayer(id=1)
+    assert IsSelf().matches(FakeState(), {"player": player}, src) is True
+
+
 # ---------- IsHost ----------
 
 def test_is_host_true_when_source_is_attached_to_subject():
-    """``IsHost`` matches when the firing subject is the permanent the
-    source aura/Equipment is attached to. Models the
-    ``Whenever enchanted creature attacks`` / ``Whenever enchanted
-    permanent becomes tapped`` family — the trigger lives on the aura
-    (the source), but fires against an event whose subject is the
-    aura's host."""
     host = FakeObject(id=42, controller_id=0)
     aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
     assert IsHost().matches(FakeState(), {"obj": host}, aura) is True
 
 
 def test_is_host_false_when_source_is_unattached():
-    """An aura/Equipment not attached to anything (``attached_to is
-    None``) never satisfies ``IsHost`` — the predicate gracefully
-    rejects the no-host case rather than crashing."""
     aura = FakeObject(id=99, controller_id=0, attached_to=None)
     other = FakeObject(id=42, controller_id=0)
     assert IsHost().matches(FakeState(), {"obj": other}, aura) is False
 
 
 def test_is_host_false_when_subject_is_not_the_host():
-    """The aura is attached to one permanent; a different permanent
-    triggers the event. ``IsHost`` rejects the unrelated subject."""
     host = FakeObject(id=42, controller_id=0)
     other = FakeObject(id=7, controller_id=0)
     aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
@@ -161,25 +180,18 @@ def test_is_host_false_when_subject_is_not_the_host():
 
 
 def test_is_host_false_when_subject_missing():
-    """No subject in the dispatch mapping → predicate evaluates false
-    rather than raising (matches the IsSelf/IsLand/etc. convention)."""
     host = FakeObject(id=42, controller_id=0)
     aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
     assert IsHost().matches(FakeState(), {}, aura) is False
 
 
 def test_is_host_resolves_named_subject():
-    """``IsHost(subject="attacker")`` against the ATTACKS-event subject
-    mapping picks the named slot, matching the wired-in shape used by
-    the migrated ``enchanted_creature_attacks`` /
-    ``equipped_creature_attacks`` triggers."""
     host = FakeObject(id=42, controller_id=0)
     aura = FakeObject(id=99, controller_id=0, attached_to=host.id)
     subjects = {"attacker": host}
     assert IsHost(subject="attacker").matches(
         FakeState(), subjects, aura
     ) is True
-    # Wrong slot → false.
     other_subjects = {"attacker": FakeObject(id=7), "blocker": host}
     assert IsHost(subject="blocker").matches(
         FakeState(), other_subjects, aura
@@ -187,42 +199,6 @@ def test_is_host_resolves_named_subject():
     assert IsHost(subject="attacker").matches(
         FakeState(), other_subjects, aura
     ) is False
-
-
-# ---------- type predicates ----------
-
-def test_is_land_recognizes_land_subject():
-    src = _src()
-    land = FakeObject(printing=FakePrinting(card_types=("Land",)))
-    assert IsLand().matches(FakeState(), {"obj": land}, src) is True
-
-
-def test_is_land_rejects_non_land():
-    src = _src()
-    creature = FakeObject(printing=FakePrinting(card_types=("Creature",)))
-    assert IsLand().matches(FakeState(), {"obj": creature}, src) is False
-
-
-def test_is_creature_recognizes_creature():
-    src = _src()
-    creature = FakeObject(printing=FakePrinting(card_types=("Creature",)))
-    assert IsCreature().matches(FakeState(), {"obj": creature}, src) is True
-
-
-def test_is_artifact_recognizes_artifact_creature():
-    """A creature with the Artifact card type should match IsArtifact."""
-    src = _src()
-    obj = FakeObject(
-        printing=FakePrinting(card_types=("Artifact", "Creature"))
-    )
-    assert IsArtifact().matches(FakeState(), {"obj": obj}, src) is True
-
-
-def test_type_predicates_false_when_subject_missing():
-    src = _src()
-    assert IsLand().matches(FakeState(), {}, src) is False
-    assert IsCreature().matches(FakeState(), {}, src) is False
-    assert IsArtifact().matches(FakeState(), {}, src) is False
 
 
 # ---------- Controlled ----------
@@ -243,257 +219,119 @@ def test_controlled_false_when_subject_missing():
     assert Controlled().matches(FakeState(), {}, _src()) is False
 
 
-# ---------- IsPlayer ----------
+def test_controlled_player_subject_uses_player_id():
+    """A Player subject (no controller_id) is matched by player.id =
+    source.controller_id — used by turn-structure events."""
+    src = _src(controller_id=0)
+    player = FakePlayer(id=0)
+    assert Controlled(by=YOU).matches(
+        FakeState(), {"player": player}, src
+    ) is True
+    opp = FakePlayer(id=1)
+    assert Controlled(by=YOU).matches(
+        FakeState(), {"player": opp}, src
+    ) is False
 
-@dataclass
-class FakePlayer:
-    id: int = 0
+
+# ---------- Subject (ObjectPredicate binder) ----------
 
 
-def test_is_player_matches_player_subject():
-    """A subject without ``printing`` is a Player and matches IsPlayer."""
+def test_subject_binds_object_predicate_to_named_slot():
     src = _src()
-    player = FakePlayer(id=1)
-    assert IsPlayer().matches(FakeState(), {"target": player}, src) is True
+    creature = FakeObject(printing=FakePrinting(card_types=("Creature",)))
+    pred = Subject("attacker", IsCreature())
+    assert pred.matches(FakeState(), {"attacker": creature}, src) is True
+    assert pred.matches(FakeState(), {"attacker": _src()}, src) is False  # _src has no card_types
 
 
-def test_is_player_rejects_permanent_subject():
-    """A subject with ``printing`` is a permanent and doesn't match."""
+def test_subject_with_none_slot_uses_single_subject_default():
     src = _src()
-    permanent = FakeObject(printing=FakePrinting(card_types=("Creature",)))
-    assert IsPlayer().matches(FakeState(), {"target": permanent}, src) is False
+    land = FakeObject(printing=FakePrinting(card_types=("Land",)))
+    pred = Subject(None, IsLand())
+    assert pred.matches(FakeState(), {"obj": land}, src) is True
 
 
-def test_is_player_resolves_named_subject_slot():
-    """``IsPlayer(subject=name)`` reads the named slot."""
+def test_subject_returns_false_when_slot_missing():
     src = _src()
-    player = FakePlayer(id=2)
-    perm = FakeObject(printing=FakePrinting(card_types=("Creature",)))
-    pred = IsPlayer(subject="target")
+    pred = Subject("missing", IsCreature())
+    assert pred.matches(FakeState(), {}, src) is False
+
+
+def test_subject_composes_object_predicate_tree():
+    """Object-tier ``&`` inside a Subject binding works end-to-end."""
+    src = _src()
+    creature_with_counter = FakeObject(
+        printing=FakePrinting(card_types=("Creature",)),
+        plus_one_counters=1,
+    )
+    creature_without = FakeObject(
+        printing=FakePrinting(card_types=("Creature",)),
+        plus_one_counters=0,
+    )
+    pred = Subject(None, IsCreature() & HasCounter("+1/+1"))
     assert pred.matches(
-        FakeState(), {"source": perm, "target": player}, src,
+        FakeState(), {"obj": creature_with_counter}, src
     ) is True
-    assert IsPlayer(subject="source").matches(
-        FakeState(), {"source": perm, "target": player}, src,
-    ) is False
-
-
-def test_is_player_false_when_subject_missing():
-    assert IsPlayer().matches(FakeState(), {}, _src()) is False
-
-
-# ---------- IsNontoken ----------
-
-def test_is_nontoken_true_for_real_card():
-    """A printing without the Token supertype passes IsNontoken."""
-    src = _src()
-    real = FakeObject(printing=FakePrinting(is_token=False))
-    assert IsNontoken().matches(FakeState(), {"obj": real}, src) is True
-
-
-def test_is_nontoken_false_for_token():
-    """A printing with the Token supertype is rejected."""
-    src = _src()
-    token = FakeObject(printing=FakePrinting(is_token=True))
-    assert IsNontoken().matches(FakeState(), {"obj": token}, src) is False
-
-
-def test_is_nontoken_false_when_subject_missing():
-    assert IsNontoken().matches(FakeState(), {}, _src()) is False
-
-
-# ---------- HasSubtype ----------
-
-def test_has_subtype_matches_named_subtype():
-    src = _src()
-    obj = FakeObject(printing=FakePrinting(subtypes=("Kavu",)))
-    assert HasSubtype("Kavu").matches(FakeState(), {"obj": obj}, src) is True
-
-
-def test_has_subtype_rejects_other_subtype():
-    src = _src()
-    obj = FakeObject(printing=FakePrinting(subtypes=("Goblin",)))
-    assert HasSubtype("Kavu").matches(FakeState(), {"obj": obj}, src) is False
-
-
-def test_has_subtype_matches_within_multi_subtype_printing():
-    """A printing with multiple subtypes matches when the named one is
-    present (case-sensitive substring match isn't enough — it's a
-    membership check)."""
-    src = _src()
-    obj = FakeObject(printing=FakePrinting(subtypes=("Human", "Wizard")))
-    assert HasSubtype("Wizard").matches(FakeState(), {"obj": obj}, src) is True
-    assert HasSubtype("Human").matches(FakeState(), {"obj": obj}, src) is True
-    assert (
-        HasSubtype("Soldier").matches(FakeState(), {"obj": obj}, src) is False
-    )
-
-
-def test_has_subtype_false_when_subject_missing():
-    assert HasSubtype("Kavu").matches(FakeState(), {}, _src()) is False
-
-
-# ---------- HasKeyword ----------
-#
-# ``HasKeyword`` reads ``effective_keywords(state, obj)`` rather than
-# ``obj.printing.keywords`` directly so granted/temporary keywords are
-# honored. The tests use a real ``GameState`` + ``GameObject`` because
-# ``effective_keywords`` traverses layer-6 entries that depend on the
-# object's printing and runtime grant slots.
-
-def test_has_keyword_matches_printed_keyword():
-    """A creature with a printed keyword (``flying``) matches
-    ``HasKeyword("flying")``."""
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.game import GameState, Player, Zone
-    from mtg_bot.agents import RandomAgent
-
-    state = GameState()
-    state.players.append(Player(id=0, agent=RandomAgent()))
-    state.players.append(Player(id=1, agent=RandomAgent()))
-    flier = state.new_object(
-        make_creature("Flier", "{1}{U}", 1, 1, keywords={"flying"}),
-        0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(flier)
-    src = state.new_object(
-        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(src)
-    assert HasKeyword("flying").matches(
-        state, {"attacker": flier}, src,
-    ) is True
-
-
-def test_has_keyword_rejects_creature_without_keyword():
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.game import GameState, Player, Zone
-    from mtg_bot.agents import RandomAgent
-
-    state = GameState()
-    state.players.append(Player(id=0, agent=RandomAgent()))
-    state.players.append(Player(id=1, agent=RandomAgent()))
-    grounded = state.new_object(
-        make_creature("Grounded", "{1}{G}", 2, 2), 0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(grounded)
-    src = state.new_object(
-        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(src)
-    assert HasKeyword("flying").matches(
-        state, {"attacker": grounded}, src,
-    ) is False
-
-
-def test_has_keyword_resolves_named_subject():
-    """``HasKeyword(subject="attacker")`` reads the named slot in a
-    multi-subject event mapping (BLOCKS = (blocker, attacker))."""
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.game import GameState, Player, Zone
-    from mtg_bot.agents import RandomAgent
-
-    state = GameState()
-    state.players.append(Player(id=0, agent=RandomAgent()))
-    state.players.append(Player(id=1, agent=RandomAgent()))
-    blocker = state.new_object(
-        make_creature("Blocker", "{G}", 1, 1, keywords={"reach"}),
-        0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(blocker)
-    attacker = state.new_object(
-        make_creature("Attacker", "{U}", 1, 1, keywords={"flying"}),
-        1, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(attacker)
-    src = state.new_object(
-        make_creature("Source", "{W}", 1, 1), 0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(src)
-    pred = HasKeyword("flying", subject="attacker")
     assert pred.matches(
-        state, {"blocker": blocker, "attacker": attacker}, src,
-    ) is True
-    # Wrong slot — blocker has reach not flying.
-    assert HasKeyword("flying", subject="blocker").matches(
-        state, {"blocker": blocker, "attacker": attacker}, src,
+        FakeState(), {"obj": creature_without}, src
     ) is False
 
 
-def test_has_keyword_false_when_subject_missing():
-    """No subject in the dispatch mapping → predicate evaluates false
-    (matches the IsSelf / IsLand / IsHost convention)."""
-    assert HasKeyword("flying").matches(FakeState(), {}, _src()) is False
+# ---------- Source (ObjectPredicate on the firing source) ----------
 
 
-def test_has_keyword_false_for_player_subject():
-    """Players have no keywords — the predicate rejects gracefully."""
-    src = _src()
-    player = FakePlayer(id=1)
-    assert HasKeyword("flying").matches(
-        FakeState(), {"target": player}, src,
-    ) is False
+def test_source_binds_object_predicate_to_source():
+    src = FakeObject(id=999, controller_id=0, tapped=True)
+    pred = Source(IsTapped())
+    assert pred.matches(FakeState(), {}, src) is True
+    src_untapped = FakeObject(id=999, controller_id=0, tapped=False)
+    assert pred.matches(FakeState(), {}, src_untapped) is False
 
 
-# ---------- HasCounter ----------
-
-def test_has_counter_plus_one_matches_creature_with_counter():
-    """A creature with at least one +1/+1 counter passes
-    ``HasCounter("+1/+1")``."""
-    src = _src()
-    obj = FakeObject(plus_one_counters=1)
-    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is True
-
-
-def test_has_counter_plus_one_rejects_creature_without_counter():
-    src = _src()
-    obj = FakeObject(plus_one_counters=0)
-    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is False
+def test_source_ignores_subjects():
+    """Source dispatches to the firing source object regardless of what
+    the subjects mapping contains."""
+    src = FakeObject(id=999, controller_id=0, tapped=True)
+    other = FakeObject(id=2, controller_id=0, tapped=False)
+    pred = Source(IsTapped())
+    assert pred.matches(FakeState(), {"obj": other}, src) is True
 
 
-def test_has_counter_plus_one_matches_creature_with_many_counters():
-    """The check is ``> 0`` — any positive count matches."""
-    src = _src()
-    obj = FakeObject(plus_one_counters=7)
-    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is True
+# ---------- StateBound (StatePredicate with viewer = source.controller_id) ----------
 
 
-def test_has_counter_supports_other_counter_kinds():
-    """The kind→attribute mapping covers charge / stun / loyalty too."""
-    src = _src()
-    charged = FakeObject(charge_counters=2)
-    stunned = FakeObject(stun_counters=1)
-    walker = FakeObject(loyalty_counters=4)
-    assert HasCounter("charge").matches(
-        FakeState(), {"obj": charged}, src
-    ) is True
-    assert HasCounter("stun").matches(
-        FakeState(), {"obj": stunned}, src
-    ) is True
-    assert HasCounter("loyalty").matches(
-        FakeState(), {"obj": walker}, src
-    ) is True
+def _new_real_state():
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.game import GameState, Player
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    return state
 
 
-def test_has_counter_kinds_are_independent():
-    """A creature with charge counters but no +1/+1 counters does NOT
-    pass ``HasCounter("+1/+1")``."""
-    src = _src()
-    obj = FakeObject(plus_one_counters=0, charge_counters=3)
-    assert HasCounter("+1/+1").matches(FakeState(), {"obj": obj}, src) is False
+def test_statebound_dispatches_with_source_controller_as_viewer():
+    """``StateBound(SpellsCastThisTurn(n=2))`` checks the source's
+    controller's count, not some other player's."""
+    state = _new_real_state()
+    state.players[0].spells_cast_this_turn = 2
+    state.players[1].spells_cast_this_turn = 0
+    src = _src(controller_id=0)
+    pred = StateBound(SpellsCastThisTurn(n=2))
+    assert pred.matches(state, {}, src) is True
+    src_opp = _src(controller_id=1)
+    assert pred.matches(state, {}, src_opp) is False
 
 
-def test_has_counter_false_when_subject_missing():
-    assert HasCounter("+1/+1").matches(FakeState(), {}, _src()) is False
-
-
-def test_has_counter_unknown_kind_raises():
-    """Typos surface as ``KeyError`` at evaluation time rather than
-    silently never-matching."""
-    src = _src()
-    obj = FakeObject(plus_one_counters=5)
-    with pytest.raises(KeyError):
-        HasCounter("+2/+2").matches(FakeState(), {"obj": obj}, src)
+def test_statebound_ignores_subjects():
+    state = _new_real_state()
+    state.spell_warped_this_turn = True
+    src = _src(controller_id=0)
+    pred = StateBound(VoidActive())
+    # Subjects don't matter for VoidActive; same answer whether the
+    # mapping has entries or not.
+    assert pred.matches(state, {}, src) is True
+    assert pred.matches(state, {"obj": "anything"}, src) is True
 
 
 # ---------- combinators ----------
@@ -517,7 +355,7 @@ def test_not_inverts():
 
 def test_operator_overloads_compose_predicates():
     """``&`` / ``|`` / ``~`` produce the same combinators as
-    constructor calls."""
+    constructor calls (trigger-tier)."""
     src = _src(controller_id=0)
     land_you_control = FakeObject(
         controller_id=0,
@@ -527,21 +365,20 @@ def test_operator_overloads_compose_predicates():
         controller_id=1,
         printing=FakePrinting(card_types=("Land",)),
     )
-    pred = IsLand() & Controlled(by=YOU)
+    pred = Subject(None, IsLand()) & Controlled(by=YOU)
     assert isinstance(pred, And)
     assert pred.matches(FakeState(), {"obj": land_you_control}, src)
     assert not pred.matches(FakeState(), {"obj": opp_land}, src)
 
-    pred_or = IsLand() | IsArtifact()
+    pred_or = Subject(None, IsLand()) | Subject(None, IsArtifact())
     assert isinstance(pred_or, Or)
 
-    pred_not = ~IsLand()
+    pred_not = ~IsSelf()
     assert isinstance(pred_not, Not)
 
 
-# ---------- Predicate ABC ----------
+# ---------- TriggerPredicate ABC ----------
 
-def test_predicate_abc_cannot_be_instantiated():
-    """``Predicate`` is abstract — subclasses must implement ``matches``."""
+def test_trigger_predicate_abc_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        Predicate()  # type: ignore[abstract]
+        TriggerPredicate()  # type: ignore[abstract]

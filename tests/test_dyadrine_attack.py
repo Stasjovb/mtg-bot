@@ -129,7 +129,10 @@ def test_dyadrine_full_attack_trigger_flow():
 
 
 def test_dyadrine_subtypes_and_trigger_wired():
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.predicates import (
+        Event,
+        IsSelf,
+    )
     d = _PRINTINGS["Dyadrine, Synthesis Amalgam"]
     assert "Construct" in d.subtypes
     assert any(

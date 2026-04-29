@@ -16,7 +16,10 @@ from mtg_bot.effects import (
     PumpTargetCreatureUntilEOT,
     TriggeredAbility,
 )
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import (
     _fire_dies_triggers,

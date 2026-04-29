@@ -40,7 +40,11 @@ from mtg_bot.cards.base import (
     TriggeredAbility,
 )
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
-from mtg_bot.effects.predicates import Controlled, Event, YOU
+from mtg_bot.effects.predicates import (
+    Controlled,
+    Event,
+    YOU,
+)
 
 
 _ENDSTONE_CARD = {

@@ -17,16 +17,19 @@ from mtg_bot.cards.parser.triggers import (
     _parse_triggered_ability_line,
     _strip_ability_word_prefix,
 )
+from mtg_bot.effects.object_predicates import (
+    IsLand,
+)
 from mtg_bot.effects.predicates import (
-    YOU,
     Controlled,
     Event,
-    IsLand,
+    Subject,
+    YOU,
 )
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
 
-_LANDFALL_PRED = IsLand() & Controlled(YOU)
+_LANDFALL_PRED = Subject(None, IsLand()) & Controlled(YOU)
 
 
 # ---------- Happy path: Landfall-prefixed gain-life trigger ----------

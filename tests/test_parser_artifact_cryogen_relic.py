@@ -37,7 +37,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.effects import _parse_effect
-from mtg_bot.effects.predicates import Event, IsSelf
+from mtg_bot.effects.predicates import (
+    Event,
+    IsSelf,
+)
 
 
 # --- Effect-grammar level ------------------------------------------------
