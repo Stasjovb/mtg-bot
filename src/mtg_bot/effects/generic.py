@@ -473,10 +473,24 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
     704.5d) — they'd briefly land in the library, but a non-trivial
     state-based action removes them. Combat / counter state is cleared
     on the way off the battlefield as in other bounce effects.
+
+    ``nonland_permanent`` widens the legal-target pool from "artifact
+    or creature" to "any nonland permanent" — Vanish from Sight's
+    printed scope. The same engine class is reused with a flag (rather
+    than a sibling class) because every line below the legal-target
+    filter is identical: same owner-choice top-vs-bottom prompt, same
+    bounce-style cleanup, same token-ceases-to-exist handling.
     """
+
+    nonland_permanent: bool = False
 
     def requires_target(self) -> bool:
         return True
+
+    def _matches(self, printing) -> bool:
+        if self.nonland_permanent:
+            return not printing.is_land
+        return printing.is_artifact or printing.is_creature
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -484,7 +498,7 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if o.printing.is_artifact or o.printing.is_creature
+            if self._matches(o.printing)
         ]
 
     def resolve(
@@ -501,7 +515,7 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is None:
             return
-        if not (obj.printing.is_artifact or obj.printing.is_creature):
+        if not self._matches(obj.printing):
             return
         owner = state.player_by_id(obj.owner_id)
         # Owner picks top vs bottom via their agent's choose_mode.
@@ -551,9 +565,14 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         )
 
     def describe(self) -> str:
+        scope = (
+            "nonland permanent"
+            if self.nonland_permanent
+            else "artifact or creature"
+        )
         return (
-            "target artifact or creature's owner puts it on their "
-            "choice of the top or bottom of their library"
+            f"target {scope}'s owner puts it on their choice of the "
+            f"top or bottom of their library"
         )
 
 

@@ -16,6 +16,14 @@ New engine fields on ``CardPrinting``:
   existing plain "Enchant creature" Auras (Frantic Strength, Tractor
   Beam, ...) keep their previous behavior.
 
+New flag on ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``:
+
+* ``nonland_permanent`` — when True, widens the legal-target pool from
+  "artifact or creature" to "any nonland permanent" (Vanish from
+  Sight's printed scope). Same engine class is reused with a flag
+  rather than a sibling class because every line below the legal-
+  target filter is identical.
+
 Cards newly claimed in this batch:
 
 * **Glimmerlight** ``{2}`` Artifact — Equipment — ETB-create-Glimmer-
@@ -34,6 +42,14 @@ Cards newly claimed in this batch:
   ``ExileOpponentsNonlandPermanentUntilLeaves`` ETB and the existing
   ``attached_grants_ward`` rider that Hardlight Containment also
   uses.
+
+* **Vanish from Sight** ``{3}{U}`` Instant — ``Target nonland
+  permanent's owner puts it on their choice of the top or bottom of
+  their library. Surveil 1.`` Two-sentence body composed via the
+  Sequence sentence-split path: the bounce-to-library piece rides the
+  existing ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+  engine class with the new ``nonland_permanent`` flag, then the
+  trailing ``Surveil 1`` rides the existing ``Surveil`` primitive.
 """
 
 from __future__ import annotations
@@ -266,3 +282,151 @@ def test_sheltered_by_ghosts_etb_exiles_opp_permanent():
     # P0's own creature excluded; P1's enchantment in the pool.
     assert ("permanent", 2) not in legal
     assert ("permanent", 3) in legal
+
+
+# ---------- Vanish from Sight: nonland-permanent OwnerPuts variant ----------
+
+def test_parse_owner_puts_target_nonland_permanent_on_top_or_bottom():
+    # New primitive: widens the existing
+    # ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`` to
+    # accept any nonland permanent via the ``nonland_permanent`` flag.
+    # Same engine class — only the legal-targets filter changes.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    eff = _parse_effect(
+        "target nonland permanent's owner puts it on their choice "
+        "of the top or bottom of their library"
+    )
+    assert eff == OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(
+        nonland_permanent=True,
+    )
+
+
+def test_owner_puts_artifact_or_creature_unchanged_default():
+    # Belt-and-suspenders that the bare ``target artifact or creature``
+    # surface continues to parse to the unflagged engine class — the
+    # widening only applies via the new flag.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    eff = _parse_effect(
+        "target artifact or creature's owner puts it on their choice "
+        "of the top or bottom of their library"
+    )
+    assert eff == OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    assert eff.nonland_permanent is False
+
+
+def test_owner_puts_nonland_permanent_legal_targets_widening():
+    # End-to-end: with ``nonland_permanent=True``, an enchantment on
+    # the battlefield is a legal target alongside any artifact /
+    # creature. Lands stay excluded from the pool either way.
+    from mtg_bot.cards.base import (
+        make_creature,
+        make_enchantment,
+        make_basic_land,
+    )
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    ench_pr = make_enchantment("Tome", "{1}{U}")
+    land_pr = make_basic_land("Plains", "W")
+    bear_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    ench_obj = GameObject(
+        id=2, printing=ench_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    land_obj = GameObject(
+        id=3, printing=land_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear_obj, ench_obj, land_obj],
+    )
+    eff = OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(
+        nonland_permanent=True,
+    )
+    legal = eff.legal_targets(state, controller_id=0)
+    # Creature and enchantment both legal; land excluded by the
+    # nonland filter; same kind tag as the original variant.
+    assert ("permanent", 1) in legal
+    assert ("permanent", 2) in legal
+    assert ("permanent", 3) not in legal
+
+
+def test_owner_puts_default_excludes_enchantment():
+    # Without the ``nonland_permanent`` flag, the bare
+    # ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+    # primitive must NOT pick up enchantments — the widening only
+    # applies when the flag is set.
+    from mtg_bot.cards.base import make_enchantment
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    ench_pr = make_enchantment("Tome", "{1}{U}")
+    ench_obj = GameObject(
+        id=1, printing=ench_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[ench_obj],
+    )
+    eff = OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    assert eff.legal_targets(state, controller_id=0) == []
+
+
+def test_owner_puts_describe_includes_nonland_permanent_phrase():
+    # The ``describe`` helper should reflect the new flag in its
+    # English-ish output, parallel to the ``or_enchantment`` precedent
+    # on ``DestroyTargetCreature``.
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    eff = OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(
+        nonland_permanent=True,
+    )
+    assert "nonland permanent" in eff.describe()
+
+
+def test_vanish_from_sight_claimed_by_parser():
+    # Vanish from Sight ``{3}{U}`` Instant — two-sentence body
+    # combining the new nonland-permanent OwnerPuts primitive with the
+    # existing ``Surveil 1`` primitive, composed via Sequence by the
+    # spell-effect parser's sentence-split path. Reminder text on the
+    # Surveil clause is stripped before clause carving.
+    assert "Vanish from Sight" in _claimed_names()
+
+
+def test_vanish_from_sight_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the right Sequence shape (nonland-permanent OwnerPuts, then
+    # Surveil 1).
+    from mtg_bot.cards.base import Sequence, Surveil
+    from mtg_bot.effects import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Vanish from Sight"]
+    assert p.spell_effect == Sequence(effects=(
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(
+            nonland_permanent=True,
+        ),
+        Surveil(amount=1, use_artifact_count=False),
+    ))

@@ -937,6 +937,16 @@ _OWNER_PUTS_TARGET_ARTIFACT_OR_CREATURE_ON_TOP_OR_BOTTOM = re.compile(
     r"^target artifact or creature's owner puts it on their choice of "
     r"the top or bottom of their library$"
 )
+# "Target nonland permanent's owner puts it on their choice of the top
+# or bottom of their library." — Vanish from Sight's bounce-to-library
+# clause. Same engine class as the artifact-or-creature shape with the
+# ``nonland_permanent=True`` flag set; the wider target pool is the
+# only behavioral difference. The owner-decides top-vs-bottom path,
+# token-ceases-to-exist handling, and bounce cleanup are all shared.
+_OWNER_PUTS_TARGET_NONLAND_PERMANENT_ON_TOP_OR_BOTTOM = re.compile(
+    r"^target nonland permanent's owner puts it on their choice of "
+    r"the top or bottom of their library$"
+)
 # "Tap target artifact or creature." — Mental Modulation's middle
 # clause and any future card that ships the same surface form. Maps to
 # ``TapTargetArtifactOrCreature()``. No-op if the chosen target is
@@ -1800,6 +1810,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         # spell's controller). Maps to the engine class with no
         # parameters — the surface form is a literal match.
         return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    if _OWNER_PUTS_TARGET_NONLAND_PERMANENT_ON_TOP_OR_BOTTOM.match(
+        phrase
+    ) is not None:
+        # ``target nonland permanent's owner puts it on their choice
+        # of the top or bottom of their library`` — Vanish from
+        # Sight's bounce-to-library clause. Same engine class as the
+        # artifact-or-creature shape with the ``nonland_permanent``
+        # flag flipped to widen the legal-target pool.
+        return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(
+            nonland_permanent=True,
+        )
     # ``add {<mana>}. Spend this mana only to <restriction>`` —
     # restricted-mana ability (Steelswarm Operator). Tried BEFORE the
     # bare ``add {<color>}`` regex so the qualifier wins; the bare
