@@ -367,14 +367,22 @@ _DRAW_N_CARDS = re.compile(
 # damage amount latched on the trigger source. Fear of Failed Tests
 # (Duskmourn) is the EoE/Duskmourn surface form: ``Whenever this
 # creature deals combat damage to a player, draw that many cards.``
+# Starwinder (EoE) prints the same shape with the ``you may`` may-rider:
+# ``Whenever a creature you control deals combat damage to a player,
+# you may draw that many cards.`` The ``may`` is engine-flattened to
+# always-yes inside ``DrawCardsEqualToResolvingCombatDamage`` (see the
+# class docstring), so the parser accepts the may-prefix as syntactic
+# sugar that lands on the same primitive — same precedent as other
+# OptionalXyz simplifications elsewhere in this engine.
 # Maps to the existing ``DrawCardsEqualToResolvingCombatDamage``
 # engine class — same primitive Starwinder uses via the bespoke
-# table. The optional ``you `` prefix mirrors the bare draw shapes
-# above (the carry-over from compound ``you draw`` sentences); no
-# Duskmourn printing today actually prints the ``you `` prefix on
-# this surface, but accepting it keeps the regex shape uniform with
+# table. The optional ``you `` / ``you may `` prefixes mirror the
+# bare draw shapes above (the carry-over from compound ``you draw``
+# sentences); both are accepted to keep the regex shape uniform with
 # its bare-amount sibling.
-_DRAW_THAT_MANY_CARDS = re.compile(r"^(?:you )?draw that many cards$")
+_DRAW_THAT_MANY_CARDS = re.compile(
+    r"^(?:you (?:may )?)?draw that many cards$"
+)
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 # "Put a +1/+1 counter on target creature" — bare-target counter
 # (Honor-style). The optional ``attacking `` qualifier narrows the

@@ -55,7 +55,6 @@ from mtg_bot.cards.base import (
     DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyTargetNonlandPermanent,
     DrawCards,
-    DrawCardsEqualToResolvingCombatDamage,
     DyadrineAttackEffect,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
@@ -135,7 +134,6 @@ from mtg_bot.effects.predicates import (
     IsArtifact,
     IsCreature,
     IsLand,
-    IsPlayer,
     IsSelf,
     IsTapped,
     SpellsCastThisTurn,
@@ -213,24 +211,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                         ),
                         PutPlusOneCounterOnEachCreatureYouControl(amount=1),
                     )),
-                ),
-            ),
-        ),
-        # Starwinder {5}{U}{U} 7/7. Warp {2}{U}{U}.
-        # Trigger: whenever a creature you control deals combat damage to
-        # a player, draw that many cards.
-        "Starwinder": make_creature(
-            "Starwinder", "{5}{U}{U}", 7, 7,
-            warp="{2}{U}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsCreature(subject="source")
-                        & Controlled(YOU, subject="source")
-                        & IsPlayer(subject="target")
-                    ),
-                    effect=DrawCardsEqualToResolvingCombatDamage(),
                 ),
             ),
         ),
