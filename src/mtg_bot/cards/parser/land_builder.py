@@ -459,32 +459,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Mirrorpool: Legendary, enters tapped. {T}: Add {C}.
-        # {2}{C},{T},Sac self: copy target instant/sorcery you control.
-        # {4}{C},{T},Sac self: create token copy of target creature you control.
-        "Mirrorpool": make_utility_land(
-            "Mirrorpool", legendary=True, enters_tapped=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{2}{C}"),
-                        mana_str="{2}{C}",
-                        tap_self=True,
-                        sacrifice_self=True,
-                    ),
-                    effect=CopyTargetInstantOrSorceryYouControl(),
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{4}{C}"),
-                        mana_str="{4}{C}",
-                        tap_self=True,
-                        sacrifice_self=True,
-                    ),
-                    effect=CreateTokenCopyOfTargetCreatureYouControl(),
-                ),
-            ),
-        ),
         # Plaza of Heroes: Legendary. {T}: Add {C}. {T}: any mana
         # (legendary_spell). {T}: any mana among legendary permanents
         # you control (legendary_permanent_ability). {3},{T},Exile self:
@@ -799,6 +773,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if lotus_field is not None:
         return lotus_field
+    mirrorpool = _try_build_two_paid_sac_self_land(
+        card, text, supertypes, subtypes,
+    )
+    if mirrorpool is not None:
+        return mirrorpool
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2272,6 +2251,128 @@ def _try_build_chosen_color_cave_land(
                 is_mana_ability=True,
             ),
         ),
+    )
+
+
+# Mirrorpool-shape: enters-tapped + dropped-{T}:{C} + two
+# paid-mana-and-sac-self activations whose bodies dispatch through a
+# table. Plain ``Land`` (no supertypes, no subtypes), exactly four
+# lines:
+#   1. ``This land enters tapped.``
+#   2. ``{T}: Add {C}.``  (intentionally dropped — the engine's
+#      auto-tap-for-cost generic-mana fallback covers tapping for
+#      ``{C}``; the static side carries no explicit ability for line 2)
+#   3. ``<COST>, {T}, Sacrifice this land: <BODY>.``
+#   4. ``<COST>, {T}, Sacrifice this land: <BODY>.``
+# where each ``<COST>`` is a colored-pip-bearing mana cost (e.g.
+# ``{2}{C}``, ``{4}{C}``) and each ``<BODY>`` is on the
+# ``_PAID_AND_SAC_SELF_BODIES`` whitelist that maps the printed
+# surface form to a fresh ``Effect`` instance.
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring "explicitly notes why it isn't generalized today
+# (typically: 'only card in the pool with this shape; broader grammar
+# deferred until a second example exists')." Mirrorpool is the only
+# EoS land with this exact two-paid-and-sac-self activation shape;
+# broader grammar (parameterized over the activation count, or
+# extended to non-paired activation shapes) deferred until a sibling
+# printing exists. The cost capture handles colored pips so the
+# recognizer is faithful to the printed ``{2}{C}``/``{4}{C}`` surface
+# even though only Mirrorpool fits today.
+_MIRRORPOOL_TAPPED_LINE = "This land enters tapped."
+_MIRRORPOOL_DROPPED_TAP_FOR_C_LINE = "{T}: Add {C}."
+_MIRRORPOOL_PAID_AND_SAC_SELF_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}, Sacrifice this land: "
+    r"(?P<body>.+)\.$"
+)
+
+
+def _mirrorpool_copy_instant_or_sorcery() -> Effect:
+    return CopyTargetInstantOrSorceryYouControl()
+
+
+def _mirrorpool_token_copy_creature() -> Effect:
+    return CreateTokenCopyOfTargetCreatureYouControl()
+
+
+_PAID_AND_SAC_SELF_BODIES: dict[str, "callable"] = {
+    # Mirrorpool's first activation: ``{2}{C}, {T}, Sacrifice this
+    # land: Copy target instant or sorcery spell you control. You may
+    # choose new targets for the copy.`` The "you may choose new
+    # targets" clause is part of the body literal because the engine's
+    # ``CopyTargetInstantOrSorceryYouControl`` already implements
+    # fresh target selection on resolve.
+    "Copy target instant or sorcery spell you control. You may "
+    "choose new targets for the copy":
+        _mirrorpool_copy_instant_or_sorcery,
+    # Mirrorpool's second activation: ``{4}{C}, {T}, Sacrifice this
+    # land: Create a token that's a copy of target creature you
+    # control.``
+    "Create a token that's a copy of target creature you control":
+        _mirrorpool_token_copy_creature,
+}
+
+
+def _try_build_two_paid_sac_self_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Mirrorpool-shape ``CardPrinting`` if ``text`` matches
+    the strict four-line ``This land enters tapped.`` + dropped
+    ``{T}: Add {C}.`` + two ``<COST>, {T}, Sacrifice this land:
+    <BODY>.`` activations on a plain ``Land`` type line, else
+    ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). Each
+    activation's body must be on ``_PAID_AND_SAC_SELF_BODIES`` (else
+    falls through). The activation cost capture accepts arbitrary
+    brace-pip sequences (colored or generic) — Mirrorpool's
+    ``{2}{C}`` / ``{4}{C}`` is the printed shape today.
+
+    Per parser/CLAUDE.md: literal-line recognizer (Mirrorpool is the
+    only EoS land matching this shape today; broader grammar deferred
+    until a second example exists).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 4:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _MIRRORPOOL_TAPPED_LINE:
+        return None
+    if lines[1] != _MIRRORPOOL_DROPPED_TAP_FOR_C_LINE:
+        return None
+    abilities: list[ActivatedAbility] = []
+    for line in lines[2:]:
+        m = _MIRRORPOOL_PAID_AND_SAC_SELF_RE.match(line)
+        if m is None:
+            return None
+        body = m.group("body")
+        factory = _PAID_AND_SAC_SELF_BODIES.get(body)
+        if factory is None:
+            return None
+        cost_str = m.group("cost")
+        abilities.append(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(cost_str),
+                    mana_str=cost_str,
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=factory(),
+            ),
+        )
+    return make_utility_land(
+        card["name"],
+        enters_tapped=True,
+        activated_abilities=tuple(abilities),
     )
 
 
