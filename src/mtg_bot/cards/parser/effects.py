@@ -551,8 +551,20 @@ _DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
 # trigger body names the source explicitly (same precedent as
 # ``_DEAL_N_DAMAGE_EACH_OPPONENT`` and ``_DEAL_DAMAGE_TARGET_OPPONENT``
 # — the ``it `` normalizer only consumes the bare pronoun).
+#
+# The optional ``this Spacecraft `` prefix accepts the surface where
+# the source is a Spacecraft (Extinguisher Battleship's ETB body second
+# sentence — ``Then this Spacecraft deals 4 damage to each creature.``;
+# the leading ``Then `` connective is stripped by
+# ``_split_effect_sentences`` before this regex sees the phrase).
+# Mirrors the ``(?:this Room )?`` precedent on
+# ``_DEAL_DAMAGE_TARGET_OPPONENT_CREATURE`` — same self-source pronoun
+# pattern Rooms use, here applied to the Spacecraft type. Source
+# identity is established by the enclosing trigger's ``IsSelf()``
+# predicate, not the effect body.
 _DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
-    r"^(?:this creature )?deals (\d+) damage to each creature$"
+    r"^(?:this creature |this Spacecraft )?"
+    r"deals (\d+) damage to each creature$"
 )
 # "Search your library for an artifact card, reveal it, put it into
 # your hand, then shuffle." — Scour for Scrap mode 1 (and any future
@@ -1707,6 +1719,17 @@ def _split_effect_sentences(phrase: str) -> list[str]:
     embedded period in Codecracker's surface is part of a single
     primitive's literal regex, so its phrase doesn't reach this
     splitter — it claims through the single-effect dispatcher first.
+
+    Non-leading pieces also have a leading ``then `` connective stripped
+    when present. Scryfall prints sentence-joined sequenced effects
+    with ``Then <effect>.`` as the second sentence (Extinguisher
+    Battleship's ETB body — ``destroy target noncreature permanent.
+    Then this Spacecraft deals 4 damage to each creature.``); the
+    ``Then`` is purely a sequencing connective with the same semantic
+    weight as the ``, then `` joiner the compound parser accepts on
+    comma-joined surfaces, so stripping it here lands the inner
+    sentence on the same single-effect grammar without further
+    branching.
     """
     pieces = _EFFECT_SENTENCE_BOUNDARY.split(phrase)
     if len(pieces) == 1:
@@ -1720,6 +1743,8 @@ def _split_effect_sentences(phrase: str) -> list[str]:
             piece = piece[:-1]
         if i > 0 and piece and piece[0].isupper():
             piece = piece[0].lower() + piece[1:]
+        if i > 0 and piece.startswith("then "):
+            piece = piece[len("then "):]
         out.append(piece)
     return out
 

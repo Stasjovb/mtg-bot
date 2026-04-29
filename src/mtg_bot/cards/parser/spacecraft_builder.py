@@ -111,8 +111,6 @@ from mtg_bot.effects.combinators import (
 from mtg_bot.effects.generic import (
     CreateTokenPerMulticoloredPermanent,
     DealDamageToTargetCreature,
-    DestroyTargetNoncreaturePermanent,
-    DealNDamageToEachCreature,
     DrawCardPerMulticoloredPermanent,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
@@ -182,22 +180,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
-        # Extinguisher Battleship: ETB destroy target noncreature permanent
-        # then deal 4 damage to each creature. Station 5+ flying + trample.
-        make_spacecraft(
-            "Extinguisher Battleship", "{8}", 10, 10,
-            station_threshold=5,
-            stationed_keywords={"flying", "trample"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        DestroyTargetNoncreaturePermanent(),
-                        DealNDamageToEachCreature(amount=4),
-                    )),
                 ),
             ),
         ),
