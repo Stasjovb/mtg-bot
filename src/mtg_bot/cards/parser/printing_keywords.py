@@ -309,6 +309,40 @@ def _parse_replaces_draw_when_hand_at_most_one_line(line: str) -> bool:
     return line.strip() == _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE
 
 
+# ``As long as an artifact entered the battlefield under your control
+# this turn, this creature can attack as though it didn't have
+# defender.`` — Mechan Shieldmate's printed defender-bypass static.
+# The engine wires the bypass off the printing-level
+# ``attack_bypass_if_artifact_entered_this_turn`` boolean flag (rather
+# than a generic ``StaticAbility`` shape, since the attack-eligibility
+# check sits in ``combat._can_attack_through_defender`` and reads the
+# controller's per-turn artifact-entered counter). Matched as a literal
+# string — Mechan Shieldmate is the only card in the pool with this
+# exact surface today; "broader grammar deferred until a second
+# example exists" (a future printing whose triggering condition
+# differs — ``a creature entered``, ``a Spacecraft entered``, etc. —
+# would parameterize this recognizer's permanent-type capture).
+_ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE = (
+    "As long as an artifact entered the battlefield under your control "
+    "this turn, this creature can attack as though it didn't have "
+    "defender."
+)
+
+
+def _parse_attack_bypass_if_artifact_entered_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    ``As long as an artifact entered the battlefield under your control
+    this turn, this creature can attack as though it didn't have
+    defender.`` clause, else ``False``. Flips the
+    ``attack_bypass_if_artifact_entered_this_turn`` kwarg on
+    ``make_creature``; the engine reads the flag in
+    ``combat._can_attack_through_defender`` and lets the source attack
+    despite Defender once the controller's per-turn artifact-entered
+    counter is positive.
+    """
+    return line.strip() == _ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

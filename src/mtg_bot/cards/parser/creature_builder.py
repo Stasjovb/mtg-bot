@@ -107,6 +107,7 @@ from mtg_bot.cards.parser.cost_reduction import (
     _parse_external_cost_reduction_line,
 )
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
@@ -819,16 +820,6 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Mechan Shieldmate {1}{U} 3/2 Robot Soldier.
-        # "Defender. As long as an artifact entered the battlefield under
-        # your control this turn, this creature can attack as though it
-        # didn't have defender." — attack_bypass_if_artifact_entered_this_turn.
-        "Mechan Shieldmate": make_creature(
-            "Mechan Shieldmate", "{1}{U}", 3, 2,
-            artifact=True,
-            keywords={"defender"},
-            attack_bypass_if_artifact_entered_this_turn=True,
-        ),
         # Monoist Circuit-Feeder {4}{B}{B} 4/4 Nautilus.
         # "Flying. When this creature enters, until end of turn, target
         # creature you control gets +X/+0 and target creature an opponent
@@ -1390,6 +1381,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     is_token_doubler = False
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
+    attack_bypass_if_artifact_entered_this_turn = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1523,6 +1515,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # with the line twice ends up with the field set once.
             replaces_draw_with_extra_when_hand_at_most_one = True
             continue
+        if _parse_attack_bypass_if_artifact_entered_line(line):
+            # ``As long as an artifact entered the battlefield under
+            # your control this turn, this creature can attack as
+            # though it didn't have defender.`` — Mechan Shieldmate's
+            # printed defender-bypass static. Flips the
+            # ``attack_bypass_if_artifact_entered_this_turn`` kwarg
+            # below; the engine consumes the flag in
+            # ``combat._can_attack_through_defender`` to let the source
+            # attack despite Defender once the controller's per-turn
+            # artifact-entered counter is positive. Idempotent: a
+            # malformed printing with the line twice ends up with the
+            # field set once.
+            attack_bypass_if_artifact_entered_this_turn = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1621,5 +1627,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         extra_etb_trigger=extra_etb_trigger,
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
+        ),
+        attack_bypass_if_artifact_entered_this_turn=(
+            attack_bypass_if_artifact_entered_this_turn
         ),
     )
