@@ -343,6 +343,37 @@ def _parse_attack_bypass_if_artifact_entered_line(line: str) -> bool:
     return line.strip() == _ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE
 
 
+# ``This creature can't be blocked if you've cast two or more spells
+# this turn.`` — Illvoi Infiltrator's printed conditional-unblockable
+# static. The engine wires the unblockable check off the printing-level
+# ``unblockable_if_two_spells_cast_this_turn`` boolean flag (rather
+# than a generic ``StaticAbility`` shape, since the unblockability
+# decision sits in ``combat`` and reads the controller's per-turn
+# spells-cast counter). Matched as a literal string — Illvoi
+# Infiltrator is the only card in the pool with this exact surface
+# today; "broader grammar deferred until a second example exists" (a
+# future printing whose threshold differs — ``three or more spells``,
+# ``a noncreature spell``, etc. — would parameterize this recognizer's
+# threshold/spell-type capture).
+_UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE = (
+    "This creature can't be blocked if you've cast two or more spells "
+    "this turn."
+)
+
+
+def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    ``This creature can't be blocked if you've cast two or more spells
+    this turn.`` clause, else ``False``. Flips the
+    ``unblockable_if_two_spells_cast_this_turn`` kwarg on
+    ``make_creature``; the engine reads the flag in ``combat`` (both
+    legality at declare-blockers and the cast-time validation hook)
+    and treats the creature as unblockable once the controller has
+    cast two or more spells this turn.
+    """
+    return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

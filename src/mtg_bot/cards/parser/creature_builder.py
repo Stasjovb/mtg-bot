@@ -117,6 +117,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_nonbasic_lands_are_mountains_line,
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_token_doubler_line,
+    _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -175,23 +176,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             subtypes=("Beast",),
             ward="{2}",
             dynamic_pt_formula="harmonious_grovestrider",
-        ),
-        # Illvoi Infiltrator {2}{U} 1/3.
-        # Static flag: unblockable when controller has cast 2+ spells.
-        # Trigger: deals combat damage to player → draw a card.
-        "Illvoi Infiltrator": make_creature(
-            "Illvoi Infiltrator", "{2}{U}", 1, 3,
-            unblockable_if_two_spells_cast_this_turn=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsSelf(subject="source")
-                        & IsPlayer(subject="target")
-                    ),
-                    effect=DrawCards(amount=1),
-                ),
-            ),
         ),
         # Station Monitor {W}{U} 2/2.
         # Trigger: second spell each turn → create a 1/1 Drone token.
@@ -1348,6 +1332,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
     attack_bypass_if_artifact_entered_this_turn = False
+    unblockable_if_two_spells_cast_this_turn = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1495,6 +1480,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # field set once.
             attack_bypass_if_artifact_entered_this_turn = True
             continue
+        if _parse_unblockable_if_two_spells_cast_this_turn_line(line):
+            # ``This creature can't be blocked if you've cast two or
+            # more spells this turn.`` — Illvoi Infiltrator's printed
+            # conditional-unblockable static. Flips the
+            # ``unblockable_if_two_spells_cast_this_turn`` kwarg below;
+            # the engine consumes the flag in ``combat`` (see
+            # ``unblockable_if_two_spells_cast_this_turn`` checks at
+            # declare-blockers / unblockability resolution) and treats
+            # the creature as unblockable once the controller has cast
+            # two or more spells this turn. Idempotent: a malformed
+            # printing with the line twice ends up with the field set
+            # once.
+            unblockable_if_two_spells_cast_this_turn = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1596,5 +1595,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ),
         attack_bypass_if_artifact_entered_this_turn=(
             attack_bypass_if_artifact_entered_this_turn
+        ),
+        unblockable_if_two_spells_cast_this_turn=(
+            unblockable_if_two_spells_cast_this_turn
         ),
     )
