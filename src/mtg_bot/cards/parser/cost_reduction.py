@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import re
 
-from mtg_bot.cards.base import CostReduction
+from mtg_bot.cards.base import CostReduction, ExternalCostReduction
 
 
 # Surface form: ``This spell costs {N} less to cast if <condition>.``
@@ -103,6 +103,92 @@ _COST_REDUCTION_CONDITIONS: dict[str, str] = {
 _COST_REDUCTION_CONDITIONS_NO_IF: dict[str, str] = {
     "during your turn": "during_your_turn",
 }
+
+
+# External cost-reduction lines — a permanent-on-the-battlefield grants
+# a flat reduction to OTHER spells the controller casts that match the
+# stated condition. Distinct from the per-spell ``CostReduction`` rider
+# above (which lives on the spell being cast); the external variant
+# lives on the granting permanent's printing and feeds
+# ``apply_cost_reductions``'s scan over the caster's battlefield.
+#
+# Currently recognized surfaces:
+#
+# * ``The second spell you cast each turn costs {N} less to cast.`` —
+#   Uthros Psionicist's static. Maps to
+#   ``ExternalCostReduction(amount=N, condition="second_spell_this_turn")``.
+#
+# Adding a new surface: extend ``_EXTERNAL_COST_REDUCTION_LINES`` with
+# the verbatim oracle phrase mapped to the engine condition key. Each
+# key MUST already be implemented in
+# ``actions.apply_cost_reductions``'s external-scan branch — otherwise
+# the parser silently produces a no-op rule that diverges from the
+# static implementation.
+_EXTERNAL_COST_REDUCTION_LINES: dict[str, str] = {
+    # Uthros Psionicist — fires when the controller is casting their
+    # second spell of the turn.
+    "The second spell you cast each turn costs {N} less to cast.": (
+        "second_spell_this_turn"
+    ),
+}
+
+
+# ``<Subject>. (<reminder>)`` printing-flag-style external cost-
+# reductions whose surface form is just a static-keyword sentence
+# (no embedded ``{N}`` template). The amount is implied by the
+# keyword's reminder text and is wired here to the engine condition
+# key directly. Reminder text is stripped before this lookup runs,
+# so the trailing parenthetical (``(They cost {1} less to cast for
+# each artifact you control.)``) is gone by the time we see the line.
+_EXTERNAL_COST_REDUCTION_KEYWORD_LINES: dict[str, tuple[int, str]] = {
+    # Sami, Wildcat Captain — affinity-for-artifacts on every spell
+    # the controller casts. The engine's
+    # ``apply_cost_reductions`` scan multiplies ``amount`` (1) by the
+    # controller's artifact count at cast time.
+    "Spells you cast have affinity for artifacts.": (
+        1, "affinity_for_artifacts",
+    ),
+}
+
+
+# Compiled lookup keyed on the integer-template form. We keep the
+# template as the dict key (with the literal ``{N}`` placeholder) so
+# the recognizer's surface→engine-key mapping reads next to the
+# template; the regex is built off the keys so adding a new surface
+# is one entry rather than two.
+_EXTERNAL_COST_REDUCTION_RE_TO_CONDITION: dict[
+    "re.Pattern[str]", str
+] = {
+    re.compile(
+        "^" + re.escape(template).replace(r"\{N\}", r"\{(\d+)\}") + "$"
+    ): condition
+    for template, condition in _EXTERNAL_COST_REDUCTION_LINES.items()
+}
+
+
+def _parse_external_cost_reduction_line(
+    line: str,
+) -> ExternalCostReduction | None:
+    """Return an ``ExternalCostReduction`` for a recognized printed
+    static-cost-reduction line, or ``None`` if the line doesn't match
+    any registered surface form. The caller (creature_builder) routes
+    the result through the ``external_cost_reductions`` kwarg on
+    ``make_creature``.
+    """
+    stripped = line.strip()
+    for pattern, condition in (
+        _EXTERNAL_COST_REDUCTION_RE_TO_CONDITION.items()
+    ):
+        m = pattern.match(stripped)
+        if m is not None:
+            return ExternalCostReduction(
+                amount=int(m.group(1)), condition=condition,
+            )
+    keyword_match = _EXTERNAL_COST_REDUCTION_KEYWORD_LINES.get(stripped)
+    if keyword_match is not None:
+        amount, condition = keyword_match
+        return ExternalCostReduction(amount=amount, condition=condition)
+    return None
 
 
 def _parse_cost_reduction_line(line: str) -> CostReduction | None:
