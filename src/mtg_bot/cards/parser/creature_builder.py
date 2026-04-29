@@ -83,7 +83,6 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     RovingActuatorETBEffect,
     SearchLibraryForCard,
-    SearchLibraryForEquipmentToBattlefield,
     SelfcraftMechanETBEffect,
     SelfMill,
     Sequence,
@@ -368,27 +367,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                             effect=PerigeeBeckonerDiesReturnTappedEffect(),
                         ),
                     ),
-                ),
-            ),
-        ),
-        # Honored Knight-Captain {1}{W} 1/1.
-        # ETB create 1/1 Human Soldier token.
-        # Activated: {4}{W}{W}, sacrifice self → search for Equipment.
-        "Honored Knight-Captain": make_creature(
-            "Honored Knight-Captain", "{1}{W}", 1, 1,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
-                        count=1,
-                    ),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{4}{W}{W}", sacrifice_self=True),
-                    effect=SearchLibraryForEquipmentToBattlefield(),
                 ),
             ),
         ),
