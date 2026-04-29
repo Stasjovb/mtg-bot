@@ -58,12 +58,8 @@ from mtg_bot.effects import (
     ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
-    ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
-    PutPlusOneCounterOnTargetCreature,
-    ReturnAllCreaturesFromYourGraveyardToBattlefield,
-    ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
@@ -96,55 +92,6 @@ def _half(
         mana_cost_str=mana_cost,
         mana_cost=parse_mana_cost(mana_cost),
         triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-def _build_funeral_room_awakening_hall() -> CardPrinting:
-    """Funeral Room // Awakening Hall ``{2}{B}`` // ``{6}{B}{B}``.
-
-    Funeral Room oracle:
-        Whenever a creature you control dies, each opponent loses 1
-        life and you gain 1 life.
-
-    Awakening Hall oracle:
-        When you unlock this door, return all creature cards from
-        your graveyard to the battlefield.
-
-    The Funeral Room half models the dies-to-drain trigger as a
-    DIES-event predicate trigger gated on ``IsCreature() &
-    Controlled(YOU)`` (matches Sothera's "creature you control dies"
-    shape). The Awakening Hall half is an ENTERS-event self-trigger
-    routed through the Room's ``unlocked_halves`` gate so it fires
-    once when the half becomes unlocked (either at cast time, if
-    Awakening Hall was the cast half, or via ``UnlockRoomHalf`` on
-    a later turn) — see ``_unlock_room_half`` /
-    ``_fire_unlock_door_triggers`` in ``actions.py``.
-    """
-    return make_room(
-        _half(
-            "Funeral Room", "{2}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DIES,
-                    predicate=IsCreature() & Controlled(YOU),
-                    effect=Sequence(
-                        effects=(
-                            EachOpponentLosesLife(amount=1),
-                            GainLife(amount=1),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Awakening Hall", "{6}{B}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnAllCreaturesFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
     )
 
 
@@ -228,104 +175,6 @@ def _build_moldering_gym_weight_room() -> CardPrinting:
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ManifestDreadThenPutPlusOneCountersOnIt(
                         counter_amount=3,
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_surgical_suite_hospital_room() -> CardPrinting:
-    """Surgical Suite // Hospital Room ``{1}{W}`` // ``{3}{W}``.
-
-    Surgical Suite oracle:
-        When you unlock this door, return target creature card with
-        mana value 3 or less from your graveyard to the battlefield.
-
-    Hospital Room oracle:
-        Whenever you attack, put a +1/+1 counter on target attacking
-        creature.
-
-    Surgical Suite is a pure door trigger that uses the existing
-    ``ReturnCreatureFromYourGraveyardToBattlefield`` primitive's
-    ``max_mv=3`` rider — the same rider Surgical Suite was the
-    motivating example for. Hospital Room hooks ``Event.YOU_ATTACK``
-    (the once-per-pass attack event already wired for Most Valuable
-    Slayer / Razorkin Hordecaller) and routes to
-    ``PutPlusOneCounterOnTargetCreature(attacking_only=True)`` — same
-    targeting rider Hospital Room was the motivating example for.
-    Both halves' triggers fire only when their half is unlocked, via
-    the ``room_half`` tag the ``make_room`` factory threads onto each
-    flattened ability.
-    """
-    return make_room(
-        _half(
-            "Surgical Suite", "{1}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnCreatureFromYourGraveyardToBattlefield(
-                        max_mv=3,
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Hospital Room", "{3}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.YOU_ATTACK, predicate=Controlled(YOU),
-                    effect=PutPlusOneCounterOnTargetCreature(
-                        amount=1, attacking_only=True,
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_ticket_booth_tunnel_of_hate() -> CardPrinting:
-    """Ticket Booth // Tunnel of Hate ``{2}{R}`` // ``{4}{R}{R}``.
-
-    Ticket Booth oracle:
-        When you unlock this door, manifest dread.
-
-    Tunnel of Hate oracle:
-        Whenever you attack, target attacking creature gains double
-        strike until end of turn.
-
-    Ticket Booth is a pure door trigger reusing the existing
-    ``ManifestDread(count=1)`` primitive — the same effect Slimy
-    Aquarium and Weight Room layer counters on top of, here run bare
-    (no counter rider). Tunnel of Hate hooks ``Event.YOU_ATTACK`` and
-    routes to ``PumpTargetCreatureUntilEOT`` with no P/T bonus and a
-    sole granted keyword (``"double strike"``) — same primitive Most
-    Valuable Slayer uses for "+1/+0 and gains first strike", here
-    flipped to no pump and a different keyword. ``attacking_only=
-    True`` narrows the legal-target pool to the active player's
-    attackers, matching the printed "target attacking creature"
-    qualifier.
-    """
-    return make_room(
-        _half(
-            "Ticket Booth", "{2}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDread(count=1),
-                ),
-            ),
-        ),
-        _half(
-            "Tunnel of Hate", "{4}{R}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.YOU_ATTACK, predicate=Controlled(YOU),
-                    effect=PumpTargetCreatureUntilEOT(
-                        power_bonus=0,
-                        toughness_bonus=0,
-                        granted_keywords=frozenset({"double strike"}),
-                        attacking_only=True,
                     ),
                 ),
             ),
@@ -728,11 +577,8 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
-    "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
-    "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
@@ -755,8 +601,11 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 # the unified path the set and the bespoke table both drop to zero
 # and the gate goes away with them.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
+    "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
+    "Surgical Suite // Hospital Room",
+    "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
 })
 

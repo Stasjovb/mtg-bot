@@ -85,6 +85,7 @@ from mtg_bot.cards.base import (
     PutLoyaltyCounterOnSelf,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
@@ -308,8 +309,19 @@ _DRAW_N_CARDS = re.compile(
 # its bare-amount sibling.
 _DRAW_THAT_MANY_CARDS = re.compile(r"^(?:you )?draw that many cards$")
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
+# "Put a +1/+1 counter on target creature" — bare-target counter
+# (Honor-style). The optional ``attacking `` qualifier narrows the
+# legal-target pool to currently-attacking creatures (Hospital
+# Room's ``put a +1/+1 counter on target attacking creature`` door
+# trigger). When present the captured group flips
+# ``attacking_only=True`` on the resulting
+# ``PutPlusOneCounterOnTargetCreature`` — same engine flag the
+# bespoke factory we're replacing wired in. Generalized rather
+# than split into a separate literal regex per the architectural
+# guidance: a single parameterized recognizer covers both the bare
+# Honor surface and Hospital Room's attacking-target form.
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
-    r"^put a \+1/\+1 counter on target creature$"
+    r"^put a \+1/\+1 counter on target (attacking )?creature$"
 )
 # "Put a +1/+1 counter on target creature you control" — Rayblade
 # Trooper's ETB. Restricted variant: legal targets are creatures the
@@ -796,6 +808,21 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature card from your graveyard to the battlefield$"
 )
+# "Return target creature card with mana value N or less from your
+# graveyard to the battlefield" — narrowed-by-MV reanimation. Surgical
+# Suite's door trigger ("with mana value 3 or less") is the EoE/DSK
+# surface form; the captured digit lands as the engine class's
+# ``max_mv`` rider, same flag the bare regex above leaves unset
+# (None = unbounded). Tried BEFORE the bare regex so a phrase
+# carrying the MV qualifier wins; the bare regex's ``$`` anchor on
+# ``battlefield`` would never match the MV tail anyway, but ordering
+# more-specific before more-general is the convention here. Mirrors
+# the ``_RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV`` shape on
+# the to-hand sibling.
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV = re.compile(
+    r"^return target creature card with mana value (\d+) or less "
+    r"from your graveyard to the battlefield$"
+)
 # Multi-sentence Xu-Ifit, Osteoharmonist variant — the printed oracle is
 # ``Return target creature card from your graveyard to the battlefield.
 # It's a Skeleton in addition to its other types and has no abilities.``
@@ -815,6 +842,25 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON = re.compile(
     r"to the battlefield\. "
     r"It's a Skeleton in addition to its other types "
     r"and has no abilities$"
+)
+# "Return all creature cards from your graveyard to the battlefield"
+# — mass reanimation (Awakening Hall's door trigger; the half-card
+# behind Funeral Room // Awakening Hall is the only EoE/DSK printing
+# of this exact surface today). Maps to the existing
+# ``ReturnAllCreaturesFromYourGraveyardToBattlefield`` engine class.
+#
+# Literal-line recognizer per the architectural guidance: only one
+# card in the data pool fits this exact surface, and the engine has
+# no parameterized "all <zone>" sibling primitive yet (no
+# ``...ToHand`` mass-recursion engine class), so generalizing across
+# destination zones isn't expressible today. Deferred generalization:
+# when a future printing adds a sibling shape (e.g.
+# ``return all creature cards from your graveyard to your hand``) and
+# the engine grows the matching primitive, fold both into one regex
+# with a captured destination group rather than copy-paste this
+# literal.
+_RETURN_ALL_CREATURE_CARDS_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return all creature cards from your graveyard to the battlefield$"
 )
 # DSK Enduring cycle dies-trigger body: "return it to the battlefield
 # under its owner's control. It's an enchantment." Every Enduring
@@ -1389,8 +1435,18 @@ _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
 # granted-keywords body is validated against the keyword-line
 # whitelist before the parsed effect is returned, mirroring the
 # behavior of the other grant-keywords primitives.
+#
+# The optional ``attacking `` qualifier narrows the legal-target pool
+# to creatures currently flagged ``attacking=True`` — same shape as
+# the ``(attacking )?`` group on ``_PUMP_AND_GAIN_KEYWORDS_UEOT``,
+# here lifted up to the no-pump grant-only sibling. Tunnel of Hate's
+# door-trigger body ``target attacking creature gains double strike
+# until end of turn`` is the surface form that motivated the
+# parameterization; the engine class's ``attacking_only=True`` flag
+# is the same one Hospital Room's pump uses, here flipped on by the
+# captured qualifier rather than by a literal-line entry.
 _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT = re.compile(
-    r"^target creature gains (.+) until end of turn$"
+    r"^target (attacking )?creature gains (.+) until end of turn$"
 )
 # "Target artifact or creature gains <kw>[ and <kw2>...] until end of
 # turn." — pure keyword-grant on a permanent target whose legal pool
@@ -1848,8 +1904,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return PutPlusOneCounterOnOpponentsCreature(amount=1)
-    if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
-        return PutPlusOneCounterOnTargetCreature(amount=1)
+    m = _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase)
+    if m is not None:
+        # Group 1 captures the optional ``attacking `` qualifier (None
+        # otherwise). When present, ``attacking_only=True`` narrows the
+        # legal-target pool to currently-attacking creatures — same
+        # engine flag Hospital Room's door-trigger body uses.
+        return PutPlusOneCounterOnTargetCreature(
+            amount=1, attacking_only=m.group(1) is not None,
+        )
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnSelf(amount=1)
     if _PUT_LOYALTY_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
@@ -2290,6 +2353,30 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
+    # ``return all creature cards from your graveyard to the
+    # battlefield`` — Awakening Hall's door trigger (Funeral Room //
+    # Awakening Hall, the only EoE/DSK printing of this exact surface
+    # today). Maps to ``ReturnAllCreaturesFromYourGraveyardToBattlefield()``.
+    # Literal-line recognizer with a deferred-generalization note on
+    # the regex above — fold this and any future ``...to your hand``
+    # mass-recursion sibling into one parameterized regex when the
+    # engine grows the matching sibling primitive.
+    if _RETURN_ALL_CREATURE_CARDS_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        return ReturnAllCreaturesFromYourGraveyardToBattlefield()
+    m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(phrase)
+    if m is not None:
+        # ``return target creature card with mana value N or less from
+        # your graveyard to the battlefield`` — Surgical Suite's door
+        # trigger. The MV cap narrows the legal-target pool to graveyard
+        # creatures whose printed mana value clears the threshold;
+        # ``max_mv=None`` (the default on the bare regex below) keeps
+        # the unbounded behaviour for Xu-Ifit and any other unrestricted
+        # reanimator. Mirrors the to-hand sibling's max_mv rider.
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            max_mv=int(m.group(1)),
+        )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase
     ) is not None:
@@ -2561,15 +2648,23 @@ def _parse_effect(phrase: str) -> Effect | None:
     # ``_parse_keyword_grant_body`` and validated against the
     # keyword-line whitelist; rejection returns ``None`` so an
     # unknown keyword keeps the wrapping spell unclaimed.
+    #
+    # Group 1 captures the optional ``attacking `` qualifier (None
+    # otherwise); when present, ``attacking_only=True`` flips on the
+    # legal-target filter (same flag Hospital Room's counter trigger
+    # uses) so Tunnel of Hate's ``target attacking creature gains
+    # double strike until end of turn`` lands here without a separate
+    # literal-line regex.
     m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
-        keywords = _parse_keyword_grant_body(m.group(1))
+        keywords = _parse_keyword_grant_body(m.group(2))
         if keywords is None:
             return None
         return PumpTargetCreatureUntilEOT(
             power_bonus=0,
             toughness_bonus=0,
             granted_keywords=keywords,
+            attacking_only=m.group(1) is not None,
         )
     # ``target artifact or creature gains <kw>[ and <kw2>...] until
     # end of turn`` — pure keyword grant on a permanent target whose
