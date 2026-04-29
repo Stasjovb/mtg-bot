@@ -57,7 +57,6 @@ from mtg_bot.cards.base import (
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
     DealDamageToTargetCreatureSpacecraftBoosted,
-    DealDamageToTargetCreatureWithExcessLanderRider,
     DealNDamageToEachCreature,
     DepressurizeEffect,
     DestroyTargetArtifact,
@@ -588,14 +587,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Destroy target nonland permanent. "
         "Its controller creates a Lander token."
     ): DestroyTargetNonlandPermanentWithLanderForController(),
-    # Orbital Plunge: 6-damage burn + excess-damage Lander rider.
-    # The bespoke engine class checks whether excess damage was
-    # dealt (target's toughness < 6 at resolve time) and creates
-    # the Lander only on excess.
-    (
-        "Orbital Plunge deals 6 damage to target creature. "
-        "If excess damage was dealt this way, create a Lander token."
-    ): DealDamageToTargetCreatureWithExcessLanderRider(amount=6),
     # Seedship Impact: destroy artifact-or-enchantment + small-mv
     # Lander rider. The bespoke engine class gates the Lander on
     # the destroyed permanent's mana value (≤ 2).
@@ -1569,7 +1560,23 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # don't fire) and AFTER cost-reduction dropping (so a multi-
     # sentence rider — none ship today, but defensive — never gets
     # half-dropped). Single-sentence clauses round-trip unchanged.
-    clauses = [s for c in clauses for s in _split_sentences(c)]
+    #
+    # A clause whose full multi-sentence text already matches a per-
+    # clause grammar primitive (e.g. Orbital Plunge's
+    # ``X deals 6 damage to target creature. If excess damage was
+    # dealt this way, create a Lander token.`` → the dedicated multi-
+    # sentence recognizer in ``effects.py``) is kept whole — splitting
+    # would carve the rider's anaphoric ``If`` clause into a piece
+    # that has no standalone primitive. Per-clause recognizers that
+    # match the unsplit text take precedence; only clauses that fail
+    # to parse whole are split into per-sentence pieces.
+    new_clauses: list[str] = []
+    for c in clauses:
+        if _parse_spell_effect_phrase(c, name) is not None:
+            new_clauses.append(c)
+        else:
+            new_clauses.extend(_split_sentences(c))
+    clauses = new_clauses
     if not clauses:
         return None
     if len(clauses) == 1:

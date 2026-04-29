@@ -28,6 +28,7 @@ from mtg_bot.cards.base import (
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToTargetCreature,
+    DealDamageToTargetCreatureWithExcessLanderRider,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
@@ -312,6 +313,34 @@ _DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT = re.compile(
     r"^deals X damage to target attacking or blocking creature, "
     r"where X is (\d+) plus the number of creatures and/or "
     r"Spacecraft you control$"
+)
+# "<source> deals N damage to target creature. If excess damage was
+# dealt this way, create a Lander token." — Orbital Plunge `{3}{R}`
+# Sorcery: a fixed-amount burn whose Lander-creation rider fires only
+# when the damage exceeded the target's lethal threshold (overkill).
+# Two-sentence shape: the leading sentence is the bare damage; the
+# trailing ``If excess damage was dealt this way, create a Lander
+# token.`` clause is an anaphoric rider that doesn't parse as a
+# standalone effect (no per-clause primitive recognizes the back-
+# reference to the damage just dealt). The recognizer matches the
+# unsplit two-sentence body verbatim — ``_parse_spell_oracle_text``
+# tries the unsplit clause first via ``_parse_spell_effect_phrase``
+# before falling through to the per-sentence splitter, so this regex
+# claims Orbital Plunge before the splitter can carve the rider into
+# an unparseable piece.
+#
+# The capture group is the integer damage amount ``N`` (matches
+# Orbital Plunge's printed ``6``); maps to
+# ``DealDamageToTargetCreatureWithExcessLanderRider(amount=N)`` whose
+# resolve step deals the damage and gates Lander creation on the
+# excess-damage check at resolve time. Currently only Orbital Plunge
+# in the EoE pool fits this shape, but the regex captures the integer
+# amount as a parameter so a future printing with a different damage
+# value lands on the same primitive without further grammar work —
+# the parameterized-recognizer-preferred form per parser CLAUDE.md.
+_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER = re.compile(
+    r"^deals (\d+) damage to target creature\. "
+    r"If excess damage was dealt this way, create a Lander token$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -2205,6 +2234,23 @@ def _parse_effect(phrase: str) -> Effect | None:
     )
     if m is not None:
         return FocusFireEffect(base=int(m.group(1)))
+    # ``deals N damage to target creature. If excess damage was dealt
+    # this way, create a Lander token`` — Orbital Plunge's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``If excess damage was dealt this way, create
+    # a Lander token`` doesn't parse as a standalone effect, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. The captured integer
+    # parameterizes ``DealDamageToTargetCreatureWithExcessLanderRider
+    # (amount=N)`` whose resolve step gates Lander creation on the
+    # excess-damage check at resolve time. See the regex's docstring
+    # for the deferred-generalization plan when a second card with
+    # this shape ships.
+    m = _DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreatureWithExcessLanderRider(
+            amount=int(m.group(1)),
+        )
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare

@@ -402,7 +402,10 @@ def test_emergency_eject_claimed_by_parser():
 
 def test_orbital_plunge_claimed_by_parser():
     # Orbital Plunge ``{3}{R}`` Sorcery — 6-damage burn + excess-
-    # damage Lander rider.
+    # damage Lander rider. Migrated from the whole-spell exact-text
+    # tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER``);
+    # claim is end-to-end via the active source's printing.
     assert "Orbital Plunge" in _claimed_names()
 
 
@@ -465,13 +468,24 @@ def test_dispatch_emergency_eject_returns_engine_class():
 
 
 def test_dispatch_orbital_plunge_returns_engine_class():
-    # ``amount=6`` matches the printed damage; the bespoke class
-    # gates the Lander rider on excess damage at resolve time.
-    eff = _try_whole_spell_exact_text(
+    # Orbital Plunge migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER``);
+    # whole-spell dispatch now falls through. End-to-end claim
+    # verified via the active source's printing carrying
+    # ``DealDamageToTargetCreatureWithExcessLanderRider(amount=6)``
+    # — the captured integer (``6``) parameterizes the engine class
+    # off the printed damage.
+    assert _try_whole_spell_exact_text(
         "Orbital Plunge deals 6 damage to target creature. "
         "If excess damage was dealt this way, create a Lander token."
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    op = get_active_source().get_printings().get("Orbital Plunge")
+    assert op is not None
+    assert op.spell_effect == DealDamageToTargetCreatureWithExcessLanderRider(
+        amount=6,
     )
-    assert eff == DealDamageToTargetCreatureWithExcessLanderRider(amount=6)
 
 
 def test_dispatch_seedship_impact_returns_engine_class():
