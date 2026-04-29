@@ -280,18 +280,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
             enters_tapped=True,
             keywords=frozenset({"exalted"}),
         ),
-        # Mutavault: {T}: Add {C}. {1}: becomes 2/2 with all creature types UEOT.
-        "Mutavault": make_utility_land(
-            "Mutavault",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                    ),
-                    effect=BecomeLandCreatureUEOT(power=2, toughness=2),
-                ),
-            ),
-        ),
         # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact flying UEOT.
         # {1},{T}: Target Blinkmoth gets +1/+1 UEOT.
         # Animation at index 0, explicit mana-tap at index 1, pump at index 2.
@@ -1405,8 +1393,14 @@ def _try_build_paid_fancy_mana_land(
 # strips it) to ``_PAID_EFFECT_BODIES`` paired with a factory that
 # returns a fresh ``Effect`` instance. Bodies / cost shapes outside
 # the table fall through to the silent-skip path.
+#
+# The ``{T}`` portion of the activation cost is optional in the regex:
+# Mutavault's ``{1}: This land becomes a 2/2 creature ...`` line has
+# no tap component, only a generic-mana payment. When the regex
+# matches without ``{T}`` (i.e. the ``tap`` named group is empty),
+# ``tap_self`` is omitted from the resulting ``ActivationCost``.
 _PAID_EFFECT_RE = re.compile(
-    r"^(?P<cost>(?:\{\d+\})+), \{T\}: (?P<rest>.+)\.$"
+    r"^(?P<cost>(?:\{\d+\})+)(?P<tap>, \{T\})?: (?P<rest>.+)\.$"
 )
 
 
@@ -1426,6 +1420,10 @@ def _paid_effect_draw_a_card() -> Effect:
     return DrawCards(amount=1)
 
 
+def _paid_effect_become_2_2_all_creature_types() -> Effect:
+    return BecomeLandCreatureUEOT(power=2, toughness=2)
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -1436,6 +1434,22 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "battlefield tapped":
         _paid_effect_put_basic_from_hand_tapped,
     "Draw a card": _paid_effect_draw_a_card,
+    # Mutavault's ``{1}: This land becomes a 2/2 creature with all
+    # creature types until end of turn. It's still a land.`` (no
+    # ``{T}`` in the activation cost — the regex's optional ``tap``
+    # group is empty for this body, so ``tap_self`` is dropped from
+    # the resulting ``ActivationCost``). The static side simplifies
+    # the printed "with all creature types" clause to a plain 2/2
+    # animation; the body literal here pins that simplification by
+    # mapping the full printed sentence to a fresh
+    # ``BecomeLandCreatureUEOT(power=2, toughness=2)`` instance.
+    # Currently the only EoS land matching this body literal is
+    # Mutavault; deferred generalization would parameterize the
+    # P/T capture and the keyword/subtype tail when a sibling
+    # printing appears.
+    "This land becomes a 2/2 creature with all creature types "
+    "until end of turn. It's still a land":
+        _paid_effect_become_2_2_all_creature_types,
 }
 
 
@@ -1462,7 +1476,7 @@ def _try_build_paid_effect_utility_land(
 ) -> CardPrinting | None:
     """Return a generic-paid single-effect utility ``CardPrinting`` if
     ``text`` matches the strict two-line ``{T}: Add {C}.`` +
-    ``<MANA>, {T}: <BODY>.[ <RIDER>.]`` shape with a body on
+    ``<MANA>[, {T}]: <BODY>.[ <RIDER>.]`` shape with a body on
     ``_PAID_EFFECT_BODIES`` (and rider, if present, on
     ``_PAID_EFFECT_RIDERS``), else ``None``.
 
@@ -1470,6 +1484,11 @@ def _try_build_paid_effect_utility_land(
     capture is restricted to all-generic pips (``{1}``, ``{2}``, …) —
     cards with colored or hybrid pips on the activation cost would
     need a different cost shape and don't fit the current set.
+
+    The ``{T}`` part of the activation cost is optional: Mutavault's
+    ``{1}: This land becomes a 2/2 creature ...`` line activates
+    without tapping, so ``tap_self`` is conditionally set on the
+    ``ActivationCost`` only when the regex's ``tap`` group matched.
 
     The optional rider is a fixed activation-condition phrase (e.g.
     Bonders' Enclave's ``Activate only if you control a creature
@@ -1506,6 +1525,8 @@ def _try_build_paid_effect_utility_land(
     if factory is None:
         return None
     cost_str = paid_match.group("cost")
+    if paid_match.group("tap"):
+        cost_extra["tap_self"] = True
     return make_utility_land(
         card["name"],
         activated_abilities=(
@@ -1513,7 +1534,6 @@ def _try_build_paid_effect_utility_land(
                 cost=ActivationCost(
                     mana=parse_mana_cost(cost_str),
                     mana_str=cost_str,
-                    tap_self=True,
                     **cost_extra,
                 ),
                 effect=factory(),
