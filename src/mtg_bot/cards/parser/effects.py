@@ -89,6 +89,7 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNTargetCreaturesToOwnersHands,
     SearchLibraryForBasicLandTapped,
@@ -791,6 +792,28 @@ _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
 _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
     r"^return up to one other target permanent you control "
     r"to its owner's hand$"
+)
+# "Return up to one target creature to its owner's hand." — Bottomless
+# Pool's door trigger. Optional-target bounce against any creature
+# (friend or foe). Maps to
+# ``ReturnTargetCreatureToOwnersHand(optional=True)`` — same engine
+# class the spell-builder dispatch uses for the mandatory shape, here
+# with the ``optional=True`` flag flipped so a no-target resolution
+# is a clean no-op fizzle (engine-side
+# ``target_count_range = (0, 1)``). Distinct from the ``up to one
+# OTHER target permanent you control`` Exosuit Savior shape above on
+# both target type (creature only vs any permanent) and controller
+# qualifier (any controller vs you-control); the two are mutually
+# exclusive at the regex level. Literal-line recognizer with no
+# capture groups — Bottomless Pool is the only printing in the
+# EoE/DSK pool whose triggered- or activated-ability body prints this
+# exact sentence; broader grammar (parameterizing ``up to one`` vs
+# bare ``target``, or fold into a single creature-bounce family with
+# the existing ``ReturnTargetCreatureToOwnersHand`` paths in
+# ``spell_builder``) is deferred until a second example with a
+# varying piece exists.
+_RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
+    r"^return up to one target creature to its owner's hand$"
 )
 # "Return up to N target non-Spacecraft creatures to their owners'
 # hands" — Specimen Freighter's ETB body. Maps to
@@ -2393,6 +2416,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
         )
+    if _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(
+        phrase
+    ) is not None:
+        # ``return up to one target creature to its owner's hand`` —
+        # Bottomless Pool's door trigger. ``up to one`` →
+        # ``optional=True`` (resolves as a no-op fizzle if no target
+        # chosen); no controller restriction (any creature, friend or
+        # foe, is a legal target).
+        return ReturnTargetCreatureToOwnersHand(optional=True)
     m = _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS.match(
         phrase
     )
