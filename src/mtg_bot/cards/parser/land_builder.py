@@ -342,34 +342,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Contested War Zone: triggered (combat damage → opponent gains control)
-        # + {T}: Add {C}. + {1},{T}: Attacking creatures get +1/+0 UEOT.
-        "Contested War Zone": make_utility_land(
-            "Contested War Zone",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsCreature(subject="source")
-                        & Controlled(YOU, subject="target")
-                    ),
-                    effect=ChangeControllerToCombatDamageSource(),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                    ),
-                    effect=PumpCreaturesYouControlUntilEOT(
-                        power_bonus=1, toughness_bonus=0,
-                        attacking_only=True,
-                    ),
-                ),
-            ),
-        ),
         # Endless Sands: {T}: Add {C}. {2},{T}: Exile target creature you
         # control. {4},{T},Sac self: Return each creature card exiled with
         # this land to the battlefield.
@@ -749,6 +721,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if blast_zone is not None:
         return blast_zone
+    contested_war_zone = _try_build_contested_war_zone_land(
+        card, text, supertypes, subtypes,
+    )
+    if contested_war_zone is not None:
+        return contested_war_zone
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2645,6 +2622,108 @@ def _try_build_blast_zone_land(
                 ),
                 effect=(
                     DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters()
+                ),
+            ),
+        ),
+    )
+
+
+# Contested War Zone — plain ``Land`` (no supertypes, no subtypes)
+# whose oracle text is the strict three-line shape:
+#   1. ``Whenever a creature deals combat damage to you, that
+#      creature's controller gains control of this land.``
+#   2. ``{T}: Add {C}.``  (intentionally dropped — the engine's
+#      auto-tap-for-cost generic-mana fallback covers tapping for
+#      ``{C}``; the static side carries no explicit ability for line 2.)
+#   3. ``{1}, {T}: Attacking creatures get +1/+0 until end of turn.``
+#
+# The line-1 trigger maps to a triggered ability on
+# ``Event.DEALS_COMBAT_DAMAGE`` with the ``IsCreature(source) & Controlled(
+# YOU, target)`` predicate (the damage source is a creature, the damaged
+# permanent is controlled by you) firing
+# ``ChangeControllerToCombatDamageSource()``. The line-3 paid mana
+# activation maps to ``PumpCreaturesYouControlUntilEOT(power_bonus=1,
+# toughness_bonus=0, attacking_only=True)``.
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring "explicitly notes why it isn't generalized today
+# (typically: 'only card in the pool with this shape; broader grammar
+# deferred until a second example exists')." Contested War Zone is the
+# only EoS land with this combat-damage-control-change trigger plus
+# attacking-creatures-pump activation shape; broader grammar (parameterized
+# over the per-line surface forms) deferred until a sibling printing
+# exists.
+_CONTESTED_WAR_ZONE_TRIGGER_LINE = (
+    "Whenever a creature deals combat damage to you, that creature's "
+    "controller gains control of this land."
+)
+_CONTESTED_WAR_ZONE_TAP_FOR_C_LINE = "{T}: Add {C}."
+_CONTESTED_WAR_ZONE_PUMP_LINE = (
+    "{1}, {T}: Attacking creatures get +1/+0 until end of turn."
+)
+
+
+def _try_build_contested_war_zone_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Contested-War-Zone-shape ``CardPrinting`` if ``text``
+    matches the strict three-line combat-damage-trigger + ``{T}: Add
+    {C}.`` + ``{1}, {T}: Attacking creatures get +1/+0 until end of
+    turn.`` shape on a plain ``Land`` type line, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The line-2
+    ``{T}: Add {C}.`` is intentionally not modeled as an explicit
+    activated ability — the engine's auto-tap-for-cost generic-mana
+    fallback covers tapping for ``{C}``, matching the static-side
+    ``make_utility_land`` shape (no explicit colorless tap ability).
+
+    Per parser/CLAUDE.md: a literal-line recognizer is acceptable
+    here because Contested War Zone is "the only card in the current
+    data pool that fits that printed surface" and "broader grammar
+    deferred until a second example exists" (e.g. another land with
+    a combat-damage-triggered control change plus an
+    attacking-creatures pump activation).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _CONTESTED_WAR_ZONE_TRIGGER_LINE:
+        return None
+    if lines[1] != _CONTESTED_WAR_ZONE_TAP_FOR_C_LINE:
+        return None
+    if lines[2] != _CONTESTED_WAR_ZONE_PUMP_LINE:
+        return None
+    return make_utility_land(
+        card["name"],
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.DEALS_COMBAT_DAMAGE,
+                predicate=(
+                    IsCreature(subject="source")
+                    & Controlled(YOU, subject="target")
+                ),
+                effect=ChangeControllerToCombatDamageSource(),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{1}"),
+                    mana_str="{1}",
+                    tap_self=True,
+                ),
+                effect=PumpCreaturesYouControlUntilEOT(
+                    power_bonus=1, toughness_bonus=0,
+                    attacking_only=True,
                 ),
             ),
         ),
