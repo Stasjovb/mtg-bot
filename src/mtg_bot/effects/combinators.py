@@ -643,6 +643,98 @@ class ConditionalIfYouControlAtLeast(Effect):
 
 
 @dataclass(frozen=True)
+class ConditionalIfYouControlSubtype(Effect):
+    """Run ``then_effect`` if the effect's controller controls at least one
+    permanent with ``subtype`` at resolution; otherwise run ``else_effect``.
+
+    Reads each battlefield permanent's printing-level ``subtypes`` AND its
+    runtime-granted ``temp_subtype`` so a creature whose subtype was added
+    by a Conspiracy-style or Cytoshape effect counts. Matches DSK's
+    "If you control a Demon, ..., otherwise, ..." gate on Unholy Annex
+    (Unholy Annex // Ritual Chamber): the upkeep / end-step rider
+    "If you control a Demon, each opponent loses 2 life and you gain
+    2 life. Otherwise, you lose 2 life."
+
+    Mirrors ``ConditionalIfVoid`` / ``ConditionalIfYouControlAtLeast`` —
+    forwards ``requires_target`` / ``legal_targets`` to whichever branch
+    requires a target. Both branches may opt out of targeting (the
+    Unholy Annex case has no targets), which is the simple shape this
+    combinator's tests cover. Either branch may be ``None`` (the
+    "otherwise" arm is ``None`` for cards whose conditional has no else
+    clause); a ``None`` branch is a silent no-op when picked.
+    """
+
+    subtype: str
+    then_effect: Effect
+    else_effect: "Effect | None" = None
+
+    def requires_target(self) -> bool:
+        then_req = self.then_effect.requires_target()
+        else_req = (
+            self.else_effect.requires_target()
+            if self.else_effect is not None
+            else False
+        )
+        return then_req or else_req
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        # Mirrors Sequence's single-target constraint: only one branch
+        # may require a target. If both do, they'd need to share a
+        # common target space (caller picks once).
+        if self.then_effect.requires_target():
+            return self.then_effect.legal_targets(state, controller_id)
+        if (
+            self.else_effect is not None
+            and self.else_effect.requires_target()
+        ):
+            return self.else_effect.legal_targets(state, controller_id)
+        return []
+
+    def _has_subtype(
+        self, state: "GameState", controller_id: int,
+    ) -> bool:
+        from mtg_bot.game import effective_subtypes
+
+        for o in state.battlefield:
+            if o.controller_id != controller_id:
+                continue
+            if self.subtype in effective_subtypes(state, o):
+                return True
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        branch = (
+            self.then_effect
+            if self._has_subtype(state, controller_id)
+            else self.else_effect
+        )
+        if branch is None:
+            state.log.append(
+                f"conditional (you control a {self.subtype}) — "
+                f"no else branch; nothing happens"
+            )
+            return
+        branch.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        else_desc = (
+            f" Otherwise, {self.else_effect.describe()}."
+            if self.else_effect is not None
+            else ""
+        )
+        return (
+            f"if you control a {self.subtype}, "
+            f"{self.then_effect.describe()}.{else_desc}"
+        )
+
+
+
+@dataclass(frozen=True)
 class ConditionalIfYouGainedLifeAtLeast(Effect):
     """Run ``inner`` only if the effect's controller has gained at least
     ``threshold`` life this turn at resolution.

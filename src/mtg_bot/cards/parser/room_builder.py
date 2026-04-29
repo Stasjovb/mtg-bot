@@ -39,6 +39,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
+    ConditionalIfYouControlSubtype,
     CreateToken,
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
@@ -517,6 +518,77 @@ def _build_derelict_attic_widows_walk() -> CardPrinting:
     )
 
 
+def _build_unholy_annex_ritual_chamber() -> CardPrinting:
+    """Unholy Annex // Ritual Chamber ``{2}{B}`` // ``{3}{B}{B}``.
+
+    Unholy Annex oracle:
+        At the beginning of your end step, draw a card. If you control
+        a Demon, each opponent loses 2 life and you gain 2 life.
+        Otherwise, you lose 2 life.
+
+    Ritual Chamber oracle:
+        When you unlock this door, create a 6/6 black Demon creature
+        token with flying.
+
+    Unholy Annex is a ``BEGINNING_OF_END_STEP`` trigger gated on
+    ``Controlled(YOU)`` (your end step). Its effect threads
+    ``Sequence(DrawCards(1), ConditionalIfYouControlSubtype("Demon",
+    then=Sequence(EachOpponentLosesLife(2), GainLife(2)),
+    else_=LoseLife(2)))`` — the draw is unconditional, and the
+    Demon-or-not gate routes to one of the two life-shift branches.
+    The new ``ConditionalIfYouControlSubtype`` combinator reads
+    ``effective_subtypes`` so a creature granted ``Demon`` by a
+    Cytoshape / Conspiracy effect counts the same as a printed Demon —
+    matches how every other "if you control a <subtype>" gate in this
+    pool reads runtime subtypes.
+
+    Ritual Chamber is a pure door trigger (the ``Event.ENTERS +
+    IsSelf()`` shape Glassworks / Grand Entryway use) reusing
+    ``CreateToken`` against the new ``Demon`` token printing — a 6/6
+    Demon creature token with flying. The Demon entering also
+    satisfies Unholy Annex's "if you control a Demon" gate, so a
+    sequenced cast (Ritual Chamber first, then later a {2}{B} unlock
+    of Unholy Annex) flips the gate to the favorable branch.
+    """
+    return make_room(
+        _half(
+            "Unholy Annex", "{2}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_END_STEP,
+                    predicate=Controlled(YOU),
+                    effect=Sequence(
+                        effects=(
+                            DrawCards(amount=1),
+                            ConditionalIfYouControlSubtype(
+                                subtype="Demon",
+                                then_effect=Sequence(
+                                    effects=(
+                                        EachOpponentLosesLife(amount=2),
+                                        GainLife(amount=2),
+                                    ),
+                                ),
+                                else_effect=LoseLife(amount=2),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        _half(
+            "Ritual Chamber", "{3}{B}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateToken(
+                        token_printing=TOKEN_PRINTINGS["Demon"], count=1,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -532,6 +604,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
     "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
+    "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
 }
 
 

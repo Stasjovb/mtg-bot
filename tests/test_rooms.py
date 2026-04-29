@@ -1371,3 +1371,217 @@ def test_lone_attacker_predicate_is_false_with_no_attackers():
     pred = LoneAttackerForYou()
     assert pred.matches(state, {}, room) is False
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Unholy Annex // Ritual Chamber
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_unholy_annex_ritual_chamber():
+    name = "Unholy Annex // Ritual Chamber"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Unholy Annex", "Ritual Chamber"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Unholy Annex"].mana_cost_str == "{2}{B}"
+    assert by_name["Ritual Chamber"].mana_cost_str == "{3}{B}{B}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Ritual Chamber", "Unholy Annex"]
+
+
+def test_ritual_chamber_creates_demon_token_on_unlock():
+    """Casting Ritual Chamber unlocks the half; the door trigger
+    creates a 6/6 black Demon token with flying."""
+    state = _new_state()
+    # Five Swamps cover {3}{B}{B}.
+    for _ in range(5):
+        _put_battlefield(state, BASIC_LANDS["Swamp"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Ritual Chamber"),
+    )
+    drain_stack(state)
+    demons = [
+        o for o in state.battlefield if o.printing.name == "Demon"
+    ]
+    assert len(demons) == 1
+    demon = demons[0]
+    assert demon.controller_id == 0
+    assert "Demon" in demon.printing.subtypes
+    assert demon.printing.power == 6
+    assert demon.printing.toughness == 6
+    assert "flying" in demon.printing.keywords
+
+
+def test_ritual_chamber_locked_does_not_make_token():
+    """If only Unholy Annex is unlocked, Ritual Chamber's token
+    trigger does not fire."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Unholy Annex"})
+    pre_demons = sum(
+        1 for o in state.battlefield if o.printing.name == "Demon"
+    )
+    dispatch_event(state, Event.ENTERS, label="enters", obj=room)
+    drain_stack(state)
+    demons = sum(
+        1 for o in state.battlefield if o.printing.name == "Demon"
+    )
+    assert demons == pre_demons
+
+
+def test_unholy_annex_drains_when_you_control_a_demon():
+    """With Ritual Chamber's Demon on the battlefield, Unholy Annex's
+    end-step trigger draws a card AND fires the favorable branch:
+    each opponent loses 2 life and you gain 2 life."""
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _new_state()
+    # Stock library so DrawCards has a card to draw.
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Unholy Annex"})
+    # Land the Demon token directly so we don't have to cast Ritual
+    # Chamber for this scenario.
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS as _TP
+    _put_battlefield(state, _TP["Demon"], controller_id=0)
+
+    pre_my_life = state.players[0].life
+    pre_opp_life = state.players[1].life
+    pre_hand = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    # Drew a card.
+    assert len(state.players[0].hand) == pre_hand + 1
+    # Demon-controlled branch: opp -2 life, you +2 life.
+    assert state.players[1].life == pre_opp_life - 2
+    assert state.players[0].life == pre_my_life + 2
+
+
+def test_unholy_annex_drains_self_when_no_demon():
+    """Without a Demon on the battlefield, Unholy Annex's end-step
+    trigger draws a card AND fires the unfavorable branch:
+    you lose 2 life."""
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _new_state()
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Unholy Annex"})
+
+    pre_my_life = state.players[0].life
+    pre_opp_life = state.players[1].life
+    pre_hand = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    # Drew a card unconditionally.
+    assert len(state.players[0].hand) == pre_hand + 1
+    # No Demon → you lose 2 life; opponent unchanged.
+    assert state.players[0].life == pre_my_life - 2
+    assert state.players[1].life == pre_opp_life
+
+
+def test_unholy_annex_locked_does_not_fire():
+    """If only Ritual Chamber is unlocked, Unholy Annex's end-step
+    trigger doesn't fire — no draw, no life shift."""
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _new_state()
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Ritual Chamber"})
+
+    pre_my_life = state.players[0].life
+    pre_opp_life = state.players[1].life
+    pre_hand = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    assert len(state.players[0].hand) == pre_hand
+    assert state.players[0].life == pre_my_life
+    assert state.players[1].life == pre_opp_life
+
+
+def test_conditional_subtype_no_else_branch_is_noop():
+    """ConditionalIfYouControlSubtype with else_effect=None and no
+    matching subtype is a clean no-op (logs the skip; doesn't raise)."""
+    from mtg_bot.effects import ConditionalIfYouControlSubtype, GainLife
+
+    state = _new_state()
+    # No Demon on the battlefield, no else branch.
+    eff = ConditionalIfYouControlSubtype(
+        subtype="Demon",
+        then_effect=GainLife(amount=5),
+        else_effect=None,
+    )
+    pre_life = state.players[0].life
+    eff.resolve(state, controller_id=0, targets=())
+    # Then-branch did NOT fire (no Demon); else=None is a silent skip.
+    assert state.players[0].life == pre_life
+
+
+def test_conditional_subtype_describe_strings_compose():
+    """ConditionalIfYouControlSubtype.describe surfaces both branches
+    when an else is set, and only the if-branch when there's no else.
+    Surface text is consumer-only (logs / debug); we just sanity-check
+    that the strings interpolate without error."""
+    from mtg_bot.effects import (
+        ConditionalIfYouControlSubtype,
+        GainLife,
+        LoseLife,
+    )
+
+    eff_with_else = ConditionalIfYouControlSubtype(
+        subtype="Demon",
+        then_effect=GainLife(amount=2),
+        else_effect=LoseLife(amount=2),
+    )
+    desc = eff_with_else.describe()
+    assert "Demon" in desc
+    assert "Otherwise" in desc
+
+    eff_no_else = ConditionalIfYouControlSubtype(
+        subtype="Demon",
+        then_effect=GainLife(amount=2),
+    )
+    desc2 = eff_no_else.describe()
+    assert "Demon" in desc2
+    assert "Otherwise" not in desc2
+

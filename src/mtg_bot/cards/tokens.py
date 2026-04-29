@@ -172,4 +172,18 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Gremlin": make_token_creature(
         "Gremlin", 1, 1, subtypes=("Gremlin",),
     ),
+    # Demon: 6/6 black Demon creature token with flying. Created by
+    # Ritual Chamber (Unholy Annex // Ritual Chamber)'s door trigger.
+    # Color isn't tracked on tokens (every other color-tagged token
+    # in this pool ships without an explicit color tag) so the
+    # printing surfaces as a colorless 6/6 Demon with flying. The
+    # token's ``Demon`` subtype is what Unholy Annex's end-step gate
+    # reads: "If you control a Demon, each opponent loses 2 life and
+    # you gain 2 life. Otherwise, you lose 2 life." A Demon token on
+    # the battlefield satisfies that gate via the ``HasSubtype``-style
+    # check the new ``ConditionalIfYouControlSubtype`` combinator does.
+    "Demon": make_token_creature(
+        "Demon", 6, 6, subtypes=("Demon",),
+        keywords=frozenset({"flying"}),
+    ),
 }
