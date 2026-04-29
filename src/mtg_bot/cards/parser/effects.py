@@ -24,6 +24,7 @@ from mtg_bot.cards.base import (
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
     DealDamageToOpponentCreature,
+    DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
@@ -245,6 +246,30 @@ _DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE = re.compile(
 _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
     r"^(?:this Room )?deals (\d+) damage to target creature "
     r"an opponent controls$"
+)
+# "deals damage equal to the number of artifacts you control to target
+# creature an opponent controls" — Warmaker Gunship's ETB body (after
+# the ``it `` source-pronoun strip in
+# ``_normalize_creature_effect_phrase``). Maps to
+# ``DealDamageToOpponentCreatureByArtifactCount`` whose resolve counts
+# the controller's artifacts at fire time and routes through
+# ``_apply_damage`` against the chosen target. Same legal-target pool
+# (creatures NOT controlled by the resolving controller) as the bare
+# ``deals N damage to target creature an opponent controls`` shape
+# above; differs only in the dynamic damage amount tied to the
+# controller's artifact count rather than a printed integer.
+#
+# Literal-line recognizer per the architectural guidance: only one
+# card in the EoE/DSK pool fits this exact surface today (Warmaker
+# Gunship), and the engine class is the only "damage equal to count
+# of <type> you control" damage primitive that ships with a target-
+# opponent-creature filter. Deferred generalization: when a sibling
+# count-based primitive (e.g. ``deals damage equal to the number of
+# enchantments you control to …``) lands, fold both into one regex
+# whose capture group drives a count-source dispatch.
+_DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE = re.compile(
+    r"^deals damage equal to the number of artifacts you control "
+    r"to target creature an opponent controls$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -1790,6 +1815,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToOpponentCreature(amount=int(m.group(1)))
+    # ``deals damage equal to the number of artifacts you control to
+    # target creature an opponent controls`` — Warmaker Gunship's ETB
+    # body. Same legal-target pool as the bare integer-amount sibling
+    # above (target creature an opponent controls); the dynamic amount
+    # is read at resolve time from the controller's artifact count.
+    if _DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE.match(
+        phrase
+    ) is not None:
+        return DealDamageToOpponentCreatureByArtifactCount()
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare

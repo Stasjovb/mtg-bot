@@ -112,7 +112,6 @@ from mtg_bot.effects.combinators import (
 from mtg_bot.effects.generic import (
     CreateTokenPerMulticoloredPermanent,
     DealDamageAnyTarget,
-    DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
     DestroyTargetNoncreaturePermanent,
     DealNDamageToEachCreature,
@@ -145,19 +144,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Warmaker Gunship: ETB deals damage equal to artifact count to target
-        # creature an opponent controls, 6+ flying.
-        make_spacecraft(
-            "Warmaker Gunship", "{2}{R}", 4, 3,
-            station_threshold=6,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageToOpponentCreatureByArtifactCount(),
-                ),
-            ),
-        ),
         # Debris Field Crusher: ETB deals 3 damage to any target, 8+ flying,
         # "{1}{R}: This Spacecraft gets +2/+0 until end of turn."
         make_spacecraft(
