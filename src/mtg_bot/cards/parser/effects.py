@@ -72,6 +72,7 @@ from mtg_bot.cards.base import (
     OptionalPutLandFromHandOntoBattlefield,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
@@ -624,6 +625,30 @@ _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
     r"^search your library for a basic land card, "
     r"reveal it, put it into your hand, then shuffle$"
 )
+# "Search your library for a legendary creature card, reveal it, put
+# it into your hand, then shuffle." — The Seriema's ETB body (the only
+# EoE/DSK printing of this exact filter today). Maps to
+# ``SearchLibraryForCard(filter_name="legendary_creature",
+# may_fail=False)``. The printed text contains no "you may" rider, so
+# ``may_fail=False`` is the faithful reading: when a legendary creature
+# card exists in the library, the controller MUST take one. This
+# differs from the ``may_fail=True`` semantics the older
+# ``_SEARCH_LIBRARY_FOR_ARTIFACT_CARD`` /
+# ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD`` recognizers ship — those two
+# pre-date the explicit-faithfulness rules and should likely flip to
+# ``may_fail=False`` in a future pass; doing so here would change
+# behaviour pinned by many existing tests, so it's out of scope for
+# this batch. Literal-line recognizer because The Seriema is the only
+# EoE/DSK card printing this exact "legendary creature card" filter
+# in the reveal/hand/shuffle shape today; broader generalization
+# (parameterizing the filter substring across artifact / basic land /
+# legendary creature shapes into one regex) is deferred until the
+# may_fail-faithfulness cleanup above merges the existing two literals
+# at the same time.
+_SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD = re.compile(
+    r"^search your library for a legendary creature card, "
+    r"reveal it, put it into your hand, then shuffle$"
+)
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger
 # (the tapped-onto-battlefield reward form). Same fetch-land payload
@@ -1001,6 +1026,19 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature card from your graveyard to the battlefield$"
 )
+# "Return target creature or enchantment card from your graveyard to
+# the battlefield" — Rescue Skiff's ETB body (the only EoE/DSK printing
+# of this exact widened-pool shape today). Maps to
+# ``ReturnCreatureFromYourGraveyardToBattlefield(or_enchantment=True)``,
+# mirroring the ``or_spacecraft=True`` rider on the to-hand sibling
+# (Fell Gravship). Tried BEFORE the bare ``return target creature card
+# from your graveyard to the battlefield`` regex below for the more-
+# specific-first convention; the bare regex's ``$`` anchor on
+# ``battlefield`` would not match the ``or enchantment`` rider anyway.
+_RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return target creature or enchantment card from your graveyard "
+    r"to the battlefield$"
+)
 # "Return target creature card with mana value N or less from your
 # graveyard to the battlefield" — narrowed-by-MV reanimation. Surgical
 # Suite's door trigger ("with mana value 3 or less") is the EoE/DSK
@@ -1364,6 +1402,28 @@ _OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD = re.compile(
 _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT = re.compile(
     r"^you may sacrifice another creature or artifact\. If you do, "
     r"this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+)
+# "You may sacrifice a land or Lander. If you do, search your library
+# for up to N basic land cards, put them onto the battlefield tapped,
+# then shuffle." — Larval Scoutlander's ETB body (the only EoE/DSK
+# printing fitting this exact shape today). Maps to
+# ``OptionalSacLandOrLanderForBasicLandRamp(land_count=N)`` whose
+# resolve handles the optional sac + tutor-tapped sequence via the
+# existing combinator. Captures the count tail (spelled-out small
+# cardinal, e.g. ``two``) for forward-compat with any future printing
+# that varies the count. Literal-line otherwise: the leading "you may
+# sacrifice a land or Lander" subject is unique to this card today;
+# broader generalization (parameterizing the sacrificed object's
+# noun phrase, or merging with the ``OptionalSacAnotherForEffect``
+# shape) is deferred until a second printing with a varying
+# sacrificed-object surface ships, at which point the right move is a
+# parameterized regex over <subject> and <inner-effect> with the
+# inner phrase parsed recursively through ``_parse_effect_phrase``.
+_OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP = re.compile(
+    rf"^you may sacrifice a land or Lander\. If you do, "
+    rf"search your library for up to "
+    rf"(\d+|{_SMALL_CARDINAL_PATTERN}) basic land cards, "
+    rf"put them onto the battlefield tapped, then shuffle$"
 )
 # "You may sacrifice another creature or artifact. If you do, <inner-
 # effect>." — the general ``OptionalSacAnotherForEffect`` wrapper.
@@ -2350,6 +2410,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         return SearchLibraryForCard(
             filter_name="basic_land", may_fail=True,
         )
+    if _SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD.match(
+        phrase
+    ) is not None:
+        # ``search your library for a legendary creature card, reveal
+        # it, put it into your hand, then shuffle`` — The Seriema's ETB
+        # body. Maps to
+        # ``SearchLibraryForCard(filter_name="legendary_creature",
+        # may_fail=False)``. ``may_fail=False`` reflects the faithful
+        # reading of the printed text (no "you may" rider). See the
+        # regex comment for the deferred unification with the
+        # ``may_fail=True`` artifact / basic-land siblings above.
+        return SearchLibraryForCard(
+            filter_name="legendary_creature", may_fail=False,
+        )
     if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD.match(
         phrase
     ) is not None:
@@ -2730,6 +2804,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         # reanimator. Mirrors the to-hand sibling's max_mv rider.
         return ReturnCreatureFromYourGraveyardToBattlefield(
             max_mv=int(m.group(1)),
+        )
+    if _RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``return target creature or enchantment card from your
+        # graveyard to the battlefield`` — Rescue Skiff's ETB body.
+        # Tried BEFORE the bare ``return target creature card`` regex
+        # below for the more-specific-first convention; the bare regex's
+        # ``$`` anchor on ``battlefield`` would not match the
+        # ``or enchantment`` rider anyway. ``or_enchantment=True``
+        # widens the engine class's legal-target pool to include
+        # enchantment cards in the graveyard alongside creature cards,
+        # mirroring the ``or_spacecraft`` flag on
+        # ``ReturnCreatureFromYourGraveyardToHand`` (Fell Gravship).
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            or_enchantment=True,
         )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase
@@ -3190,6 +3280,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         return OptionalSacAnotherForPumpSelfUEOT(
             power_bonus=int(m.group(1)),
             toughness_bonus=int(m.group(2)),
+        )
+    m = _OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP.match(phrase)
+    if m is not None:
+        # ``you may sacrifice a land or Lander. If you do, search your
+        # library for up to N basic land cards, put them onto the
+        # battlefield tapped, then shuffle.`` — Larval Scoutlander's
+        # ETB body. Tried BEFORE the generic
+        # ``_OPTIONAL_SAC_ANOTHER_FOR_EFFECT`` so the specialized
+        # land-or-Lander shape wins; the generic regex's
+        # ``creature or artifact`` subject wouldn't match this anyway,
+        # but the more-specific-first ordering is the convention here.
+        # Maps to ``OptionalSacLandOrLanderForBasicLandRamp(land_count=
+        # N)`` which already implements the optional sac + tutor-tapped
+        # sequence as a single combinator.
+        return OptionalSacLandOrLanderForBasicLandRamp(
+            land_count=_parse_amount(m.group(1)),
         )
     m = _OPTIONAL_SAC_ANOTHER_FOR_EFFECT.match(phrase)
     if m is not None:

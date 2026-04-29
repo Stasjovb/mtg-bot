@@ -932,6 +932,10 @@ class CardPrinting:
         return "Artifact" in self.card_types
 
     @property
+    def is_enchantment(self) -> bool:
+        return "Enchantment" in self.card_types
+
+    @property
     def is_spacecraft(self) -> bool:
         return "Spacecraft" in self.subtypes
 
@@ -950,7 +954,7 @@ class CardPrinting:
             self.is_creature
             or self.is_artifact
             or self.is_land
-            or "Enchantment" in self.card_types
+            or self.is_enchantment
             or "Planeswalker" in self.card_types
         )
 
