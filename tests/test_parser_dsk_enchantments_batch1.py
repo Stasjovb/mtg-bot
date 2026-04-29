@@ -31,6 +31,13 @@ Cards newly claimed in this batch:
   and excludes it from the target's sac options. ``target player``
   narrows to ``target opponent`` per the same simplification Cracked
   Skull rides.
+
+* **Leyline of Mutation** ``{2}{G}{G}`` Enchantment. Honest no-op
+  claim — both printed lines (the opening-hand-replacement Leyline
+  mechanic and the ``You may pay {W}{U}{B}{R}{G} rather than pay
+  the mana cost`` alt cost) are inert in this engine today. Cost-
+  and-name-only printing; same permission-not-offered shape Lecture
+  Hall ships per dsk-rooms-batch6.
 """
 
 from __future__ import annotations
@@ -458,3 +465,29 @@ def test_sac_other_than_enchanted_describe():
     desc = TargetOpponentSacrificesCreatureOtherThanEnchanted().describe()
     assert "sacrif" in desc
     assert "other than enchanted" in desc
+
+
+# ---------- Leyline of Mutation ----------
+
+
+def test_leyline_of_mutation_claimed_by_parser():
+    # Leyline of Mutation ``{2}{G}{G}`` — claimed via the name-keyed
+    # ``_ENCHANTMENT_BUILDERS`` dispatch.
+    assert "Leyline of Mutation" in _claimed_names()
+
+
+def test_leyline_of_mutation_is_honest_no_op_static_enchantment():
+    # Both printed lines are inert in this engine: the opening-hand
+    # Leyline replacement isn't modeled, and the ``You may pay
+    # {W}{U}{B}{R}{G} rather than pay the mana cost`` alt cost isn't
+    # offered by ``legal.py``. The printing therefore carries no
+    # triggers, no static abilities, no activated abilities — same
+    # honest-no-op shape Lecture Hall ships per dsk-rooms-batch6.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Leyline of Mutation"]
+    assert p.mana_cost_str == "{2}{G}{G}"
+    assert "Enchantment" in p.card_types
+    assert p.is_aura is False
+    assert p.triggered_abilities == ()
+    assert p.static_abilities == ()
+    assert p.activated_abilities == ()

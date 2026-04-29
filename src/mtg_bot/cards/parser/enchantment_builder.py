@@ -19,6 +19,12 @@ Non-Aura enchantments (EoE):
 - Eusocial Engineering ``{3}{G}{G}``
 
 Non-Aura enchantments (DSK):
+- Leyline of Mutation ``{2}{G}{G}`` (honest-no-op: opening-hand
+  replacement isn't modeled and the printed ``You may pay {W}{U}{B}
+  {R}{G} rather than pay the mana cost for spells you cast.`` alt
+  cost is not offered by ``legal.py`` — so the printing sits there
+  inert. Same permission-not-offered pattern Lecture Hall ships
+  per dsk-rooms-batch6.)
 - Trapped in the Screen ``{2}{W}`` (Ward {2} + ETB exile-opp-permanent-
   until-leaves; first non-Aura enchantment to ship the new ``ward``
   kwarg on ``make_enchantment``)
@@ -215,6 +221,39 @@ def _build_eusocial_engineering() -> CardPrinting:
                 ),
             ),
         ),
+    )
+
+
+def _build_leyline_of_mutation() -> CardPrinting:
+    """Leyline of Mutation ``{2}{G}{G}``: Enchantment.
+
+    Oracle text:
+        If this card is in your opening hand, you may begin the game
+        with it on the battlefield.
+        You may pay {W}{U}{B}{R}{G} rather than pay the mana cost for
+        spells you cast.
+
+    Honest no-op claim. Both printed lines are inert in this engine
+    today:
+
+    - The ``opening hand`` replacement (start-of-game-on-battlefield
+      Leyline mechanic) isn't modeled — every Leyline starts the game
+      in the controller's library / hand like any other card.
+    - The ``You may pay {W}{U}{B}{R}{G} rather than pay the mana
+      cost`` alt cost isn't offered by ``legal.py``'s cast pipeline
+      today, so the controller is never given the option. Same
+      permission-not-offered shape Lecture Hall's ``Other permanents
+      you control have hexproof`` ships per dsk-rooms-batch6 — the
+      static stays in place as a no-op until the engine wires the
+      enabling check.
+
+    The card therefore sits on the battlefield doing nothing, which
+    is the rules-correct observable behaviour given that neither of
+    its two surface clauses is wired through. Cost-and-name-only
+    factory.
+    """
+    return make_enchantment(
+        "Leyline of Mutation", "{2}{G}{G}",
     )
 
 
@@ -605,6 +644,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Weapons Manufacturing": _build_weapons_manufacturing,
     "Bioengineered Future": _build_bioengineered_future,
     "Eusocial Engineering": _build_eusocial_engineering,
+    "Leyline of Mutation": _build_leyline_of_mutation,
     "Trapped in the Screen": _build_trapped_in_the_screen,
     # Auras
     "Moonlit Meditation": _build_moonlit_meditation,
