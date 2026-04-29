@@ -44,6 +44,7 @@ from mtg_bot.cards.base import (
     EachOpponentLosesLife,
     EachPlayerDraws,
     Effect,
+    EnduringDiesReturnAsEnchantmentEffect,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
     ExileEachOpponentsGraveyard,
@@ -652,6 +653,31 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON = re.compile(
     r"to the battlefield\. "
     r"It's a Skeleton in addition to its other types "
     r"and has no abilities$"
+)
+# DSK Enduring cycle dies-trigger body: "return it to the battlefield
+# under its owner's control. It's an enchantment." Every Enduring
+# creature in DSK (Innocence, Curiosity, Tenacity, Courage, Vitality)
+# prints the same self-return body verbatim. The phrase appears as
+# the EFFECT tail of an intervening-if line ``When this creature
+# dies, if it was a creature, …`` — the gate is handled by the
+# ``_INTERVENING_IF_PHRASES`` ``"it was a creature"`` entry; this
+# regex matches the bare effect body that lands in the trailing
+# group.
+#
+# The body is two sentences glued together. Reminder text
+# (``(It's not a creature.)``) has already been stripped by
+# ``_strip_reminder_text`` before line-level parsing, so the
+# parenthesized rule reminder doesn't appear here.
+#
+# Maps to ``EnduringDiesReturnAsEnchantmentEffect()`` — a
+# parameterless engine class that reads ``state.resolving_source`` to
+# locate the dying card in its owner's graveyard, moves it back onto
+# the battlefield under the owner's control, and sets the
+# ``enduring_returned_as_enchantment`` flag on the returned permanent
+# so the engine's ``is_creature_now`` short-circuits to False.
+_ENDURING_DIES_RETURN_AS_ENCHANTMENT = re.compile(
+    r"^return it to the battlefield under its owner's control\. "
+    r"It's an enchantment$"
 )
 # "Return target artifact card from your graveyard to your hand" —
 # matches Scour for Scrap's mode (parsed via the modal combinator
@@ -1931,6 +1957,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
     if _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnTargetArtifactCardFromYourGraveyardToHand()
+    # DSK Enduring cycle dies-trigger body (Innocence / Curiosity /
+    # Tenacity / Courage / Vitality). The phrase ``return it to the
+    # battlefield under its owner's control. It's an enchantment``
+    # appears verbatim as the effect tail of every Enduring creature's
+    # intervening-if dies trigger; the parenthesized
+    # ``(It's not a creature.)`` reminder is stripped before the
+    # effect body reaches this dispatcher. Maps to the parameterless
+    # ``EnduringDiesReturnAsEnchantmentEffect`` engine class.
+    if _ENDURING_DIES_RETURN_AS_ENCHANTMENT.match(phrase) is not None:
+        return EnduringDiesReturnAsEnchantmentEffect()
     # ``put target card from a graveyard on the bottom of its owner's
     # library`` — Chrome Companion's tap-mana activated ability. Untyped
     # grave-target across all players; resolution moves the chosen card

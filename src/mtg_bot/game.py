@@ -275,6 +275,21 @@ class GameObject:
     # unlocked" so a future Eerie hook can observe it (Eerie itself
     # isn't wired yet). Empty frozenset for non-Room objects.
     unlocked_halves: frozenset[str] = field(default_factory=frozenset)
+    # DSK Enduring cycle (Enduring Innocence / Curiosity / Tenacity /
+    # Courage / Vitality): when an Enduring creature dies, its
+    # ``When this creature dies`` trigger returns the card to the
+    # battlefield "as an enchantment" — its printed Creature card type
+    # is suppressed for the return. The printing still carries
+    # ``"Creature"`` in ``card_types``; this per-instance flag is the
+    # in-game suppression marker. Set by the resolving Enduring
+    # effect (``EnduringDiesReturnAsEnchantmentEffect``) at the moment
+    # the card transits graveyard → battlefield; consumed by
+    # ``is_creature_now``, which short-circuits to ``False`` when
+    # the flag is True so the returned permanent counts as an
+    # enchantment only. Mirrors the ``impending_active`` precedent —
+    # same shape (printing keeps the type, GameObject suppresses it
+    # at runtime), different mechanic.
+    enduring_returned_as_enchantment: bool = False
 
 
 def is_void_active(state: GameState) -> bool:
@@ -402,6 +417,14 @@ def is_creature_now(obj: GameObject) -> bool:
     if obj.face_down:
         return True
     if obj.impending_active:
+        return False
+    # DSK Enduring cycle: after the dies-trigger has returned the card
+    # to the battlefield "as an enchantment", the printing's Creature
+    # card type is suppressed at runtime. The flag is sticky for the
+    # remainder of the object's life on the battlefield (CR 400.7 — a
+    # new object once it changes zones; clearing happens at the next
+    # zone change implicitly via a fresh GameObject instance).
+    if obj.enduring_returned_as_enchantment:
         return False
     return (
         obj.printing.is_creature

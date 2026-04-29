@@ -910,6 +910,28 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
         Delirium()
     ),
+    # DSK Enduring cycle: "When this creature dies, if it was a
+    # creature, return it to the battlefield under its owner's
+    # control. It's an enchantment." Every Enduring creature in DSK
+    # carries the same intervening-if gate, paired with the cycle's
+    # return-as-enchantment effect body.
+    #
+    # The gate predicate is ``IsCreature()`` — it evaluates against
+    # the dispatched subject (the dying object) via its printing's
+    # ``card_types``. Every Enduring printing is an Enchantment
+    # Creature, so the gate is naturally true on the first death
+    # (the printing has "Creature"). After the effect returns the
+    # card "as an enchantment", the engine's ``is_creature_now``
+    # short-circuits to False (via the new
+    # ``enduring_returned_as_enchantment`` flag) so the
+    # ``_fire_dies_triggers`` ``was_creature`` gate at the call site
+    # in ``move_off_battlefield`` already prevents a second death
+    # from re-firing the trigger. The gate predicate composed here
+    # is therefore behaviorally redundant in the engine today, but
+    # we register it so parser/static parity stays exact and the
+    # gate is in place if a future engine change ever loosened the
+    # call-site ``was_creature`` check.
+    "it was a creature": IsCreature(),
 }
 
 

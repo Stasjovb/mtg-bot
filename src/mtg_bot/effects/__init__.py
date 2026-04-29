@@ -210,6 +210,7 @@ from mtg_bot.effects.bespoke import (
     DiplomaticRelationsEffect,
     DyadrineAttackEffect,
     EnchantedCreatureFightsTargetEffect,
+    EnduringDiesReturnAsEnchantmentEffect,
     FamishedWorldsireETBEffect,
     FocusFireEffect,
     KavaronHarrierAttackEffect,

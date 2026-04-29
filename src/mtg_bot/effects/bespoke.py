@@ -2625,6 +2625,93 @@ class DiplomaticRelationsEffect(Effect):
 
 
 @dataclass(frozen=True)
+class EnduringDiesReturnAsEnchantmentEffect(Effect):
+    """DSK Enduring cycle dies-trigger body: "return it to the
+    battlefield under its owner's control. It's an enchantment."
+
+    Resolves directly from the DIES dispatch path (mirrors the
+    ``PerigeeBeckonerDiesReturnTappedEffect`` precedent): the dying
+    Enduring creature is sitting in its owner's graveyard with
+    ``state.resolving_source`` pointing at it. We move it back to
+    the battlefield under its OWNER's control (per oracle — "owner's
+    control", not "your control") and set
+    ``enduring_returned_as_enchantment=True`` so the engine's
+    ``is_creature_now`` reads False on the returned permanent (it's
+    an enchantment now, not a creature). The printing's card_types
+    still includes "Creature" — the suppression is per-instance,
+    matching the impending_active precedent.
+
+    Used by Enduring Innocence (W), Enduring Curiosity (U), Enduring
+    Tenacity (B), Enduring Courage (R), and Enduring Vitality (G) —
+    every Enduring creature in the DSK pool prints the same return-
+    as-enchantment body verbatim. The "if it was a creature"
+    intervening-if gate that pairs with this effect is handled by
+    the parser's predicate composition (the gate is naturally
+    implicit in the engine's ``_fire_dies_triggers`` path: a returned
+    enchantment is no longer a creature, so a second death wouldn't
+    fire the dies trigger at all — but the parser still composes the
+    gate predicate to keep parser/static parity readable and to
+    forward-protect against future engine changes that would loosen
+    the dies-fire gate).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        owner = state.player_by_id(source.owner_id)
+        # Tokens cease to exist on death — nothing to bring back.
+        # No EoE/DSK printing makes a token Enduring creature today,
+        # but the guard keeps the path safe if a future card grants
+        # the dies-rider to a token.
+        if source.printing.is_token:
+            return
+        # The dying creature should be in its owner's graveyard. If
+        # it's been moved elsewhere already (e.g. exiled by a
+        # replacement, or the printed effect's dies-trigger fizzled
+        # because the source was stolen mid-combat and graveyarded
+        # under another player's pile), we don't return anything.
+        if source not in owner.graveyard:
+            return
+        owner.graveyard.remove(source)
+        # Clear UEOT-granted triggered abilities targeting this object
+        # — the returned permanent is a "new object" per CR 400.7, so
+        # any UEOT grants on the FORMER object are dropped before the
+        # battlefield transition.
+        source.temp_triggered_abilities = ()
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects
+            if not (
+                ce.layer == 6
+                and ce.kind == "grant_triggered_ability"
+                and ce.target_id == source.id
+            )
+        ]
+        put_into_battlefield(state, source, owner.id)
+        # Mark the returned permanent as no-longer-a-creature. The
+        # flag is sticky for the rest of this GameObject's life on
+        # the battlefield; a subsequent zone change creates a fresh
+        # GameObject (CR 400.7) and the printed Creature card type
+        # comes back into play on the next ETB.
+        source.enduring_returned_as_enchantment = True
+        state.log.append(
+            f"{source.printing.name} returns to P{owner.id}'s "
+            f"battlefield as an enchantment (Enduring)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "return it to the battlefield under its owner's control. "
+            "it's an enchantment"
+        )
+
+
+@dataclass(frozen=True)
 class PerigeeBeckonerDiesReturnTappedEffect(Effect):
     """Perigee Beckoner's granted dies-rider: "When this creature dies,
     return it to the battlefield tapped under its owner's control."

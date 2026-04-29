@@ -58,6 +58,7 @@ from mtg_bot.effects import (
     ExileOpponentsNonlandPermanentUntilLeaves,
     ChoraleReanimateDefenderGraveCreatureEffect,
     EnchantedCreatureFightsTargetEffect,
+    EnduringDiesReturnAsEnchantmentEffect,
     KavaronHarrierAttackEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
