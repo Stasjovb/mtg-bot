@@ -174,6 +174,7 @@ from mtg_bot.effects.generic import (
     TargetOpponentDiscardsCasterChoice,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentLosesLife,
+    TargetOpponentSacrificesCreatureOtherThanEnchanted,
     TargetOpponentLosesNYouGainN,
     TargetPlayerLosesLife,
     UntapTargetLand,

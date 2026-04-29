@@ -7912,6 +7912,87 @@ class EachOpponentSacrificesCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentSacrificesCreatureOtherThanEnchanted(Effect):
+    """"Target opponent sacrifices a creature of their choice other
+    than enchanted creature."
+
+    Used by Sporogenic Infection's ETB. Identifies the source Aura's
+    enchanted creature via ``state.resolving_source.attached_to`` and
+    excludes it from the target's sac options. The target opponent
+    picks via their own ``Agent.choose_sacrifice`` — same agent path
+    ``EachOpponentSacrificesCreature`` rides.
+
+    Simplification vs. printed ``target player``: targets are
+    restricted to opponents only — the standard EoE / DSK ``target
+    player`` simplification used by other Caster-controls-target
+    effects in this codebase. Self-targeting is never strategically
+    correct for the controller of an enchant-an-opponent's-creature
+    Aura; narrowing legality doesn't affect rational play. The
+    nontoken filter that ``EachOpponentSacrificesCreature`` ships is
+    NOT applied here — the printed text says ``a creature of their
+    choice``, not ``a nontoken creature``.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        target = state.player_by_id(target_id)
+        if target.has_lost:
+            return
+        # Excluded id: the Aura's enchanted creature, if any. When the
+        # Aura is enchanting a creature controlled by the target (the
+        # usual case for Sporogenic Infection), the host is excluded
+        # from the sac options. When the Aura is enchanting one of
+        # the controller's own creatures, the target's own creatures
+        # are unaffected by the exclusion (the host isn't theirs).
+        aura = state.resolving_source
+        excluded_id = aura.attached_to if aura is not None else None
+        legal = [
+            o for o in state.battlefield
+            if o.controller_id == target_id
+            and o.printing.is_creature
+            and o.id != excluded_id
+        ]
+        if not legal or target.agent is None:
+            return
+        chosen_id = target.agent.choose_sacrifice(
+            state, target_id, [o.id for o in legal]
+        )
+        obj = next((o for o in legal if o.id == chosen_id), legal[0])
+        state.log.append(
+            f"P{target_id} sacrifices {obj.printing.name} "
+            f"(Sporogenic Infection)"
+        )
+        _sacrifice(state, obj)
+
+    def describe(self) -> str:
+        return (
+            "target opponent sacrifices a creature of their choice "
+            "other than enchanted creature"
+        )
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentDiscardsCasterChoice(Effect):
     """Target opponent reveals their hand. You choose a nonland card
     from it. That player discards the chosen card.

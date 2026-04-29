@@ -22,6 +22,15 @@ Cards newly claimed in this batch:
   standard EoE / DSK simplification — self-targeting is never
   strategically correct for the controller. The destroys-host
   trigger rides the same shape Cryoshatter's bottom trigger uses.
+
+* **Sporogenic Infection** ``{1}{B}`` Enchantment — Aura. ETB target-
+  opp-sacs-creature-other-than-enchanted + DEALT_DAMAGE-destroys-
+  enchanted. The new
+  ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` engine
+  class identifies the host via ``state.resolving_source.attached_to``
+  and excludes it from the target's sac options. ``target player``
+  narrows to ``target opponent`` per the same simplification Cracked
+  Skull rides.
 """
 
 from __future__ import annotations
@@ -287,3 +296,165 @@ def test_may_discard_describe_mentions_may_and_nonland():
     desc = TargetOpponentLookHandMayDiscard().describe()
     assert "may" in desc
     assert "nonland" in desc
+
+
+# ---------- Sporogenic Infection ----------
+
+
+def test_sporogenic_infection_claimed_by_parser():
+    # Sporogenic Infection ``{1}{B}`` Enchantment — Aura — claimed via
+    # the name-keyed ``_ENCHANTMENT_BUILDERS`` dispatch.
+    assert "Sporogenic Infection" in _claimed_names()
+
+
+def test_sporogenic_infection_carries_etb_and_dealt_damage_triggers():
+    # The produced ``CardPrinting`` carries two triggers, in printed
+    # order:
+    # 1. ETB target-opp-sacs-creature-other-than-enchanted via the
+    #    new ``TargetOpponentSacrificesCreatureOtherThanEnchanted``
+    #    engine class.
+    # 2. DEALT_DAMAGE-destroys-host via ``DestroyEnchantedPermanent``.
+    from mtg_bot.effects import (
+        DestroyEnchantedPermanent,
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Sporogenic Infection"]
+    assert len(p.triggered_abilities) == 2
+    etb, dealt = p.triggered_abilities
+    assert isinstance(
+        etb.effect,
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+    assert isinstance(dealt.effect, DestroyEnchantedPermanent)
+
+
+def test_sporogenic_infection_is_aura_with_correct_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Sporogenic Infection"]
+    assert p.mana_cost_str == "{1}{B}"
+    assert p.is_aura is True
+    assert p.aura_enchant_type == "creature"
+    # Printed ``Enchant creature`` (any creature), not the yours-only
+    # restriction. Self-targeting at cast-time pays for the printed
+    # text; the ETB's target narrowing is a separate axis.
+    assert p.aura_yours_only is False
+
+
+# ---------- TargetOpponentSacrificesCreatureOtherThanEnchanted ----------
+
+
+def test_sac_other_than_enchanted_legal_targets_is_opps_only():
+    from mtg_bot.effects import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    eff = TargetOpponentSacrificesCreatureOtherThanEnchanted()
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("player", 1) in legal
+    assert ("player", 0) not in legal
+    assert eff.requires_target() is True
+
+
+def test_sac_other_than_enchanted_excludes_host_from_options():
+    # End-to-end resolve sanity: the target opp controls the enchanted
+    # creature (host) plus a second creature. The host must not appear
+    # in the sac options; the target must sacrifice the OTHER creature.
+    from mtg_bot.cards.base import make_aura, make_creature
+    from mtg_bot.effects import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura_pr = make_aura("TestSac", "{1}{B}")
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+
+    host = GameObject(
+        id=10, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    other = GameObject(
+        id=11, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura = GameObject(
+        id=20, printing=aura_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = host.id
+
+    seen_options: list[list[int]] = []
+
+    class _Agent:
+        def choose_sacrifice(self, state, player_id, options):
+            seen_options.append(list(options))
+            return options[0]
+
+    p0 = Player(id=0)
+    p1 = Player(id=1)
+    p1.agent = _Agent()
+    state = GameState(
+        players=[p0, p1],
+        battlefield=[host, other, aura],
+        resolving_source=aura,
+    )
+    eff = TargetOpponentSacrificesCreatureOtherThanEnchanted()
+    eff.resolve(state, controller_id=0, targets=(("player", 1),))
+    # The agent saw ONLY the non-host id.
+    assert seen_options == [[11]]
+    # The non-host creature is now in the graveyard; the host is still
+    # on the battlefield.
+    assert other not in state.battlefield
+    assert host in state.battlefield
+
+
+def test_sac_other_than_enchanted_no_legal_silently_no_ops():
+    # When the target opp's only creature is the enchanted creature,
+    # there are no legal sac options — the trigger silently no-ops.
+    from mtg_bot.cards.base import make_aura, make_creature
+    from mtg_bot.effects import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura_pr = make_aura("TestSac", "{1}{B}")
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    host = GameObject(
+        id=10, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura = GameObject(
+        id=20, printing=aura_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = host.id
+
+    class _AssertAgent:
+        def choose_sacrifice(self, state, player_id, options):
+            raise AssertionError("should not be prompted with no options")
+
+    p0 = Player(id=0)
+    p1 = Player(id=1)
+    p1.agent = _AssertAgent()
+    state = GameState(
+        players=[p0, p1],
+        battlefield=[host, aura],
+        resolving_source=aura,
+    )
+    eff = TargetOpponentSacrificesCreatureOtherThanEnchanted()
+    eff.resolve(state, controller_id=0, targets=(("player", 1),))
+    # Host survives.
+    assert host in state.battlefield
+
+
+def test_sac_other_than_enchanted_describe():
+    from mtg_bot.effects import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
+
+    desc = TargetOpponentSacrificesCreatureOtherThanEnchanted().describe()
+    assert "sacrif" in desc
+    assert "other than enchanted" in desc

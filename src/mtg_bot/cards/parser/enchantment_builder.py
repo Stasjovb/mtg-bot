@@ -44,6 +44,8 @@ Aura enchantments (DSK):
   hexproof grant is also a no-op.)
 - Sheltered by Ghosts ``{1}{W}`` (Enchant-creature-you-control + ETB
   exile-opp-permanent-until-leaves + +1/+0 + lifelink + ward {2})
+- Sporogenic Infection ``{1}{B}`` (ETB target-opp-sacs-creature-other-
+  than-enchanted + DEALT_DAMAGE-destroys-enchanted)
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ from mtg_bot.effects import (
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
     TargetOpponentLookHandMayDiscard,
+    TargetOpponentSacrificesCreatureOtherThanEnchanted,
     TractorBeamETBEffect,
     WeftwalkingETBEffect,
 )
@@ -483,6 +486,42 @@ def _build_cracked_skull() -> CardPrinting:
     )
 
 
+def _build_sporogenic_infection() -> CardPrinting:
+    """Sporogenic Infection ``{1}{B}``: Enchantment — Aura.
+
+    Oracle text:
+        Enchant creature
+        When this Aura enters, target player sacrifices a creature of
+        their choice other than enchanted creature.
+        When enchanted creature is dealt damage, destroy it.
+
+    Composes the new ``TargetOpponentSacrificesCreatureOtherThan
+    Enchanted`` ETB and the existing Cryoshatter-style
+    DEALT_DAMAGE-destroys-host trigger:
+
+    - ETB: ``TargetOpponentSacrificesCreatureOtherThanEnchanted()`` —
+      identifies the host via ``state.resolving_source.attached_to``
+      and excludes it from the target's sac options. The simplified
+      ``target player`` -> ``target opponent`` legality narrowing is
+      the same convention Cracked Skull's may-discard ETB rides.
+    - DEALT_DAMAGE: ``DestroyEnchantedPermanent()`` keyed on
+      ``IsHost()`` — same shape Cryoshatter's bottom trigger uses.
+    """
+    return make_aura(
+        "Sporogenic Infection", "{1}{B}",
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
+            ),
+            TriggeredAbility(
+                event=Event.DEALT_DAMAGE, predicate=IsHost(),
+                effect=DestroyEnchantedPermanent(),
+            ),
+        ),
+    )
+
+
 def _build_shardmages_rescue() -> CardPrinting:
     """Shardmage's Rescue ``{W}``: Enchantment — Aura.
 
@@ -581,6 +620,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Frantic Strength": _build_frantic_strength,
     "Shardmage's Rescue": _build_shardmages_rescue,
     "Sheltered by Ghosts": _build_sheltered_by_ghosts,
+    "Sporogenic Infection": _build_sporogenic_infection,
 }
 
 
