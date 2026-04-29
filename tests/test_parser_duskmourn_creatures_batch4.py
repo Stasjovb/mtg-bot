@@ -455,3 +455,132 @@ def test_savior_of_the_small_carries_max_mv_reanimator():
     assert len(s.triggered_abilities) == 1
     trig = s.triggered_abilities[0]
     assert trig.effect == ReturnCreatureFromYourGraveyardToHand(max_mv=3)
+
+
+# ---------- ``LookAtTopNRevealOrCounter`` max_power + counter_on_miss ----------
+
+
+def test_look_at_top_n_creature_with_max_power_filter_excludes_strong():
+    # ``filter_name="creature"`` + ``max_power=2`` matches a creature
+    # printing whose printed power is at most 2 and rejects one with
+    # higher power. Mirrors the pattern's narrowing for Living Phone's
+    # ``creature card with power 2 or less`` clause.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    eff = LookAtTopNRevealOrCounter(
+        n=5, filter_name="creature", max_power=2, counter_on_miss=False,
+    )
+    small = make_creature("Smol", "{1}{G}", 2, 2)
+    big = make_creature("Hench", "{3}{G}", 4, 4)
+    assert eff._matches(small) is True
+    assert eff._matches(big) is False
+
+
+def test_look_at_top_n_creature_with_max_power_zero_no_cap():
+    # ``max_power=0`` (the default) keeps the existing Pulsar Squadron
+    # Ace behaviour where every creature card qualifies regardless of
+    # power. Belt-and-suspenders against a future regression that
+    # flipped the sentinel.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    eff = LookAtTopNRevealOrCounter(n=5, filter_name="creature")
+    big = make_creature("Hench", "{3}{G}", 4, 4)
+    assert eff._matches(big) is True
+
+
+def test_look_at_top_n_counter_on_miss_false_skips_counter_branch():
+    # When ``counter_on_miss=False`` and no card is revealed, the
+    # resolution puts the examined cards on the bottom in random
+    # order WITHOUT placing a +1/+1 counter on the source. Belt-and-
+    # suspenders for the new flag — the Pulsar Squadron Ace path
+    # (counter_on_miss=True, the default) is exercised by its own
+    # test elsewhere.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    p = Player(id=0, agent=RandomAgent())
+    state.players.append(p)
+    src = state.new_object(
+        make_creature("Source", "{2}{B}", 2, 1, artifact=True),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    state.resolving_source = src
+    # Seed the library with non-creature cards so the agent finds no
+    # match — the on-miss branch fires.
+    from mtg_bot.cards import BASIC_LANDS
+    for _ in range(5):
+        c = state.new_object(
+            BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY,
+        )
+        p.library.append(c)
+    eff = LookAtTopNRevealOrCounter(
+        n=5, filter_name="creature", max_power=2, counter_on_miss=False,
+    )
+    try:
+        eff.resolve(state, controller_id=0)
+    finally:
+        state.resolving_source = None
+    # No counter placed.
+    assert src.plus_one_counters == 0
+
+
+def test_look_at_top_n_describe_with_max_power_no_counter():
+    # The describe output spells out the power threshold and omits the
+    # counter clause when ``counter_on_miss=False``. Forward-looking
+    # log readability check.
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    eff = LookAtTopNRevealOrCounter(
+        n=5, filter_name="creature", max_power=2, counter_on_miss=False,
+    )
+    desc = eff.describe()
+    assert "creature card with power 2 or less" in desc
+    assert "+1/+1 counter" not in desc
+
+
+def test_parse_living_phone_dies_phrase():
+    # End-to-end through the effect-phrase parser. The full three-
+    # sentence body parses to a ``LookAtTopNRevealOrCounter`` carrying
+    # the new ``max_power`` and ``counter_on_miss=False`` fields —
+    # distinct from Pulsar Squadron Ace's bespoke counter-rider variant.
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    parsed = _parse_effect_phrase(
+        "look at the top five cards of your library. You may reveal a "
+        "creature card with power 2 or less from among them and put it "
+        "into your hand. Put the rest on the bottom of your library in "
+        "a random order"
+    )
+    assert parsed == LookAtTopNRevealOrCounter(
+        n=5, filter_name="creature", max_power=2, counter_on_miss=False,
+    )
+
+
+def test_living_phone_claimed_by_parser():
+    # Living Phone ``{2}{W}`` 2/1 Artifact Creature — Toy. Single oracle
+    # line: ``When this creature dies, look at the top five cards of
+    # your library. You may reveal a creature card with power 2 or less
+    # from among them and put it into your hand. Put the rest on the
+    # bottom of your library in a random order.`` Claims via the
+    # existing dies-trigger grammar fed by the new max_power +
+    # counter_on_miss=False variant of LookAtTopNRevealOrCounter.
+    assert "Living Phone" in _claimed_names()
+
+
+def test_living_phone_carries_max_power_no_counter_effect():
+    # Belt-and-suspenders that the claimed printing actually wires the
+    # narrow ``max_power=2`` filter and the ``counter_on_miss=False``
+    # flag — the difference from Pulsar Squadron Ace's variant. A
+    # regression that defaulted ``counter_on_miss`` back to True would
+    # silently add a +1/+1 counter to the dying source on miss, which
+    # Living Phone's printed text doesn't include.
+    from mtg_bot.effects.generic import LookAtTopNRevealOrCounter
+    src = OracleParserCardSource()
+    lp = src.get_printings()["Living Phone"]
+    assert len(lp.triggered_abilities) == 1
+    trig = lp.triggered_abilities[0]
+    assert trig.effect == LookAtTopNRevealOrCounter(
+        n=5, filter_name="creature", max_power=2, counter_on_miss=False,
+    )

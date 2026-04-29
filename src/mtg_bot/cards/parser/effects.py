@@ -51,6 +51,7 @@ from mtg_bot.cards.base import (
     ExileTargetCreature,
     GainLife,
     GrantUnblockableUEOT,
+    LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     ManifestDread,
@@ -526,6 +527,23 @@ _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
     r"^look at the top two cards of your library\. "
     r"Put one into your hand and the other into your graveyard$"
+)
+# Living Phone's dies trigger body — ``look at the top five cards of
+# your library. You may reveal a creature card with power 2 or less
+# from among them and put it into your hand. Put the rest on the
+# bottom of your library in a random order``. The three-sentence
+# surface form is matched as a single primitive (the compound-effect
+# splitter's all-or-nothing rule keeps the embedded periods from
+# carving the phrase). Captures the power threshold so a future
+# variant with a different cap (``with power 3 or less``, etc.) lands
+# on the same primitive without further regex work. Maps to
+# ``LookAtTopNRevealOrCounter(n=5, filter_name="creature",
+# max_power=N, counter_on_miss=False)``.
+_LOOK_TOP_FIVE_REVEAL_LOW_POWER_CREATURE = re.compile(
+    r"^look at the top five cards of your library\. "
+    r"You may reveal a creature card with power (\d+) or less "
+    r"from among them and put it into your hand\. "
+    r"Put the rest on the bottom of your library in a random order$"
 )
 # Mill is "mill <amount> cards" where the amount is either a digit or
 # one of the spelled-out small cardinals (Scryfall printing convention).
@@ -1821,6 +1839,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         # single primitive; the agent's ``choose_surveil`` hook
         # decides which card goes to which pile at resolve time.
         return LookAtTopTwoSplitHandGraveyard()
+    m = _LOOK_TOP_FIVE_REVEAL_LOW_POWER_CREATURE.match(phrase)
+    if m is not None:
+        # ``look at the top five cards of your library. You may reveal
+        # a creature card with power N or less from among them and put
+        # it into your hand. Put the rest on the bottom of your library
+        # in a random order`` — Living Phone's dies trigger body. Maps
+        # to ``LookAtTopNRevealOrCounter(n=5, filter_name="creature",
+        # max_power=N, counter_on_miss=False)`` — the ``creature``
+        # filter narrowed by power, and ``counter_on_miss=False``
+        # because Living Phone's printed text has no ``Otherwise, put
+        # a +1/+1 counter`` clause (distinct from Pulsar Squadron Ace's
+        # bespoke entry which carries the counter rider).
+        return LookAtTopNRevealOrCounter(
+            n=5, filter_name="creature",
+            max_power=int(m.group(1)), counter_on_miss=False,
+        )
     m = _MILL_N_CARDS.match(phrase)
     if m is not None:
         return SelfMill(amount=_parse_amount(m.group(1)))

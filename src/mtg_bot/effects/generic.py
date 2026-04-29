@@ -2626,13 +2626,31 @@ class LookAtTopNRevealOrCounter(Effect):
 
     n: int = 5
     filter_name: str = "spacecraft"
+    # Inclusive upper bound on printed power for the ``creature`` filter
+    # — used by Living Phone's ``creature card with power 2 or less``
+    # tutor body. ``0`` (default) means "no power cap" so the existing
+    # Pulsar Squadron Ace ``creature`` use-site keeps its unrestricted
+    # behaviour. Ignored for non-creature filters.
+    max_power: int = 0
+    # When ``True`` (default, matches Pulsar Squadron Ace), failing to
+    # reveal a card puts a +1/+1 counter on the resolving source. Living
+    # Phone has no counter rider — its oracle text is the bare
+    # ``Put the rest on the bottom of your library in a random order``
+    # tail with no ``Otherwise, put a +1/+1 counter`` clause — so its
+    # printing carries ``counter_on_miss=False`` and the resolution
+    # short-circuits to bottoming the remainder when no card is revealed.
+    counter_on_miss: bool = True
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name
         if fn == "spacecraft":
             return printing.is_spacecraft
         if fn == "creature":
-            return printing.is_creature
+            if not printing.is_creature:
+                return False
+            if self.max_power > 0 and printing.power > self.max_power:
+                return False
+            return True
         if fn == "artifact":
             return printing.is_artifact
         return False
@@ -2671,14 +2689,20 @@ class LookAtTopNRevealOrCounter(Effect):
                 f"P{controller_id} reveals nothing from the top "
                 f"{len(examined)} cards"
             )
-            source = state.resolving_source
-            if source is not None and source in state.battlefield:
-                from mtg_bot.game import add_plus_one_counters
-                add_plus_one_counters(state, source, 1)
-                state.log.append(
-                    f"{source.printing.name} gets a +1/+1 counter "
-                    f"(now {source.plus_one_counters})"
-                )
+            # Pulsar Squadron Ace's ``Otherwise, put a +1/+1 counter
+            # on it`` rider. Living Phone's printing carries
+            # ``counter_on_miss=False`` so a missed reveal there just
+            # bottoms the remainder without a counter — matching its
+            # printed text which has no such fallback clause.
+            if self.counter_on_miss:
+                source = state.resolving_source
+                if source is not None and source in state.battlefield:
+                    from mtg_bot.game import add_plus_one_counters
+                    add_plus_one_counters(state, source, 1)
+                    state.log.append(
+                        f"{source.printing.name} gets a +1/+1 counter "
+                        f"(now {source.plus_one_counters})"
+                    )
         # Bottom the remainder in a random order. Take up to n cards off
         # the top (those we examined except the revealed one if any) and
         # shuffle them onto the bottom.
@@ -2695,13 +2719,22 @@ class LookAtTopNRevealOrCounter(Effect):
         p.library.extend(remaining_examined)
 
     def describe(self) -> str:
-        return (
+        if self.filter_name == "creature" and self.max_power > 0:
+            filter_phrase = f"creature card with power {self.max_power} or less"
+        else:
+            filter_phrase = f"{self.filter_name} card"
+        base = (
             f"look at the top {self.n} cards of your library; you may "
-            f"reveal a {self.filter_name} card from among them and put "
+            f"reveal a {filter_phrase} from among them and put "
             f"it into your hand; put the rest on the bottom of your "
-            f"library in a random order; if you didn't put a card into "
-            f"your hand this way, put a +1/+1 counter on ~"
+            f"library in a random order"
         )
+        if self.counter_on_miss:
+            base += (
+                "; if you didn't put a card into your hand this way, "
+                "put a +1/+1 counter on ~"
+            )
+        return base
 
 
 
