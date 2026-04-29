@@ -826,6 +826,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if verge is not None:
         return verge
+    low_life_dual = _try_build_low_life_dual_land(
+        card, text, supertypes, subtypes,
+    )
+    if low_life_dual is not None:
+        return low_life_dual
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1676,6 +1681,67 @@ def _try_build_verge_dual_land(
                 is_mana_ability=True,
             ),
         ),
+    )
+
+
+# Duskmourn "horror dual" cycle (Abandoned Campground, Bleeding Woods,
+# Etched Cornfield, Lakeside Shack, Murky Sewer, Neglected Manor,
+# Peculiar Lighthouse, Raucous Carnival, Razortrap Gorge, Strangled
+# Cemetery). Plain ``Land``, no supertypes/subtypes, exactly two
+# lines:
+#   1. ``This land enters tapped unless a player has <N> or less life.``
+#   2. ``{T}: Add {<C1>} or {<C2>}.``
+# The condition is a deterministic state check at ETB (no agent
+# choice). The threshold flows through
+# ``CardPrinting.enters_tapped_unless_any_player_life_at_most``;
+# ``_play_land`` reads it after applying the default ``enters_tapped``.
+_LOW_LIFE_TAPPED_LINE_RE = re.compile(
+    r"^This land enters tapped unless a player has "
+    r"(?P<threshold>\d+) or less life\.$"
+)
+_LOW_LIFE_DUAL_TAP_LINE_RE = re.compile(
+    r"^\{T\}: Add \{(?P<c1>[WUBRG])\} or \{(?P<c2>[WUBRG])\}\.$"
+)
+
+
+def _try_build_low_life_dual_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a low-life-dual ``CardPrinting`` if ``text`` matches the
+    Duskmourn horror-dual two-line shape, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The condition
+    line names the threshold (always 13 in the printed cycle, but
+    captured generically). The mana line names two distinct colors;
+    they're set as the ``produces`` frozenset and the dual-mana
+    activation goes on the printing as a single mana ability via the
+    ``AddNManaOfChosenColor`` primitive.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    cond = _LOW_LIFE_TAPPED_LINE_RE.match(lines[0])
+    if cond is None:
+        return None
+    tap = _LOW_LIFE_DUAL_TAP_LINE_RE.match(lines[1])
+    if tap is None:
+        return None
+    c1 = tap.group("c1")
+    c2 = tap.group("c2")
+    if c1 == c2:
+        return None
+    threshold = int(cond.group("threshold"))
+    return make_utility_land(
+        card["name"],
+        produces=frozenset({c1, c2}),
+        enters_tapped_unless_any_player_life_at_most=threshold,
     )
 
 

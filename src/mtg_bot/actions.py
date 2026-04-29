@@ -1182,6 +1182,16 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     card.controller_id = player_id
     # "Enters tapped" covers Planets + most non-basic utility lands.
     card.tapped = bool(card.printing.enters_tapped)
+    # Duskmourn horror duals: "This land enters tapped unless a
+    # player has 13 or less life." Deterministic state check at ETB,
+    # no agent choice. The land enters untapped when any player's
+    # life total is at or below the threshold; otherwise tapped.
+    low_life_threshold = (
+        card.printing.enters_tapped_unless_any_player_life_at_most
+    )
+    if low_life_threshold > 0:
+        any_low = any(pl.life <= low_life_threshold for pl in state.players)
+        card.tapped = not any_low
     # Shock land: optional life payment on ETB. Agent decides; if they
     # can't/won't pay, the land enters tapped.
     life_cost = card.printing.shock_land_life_cost

@@ -571,6 +571,11 @@ class CardPrinting:
     # When True, this card always enters the battlefield tapped
     # (Planet-style utility lands and other "enters tapped" permanents).
     enters_tapped: bool = False
+    # Duskmourn "horror dual" cycle (Bleeding Woods, Etched Cornfield,
+    # …). When > 0, the land enters tapped unless any player's life
+    # total is at or below this threshold at ETB time. No agent choice
+    # — the condition is a deterministic state check. 0 disables.
+    enters_tapped_unless_any_player_life_at_most: int = 0
     # Echoing Deeps: "You may have this land enter tapped as a copy of
     # any land card in a graveyard, except it's a Cave in addition to
     # its other types." When True, _play_land offers the controller's
@@ -1566,6 +1571,7 @@ def make_utility_land(
     enters_tapped: bool = False,
     keywords: "frozenset[str] | set[str] | tuple[str, ...]" = (),
     optional_copy_land_from_graveyard: bool = False,
+    enters_tapped_unless_any_player_life_at_most: int = 0,
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -1588,6 +1594,9 @@ def make_utility_land(
         enters_tapped=enters_tapped,
         keywords=frozenset(keywords),
         optional_copy_land_from_graveyard=optional_copy_land_from_graveyard,
+        enters_tapped_unless_any_player_life_at_most=(
+            enters_tapped_unless_any_player_life_at_most
+        ),
     )
 
 
