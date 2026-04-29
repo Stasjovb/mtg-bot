@@ -116,7 +116,6 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.combinators import (
     OptionalSacLandOrLanderForBasicLandRamp,
-    Sequence,
 )
 from mtg_bot.effects.generic import (
     DealDamageToTargetCreature,
@@ -124,9 +123,7 @@ from mtg_bot.effects.generic import (
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
-    ReturnCreatureFromYourGraveyardToHand,
     SearchLibraryForCard,
-    SelfMill,
     TargetArtifactBecomesCreatureUEOT,
     TargetPlayerLosesLife,
 )
@@ -147,22 +144,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Fell Gravship: ETB mill 3 then return a creature card from your
-        # graveyard to your hand. Station 8+ flying + lifelink.
-        make_spacecraft(
-            "Fell Gravship", "{2}{B}", 3, 2,
-            station_threshold=8,
-            stationed_keywords={"flying", "lifelink"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        SelfMill(amount=3),
-                        ReturnCreatureFromYourGraveyardToHand(),
-                    )),
-                ),
-            ),
-        ),
         # Larval Scoutlander: ETB optional sac land or Lander → search for up
         # to two basic lands onto battlefield tapped. Station 7+ flying.
         make_spacecraft(

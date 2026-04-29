@@ -912,6 +912,34 @@ _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
     r"^return target creature card from your graveyard to your hand$"
 )
+# "Return a creature or Spacecraft card from your graveyard to your
+# hand" — Fell Gravship's ETB body second sentence (after the
+# ``mill three cards, then`` connective is split off by the compound
+# parser). Maps to ``ReturnCreatureFromYourGraveyardToHand(
+# or_spacecraft=True)``. The article is ``a`` rather than ``target``
+# because Scryfall prints the choice as a non-target selection in
+# this position; the engine class's ``requires_target`` /
+# ``legal_targets`` still drive the choice through the agent at
+# resolve time. Tried BEFORE the bare ``return target creature card``
+# regex below so the more-specific ``or Spacecraft`` widening lands
+# first; the bare regex's ``$`` anchor on ``hand`` would never match
+# the ``or Spacecraft`` tail anyway, but ordering more-specific before
+# more-general is the convention in this dispatcher. Mirrors the
+# ``or_spacecraft`` widening on ``DestroyTargetCreature`` (Embrace
+# Oblivion) and the ``or_enchantment`` widening on the same engine
+# class (Withering Torment) — same precedent of adding a flag to an
+# existing graveyard / battlefield operator rather than a new engine
+# class. Literal-line recognizer with a single-card claim: only Fell
+# Gravship in the EoE pool prints this exact ``a creature or
+# Spacecraft card`` graveyard surface today; deferred generalization
+# would fold this and a future ``return a creature or Spacecraft
+# card from your graveyard to the battlefield`` sibling into one
+# regex with a captured destination word, dispatching across both
+# engine-class destinations.
+_RETURN_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_HAND = re.compile(
+    r"^return a creature or Spacecraft card "
+    r"from your graveyard to your hand$"
+)
 # "Return target creature card with mana value N or less from your
 # graveyard to your hand" — narrowed-by-MV graveyard-to-hand reanimation.
 # Savior of the Small's Survival reward (``mana value 3 or less``); the
@@ -2585,6 +2613,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         # threshold; ``max_mv=0`` (unset) keeps the original unbounded
         # behaviour for Interceptor Mechan and the bare regex below.
         return ReturnCreatureFromYourGraveyardToHand(max_mv=int(m.group(1)))
+    if _RETURN_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_HAND.match(
+        phrase
+    ) is not None:
+        # ``return a creature or Spacecraft card from your graveyard
+        # to your hand`` — Fell Gravship's ETB body second sentence.
+        # Tried before the bare ``return target creature card`` regex
+        # below for the more-specific-first convention; the bare
+        # regex's ``$`` anchor on ``hand`` would never match the
+        # ``or Spacecraft`` rider anyway. ``or_spacecraft=True``
+        # widens the engine class's legal-target pool to include
+        # Spacecraft cards in the graveyard alongside creature cards,
+        # mirroring the ``or_spacecraft`` flag on
+        # ``DestroyTargetCreature`` (Embrace Oblivion).
+        return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnCreatureFromYourGraveyardToHand()
     # Xu-Ifit, Osteoharmonist's reanimate-as-Skeleton multi-sentence
