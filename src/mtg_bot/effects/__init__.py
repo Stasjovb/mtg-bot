@@ -237,6 +237,7 @@ from mtg_bot.effects.bespoke import (
     TerrapactIntimidatorETBEffect,
     TerritorialBruntarLandfallEffect,
     TractorBeamETBEffect,
+    VengefulPossessionEffect,
     WeftwalkingETBEffect,
     ZeroPointBalladEffect,
 )

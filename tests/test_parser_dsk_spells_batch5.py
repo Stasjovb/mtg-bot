@@ -136,3 +136,142 @@ def test_jump_scare_is_instant():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Jump Scare"]
     assert "Instant" in p.card_types
+
+
+# ---------- VengefulPossessionEffect engine class ----------
+
+def test_vengeful_possession_effect_exists():
+    # New bespoke engine class wired in ``mtg_bot.effects.bespoke``
+    # next to ``SystemsOverrideEffect``. Imports cleanly and is
+    # exposed via ``mtg_bot.effects``.
+    from mtg_bot.effects import VengefulPossessionEffect
+
+    eff = VengefulPossessionEffect()
+    assert eff.requires_target() is True
+
+
+def test_vengeful_possession_describe():
+    from mtg_bot.effects import VengefulPossessionEffect
+
+    desc = VengefulPossessionEffect().describe()
+    assert "gain control" in desc
+    assert "untap" in desc
+    assert "haste" in desc
+
+
+def test_vengeful_possession_legal_targets_creatures_only():
+    # Vengeful Possession's legal-target pool is creatures only —
+    # narrowed from Systems Override's "artifact or creature" scope.
+    # Belt-and-suspenders: a non-creature artifact on the battlefield
+    # is NOT a legal target for Vengeful Possession (whereas it would
+    # be for Systems Override).
+    from mtg_bot.cards.base import make_artifact, make_creature
+    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=1, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    art_pr = make_artifact("Plain Artifact", "{2}")
+    art = GameObject(
+        id=2, printing=art_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear, art],
+    )
+    legal = VengefulPossessionEffect().legal_targets(state, 0)
+    ids = {t[1] for t in legal}
+    assert bear.id in ids
+    assert art.id not in ids
+
+
+def test_vengeful_possession_resolves_gain_control_untap_haste():
+    # End-to-end resolve sanity: target opponent's tapped creature
+    # gets controlled by us, untaps, and gains haste UEOT.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone, effective_keywords,
+    )
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=1, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear],
+    )
+    VengefulPossessionEffect().resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.controller_id == 0
+    assert bear.tapped is False
+    assert "haste" in effective_keywords(state, bear)
+
+
+def test_vengeful_possession_no_target_noop():
+    # Defensive: empty targets tuple resolves without raising.
+    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    VengefulPossessionEffect().resolve(
+        state, controller_id=0, targets=()
+    )
+
+
+def test_vengeful_possession_wrong_kind_noop():
+    # Defensive: a non-creature target kind (e.g. ``permanent`` from
+    # a Systems-Override-style invocation) resolves without raising
+    # — Vengeful Possession only honors ``creature`` targets.
+    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    VengefulPossessionEffect().resolve(
+        state, controller_id=0, targets=(("permanent", 999),)
+    )
+
+
+def test_vengeful_possession_missing_target_noop():
+    # Defensive: a target id that doesn't exist on the battlefield
+    # (the chosen creature was bounced/destroyed before resolution)
+    # resolves without raising.
+    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    VengefulPossessionEffect().resolve(
+        state, controller_id=0, targets=(("creature", 999),)
+    )
+
+
+# ---------- Vengeful Possession parser claim ----------
+
+def test_vengeful_possession_claimed_by_parser():
+    # Vengeful Possession ``{2}{R}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry mapping to the new
+    # ``VengefulPossessionEffect`` engine class.
+    assert "Vengeful Possession" in _claimed_names()
+
+
+def test_vengeful_possession_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the ``VengefulPossessionEffect`` engine class.
+    from mtg_bot.effects import VengefulPossessionEffect
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Vengeful Possession"]
+    assert p.spell_effect == VengefulPossessionEffect()
+
+
+def test_vengeful_possession_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Vengeful Possession"]
+    assert "Sorcery" in p.card_types

@@ -86,6 +86,7 @@ from mtg_bot.cards.base import (
     SystemsOverrideEffect,
     TakeExtraTurnAfterThisOne,
     TargetOpponentDiscardsCasterChoice,
+    VengefulPossessionEffect,
     ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
@@ -1020,6 +1021,23 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         toughness_bonus=2,
         granted_keywords=frozenset({"flying"}),
     ),
+    # Vengeful Possession (Duskmourn) — gain-control + untap +
+    # haste UEOT plus an optional looter rider ("You may discard a
+    # card. If you do, draw a card."). The static side ships
+    # ``VengefulPossessionEffect()`` which mirrors Systems
+    # Override's gain-control + untap + haste skeleton, narrowed to
+    # creature targets and stripped of the Spacecraft charge-counter
+    # rider. The optional looter rider is dropped on the parser
+    # side per the parser-is-right precedent — the bare base
+    # mechanic (gain-control + untap + haste UEOT) is what the
+    # engine models cleanly; the optional looter rider would need a
+    # new ``OptionalDiscardThenDraw`` primitive that no other DSK
+    # spell needs today.
+    (
+        "Gain control of target creature until end of turn. "
+        "Untap it. It gains haste until end of turn. "
+        "You may discard a card. If you do, draw a card."
+    ): VengefulPossessionEffect(),
 }
 
 
