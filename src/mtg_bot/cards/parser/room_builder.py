@@ -63,7 +63,6 @@ from mtg_bot.effects import (
     ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
-    TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
     YOU,
@@ -92,52 +91,6 @@ def _half(
         mana_cost_str=mana_cost,
         mana_cost=parse_mana_cost(mana_cost),
         triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-def _build_meat_locker_drowned_diner() -> CardPrinting:
-    """Meat Locker // Drowned Diner ``{2}{U}`` // ``{3}{U}{U}``.
-
-    Meat Locker oracle:
-        When you unlock this door, tap up to one target creature and
-        put two stun counters on it.
-
-    Drowned Diner oracle:
-        When you unlock this door, draw three cards, then discard a
-        card.
-
-    Both halves are pure door triggers. Meat Locker uses the new
-    ``TapAndStunUpToOneTargetCreature(stun_amount=2)`` primitive
-    (any creature, friend or foe; "up to one" means the door fires
-    even with no legal target). Drowned Diner threads
-    ``Sequence(DrawCards(3), DiscardSelf(1))`` through the resolve
-    pipeline — the existing primitives compose directly without a
-    new effect class.
-    """
-    return make_room(
-        _half(
-            "Meat Locker", "{2}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=TapAndStunUpToOneTargetCreature(stun_amount=2),
-                ),
-            ),
-        ),
-        _half(
-            "Drowned Diner", "{3}{U}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(
-                        effects=(
-                            DrawCards(amount=3),
-                            DiscardSelf(amount=1),
-                        ),
-                    ),
-                ),
-            ),
-        ),
     )
 
 
@@ -577,7 +530,6 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
@@ -604,6 +556,7 @@ _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
+    "Meat Locker // Drowned Diner",
     "Surgical Suite // Hospital Room",
     "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
