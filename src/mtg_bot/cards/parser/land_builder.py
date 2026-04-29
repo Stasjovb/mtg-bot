@@ -77,6 +77,7 @@ from mtg_bot.cards.base import (
     make_utility_land,
     parse_mana_cost,
 )
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
 
@@ -274,12 +275,6 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # Cathedral of War: enters tapped, exalted keyword, {T}: Add {C}.
-        "Cathedral of War": make_utility_land(
-            "Cathedral of War",
-            enters_tapped=True,
-            keywords=frozenset({"exalted"}),
-        ),
         # Mutavault: {T}: Add {C}. {1}: becomes 2/2 with all creature types UEOT.
         "Mutavault": make_utility_land(
             "Mutavault",
@@ -443,23 +438,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                     effect=(
                         DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters()
                     ),
-                ),
-            ),
-        ),
-        # Nesting Grounds: {T}: Add {C}. {1},{T}: Move a counter from
-        # target permanent you control onto a second target permanent.
-        # Activate only as a sorcery.
-        "Nesting Grounds": make_utility_land(
-            "Nesting Grounds",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                    ),
-                    effect=MovePlusOneCounterBetweenPermanentsYouControl(),
-                    sorcery_speed=True,
                 ),
             ),
         ),
@@ -651,21 +629,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Thespian's Stage: {T}: Add {C}. {2},{T}: This land becomes a
-        # copy of target land, except it has this ability.
-        "Thespian's Stage": make_utility_land(
-            "Thespian's Stage",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{2}"),
-                        mana_str="{2}",
-                        tap_self=True,
-                    ),
-                    effect=BecomesCopyOfTargetLand(),
-                ),
-            ),
-        ),
         # Echoing Deeps: Land — Cave. May enter tapped as copy of any
         # graveyard land (Cave in addition to its other types).
         # {T}: Add {C}.
@@ -812,6 +775,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if paid_fancy is not None:
         return paid_fancy
+    keyword_colorless = _try_build_keyword_colorless_utility_land(
+        card, text, supertypes, subtypes,
+    )
+    if keyword_colorless is not None:
+        return keyword_colorless
     paid_effect = _try_build_paid_effect_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1312,7 +1280,7 @@ _PAID_FANCY_MANA_BODIES: dict[str, "callable"] = {
 }
 
 
-_LAND_KEYWORD_WHITELIST = frozenset({"indestructible"})
+_LAND_KEYWORD_WHITELIST = frozenset({"indestructible", "exalted"})
 
 
 def _try_build_paid_fancy_mana_land(
@@ -1376,6 +1344,73 @@ def _try_build_paid_fancy_mana_land(
     )
 
 
+# Keyword-only utility lands.
+#
+# Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
+# is the strict three-line shape:
+#   1. ``This land enters tapped.``
+#   2. <single-keyword-line>      (on ``_LAND_KEYWORD_WHITELIST``)
+#   3. ``{T}: Add {C}.``          (intentionally dropped — the
+#      static-side ``make_utility_land`` doesn't add an explicit
+#      ability for it; the engine's auto-tap-for-cost generic-mana
+#      fallback covers tapping for ``{C}``)
+#
+# Currently claims:
+# - Cathedral of War — ``This land enters tapped.`` +
+#   ``Exalted (...)`` + ``{T}: Add {C}.``
+#
+# The keyword-line reminder text is stripped per-line via
+# ``_strip_reminder_text`` before the ``_KEYWORD_LINE_RE`` lookup.
+# Distinct from the paid-fancy-mana branch (which expects a paid
+# mana ability after ``{T}: Add {C}.``) and the colorless-utility
+# branch (which doesn't model ``enters_tapped`` and doesn't accept
+# a keyword line).
+_KEYWORD_TAPPED_TAP_FOR_C_LINE = "This land enters tapped."
+
+
+def _try_build_keyword_colorless_utility_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a keyword-only colorless utility ``CardPrinting`` if
+    ``text`` matches the strict three-line ``This land enters
+    tapped.`` + <keyword> + ``{T}: Add {C}.`` shape, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The keyword
+    line is restricted to a single capitalized word on
+    ``_LAND_KEYWORD_WHITELIST`` (today: ``Exalted`` for Cathedral of
+    War). The ``{T}: Add {C}.`` line is intentionally not modeled as
+    an explicit activated ability — the engine's auto-tap-for-cost
+    generic-mana fallback covers it, matching the static side's
+    ``make_utility_land(enters_tapped=True, keywords=...)`` shape.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _KEYWORD_TAPPED_TAP_FOR_C_LINE:
+        return None
+    kw_match = _KEYWORD_LINE_RE.match(lines[1])
+    if kw_match is None:
+        return None
+    kw = kw_match.group(1).lower()
+    if kw not in _LAND_KEYWORD_WHITELIST:
+        return None
+    if lines[2] != _DROPPED_TAP_FOR_C_LINE:
+        return None
+    return make_utility_land(
+        card["name"],
+        enters_tapped=True,
+        keywords=frozenset({kw}),
+    )
+
+
 # Generic-paid single-effect utility lands.
 #
 # Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
@@ -1428,6 +1463,14 @@ def _paid_effect_draw_a_card() -> Effect:
     return DrawCards(amount=1)
 
 
+def _paid_effect_becomes_copy_of_target_land() -> Effect:
+    return BecomesCopyOfTargetLand()
+
+
+def _paid_effect_move_counter_between_permanents() -> Effect:
+    return MovePlusOneCounterBetweenPermanentsYouControl()
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -1438,21 +1481,51 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "battlefield tapped":
         _paid_effect_put_basic_from_hand_tapped,
     "Draw a card": _paid_effect_draw_a_card,
+    # Thespian's Stage's ``{2}, {T}: This land becomes a copy of
+    # target land, except it has this ability.`` This recognizer
+    # claims the land via the standard paid-effect arm; the
+    # ``except it has this ability`` clause is part of the body
+    # surface form (``BecomesCopyOfTargetLand`` already implements
+    # the ability-preserving copy).
+    "This land becomes a copy of target land, except it has this "
+    "ability":
+        _paid_effect_becomes_copy_of_target_land,
+    # Nesting Grounds' ``{1}, {T}: Move a counter from target permanent
+    # you control onto a second target permanent.`` (paired with the
+    # ``Activate only as a sorcery`` rider, which lifts to
+    # ``sorcery_speed=True`` on the ability).
+    "Move a counter from target permanent you control onto a second "
+    "target permanent":
+        _paid_effect_move_counter_between_permanents,
 }
 
 
 # Activation-condition rider phrases. Each entry maps an exact phrase
-# (no trailing period) to a callable that mutates an
-# ``ActivationCost`` keyword-arg dict in place. Riders outside the
+# (no trailing period) to a callable that mutates either the
+# ``ActivationCost`` keyword-arg dict or the ``ActivatedAbility``
+# keyword-arg dict in place (or both). The mutator's signature is
+# ``(cost_kwargs, ability_kwargs)`` — riders that only affect the
+# cost ignore ``ability_kwargs`` and vice versa. Riders outside the
 # table fall through to the silent-skip path; bodies without a rider
 # also pass through — the recognizer treats the rider as optional.
-def _rider_creature_power_four_or_greater(kwargs: dict) -> None:
-    kwargs["requires_own_creature_power_at_least"] = 4
+def _rider_creature_power_four_or_greater(
+    cost_kwargs: dict, ability_kwargs: dict,
+) -> None:
+    cost_kwargs["requires_own_creature_power_at_least"] = 4
+
+
+def _rider_activate_only_as_a_sorcery(
+    cost_kwargs: dict, ability_kwargs: dict,
+) -> None:
+    ability_kwargs["sorcery_speed"] = True
 
 
 _PAID_EFFECT_RIDERS: dict[str, "callable"] = {
     "Activate only if you control a creature with power 4 or greater":
         _rider_creature_power_four_or_greater,
+    # Nesting Grounds — sorcery-speed rider lifts to
+    # ``ActivatedAbility(sorcery_speed=True)``.
+    "Activate only as a sorcery": _rider_activate_only_as_a_sorcery,
 }
 
 
@@ -1475,9 +1548,12 @@ def _try_build_paid_effect_utility_land(
 
     The optional rider is a fixed activation-condition phrase (e.g.
     Bonders' Enclave's ``Activate only if you control a creature
-    with power 4 or greater``) that maps to an ``ActivationCost``
-    flag. Bodies / cost shapes / riders outside their tables fall
-    through silently.
+    with power 4 or greater``, Nesting Grounds' ``Activate only as a
+    sorcery``) that maps to either an ``ActivationCost`` flag or an
+    ``ActivatedAbility`` flag (or both, depending on the rider). The
+    rider mutator receives both kwargs dicts and writes into whichever
+    is appropriate. Bodies / cost shapes / riders outside their tables
+    fall through silently.
     """
     if supertypes:
         return None
@@ -1498,11 +1574,12 @@ def _try_build_paid_effect_utility_land(
     # the front of ``rest`` after trimming the rider).
     body = rest
     cost_extra: dict = {}
+    ability_extra: dict = {}
     for rider, mutator in _PAID_EFFECT_RIDERS.items():
         suffix = ". " + rider
         if rest.endswith(suffix):
             body = rest[: -len(suffix)]
-            mutator(cost_extra)
+            mutator(cost_extra, ability_extra)
             break
     factory = _PAID_EFFECT_BODIES.get(body)
     if factory is None:
@@ -1519,6 +1596,7 @@ def _try_build_paid_effect_utility_land(
                     **cost_extra,
                 ),
                 effect=factory(),
+                **ability_extra,
             ),
         ),
     )
