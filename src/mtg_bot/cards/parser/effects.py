@@ -24,6 +24,7 @@ from mtg_bot.cards.base import (
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
     DealDamageToOpponentCreature,
+    DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
@@ -246,6 +247,30 @@ _DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE = re.compile(
 _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
     r"^(?:this Room )?deals (\d+) damage to target creature "
     r"an opponent controls$"
+)
+# "deals damage equal to the number of artifacts you control to target
+# creature an opponent controls" — Warmaker Gunship's ETB body (after
+# the ``it `` source-pronoun strip in
+# ``_normalize_creature_effect_phrase``). Maps to
+# ``DealDamageToOpponentCreatureByArtifactCount`` whose resolve counts
+# the controller's artifacts at fire time and routes through
+# ``_apply_damage`` against the chosen target. Same legal-target pool
+# (creatures NOT controlled by the resolving controller) as the bare
+# ``deals N damage to target creature an opponent controls`` shape
+# above; differs only in the dynamic damage amount tied to the
+# controller's artifact count rather than a printed integer.
+#
+# Literal-line recognizer per the architectural guidance: only one
+# card in the EoE/DSK pool fits this exact surface today (Warmaker
+# Gunship), and the engine class is the only "damage equal to count
+# of <type> you control" damage primitive that ships with a target-
+# opponent-creature filter. Deferred generalization: when a sibling
+# count-based primitive (e.g. ``deals damage equal to the number of
+# enchantments you control to …``) lands, fold both into one regex
+# whose capture group drives a count-source dispatch.
+_DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE = re.compile(
+    r"^deals damage equal to the number of artifacts you control "
+    r"to target creature an opponent controls$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -527,8 +552,20 @@ _DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
 # trigger body names the source explicitly (same precedent as
 # ``_DEAL_N_DAMAGE_EACH_OPPONENT`` and ``_DEAL_DAMAGE_TARGET_OPPONENT``
 # — the ``it `` normalizer only consumes the bare pronoun).
+#
+# The optional ``this Spacecraft `` prefix accepts the surface where
+# the source is a Spacecraft (Extinguisher Battleship's ETB body second
+# sentence — ``Then this Spacecraft deals 4 damage to each creature.``;
+# the leading ``Then `` connective is stripped by
+# ``_split_effect_sentences`` before this regex sees the phrase).
+# Mirrors the ``(?:this Room )?`` precedent on
+# ``_DEAL_DAMAGE_TARGET_OPPONENT_CREATURE`` — same self-source pronoun
+# pattern Rooms use, here applied to the Spacecraft type. Source
+# identity is established by the enclosing trigger's ``IsSelf()``
+# predicate, not the effect body.
 _DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
-    r"^(?:this creature )?deals (\d+) damage to each creature$"
+    r"^(?:this creature |this Spacecraft )?"
+    r"deals (\d+) damage to each creature$"
 )
 # "Search your library for an artifact card, reveal it, put it into
 # your hand, then shuffle." — Scour for Scrap mode 1 (and any future
@@ -1371,8 +1408,21 @@ _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
 # Distinct from the ``put a +1/+1 counter on this creature`` shape
 # (which produces ``PutPlusOneCounterOnSelf``) — counters persist past
 # end of turn while the pump bonus clears at cleanup.
+#
+# The optional ``this Spacecraft `` prefix accepts the activated-
+# ability surface where a Spacecraft body explicitly names its own
+# source as ``this Spacecraft`` (Debris Field Crusher's ``{1}{R}: This
+# Spacecraft gets +2/+0 until end of turn.`` body, post-activated
+# normalization to ``this Spacecraft gets +2/+0 until end of turn``).
+# Mirrors the ``(?:this Room )?`` precedent on
+# ``_DEAL_DAMAGE_TARGET_OPPONENT_CREATURE`` — same self-source pronoun
+# pattern Rooms use, here applied to the Spacecraft type. The source-
+# identity check happens through the enclosing ability's wiring (an
+# activated ability's source is implicitly the host), not the effect
+# body — so the prefix is purely a surface-noise admission.
 _PUMP_SELF_UEOT = re.compile(
-    r"^(?:this creature )?gets ([+-]\d+)/([+-]\d+) until end of turn$"
+    r"^(?:this creature |this Spacecraft )?"
+    r"gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
 # "This creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
 # turn" — source pumps itself AND grants itself one or more evergreen
@@ -1666,6 +1716,17 @@ def _split_effect_sentences(phrase: str) -> list[str]:
     embedded period in Codecracker's surface is part of a single
     primitive's literal regex, so its phrase doesn't reach this
     splitter — it claims through the single-effect dispatcher first.
+
+    Non-leading pieces also have a leading ``then `` connective stripped
+    when present. Scryfall prints sentence-joined sequenced effects
+    with ``Then <effect>.`` as the second sentence (Extinguisher
+    Battleship's ETB body — ``destroy target noncreature permanent.
+    Then this Spacecraft deals 4 damage to each creature.``); the
+    ``Then`` is purely a sequencing connective with the same semantic
+    weight as the ``, then `` joiner the compound parser accepts on
+    comma-joined surfaces, so stripping it here lands the inner
+    sentence on the same single-effect grammar without further
+    branching.
     """
     pieces = _EFFECT_SENTENCE_BOUNDARY.split(phrase)
     if len(pieces) == 1:
@@ -1679,6 +1740,8 @@ def _split_effect_sentences(phrase: str) -> list[str]:
             piece = piece[:-1]
         if i > 0 and piece and piece[0].isupper():
             piece = piece[0].lower() + piece[1:]
+        if i > 0 and piece.startswith("then "):
+            piece = piece[len("then "):]
         out.append(piece)
     return out
 
@@ -1787,6 +1850,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToOpponentCreature(amount=int(m.group(1)))
+    # ``deals damage equal to the number of artifacts you control to
+    # target creature an opponent controls`` — Warmaker Gunship's ETB
+    # body. Same legal-target pool as the bare integer-amount sibling
+    # above (target creature an opponent controls); the dynamic amount
+    # is read at resolve time from the controller's artifact count.
+    if _DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE.match(
+        phrase
+    ) is not None:
+        return DealDamageToOpponentCreatureByArtifactCount()
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare
