@@ -944,10 +944,26 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
 
 def run_cleanup_step(state: GameState) -> None:
     ap = state.active_player()
-    while len(ap.hand) > 7:
-        card = ap.hand.pop()
-        card.zone = Zone.GRAVEYARD
-        ap.graveyard.append(card)
+    # CR 402.2: by default the active player discards down to 7 at
+    # cleanup. Steaming Sauna's static ``You have no maximum hand
+    # size`` (and any future ``grants_no_max_hand_size``-flagged
+    # static) suspends that rule for its controller while active.
+    # Walk the battlefield for any source under ``ap``'s control
+    # whose ``_active_static_abilities`` (room_half-aware) includes
+    # a ``grants_no_max_hand_size=True`` entry; skip the discard
+    # loop when found.
+    from mtg_bot.game import _active_static_abilities
+    no_max_hand_size = any(
+        getattr(static, "grants_no_max_hand_size", False)
+        for obj in state.battlefield
+        if obj.controller_id == ap.id
+        for static in _active_static_abilities(obj)
+    )
+    if not no_max_hand_size:
+        while len(ap.hand) > 7:
+            card = ap.hand.pop()
+            card.zone = Zone.GRAVEYARD
+            ap.graveyard.append(card)
     # Layer-6/7 UEOT continuous effects expire at cleanup. Drop every
     # registry entry tagged ``expires_at="cleanup"`` (Phase 2+
     # migration: keyword grants from pump effects, eventually

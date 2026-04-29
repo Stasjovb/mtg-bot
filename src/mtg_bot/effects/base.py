@@ -356,6 +356,19 @@ class StaticAbility:
     # the half is locked (not in ``unlocked_halves``), the ability is
     # inert. ``None`` for non-Room statics — always active.
     room_half: "str | None" = None
+    # Player-scope static: source's controller has no maximum hand
+    # size (CR 402.2 default 7-card cleanup discard suspended).
+    # Steaming Sauna (DSK Room half) prints ``You have no maximum
+    # hand size.`` Gated by ``room_half`` while the half is locked.
+    # ``run_cleanup_step`` scans the battlefield for active statics
+    # carrying this flag whose source's controller is the active
+    # player and skips the cleanup-discard loop when found, mirroring
+    # CR 402.2's "no maximum hand size" replacement of the discard-
+    # to-7 rule. The flag is independent of the creature-target
+    # ``applies_to`` walk — this static doesn't grant keywords or
+    # P/T bonuses to creatures, so the existing scope/applies_to
+    # plumbing isn't exercised.
+    grants_no_max_hand_size: bool = False
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""

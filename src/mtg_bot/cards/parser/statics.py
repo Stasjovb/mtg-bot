@@ -218,6 +218,19 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
     "creatures you control": StaticScope.CREATURES_YOU_CONTROL,
     "other creatures you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    # Lecture Hall (DSK Room half) prints ``Other permanents you control
+    # have hexproof.`` — strictly broader than "Other creatures" (also
+    # affects non-creature permanents). The engine's ``applies_to``
+    # walk is creature-only today (``is_creature_now`` short-circuits
+    # for non-creatures), so ``OTHER_CREATURES_YOU_CONTROL`` is the
+    # widest scope that produces an honest, engine-observable static —
+    # a faithful approximation of the printed surface where the
+    # difference (hexproof grant on non-creature permanents) is
+    # immaterial as long as hexproof remains engine-unenforced
+    # metadata. When hexproof becomes targeting-site-checked AND a
+    # broader ``OTHER_PERMANENTS_YOU_CONTROL`` scope ships, this entry
+    # should switch to that scope to recover full faithfulness.
+    "other permanents you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
 }
 
 # The subject's first letter is capitalized at the start of an oracle
@@ -227,7 +240,9 @@ _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
 # looking it up in ``_ANTHEM_SUBJECT_SCOPES``; both surface
 # capitalizations map to the same scope.
 _ANTHEM_SUBJECT_RE = (
-    r"(?P<subject>[Cc]reatures you control|[Oo]ther creatures you control)"
+    r"(?P<subject>[Cc]reatures you control"
+    r"|[Oo]ther creatures you control"
+    r"|[Oo]ther permanents you control)"
 )
 _ANTHEM_TURN_RIDER_RE = r"(?P<turn_rider>During your turn, )?"
 
@@ -259,6 +274,19 @@ _COUNTER_GATED_ANTHEM_LINE = re.compile(
     r"^Each creature you control with a \+1/\+1 counter on it has "
     r"(?P<keyword>[A-Za-z ]+)\.$"
 )
+
+# Player-scope static: ``You have no maximum hand size.`` — Steaming
+# Sauna (DSK Room half) is the only EoE/DSK card in the parser pool
+# today fitting this exact surface (Marina Vendrell's Grimoire
+# combines it with other rules in a multi-line oracle and isn't yet
+# claimed by the parser). Per parser/CLAUDE.md a literal-line
+# recognizer is acceptable when one card in the pool fits AND the
+# docstring notes deferred generalization — when a second printing
+# with this surface lands (or with sibling player-scope statics like
+# "you don't lose the game for having 0 or less life"), the right
+# move is a parameterized player-scope-static regex driving an
+# enum/flag dispatch, replacing this literal.
+_NO_MAX_HAND_SIZE_LINE = re.compile(r"^You have no maximum hand size\.$")
 
 
 def _parse_anthem_static_line(line: str) -> StaticAbility | None:
@@ -375,7 +403,25 @@ def _parse_static_ability_line(line: str) -> StaticAbility | None:
         anthem = _parse_anthem_static_line(stripped)
         if anthem is not None:
             return anthem
-        return _parse_counter_gated_anthem_line(stripped)
+        counter_gated = _parse_counter_gated_anthem_line(stripped)
+        if counter_gated is not None:
+            return counter_gated
+        # Player-scope statics — no creature target, just a flag on
+        # the source's controller. ``You have no maximum hand size.``
+        # is the only entry today (Steaming Sauna). The produced
+        # ``StaticAbility`` carries no granted keywords / no P/T
+        # bonus; ``run_cleanup_step`` reads ``grants_no_max_hand_size``
+        # directly off the active static abilities of every
+        # battlefield permanent under the active player's control.
+        # Scope is set to ``SELF`` so the existing creature-only
+        # ``applies_to`` walk is a clean no-op for non-creature
+        # source permanents (Steaming Sauna is an Enchantment).
+        if _NO_MAX_HAND_SIZE_LINE.match(stripped) is not None:
+            return StaticAbility(
+                scope=StaticScope.SELF,
+                grants_no_max_hand_size=True,
+            )
+        return None
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:

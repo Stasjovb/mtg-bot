@@ -26,6 +26,7 @@ from mtg_bot.cards.base import (
     DealDamageEqualToSourcePowerAnyTarget,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
+    DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
@@ -253,30 +254,38 @@ _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
     r"^(?:this Room )?deals (\d+) damage to target creature "
     r"an opponent controls$"
 )
-# "deals damage equal to the number of artifacts you control to target
-# creature an opponent controls" — Warmaker Gunship's ETB body (after
-# the ``it `` source-pronoun strip in
-# ``_normalize_creature_effect_phrase``). Maps to
-# ``DealDamageToOpponentCreatureByArtifactCount`` whose resolve counts
-# the controller's artifacts at fire time and routes through
-# ``_apply_damage`` against the chosen target. Same legal-target pool
-# (creatures NOT controlled by the resolving controller) as the bare
-# ``deals N damage to target creature an opponent controls`` shape
-# above; differs only in the dynamic damage amount tied to the
-# controller's artifact count rather than a printed integer.
+# "[this Room ]deals damage equal to <count-source> to target creature
+# an opponent controls" — Warmaker Gunship (artifacts you control,
+# from EoE) and Roaring Furnace (cards in your hand, from DSK Room
+# half). Parameterized over the count-source phrase via a captured
+# group; the ``_DEAL_DAMAGE_COUNT_SOURCE_DISPATCH`` mapping below
+# routes the captured surface text to the matching engine class.
+# Same legal-target pool (creatures NOT controlled by the resolving
+# controller) as the bare ``deals N damage to target creature an
+# opponent controls`` shape above; differs only in the dynamic
+# damage amount tied to a runtime count instead of a printed integer.
 #
-# Literal-line recognizer per the architectural guidance: only one
-# card in the EoE/DSK pool fits this exact surface today (Warmaker
-# Gunship), and the engine class is the only "damage equal to count
-# of <type> you control" damage primitive that ships with a target-
-# opponent-creature filter. Deferred generalization: when a sibling
-# count-based primitive (e.g. ``deals damage equal to the number of
-# enchantments you control to …``) lands, fold both into one regex
-# whose capture group drives a count-source dispatch.
-_DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE = re.compile(
-    r"^deals damage equal to the number of artifacts you control "
+# The optional ``this Room `` prefix accepts the Duskmourn Room-half
+# surface where the source names itself as ``this Room`` (mirrors the
+# ``(?:this Room )?`` precedent on the integer-amount sibling above).
+# Same source-identity check via the trigger's ``IsSelf()`` predicate;
+# the prefix is purely surface noise that the regex consumes.
+_DEAL_DAMAGE_BY_COUNT_TARGET_OPPONENT_CREATURE = re.compile(
+    r"^(?:this Room )?deals damage equal to the number of "
+    r"(artifacts you control|cards in your hand) "
     r"to target creature an opponent controls$"
 )
+# Maps the captured count-source surface text to its engine class.
+# Adding a new count source (e.g. ``enchantments you control``) is
+# one entry here plus extending the regex's alternation above — no
+# new dispatch site required. Both engine classes share the
+# ``target creature an opponent controls`` legal-target filter; they
+# differ only in WHICH count drives the damage amount at resolve
+# time (artifacts on the battlefield vs cards in hand).
+_DEAL_DAMAGE_COUNT_SOURCE_DISPATCH: dict[str, type] = {
+    "artifacts you control": DealDamageToOpponentCreatureByArtifactCount,
+    "cards in your hand": DealDamageToOpponentCreatureByCardsInHand,
+}
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
 # than a creature; ``DealDamageToTargetOpponent(amount=N)`` filters
@@ -469,6 +478,20 @@ _DESTROY_ALL_TAPPED_CREATURES = re.compile(
 )
 _DESTROY_ALL_UNTAPPED_CREATURES = re.compile(
     r"^destroy all untapped creatures$"
+)
+# "Destroy all creatures with power N or greater." — Restricted Office's
+# door trigger body in DSK ("destroy all creatures with power 3 or
+# greater"). Parameterized: the captured group is the minimum power
+# threshold (digit only — no card prints a spelled-out power bound on
+# this surface). Maps to ``DestroyAllCreatures(min_power=N)`` whose
+# ``effective_power`` walk at resolve time correctly accounts for
+# layer-7 pump effects and +1/+1 counters when filtering victims.
+# Sibling to the tapped/untapped branches above; sets a different
+# engine-class flag (``min_power`` rather than the tap-state bools)
+# so the dispatch is a separate ``re.match`` branch in the
+# ``destroy``-family neighborhood.
+_DESTROY_ALL_CREATURES_WITH_POWER_AT_LEAST = re.compile(
+    r"^destroy all creatures with power (\d+) or greater$"
 )
 # "Exile all creatures and Spacecraft." — Beyond the Quiet wrath. Capital
 # ``S`` on Spacecraft is preserved verbatim from the oracle text — the
@@ -1988,15 +2011,20 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToOpponentCreature(amount=int(m.group(1)))
-    # ``deals damage equal to the number of artifacts you control to
-    # target creature an opponent controls`` — Warmaker Gunship's ETB
-    # body. Same legal-target pool as the bare integer-amount sibling
-    # above (target creature an opponent controls); the dynamic amount
-    # is read at resolve time from the controller's artifact count.
-    if _DEAL_DAMAGE_BY_ARTIFACT_COUNT_TARGET_OPPONENT_CREATURE.match(
-        phrase
-    ) is not None:
-        return DealDamageToOpponentCreatureByArtifactCount()
+    # ``[this Room ]deals damage equal to <count-source> to target
+    # creature an opponent controls`` — Warmaker Gunship (count-source
+    # ``artifacts you control``, EoE) and Roaring Furnace (count-source
+    # ``cards in your hand``, DSK Room half). The captured count-source
+    # surface text routes through
+    # ``_DEAL_DAMAGE_COUNT_SOURCE_DISPATCH`` to the matching engine
+    # class; both share the ``target creature an opponent controls``
+    # legal-target pool (creatures NOT controlled by the resolving
+    # controller) with the dynamic damage amount read at resolve time.
+    m = _DEAL_DAMAGE_BY_COUNT_TARGET_OPPONENT_CREATURE.match(phrase)
+    if m is not None:
+        cls = _DEAL_DAMAGE_COUNT_SOURCE_DISPATCH.get(m.group(1))
+        if cls is not None:
+            return cls()
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare
@@ -2274,6 +2302,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyAllCreatures(tapped_only=True)
     if _DESTROY_ALL_UNTAPPED_CREATURES.match(phrase) is not None:
         return DestroyAllCreatures(untapped_only=True)
+    # ``destroy all creatures with power N or greater`` — Restricted
+    # Office's door trigger body. Parameterized over the power
+    # threshold; maps to ``DestroyAllCreatures(min_power=N)`` whose
+    # resolve walks ``effective_power`` so layer-7 pumps and +1/+1
+    # counters are accounted for when filtering victims.
+    m = _DESTROY_ALL_CREATURES_WITH_POWER_AT_LEAST.match(phrase)
+    if m is not None:
+        return DestroyAllCreatures(min_power=int(m.group(1)))
     m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
     if m is not None:
         return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))
