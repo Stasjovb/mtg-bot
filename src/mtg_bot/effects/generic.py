@@ -2005,6 +2005,74 @@ class PutCardFromGraveyardOnBottomOfLibrary(Effect):
 
 
 @dataclass(frozen=True)
+class ExileTargetCardFromGraveyard(Effect):
+    """Exile target card from a graveyard. Either player's graveyard is a
+    legal target source — the chosen card moves to its owner's exile zone
+    and (when the source supports the linkage) carries
+    ``exiled_by_source`` so a sibling activated ability can recall every
+    card the same source exiled later. DSK Ghost Vacuum's
+    ``{T}: Exile target card from a graveyard.`` is the introducing
+    printing.
+
+    Mirrors ``PutCardFromGraveyardOnBottomOfLibrary``'s
+    ``("card_in_graveyard", id)`` target-kind shape — the same target
+    kind the existing graveyard-bottom effect emits, so the targeting
+    pipeline doesn't need a new kind for this primitive.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import Zone
+
+        return [
+            ("card_in_graveyard", c.id)
+            for p in state.players
+            for c in p.graveyard
+            if c.zone == Zone.GRAVEYARD
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "card_in_graveyard":
+            return
+        source = state.resolving_source
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.EXILE
+            # Tag the exile site so a sibling activated ability on the
+            # same source (Ghost Vacuum's ``{6}, {T}, Sacrifice this
+            # artifact`` recall) can find every card the same source
+            # exiled later. The link is harmless when the source has no
+            # such recall ability; ``move_off_battlefield`` clears the
+            # tag on any release path that returns the card from exile.
+            if source is not None:
+                card.exiled_by_source = source.id
+            p.exile.append(card)
+            state.log.append(
+                f"{card.printing.name} exiled from P{p.id}'s graveyard"
+            )
+            return
+
+    def describe(self) -> str:
+        return "exile target card from a graveyard"
+
+
+
+@dataclass(frozen=True)
 class PutPlusOneCounterOnEachOfUpToNTargetCreatures(Effect):
     """Put a +1/+1 counter on each of up to ``max_n`` target creatures.
 

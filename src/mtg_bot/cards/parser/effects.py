@@ -48,6 +48,7 @@ from mtg_bot.cards.base import (
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
     ExileEachOpponentsGraveyard,
+    ExileTargetCardFromGraveyard,
     ExileTargetCreature,
     GainLife,
     GrantUnblockableUEOT,
@@ -744,6 +745,18 @@ _RETURN_TARGET_ARTIFACT_GRAVEYARD_TO_HAND = re.compile(
 _PUT_CARD_FROM_GRAVEYARD_ON_BOTTOM_OF_LIBRARY = re.compile(
     r"^put target card from a graveyard "
     r"on the bottom of its owner's library$"
+)
+# "Exile target card from a graveyard" — Ghost Vacuum's ``{T}`` activated
+# ability. Sibling to the bottom-of-library shape above; same
+# ``("card_in_graveyard", id)`` target-kind pool, different destination
+# zone. Maps to the new ``ExileTargetCardFromGraveyard`` engine class
+# whose resolve also tags the exiled card with the source's id via
+# ``exiled_by_source`` so a sibling ``{6}, {T}, Sacrifice this artifact``
+# recall ability (Ghost Vacuum's second activation) can find every card
+# the same source exiled later. The tag is harmless on a source whose
+# only graveyard interaction is this exile primitive — no recall.
+_EXILE_CARD_FROM_GRAVEYARD = re.compile(
+    r"^exile target card from a graveyard$"
 )
 # "Target creature gets +N/+M until end of turn" or
 # "Target creature gets -N/-M until end of turn". Both signs supported
@@ -2059,6 +2072,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return PutCardFromGraveyardOnBottomOfLibrary()
+    # ``exile target card from a graveyard`` — Ghost Vacuum's bare
+    # tap activation. Sibling to the bottom-of-library shape above;
+    # same target-kind pool but the chosen card moves to its owner's
+    # exile zone, with the resolving source's id stamped on
+    # ``exiled_by_source`` so a sibling recall ability can find every
+    # card the same source exiled later (Ghost Vacuum's
+    # ``{6}, {T}, Sacrifice this artifact`` recall is the only EoE/DSK
+    # consumer of that linkage today).
+    if _EXILE_CARD_FROM_GRAVEYARD.match(phrase) is not None:
+        return ExileTargetCardFromGraveyard()
     # Pump + grant-keywords compound is tried BEFORE the bare-pump
     # regex so a phrase like ``+3/+0 and gains first strike and reach
     # until end of turn`` produces the keyword-bearing

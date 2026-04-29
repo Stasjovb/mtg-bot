@@ -3352,4 +3352,113 @@ class CommuneWithEvilEffect(Effect):
         )
 
 
+@dataclass(frozen=True)
+class GhostVacuumActivatedEffect(Effect):
+    """Ghost Vacuum's ``{6}, {T}, Sacrifice this artifact`` activation:
+    "Put each creature card exiled with this artifact onto the battlefield
+    under your control with a flying counter on it. Each of them is a 1/1
+    Spirit in addition to its other types. Activate only as a sorcery."
+
+    The cost includes ``Sacrifice this artifact``, so by the time this
+    effect resolves the source has already moved to the graveyard. We
+    still hold the source reference via ``state.resolving_source`` (the
+    engine doesn't null it on cost-time sacrifice) and use its id to
+    locate every card in any player's exile carrying
+    ``exiled_by_source == source.id``.
+
+    For each creature card in that filtered exile pool we put it onto the
+    battlefield under the activator's control, give it a flying counter,
+    and write registry entries for the permanent layer-4 ``add_subtype
+    "Spirit"`` and layer-7 sublayer-1 ``set_base_pt (1, 1)`` so the
+    "1/1 Spirit in addition to its other types" line takes effect. The
+    flying counter rides ``GameObject.flying_counters``; ``effective_
+    keywords`` adds ``"flying"`` to the bearer's keyword set whenever
+    that field is positive (CR 122 named-counter grant).
+
+    Non-creature cards in the same exile-tagged pool stay where they are
+    — the printed body's filter is "each creature card exiled with this
+    artifact" — so a follow-up exile of, say, a land or instant remains
+    inert until some future card recalls them.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        # Walk every player's exile zone for cards tagged by this source.
+        # The source's own controller does the recall, but cards owned
+        # by opponents in exile are still recalled and enter under the
+        # activator's control — the printed body keys on the
+        # ``exiled-with-this-artifact`` linkage, not on ownership.
+        moved: list = []
+        for p in state.players:
+            still_exiled = list(
+                c for c in p.exile if c.exiled_by_source == source.id
+            )
+            for card in still_exiled:
+                if not card.printing.is_creature:
+                    continue
+                p.exile.remove(card)
+                card.exiled_by_source = None
+                moved.append(card)
+        if not moved:
+            state.log.append(
+                f"{source.printing.name} resolves: no exiled creature "
+                f"cards to recall"
+            )
+            return
+        for card in moved:
+            put_into_battlefield(state, card, controller_id)
+            # Flying counter — ``effective_keywords`` reads ``flying_
+            # counters > 0`` and adds the granted keyword to the bearer.
+            card.flying_counters += 1
+            # "Each of them is a 1/1 Spirit in addition to its other
+            # types." Two registry entries with ``expires_at=None``: a
+            # layer-4 ``add_subtype "Spirit"`` (read by
+            # ``effective_subtypes``) and a layer-7 sublayer-1
+            # ``set_base_pt (1, 1)`` (read by ``_compute_effective_pt``
+            # via the ``_registry_set_base_pt`` walker). The "in
+            # addition to its other types" wording means we don't strip
+            # the printed creature type — the ``add_subtype`` entry
+            # only adds Spirit, leaving the existing subtype list
+            # intact for any prior subtype-bearing creature in the
+            # exile pool. The set-base-PT entry overrides any printed
+            # P/T to (1, 1) per CR 613 sublayer 7b.
+            state.add_continuous_effect(
+                source_id=source.id, layer=4, kind="add_subtype",
+                target_id=card.id, params=("Spirit",),
+                expires_at=None,
+                description=(
+                    f"{card.printing.name} is a 1/1 Spirit "
+                    f"(Ghost Vacuum)"
+                ),
+            )
+            state.add_continuous_effect(
+                source_id=source.id, layer=7, sublayer=1,
+                kind="set_base_pt",
+                target_id=card.id, params=(1, 1),
+                expires_at=None,
+                description=(
+                    f"{card.printing.name} base 1/1 (Ghost Vacuum)"
+                ),
+            )
+            state.log.append(
+                f"{card.printing.name} returns from exile to "
+                f"P{controller_id}'s battlefield as a 1/1 Spirit with "
+                f"a flying counter"
+            )
+
+    def describe(self) -> str:
+        return (
+            "put each creature card exiled with this artifact onto the "
+            "battlefield under your control with a flying counter on it; "
+            "each of them is a 1/1 Spirit in addition to its other types"
+        )
+
+
 

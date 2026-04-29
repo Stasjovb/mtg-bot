@@ -118,6 +118,7 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CostReduction,
     DrawCards,
+    GhostVacuumActivatedEffect,
     LockOrUnlockDoorOfTargetRoomYouControl,
     MemorialVaultActivatedEffect,
     PinnacleStarcageETBEffect,
@@ -230,6 +231,36 @@ def _keys_to_the_house_lock_or_unlock_activation() -> ActivatedAbility:
     )
 
 
+def _ghost_vacuum_recall_activation() -> ActivatedAbility:
+    """Build Ghost Vacuum's ``{6}, {T}, Sacrifice this artifact``
+    sorcery-speed activation.
+
+    The body — "Put each creature card exiled with this artifact onto
+    the battlefield under your control with a flying counter on it.
+    Each of them is a 1/1 Spirit in addition to its other types." — is
+    bespoke (the bespoke effect class folds the creature-filter recall,
+    the per-card flying-counter add, and the layer-4/7 type+subtype+P/T
+    grants into one resolve step). The ``Activate only as a sorcery.``
+    rider lifts to ``sorcery_speed=True`` on the ability. Cost shape
+    ``{6}, {T}, Sacrifice this artifact`` is otherwise standard
+    activated-grammar territory; only the body needs the literal
+    dispatch. The first ability ``{T}: Exile target card from a
+    graveyard.`` parses through the unified activated grammar via the
+    new ``ExileTargetCardFromGraveyard`` primitive — no literal entry
+    needed for that line.
+    """
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{6}"),
+            mana_str="{6}",
+            tap_self=True,
+            sacrifice_self=True,
+        ),
+        effect=GhostVacuumActivatedEffect(),
+        sorcery_speed=True,
+    )
+
+
 def _all_fates_scroll_draw_activation() -> ActivatedAbility:
     """Build All-Fates Scroll's ``{7}, {T}, Sacrifice this artifact``
     activation drawing X cards (X = number of differently named lands
@@ -295,6 +326,18 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "{3}, {T}, Sacrifice this artifact: Lock or unlock a door of "
     "target Room you control. Activate only as a sorcery.":
         _keys_to_the_house_lock_or_unlock_activation,
+    # Ghost Vacuum — bespoke "recall creature cards exiled with this
+    # artifact, each becomes a 1/1 Spirit with a flying counter" body.
+    # Cost is parser-grammar standard; only the body needs the literal
+    # dispatch. The companion ``{T}: Exile target card from a
+    # graveyard.`` ability parses through the unified activated grammar
+    # via the new ``ExileTargetCardFromGraveyard`` primitive — no
+    # literal entry needed for that one.
+    "{6}, {T}, Sacrifice this artifact: Put each creature card exiled "
+    "with this artifact onto the battlefield under your control with "
+    "a flying counter on it. Each of them is a 1/1 Spirit in addition "
+    "to its other types. Activate only as a sorcery.":
+        _ghost_vacuum_recall_activation,
 }
 
 

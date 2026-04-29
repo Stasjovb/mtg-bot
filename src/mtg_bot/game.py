@@ -301,6 +301,16 @@ class GameObject:
     # same shape (printing keeps the type, GameObject suppresses it
     # at runtime), different mechanic.
     enduring_returned_as_enchantment: bool = False
+    # DSK Ghost Vacuum / "flying counter" custom counter type. CR 122
+    # recognizes named counters whose name and printed wording grant the
+    # named keyword to the bearer ("a flying counter"); engine-side we
+    # carry the count as its own integer field on ``GameObject`` parallel
+    # to ``plus_one_counters`` / ``stun_counters`` etc. ``effective_keywords``
+    # adds ``"flying"`` to the bearer's keyword set whenever this is
+    # ``> 0`` so combat / blocker rules pick the granted keyword up
+    # automatically — same write-through-cache shape the +1/+1 counter
+    # pump path uses for layer-7d P/T contributions.
+    flying_counters: int = 0
 
 
 def is_void_active(state: GameState) -> bool:
@@ -692,6 +702,20 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
             kws.clear()
         elif ce.kind == "grant_keyword" and ce.params:
             kws.add(ce.params[0])
+    # CR 122 named counters that grant keywords — currently just the
+    # "flying counter" custom counter type (DSK Ghost Vacuum). The
+    # counter is its own integer field on ``GameObject``; a positive
+    # count contributes the matching keyword to the bearer regardless
+    # of how the counter got there. Folded in AFTER the layer-6 walk so
+    # a Lignify wipe on the bearer doesn't cancel the counter's grant
+    # — counters are not abilities (CR 122) so layer-6 ``lose_all_
+    # abilities`` doesn't touch them. A future named-counter type
+    # (haste counter, shield counter, …) lands as a sibling field
+    # with the same shape rather than a generalized counter-name map,
+    # mirroring the per-counter-type field precedent (``stun_counters``
+    # / ``time_counters`` / ``charge_counters``).
+    if obj.flying_counters > 0:
+        kws.add("flying")
     return frozenset(kws)
 
 
