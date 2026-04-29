@@ -142,11 +142,11 @@ def test_dual_sun_technique_claimed_by_parser():
 
 
 def test_invasive_maneuvers_claimed_by_parser():
-    # Invasive Maneuvers ``{1}{R}`` Instant — bare burn with the
-    # ``It deals 5 damage instead if you control a Spacecraft.``
-    # boost rider. The rider's state-substitution syntax has no
-    # corresponding primitive in the per-clause grammar, so the
-    # spell is claimed via the whole-spell exact-text dispatcher.
+    # Invasive Maneuvers ``{1}{R}`` Instant — bare burn with a
+    # Spacecraft-state boost. Migrated from the whole-spell exact-
+    # text tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT``); claim is
+    # end-to-end via the active source's printing.
     assert "Invasive Maneuvers" in _claimed_names()
 
 
@@ -233,14 +233,23 @@ def test_dispatch_dual_sun_technique_returns_engine_class():
 
 
 def test_dispatch_invasive_maneuvers_returns_engine_class():
-    # The base burn is 3; the ``boosted=5`` field fires when the
-    # controller has a Spacecraft on the battlefield at resolve
-    # time.
-    eff = _try_whole_spell_exact_text(
+    # Invasive Maneuvers migrated from the whole-spell exact-text
+    # tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT``); whole-
+    # spell dispatch now falls through. End-to-end claim verified
+    # via the active source's printing carrying
+    # ``DealDamageToTargetCreatureSpacecraftBoosted(base=3,
+    # boosted=5)`` — the captured integers (``3``, ``5``)
+    # parameterize the engine class off the printed base/boosted
+    # damage values.
+    assert _try_whole_spell_exact_text(
         "Invasive Maneuvers deals 3 damage to target creature. "
         "It deals 5 damage instead if you control a Spacecraft."
-    )
-    assert eff == DealDamageToTargetCreatureSpacecraftBoosted(
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    im = get_active_source().get_printings().get("Invasive Maneuvers")
+    assert im is not None
+    assert im.spell_effect == DealDamageToTargetCreatureSpacecraftBoosted(
         base=3, boosted=5,
     )
 

@@ -56,7 +56,6 @@ from mtg_bot.cards.base import (
     CutPropulsionEffect,
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
-    DealDamageToTargetCreatureSpacecraftBoosted,
     DealNDamageToEachCreature,
     DepressurizeEffect,
     DestroyTargetArtifact,
@@ -522,14 +521,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         you_control_only=True,
         draw_if_target_has_plus_one_counter=1,
     ),
-    # Invasive Maneuvers: bare burn with a Spacecraft-state boost
-    # ("It deals 5 damage instead if you control a Spacecraft").
-    # The bespoke class picks ``base`` vs ``boosted`` by inspecting
-    # the controller's battlefield at resolve time.
-    (
-        "Invasive Maneuvers deals 3 damage to target creature. "
-        "It deals 5 damage instead if you control a Spacecraft."
-    ): DealDamageToTargetCreatureSpacecraftBoosted(base=3, boosted=5),
     # Cerebral Download: variable surveil ("Surveil X, where X is the
     # number of artifacts you control") + flat draw three. The Surveil
     # primitive's ``use_artifact_count=True`` flag substitutes the

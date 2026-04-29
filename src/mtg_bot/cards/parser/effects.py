@@ -28,6 +28,7 @@ from mtg_bot.cards.base import (
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToTargetCreature,
+    DealDamageToTargetCreatureSpacecraftBoosted,
     DealDamageToTargetCreatureWithExcessLanderRider,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
@@ -341,6 +342,35 @@ _DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT = re.compile(
 _DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER = re.compile(
     r"^deals (\d+) damage to target creature\. "
     r"If excess damage was dealt this way, create a Lander token$"
+)
+# "<source> deals N damage to target creature. It deals M damage
+# instead if you control a Spacecraft." — Invasive Maneuvers `{1}{R}`
+# Instant: a fixed-amount burn with a Spacecraft-state boost rider.
+# Two-sentence shape: the leading sentence is the bare damage; the
+# trailing ``It deals M damage instead if you control a Spacecraft.``
+# clause is an anaphoric rider that doesn't parse as a standalone
+# effect (the ``It deals M damage instead`` substitution-syntax has no
+# per-clause primitive). The recognizer matches the unsplit two-
+# sentence body verbatim — ``_parse_spell_oracle_text`` tries the
+# unsplit clause first via ``_parse_spell_effect_phrase`` before
+# falling through to the per-sentence splitter, so this regex claims
+# Invasive Maneuvers before the splitter can carve the rider into an
+# unparseable piece.
+#
+# Two capture groups: the base damage ``N`` (matches Invasive
+# Maneuvers's printed ``3``) and the boosted damage ``M`` (matches
+# the printed ``5``); maps to
+# ``DealDamageToTargetCreatureSpacecraftBoosted(base=N, boosted=M)``
+# whose resolve step picks ``base`` vs ``boosted`` by inspecting the
+# controller's battlefield for a Spacecraft. Currently only Invasive
+# Maneuvers in the EoE pool fits this shape, but the regex captures
+# both integer amounts as parameters so a future printing with
+# different base/boosted values lands on the same primitive without
+# further grammar work — the parameterized-recognizer-preferred form
+# per parser CLAUDE.md.
+_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT = re.compile(
+    r"^deals (\d+) damage to target creature\. "
+    r"It deals (\d+) damage instead if you control a Spacecraft$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -2250,6 +2280,24 @@ def _parse_effect(phrase: str) -> Effect | None:
     if m is not None:
         return DealDamageToTargetCreatureWithExcessLanderRider(
             amount=int(m.group(1)),
+        )
+    # ``deals N damage to target creature. It deals M damage instead
+    # if you control a Spacecraft`` — Invasive Maneuvers's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``It deals M damage instead`` substitution-
+    # syntax doesn't parse as a standalone effect, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. The captured integers
+    # parameterize ``DealDamageToTargetCreatureSpacecraftBoosted(
+    # base=N, boosted=M)`` whose resolve step picks ``base`` vs
+    # ``boosted`` by inspecting the controller's battlefield for a
+    # Spacecraft. See the regex's docstring for the deferred-
+    # generalization plan when a second card with this shape ships.
+    m = _DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreatureSpacecraftBoosted(
+            base=int(m.group(1)),
+            boosted=int(m.group(2)),
         )
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
