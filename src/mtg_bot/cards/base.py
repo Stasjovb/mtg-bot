@@ -815,6 +815,29 @@ class CardPrinting:
     # combat.can_block — when True on the blocker's printing, the
     # blocker may only declare blocks against attackers with flying.
     can_only_block_creatures_with_flying: bool = False
+    # Basic-landcycling. CR 702.29 typecycling: while this card is in
+    # the controller's hand, they may pay the cycling cost and discard
+    # this card to search their library for a basic-land card of the
+    # named subtype, reveal it, put it into their hand, then shuffle.
+    # Tuple shape is ``(land_subtype, mana_cost_str)`` — e.g. DSK's
+    # Plainscycling {2} cycle prints as ``("Plains", "{2}")``,
+    # Islandcycling {2} as ``("Island", "{2}")``, etc. ``None`` when
+    # the card has no landcycling.
+    #
+    # Today this field is **purely declarative**: the parser populates
+    # it from the printed ``Plainscycling/Islandcycling/...`` line so
+    # the printing accurately reflects oracle text, but the engine
+    # does NOT yet enumerate hand-activated abilities, so the
+    # cycling cost cannot actually be paid in simulation. Activation
+    # support requires (1) ``legal_actions`` to enumerate from-hand
+    # ability activations against this field and (2) an
+    # ``ActivationCost.discard_self`` cost atom. Both lifts are
+    # follow-up work that this batch deliberately scopes out — keeping
+    # the printing-level field distinct from the activation pipeline
+    # mirrors the precedent set by ``warp_castable_from_graveyard``
+    # and ``warp_additional_life_cost`` (declarative metadata stored
+    # on the printing; activation logic plumbs separately).
+    landcycling: tuple[str, str] | None = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast
@@ -950,6 +973,7 @@ def make_creature(
     enchantment: bool = False,
     enters_tapped: bool = False,
     must_be_blocked_if_able: bool = False,
+    landcycling: tuple[str, str] | None = None,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -1019,6 +1043,7 @@ def make_creature(
         impending_count=impending_count,
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
+        landcycling=landcycling,
     )
 
 

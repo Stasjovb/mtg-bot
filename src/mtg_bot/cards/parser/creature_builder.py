@@ -98,6 +98,7 @@ from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
     _parse_enters_tapped_line,
+    _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_ward_discard_line,
     _parse_ward_line,
@@ -1250,6 +1251,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     devour: int = 0
     enters_tapped = False
     must_be_blocked_if_able = False
+    landcycling: tuple[str, str] | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1313,6 +1315,22 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # but has an eligible blocker.
             must_be_blocked_if_able = True
             continue
+        landcycling_match = _parse_landcycling_line(line)
+        if landcycling_match is not None:
+            # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
+            # Forestcycling {cost}`` — basic-landcycling. Stored as
+            # declarative metadata on the printing
+            # (``CardPrinting.landcycling = (subtype, cost_str)``); the
+            # activation pipeline isn't wired today, so the cycling
+            # ability cannot be paid in simulation. The field is
+            # populated honestly so the printing reflects oracle text;
+            # claiming the card on the basis of this recognition keeps
+            # parser parity with the printed oracle line. A card
+            # carries at most one landcycling clause; if a malformed
+            # printing somehow listed two we keep the last (matching
+            # the Warp/Ward/Devour precedent above).
+            landcycling = landcycling_match
+            continue
         cost_reduction = _parse_cost_reduction_line(line)
         if cost_reduction is not None:
             # ``This spell costs {N} less to cast if <condition>.``
@@ -1372,4 +1390,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         devour_land_multiplier=devour,
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
+        landcycling=landcycling,
     )

@@ -179,3 +179,50 @@ def _parse_must_be_blocked_line(line: str) -> bool:
     ``must_be_blocked_if_able`` kwarg on ``make_creature``.
     """
     return line.strip() == _MUST_BE_BLOCKED_LINE
+
+
+# Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
+# the five basic-land subtypes. CR 702.29 typecycling — while the card
+# is in the controller's hand, they may pay the cycling cost and discard
+# this card to search their library for a basic-land card of the named
+# subtype, reveal it, put it into their hand, then shuffle. The subtype
+# capitalizes per the printed line (``Plains`` / ``Island`` / ``Swamp``
+# / ``Mountain`` / ``Forest``); the cost is one or more brace-wrapped
+# mana symbols. The line's parenthesized reminder text is stripped by
+# the per-line ``_strip_reminder_text`` step before this lookup runs,
+# so the regex matches the bare keyword head only.
+#
+# Each of the five basic-land subtypes shares the same engine field
+# layout (``CardPrinting.landcycling = (subtype, cost_str)``), so this
+# single recognizer covers the whole DSK landcycling-{2} cycle
+# (Shepherding Spirits, Daggermaw Megalodon, Spectral Snatcher, Bedhead
+# Beastie, Slavering Branchsnapper). A future printing whose oracle
+# uses non-basic typecycling (``Spiritcycling``, ``Wizardcycling``)
+# would need its own recognizer — this one anchors on the five basic-
+# land subtypes by name to keep the grammar's surface form 1:1 with
+# the engine field's expected ``land_subtype`` values.
+_LANDCYCLING_LINE = re.compile(
+    r"^(?P<subtype>Plains|Island|Swamp|Mountain|Forest)cycling "
+    r"(?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
+    """Return ``(land_subtype, mana_cost_str)`` if ``line`` is a
+    basic-landcycling clause (``<Land>cycling {cost}``), else ``None``.
+
+    The five basic-land subtypes are matched by name; non-basic
+    typecycling (no DSK printing today) intentionally doesn't match
+    and falls through. The mana-cost capture preserves the printed
+    cost string verbatim — e.g. ``{2}`` for the DSK cycle, ``{1}{R}``
+    for any forward-looking hybrid-cost printing — which the engine
+    field stores as-is for future activation-pipeline support.
+
+    Reminder text is stripped via the existing per-line
+    ``_strip_reminder_text`` helper before this lookup runs, so the
+    regex only has to match the bare keyword head.
+    """
+    m = _LANDCYCLING_LINE.match(line.strip())
+    if m is None:
+        return None
+    return m.group("subtype"), m.group("cost")
