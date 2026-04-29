@@ -280,6 +280,35 @@ def _parse_extra_etb_trigger_line(line: str) -> bool:
     return line.strip() == _EXTRA_ETB_TRIGGER_LINE
 
 
+# ``As long as you have one or fewer cards in hand, if you would draw
+# one or more cards, you draw that many cards plus one instead.`` —
+# Quantum Riddler's printed draw-replacement static. The engine wires
+# the replacement off the printing-level
+# ``replaces_draw_with_extra_when_hand_at_most_one`` flag (rather than
+# a generic ``StaticAbility`` shape, since draw replacement happens at
+# draw resolution time and reads the controller's hand size). Matched
+# as a literal string — Quantum Riddler is the only card in the pool
+# with this exact surface today; "broader grammar deferred until a
+# second example exists" (a future printing whose hand-size threshold
+# differs would parameterize this recognizer's threshold capture).
+_REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE = (
+    "As long as you have one or fewer cards in hand, if you would "
+    "draw one or more cards, you draw that many cards plus one "
+    "instead."
+)
+
+
+def _parse_replaces_draw_when_hand_at_most_one_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level draw-replacement
+    clause for hand-size at-most-one, else ``False``. Flips the
+    ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg on
+    ``make_creature``; the engine reads the flag at draw resolution
+    time and adds one extra card when the controller's hand is at
+    most one card.
+    """
+    return line.strip() == _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

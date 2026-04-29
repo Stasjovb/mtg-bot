@@ -115,6 +115,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
+    _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_token_doubler_line,
     _parse_ward_discard_line,
     _parse_ward_line,
@@ -586,22 +587,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=(
                         PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
                     ),
-                ),
-            ),
-        ),
-        # Quantum Riddler {3}{U}{U} 4/6 Sphinx — flying, warp {1}{U}.
-        # ETB draw a card. Static: if hand ≤ 1 card, each draw draws
-        # one additional card (replaces_draw_with_extra_when_hand_at_
-        # most_one=True).
-        "Quantum Riddler": make_creature(
-            "Quantum Riddler", "{3}{U}{U}", 4, 6,
-            keywords={"flying"},
-            warp="{1}{U}",
-            replaces_draw_with_extra_when_hand_at_most_one=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DrawCards(amount=1),
                 ),
             ),
         ),
@@ -1404,6 +1389,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     enters_with_minus_one_counters_from_hand_cast = 0
     is_token_doubler = False
     extra_etb_trigger = 0
+    replaces_draw_with_extra_when_hand_at_most_one = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1525,6 +1511,18 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # field handles it).
             extra_etb_trigger += 1
             continue
+        if _parse_replaces_draw_when_hand_at_most_one_line(line):
+            # ``As long as you have one or fewer cards in hand, if you
+            # would draw one or more cards, you draw that many cards
+            # plus one instead.`` — Quantum Riddler's printed
+            # draw-replacement static. Flips the
+            # ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg
+            # below; the engine consumes the flag at draw resolution
+            # time and adds one extra card when the controller's hand
+            # is at most one card. Idempotent: a malformed printing
+            # with the line twice ends up with the field set once.
+            replaces_draw_with_extra_when_hand_at_most_one = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1621,4 +1619,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         is_token_doubler=is_token_doubler,
         extra_etb_trigger=extra_etb_trigger,
+        replaces_draw_with_extra_when_hand_at_most_one=(
+            replaces_draw_with_extra_when_hand_at_most_one
+        ),
     )
