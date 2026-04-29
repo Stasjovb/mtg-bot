@@ -1072,6 +1072,37 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "They each deal damage equal to their power to target "
         "creature an opponent controls."
     ): CoordinatedClobberingEffect(),
+    # Trial of Agony (Duskmourn) ``{R}`` Sorcery — single-line spell
+    # with a multi-target opp-choice burn shape: caster picks two
+    # creatures controlled by the same opponent; that opponent chooses
+    # which of the two takes 5 damage; the other "can't block this
+    # turn" rider applies UEOT. The static side simplifies to bare
+    # ``DealDamageToTargetCreature(amount=5)`` because:
+    # (1) the engine has no two-target same-controller slot-kind
+    #     ("opp_pair") nor an opponent-side mode-pick hook for picking
+    #     which of two chosen targets the burn lands on (the existing
+    #     ``my_creature`` / ``creature`` slot kinds and modal-mode
+    #     picks both run on the SPELL's controller, not the opp);
+    # (2) the engine has no per-creature ``cant_block_this_turn`` flag
+    #     to set on the unhit target — wiring one would require new
+    #     fields on ``GameObject`` and a guard in combat's declare-
+    #     blockers step, beyond the parser's scope.
+    # Same parser-is-right precedent as Unravel / Divert Disaster /
+    # Scorching Dragonfire — claim the bare base mechanic (5-damage
+    # burn) and drop the multi-target opp-choice + can't-block riders
+    # rather than leaving the spell unclaimed for unmodeled riders.
+    # The per-clause grammar can't claim this spell either: the first
+    # sentence ``Choose two target creatures controlled by the same
+    # opponent.`` doesn't match any spell-effect shape in the unified
+    # grammar (no other card uses the "choose two creatures controlled
+    # by the same opponent" target framing), so the whole-spell tier is
+    # the right place to land the simplification.
+    (
+        "Choose two target creatures controlled by the same opponent. "
+        "That player chooses one of those creatures. Trial of Agony "
+        "deals 5 damage to that creature, and the other can't block "
+        "this turn."
+    ): DealDamageToTargetCreature(amount=5),
 }
 
 
