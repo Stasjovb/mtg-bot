@@ -945,3 +945,132 @@ def test_manifest_dread_then_counters_no_op_on_empty_library():
     eff.resolve(state, controller_id=0, targets=())
     # No new permanent created; no exception.
     assert len(state.battlefield) == pre_bf
+
+
+# ---------------------------------------------------------------------------
+# Parser claims: Surgical Suite // Hospital Room
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_surgical_suite_hospital_room():
+    name = "Surgical Suite // Hospital Room"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Surgical Suite", "Hospital Room"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Surgical Suite"].mana_cost_str == "{1}{W}"
+    assert by_name["Hospital Room"].mana_cost_str == "{3}{W}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Hospital Room", "Surgical Suite"]
+
+
+def test_surgical_suite_reanimates_small_creature_on_unlock():
+    """Surgical Suite's door trigger returns a target creature card with
+    mana value 3 or less from the graveyard to the battlefield."""
+    state = _new_state()
+    # Two Wild Bears in the graveyard — "Wild Bear" is a 2/2 for {1}{G}
+    # (mana value 2 — passes the ≤3 filter).
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    state.players[0].graveyard.append(bear)
+    # Two Plains cover the {1}{W} cost.
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Surgical Suite // Hospital Room"],
+        owner_id=0,
+    )
+    pre_bf = len(state.battlefield)
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Surgical Suite"),
+    )
+    drain_stack(state)
+    # Bear is back on the battlefield; graveyard is empty.
+    on_bf = [o for o in state.battlefield if o.printing.name == "Wild Bear"]
+    assert len(on_bf) == 1
+    assert bear not in state.players[0].graveyard
+    # Battlefield gained the Room itself plus the bear (net +2 vs pre).
+    assert len(state.battlefield) == pre_bf + 2
+
+
+def test_surgical_suite_skips_too_expensive_target():
+    """Surgical Suite's max_mv=3 rider filters out creatures with mana
+    value 4 or more — they aren't legal targets, so the door trigger
+    has nothing to return when only an expensive creature is available.
+    """
+    from mtg_bot.cards import make_creature
+    state = _new_state()
+    # A 5-mana creature in the graveyard — not a legal target.
+    big = make_creature("Big Bear", "{4}{G}", 5, 5)
+    big_obj = state.new_object(big, owner_id=0, zone=Zone.GRAVEYARD)
+    state.players[0].graveyard.append(big_obj)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Plains"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Surgical Suite // Hospital Room"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Surgical Suite"),
+    )
+    drain_stack(state)
+    # The big bear stays in the graveyard — no legal target.
+    assert big_obj in state.players[0].graveyard
+    # Room is still on the battlefield with Surgical Suite unlocked.
+    bf_room = next(o for o in state.battlefield if o.id == room_card.id)
+    assert bf_room.unlocked_halves == frozenset({"Surgical Suite"})
+
+
+def test_hospital_room_puts_counter_on_attacker_when_unlocked():
+    """Hospital Room's YOU_ATTACK trigger fires once per declare-
+    attackers pass when its half is unlocked, putting a +1/+1 counter
+    on the (lone) attacking creature."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Surgical Suite // Hospital Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Hospital Room"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    # The lone attacker (bear) is the only legal target for the
+    # PickFirst agent — counter lands on it.
+    assert bear.plus_one_counters == 1
+
+
+def test_hospital_room_locked_does_not_fire():
+    """If Hospital Room is locked (Surgical Suite is unlocked instead),
+    the YOU_ATTACK trigger doesn't fire — no +1/+1 counter on the
+    attacker."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Surgical Suite // Hospital Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Surgical Suite"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    assert bear.plus_one_counters == 0
+
+

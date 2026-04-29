@@ -49,6 +49,7 @@ from mtg_bot.effects import (
     LoseLife,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    PutPlusOneCounterOnTargetCreature,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     SearchLibraryForBasicLandTapped,
@@ -347,6 +348,55 @@ def _build_moldering_gym_weight_room() -> CardPrinting:
     )
 
 
+def _build_surgical_suite_hospital_room() -> CardPrinting:
+    """Surgical Suite // Hospital Room ``{1}{W}`` // ``{3}{W}``.
+
+    Surgical Suite oracle:
+        When you unlock this door, return target creature card with
+        mana value 3 or less from your graveyard to the battlefield.
+
+    Hospital Room oracle:
+        Whenever you attack, put a +1/+1 counter on target attacking
+        creature.
+
+    Surgical Suite is a pure door trigger that uses the existing
+    ``ReturnCreatureFromYourGraveyardToBattlefield`` primitive's
+    ``max_mv=3`` rider — the same rider Surgical Suite was the
+    motivating example for. Hospital Room hooks ``Event.YOU_ATTACK``
+    (the once-per-pass attack event already wired for Most Valuable
+    Slayer / Razorkin Hordecaller) and routes to
+    ``PutPlusOneCounterOnTargetCreature(attacking_only=True)`` — same
+    targeting rider Hospital Room was the motivating example for.
+    Both halves' triggers fire only when their half is unlocked, via
+    the ``room_half`` tag the ``make_room`` factory threads onto each
+    flattened ability.
+    """
+    return make_room(
+        _half(
+            "Surgical Suite", "{1}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ReturnCreatureFromYourGraveyardToBattlefield(
+                        max_mv=3,
+                    ),
+                ),
+            ),
+        ),
+        _half(
+            "Hospital Room", "{3}{W}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.YOU_ATTACK, predicate=Controlled(YOU),
+                    effect=PutPlusOneCounterOnTargetCreature(
+                        amount=1, attacking_only=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -359,6 +409,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Underwater Tunnel // Slimy Aquarium":
         _build_underwater_tunnel_slimy_aquarium,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
+    "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
 }
 
 
