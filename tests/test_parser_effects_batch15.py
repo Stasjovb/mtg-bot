@@ -614,28 +614,34 @@ def test_whole_spell_exact_match_returns_none_for_unrelated_text():
         _try_whole_spell_exact_text,
     )
 
-    # Same shape as Singularity Rupture but with a typo in
-    # ``creatures`` — the exact-match dispatcher rejects.
+    # Same shape as Mutinous Massacre but with a typo in ``creature``
+    # — the exact-match dispatcher rejects.
     assert _try_whole_spell_exact_text(
-        "Destroy all creature, then any number of target players "
-        "each mill half their library, rounded down."
+        "Choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creature until end of turn. "
+        "Untap them. They gain haste until end of turn."
     ) is None
 
 
-def test_whole_spell_exact_match_returns_engine_class_for_match():
-    # Direct lookup against the dispatcher with the exact verbatim
-    # Singularity Rupture text. The returned engine class is the
-    # static-side primitive (no parameters).
+def test_dispatch_singularity_rupture_returns_engine_class():
+    # Singularity Rupture migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's ``_SINGULARITY_RUPTURE``);
+    # whole-spell dispatch now falls through. End-to-end claim verified
+    # via the active source's printing.
     from mtg_bot.cards.parser.spell_builder import (
         _try_whole_spell_exact_text,
     )
 
-    eff = _try_whole_spell_exact_text(
+    assert _try_whole_spell_exact_text(
         "Destroy all creatures, then any number of target players "
         "each mill half their library, rounded down."
-    )
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    sr = get_active_source().get_printings().get("Singularity Rupture")
+    assert sr is not None
     from mtg_bot.cards.base import SingularityRuptureEffect
-    assert eff == SingularityRuptureEffect()
+    assert sr.spell_effect == SingularityRuptureEffect()
 
 
 def test_whole_spell_exact_match_strips_mutinous_massacre_reminder():

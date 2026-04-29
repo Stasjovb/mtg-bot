@@ -102,6 +102,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForEquipmentToBattlefield,
     SelfMill,
     Sequence,
+    SingularityRuptureEffect,
     Surveil,
     TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
@@ -479,6 +480,27 @@ _DESTROY_ALL_TAPPED_CREATURES = re.compile(
 )
 _DESTROY_ALL_UNTAPPED_CREATURES = re.compile(
     r"^destroy all untapped creatures$"
+)
+# "Destroy all creatures, then any number of target players each mill
+# half their library, rounded down." — Singularity Rupture `{3}{U}{B}{B}`
+# Sorcery: a board wrath followed by a multi-target half-library mill on
+# any number of chosen players. Maps to the parameterless
+# ``SingularityRuptureEffect`` engine class which folds the wrath and
+# the per-target floor-divide mill into one resolve step (the cast-
+# pipeline target-count range is 0..players-bounded, with each chosen
+# target milling ``floor(library_size / 2)`` cards).
+#
+# Currently only Singularity Rupture in the EoE pool fits this shape, so
+# the recognizer is a parameterless literal — broader generalization
+# (e.g. ``destroy all creatures, then ... <any-mass-effect>``) is
+# deferred until a second card with this two-clause wrath-then-multi-
+# target-mass-effect shape exists. Sibling to the tapped/untapped
+# wrath branches above; lives in the per-clause grammar (rather than
+# the whole-spell exact-text tier) per the parser's
+# generic-templates-over-literals guidance.
+_SINGULARITY_RUPTURE = re.compile(
+    r"^destroy all creatures, then any number of target players "
+    r"each mill half their library, rounded down$"
 )
 # "Destroy all creatures with power N or greater." — Restricted Office's
 # door trigger body in DSK ("destroy all creatures with power 3 or
@@ -2321,6 +2343,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyAllCreatures(tapped_only=True)
     if _DESTROY_ALL_UNTAPPED_CREATURES.match(phrase) is not None:
         return DestroyAllCreatures(untapped_only=True)
+    # ``destroy all creatures, then any number of target players each
+    # mill half their library, rounded down`` — Singularity Rupture's
+    # full single-sentence body. Maps to the parameterless
+    # ``SingularityRuptureEffect`` engine class which folds the wrath
+    # and the per-target floor-divide mill into one resolve step. Sole
+    # card with this shape today; broader generalization deferred —
+    # see ``_SINGULARITY_RUPTURE`` regex comment.
+    if _SINGULARITY_RUPTURE.match(phrase) is not None:
+        return SingularityRuptureEffect()
     # ``destroy all creatures with power N or greater`` — Restricted
     # Office's door trigger body. Parameterized over the power
     # threshold; maps to ``DestroyAllCreatures(min_power=N)`` whose
