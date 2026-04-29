@@ -643,6 +643,19 @@ _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
     r"^return target creature card from your graveyard to your hand$"
 )
+# "Return target creature card with mana value N or less from your
+# graveyard to your hand" — narrowed-by-MV graveyard-to-hand reanimation.
+# Savior of the Small's Survival reward (``mana value 3 or less``); the
+# threshold is the captured digit. Maps to
+# ``ReturnCreatureFromYourGraveyardToHand(max_mv=N)``. Tried BEFORE the
+# bare ``return target creature card from your graveyard to your hand``
+# regex above so a future printing carrying the MV rider lands here
+# rather than on the unbounded sibling. The bare regex still covers
+# Interceptor Mechan and any other MV-unrestricted reanimator.
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
+    r"^return target creature card with mana value (\d+) or less "
+    r"from your graveyard to your hand$"
+)
 # "Return target creature card from your graveyard to the battlefield"
 # — graveyard reanimation surface (Xu-Ifit and forward-compat for any
 # future "raise dead" oracle line).
@@ -1965,6 +1978,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
         )
+    m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV.match(phrase)
+    if m is not None:
+        # ``return target creature card with mana value N or less from
+        # your graveyard to your hand`` — Savior of the Small's
+        # Survival reward. The MV cap narrows the legal-target pool to
+        # graveyard creatures whose printed mana value clears the
+        # threshold; ``max_mv=0`` (unset) keeps the original unbounded
+        # behaviour for Interceptor Mechan and the bare regex below.
+        return ReturnCreatureFromYourGraveyardToHand(max_mv=int(m.group(1)))
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnCreatureFromYourGraveyardToHand()
     # Xu-Ifit, Osteoharmonist's reanimate-as-Skeleton multi-sentence

@@ -1375,7 +1375,18 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
 
     Matches Interceptor Mechan's ETB (creature-only simplification of its
     "artifact or creature" oracle text).
+
+    ``max_mv`` (default 0 = "no cap") narrows the legal-target pool to
+    creature cards whose printed mana value is less than or equal to the
+    threshold. Models Savior of the Small's Survival reanimator —
+    ``return target creature card with mana value 3 or less from your
+    graveyard to your hand`` — and any future printing with the same
+    "with mana value N or less" rider. The threshold is inclusive on
+    the bound; ``max_mv=0`` keeps the original Interceptor Mechan
+    behaviour where every creature card in the graveyard qualifies.
     """
+
+    max_mv: int = 0
 
     def requires_target(self) -> bool:
         return True
@@ -1388,6 +1399,7 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
             ("graveyard_creature", c.id)
             for c in p.graveyard
             if c.printing.is_creature
+            and (self.max_mv == 0 or c.printing.mana_cost.total <= self.max_mv)
         ]
 
     def resolve(
@@ -1416,6 +1428,11 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
         )
 
     def describe(self) -> str:
+        if self.max_mv > 0:
+            return (
+                f"return target creature card with mana value "
+                f"{self.max_mv} or less from your graveyard to your hand"
+            )
         return "return target creature card from your graveyard to your hand"
 
 

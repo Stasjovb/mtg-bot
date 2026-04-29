@@ -354,3 +354,104 @@ def test_spineseeker_centipede_carries_basic_land_etb_and_delirium_static():
     assert static.toughness_bonus == 2
     assert static.granted_keywords == frozenset({"vigilance"})
     assert static.requires_delirium is True
+
+
+# ---------- ``ReturnCreatureFromYourGraveyardToHand`` max_mv ----------
+
+
+def test_return_creature_from_graveyard_max_mv_filters_legal_targets():
+    # ``max_mv=3`` narrows the legal-target pool to graveyard creatures
+    # whose printed mana value is at most 3. A 2-mv creature qualifies,
+    # a 5-mv creature is filtered out — same convention every threshold
+    # field uses (inclusive on the bound, exclusive above).
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import ReturnCreatureFromYourGraveyardToHand
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    p = Player(id=0, agent=RandomAgent())
+    state.players.append(p)
+    cheap = state.new_object(
+        make_creature("Cheap", "{1}{G}", 2, 2),
+        owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    p.graveyard.append(cheap)
+    pricey = state.new_object(
+        make_creature("Pricey", "{3}{G}{G}", 5, 5),
+        owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    p.graveyard.append(pricey)
+    eff = ReturnCreatureFromYourGraveyardToHand(max_mv=3)
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("graveyard_creature", cheap.id) in legal
+    assert ("graveyard_creature", pricey.id) not in legal
+
+
+def test_return_creature_from_graveyard_max_mv_zero_unbounded():
+    # ``max_mv=0`` (the default) keeps the original Interceptor Mechan
+    # behaviour where every creature card in the graveyard qualifies,
+    # regardless of mana value. Belt-and-suspenders against a future
+    # regression that flipped the sentinel.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import ReturnCreatureFromYourGraveyardToHand
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    p = Player(id=0, agent=RandomAgent())
+    state.players.append(p)
+    big = state.new_object(
+        make_creature("Big", "{6}{G}", 7, 7),
+        owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    p.graveyard.append(big)
+    eff = ReturnCreatureFromYourGraveyardToHand()
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("graveyard_creature", big.id) in legal
+
+
+def test_return_creature_from_graveyard_max_mv_describe():
+    # The describe output spells out the mana-value cap so log messages
+    # disambiguate the narrowed reanimator from the unbounded sibling.
+    from mtg_bot.effects.generic import ReturnCreatureFromYourGraveyardToHand
+    eff = ReturnCreatureFromYourGraveyardToHand(max_mv=3)
+    assert eff.describe() == (
+        "return target creature card with mana value 3 or less from "
+        "your graveyard to your hand"
+    )
+
+
+def test_parse_return_creature_from_graveyard_max_mv_phrase():
+    # End-to-end through the effect-phrase parser. The phrase
+    # ``return target creature card with mana value 3 or less from your
+    # graveyard to your hand`` parses to the new max_mv=3 variant.
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects.generic import ReturnCreatureFromYourGraveyardToHand
+    parsed = _parse_effect_phrase(
+        "return target creature card with mana value 3 or less from "
+        "your graveyard to your hand"
+    )
+    assert parsed == ReturnCreatureFromYourGraveyardToHand(max_mv=3)
+
+
+def test_savior_of_the_small_claimed_by_parser():
+    # Savior of the Small ``{3}{W}`` 3/4 Kor Survivor. Single oracle
+    # line: ``Survival — At the beginning of your second main phase,
+    # if this creature is tapped, return target creature card with
+    # mana value 3 or less from your graveyard to your hand.`` Claims
+    # via the existing Survival ability-word + post-combat-main
+    # trigger plumbing, fed by the new max_mv variant of the
+    # graveyard-to-hand reanimator.
+    assert "Savior of the Small" in _claimed_names()
+
+
+def test_savior_of_the_small_carries_max_mv_reanimator():
+    # The claimed printing must actually carry the ``max_mv=3`` field
+    # on its triggered effect — otherwise a regression that dropped the
+    # MV rider would silently widen the legal-target pool to the full
+    # graveyard rather than just creatures with mana value 3 or less.
+    from mtg_bot.effects.generic import ReturnCreatureFromYourGraveyardToHand
+    src = OracleParserCardSource()
+    s = src.get_printings()["Savior of the Small"]
+    assert len(s.triggered_abilities) == 1
+    trig = s.triggered_abilities[0]
+    assert trig.effect == ReturnCreatureFromYourGraveyardToHand(max_mv=3)
