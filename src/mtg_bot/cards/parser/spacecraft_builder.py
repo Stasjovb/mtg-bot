@@ -117,9 +117,7 @@ from mtg_bot.effects.generic import (
     DealDamageToTargetCreature,
     DestroyTargetNoncreaturePermanent,
     DealNDamageToEachCreature,
-    DiscardSelf,
     DrawCardPerMulticoloredPermanent,
-    DrawCards,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
@@ -186,21 +184,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=EachOpponentSacrificesCreature(),
-                ),
-            ),
-        ),
-        # Uthros Scanship: ETB draw two cards then discard a card, 8+ flying.
-        make_spacecraft(
-            "Uthros Scanship", "{3}{U}", 4, 4,
-            station_threshold=8,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        DiscardSelf(amount=1),
-                    )),
                 ),
             ),
         ),
