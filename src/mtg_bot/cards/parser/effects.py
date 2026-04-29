@@ -1399,8 +1399,21 @@ _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
 # Distinct from the ``put a +1/+1 counter on this creature`` shape
 # (which produces ``PutPlusOneCounterOnSelf``) — counters persist past
 # end of turn while the pump bonus clears at cleanup.
+#
+# The optional ``this Spacecraft `` prefix accepts the activated-
+# ability surface where a Spacecraft body explicitly names its own
+# source as ``this Spacecraft`` (Debris Field Crusher's ``{1}{R}: This
+# Spacecraft gets +2/+0 until end of turn.`` body, post-activated
+# normalization to ``this Spacecraft gets +2/+0 until end of turn``).
+# Mirrors the ``(?:this Room )?`` precedent on
+# ``_DEAL_DAMAGE_TARGET_OPPONENT_CREATURE`` — same self-source pronoun
+# pattern Rooms use, here applied to the Spacecraft type. The source-
+# identity check happens through the enclosing ability's wiring (an
+# activated ability's source is implicitly the host), not the effect
+# body — so the prefix is purely a surface-noise admission.
 _PUMP_SELF_UEOT = re.compile(
-    r"^(?:this creature )?gets ([+-]\d+)/([+-]\d+) until end of turn$"
+    r"^(?:this creature |this Spacecraft )?"
+    r"gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
 # "This creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
 # turn" — source pumps itself AND grants itself one or more evergreen

@@ -97,7 +97,6 @@ from mtg_bot.cards.base import (
     StaticAbility,
     StaticScope,
     TriggeredAbility,
-    cost,
     make_artifact,
     make_spacecraft,
 )
@@ -111,7 +110,6 @@ from mtg_bot.effects.combinators import (
 )
 from mtg_bot.effects.generic import (
     CreateTokenPerMulticoloredPermanent,
-    DealDamageAnyTarget,
     DealDamageToTargetCreature,
     DestroyTargetNoncreaturePermanent,
     DealNDamageToEachCreature,
@@ -119,7 +117,6 @@ from mtg_bot.effects.generic import (
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
-    PumpSelfUntilEOT,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     SearchLibraryForCard,
@@ -144,25 +141,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Debris Field Crusher: ETB deals 3 damage to any target, 8+ flying,
-        # "{1}{R}: This Spacecraft gets +2/+0 until end of turn."
-        make_spacecraft(
-            "Debris Field Crusher", "{4}{R}", 1, 5,
-            station_threshold=8,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageAnyTarget(amount=3),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{1}{R}"),
-                    effect=PumpSelfUntilEOT(power_bonus=2, toughness_bonus=0),
-                ),
-            ),
-        ),
         # Fell Gravship: ETB mill 3 then return a creature card from your
         # graveyard to your hand. Station 8+ flying + lifelink.
         make_spacecraft(
@@ -421,7 +399,14 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
       ``TriggeredAbility(event=ENTERS, predicate=IsSelf())``, and
     - at most one ``"Whenever this Spacecraft attacks, <effect>."``
       line whose effect resolves through ``_parse_clause`` to a
-      ``TriggeredAbility(event=ATTACKS, predicate=IsSelf())``.
+      ``TriggeredAbility(event=ATTACKS, predicate=IsSelf())``, and
+    - any number of ``"{cost}: <effect>."`` activated-ability lines
+      whose cost / effect resolve through ``_parse_clause`` to an
+      ``ActivatedAbility``. Debris Field Crusher's
+      ``{1}{R}: This Spacecraft gets +2/+0 until end of turn.`` is the
+      EoE printing in this shape; the ``this Spacecraft`` self-source
+      pronoun is admitted by the unified ``_PUMP_SELF_UEOT`` regex
+      alongside the canonical ``this creature`` form.
 
     Legendary Spacecraft (The Seriema, Dawnsire, Infinite Guideline
     Station, The Eternity Elevator) are not skipped — the ``Legendary``
@@ -468,6 +453,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     tier_threshold: int | None = None
     stationed_keywords: frozenset[str] | None = None
     triggers: list[TriggeredAbility] = []
+    activateds: list[ActivatedAbility] = []
 
     for line in lines:
         m = _STATION_LINE_RE.match(line)
@@ -537,19 +523,32 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             continue
         # Try the unified clause parser. This builder accepts at most
         # one self-ETB trigger and at most one self-ATTACKS trigger
-        # per card from non-tier lines; any other clause shape (static,
-        # activated, a different trigger event) is out of scope and
-        # skips the whole card.
+        # per card from non-tier lines, plus any number of activated
+        # abilities; static-only clauses are still out of scope.
         clause = _parse_clause(line)
         if clause is None:
             # Anything the unified parser doesn't recognize - attack
             # or ETB triggers whose effect phrases aren't modeled,
-            # plain activated abilities not yet supported here, etc. -
-            # falls through and we skip the whole card.
+            # activated abilities whose cost or effect grammar we don't
+            # support, etc. - falls through and we skip the whole card.
             return None
+        if clause.activated is not None:
+            # Activated abilities surface as standalone lines on
+            # Spacecraft (Debris Field Crusher's
+            # ``{1}{R}: This Spacecraft gets +2/+0 until end of turn.``
+            # is the EoE printing). The unified ``_parse_activated_
+            # ability_line`` produces an ``ActivatedAbility`` whose
+            # cost / effect / mana-ability flag are already wired —
+            # forward it straight to ``make_spacecraft(activated_
+            # abilities=...)``. Static and trigger arms below stay
+            # mutually exclusive: a clause with a non-None ``activated``
+            # field has an empty ``triggers`` tuple by ``_ParsedClause``
+            # construction.
+            activateds.append(clause.activated)
+            continue
         if clause.trigger is None:
-            # The clause parsed but as a non-trigger (static keyword,
-            # activated ability, granted-keyword line). This builder
+            # The clause parsed but as a non-trigger and non-activated
+            # (static keyword, granted-keyword line). This builder
             # doesn't model those on Spacecraft yet - skip rather than
             # silently drop the ability.
             return None
@@ -616,5 +615,6 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         station_threshold=station_threshold,
         stationed_keywords=stationed_keywords,
         triggered_abilities=ordered_triggers,
+        activated_abilities=tuple(activateds),
         legendary=legendary,
     )
