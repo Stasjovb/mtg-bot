@@ -345,33 +345,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
         ),
-        # Biomechan Engineer {G}{U} 2/2 Insect Artificer.
-        # ETB: create a Lander token.
-        # Activated: {8} → draw 2 + create Robot token.
-        "Biomechan Engineer": make_creature(
-            "Biomechan Engineer", "{G}{U}", 2, 2,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Lander"],
-                        count=1,
-                    ),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{8}"),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        CreateToken(
-                            token_printing=TOKEN_PRINTINGS["Robot"],
-                            count=1,
-                        ),
-                    )),
-                ),
-            ),
-        ),
         # Blade of the Swarm {3}{B} 3/1 Insect Assassin. Warp {1}{B}.
         # ETB modal: put 2 +1/+1 counters on self OR put target warped
         # exiled card on bottom of its owner's library.
