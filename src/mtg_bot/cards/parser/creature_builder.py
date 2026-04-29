@@ -77,7 +77,6 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
-    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     PutPoisonCountersOnTargetPlayer,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
@@ -108,6 +107,7 @@ from mtg_bot.cards.parser.cost_reduction import (
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
+    _parse_emissary_escort_dynamic_pt_line,
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
@@ -117,6 +117,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_nonbasic_lands_are_mountains_line,
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_token_doubler_line,
+    _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -175,23 +176,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             subtypes=("Beast",),
             ward="{2}",
             dynamic_pt_formula="harmonious_grovestrider",
-        ),
-        # Illvoi Infiltrator {2}{U} 1/3.
-        # Static flag: unblockable when controller has cast 2+ spells.
-        # Trigger: deals combat damage to player → draw a card.
-        "Illvoi Infiltrator": make_creature(
-            "Illvoi Infiltrator", "{2}{U}", 1, 3,
-            unblockable_if_two_spells_cast_this_turn=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsSelf(subject="source")
-                        & IsPlayer(subject="target")
-                    ),
-                    effect=DrawCards(amount=1),
-                ),
-            ),
         ),
         # Station Monitor {W}{U} 2/2.
         # Trigger: second spell each turn → create a 1/1 Drone token.
@@ -543,20 +527,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Ouroboroid {2}{G}{G} 1/3 Plant Wurm.
-        # At the beginning of combat on your turn, put X +1/+1 counters
-        # on each creature you control where X is this creature's power.
-        "Ouroboroid": make_creature(
-            "Ouroboroid", "{2}{G}{G}", 1, 3,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
-                    effect=(
-                        PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
-                    ),
-                ),
-            ),
-        ),
         # Duskmourn Overlord cycle — Enchantment Creatures with the
         # Impending alt-cost. Each enters as a creature when cast for
         # its printed cost, OR enters with N time counters and is
@@ -730,15 +700,6 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
     ``"Artifact"`` appearing in the card's ``type_line``.
     """
     return {
-        # Emissary Escort {1}{U} 0/4 Robot Soldier.
-        # "This creature gets +X/+0, where X is the greatest mana value
-        # among other artifacts you control." — dynamic P/T formula.
-        "Emissary Escort": make_creature(
-            "Emissary Escort", "{1}{U}", 0, 4,
-            artifact=True,
-            subtypes=("Robot", "Soldier"),
-            dynamic_pt_formula="emissary_escort",
-        ),
         # Gene Pollinator {G} 1/2 Robot Insect.
         # Real oracle: "{T}, Tap an untapped permanent you control: Add
         # one mana of any color." — activated mana ability not yet in
@@ -1348,6 +1309,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
     attack_bypass_if_artifact_entered_this_turn = False
+    unblockable_if_two_spells_cast_this_turn = False
+    dynamic_pt_formula: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1495,6 +1458,33 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # field set once.
             attack_bypass_if_artifact_entered_this_turn = True
             continue
+        if _parse_unblockable_if_two_spells_cast_this_turn_line(line):
+            # ``This creature can't be blocked if you've cast two or
+            # more spells this turn.`` — Illvoi Infiltrator's printed
+            # conditional-unblockable static. Flips the
+            # ``unblockable_if_two_spells_cast_this_turn`` kwarg below;
+            # the engine consumes the flag in ``combat`` (see
+            # ``unblockable_if_two_spells_cast_this_turn`` checks at
+            # declare-blockers / unblockability resolution) and treats
+            # the creature as unblockable once the controller has cast
+            # two or more spells this turn. Idempotent: a malformed
+            # printing with the line twice ends up with the field set
+            # once.
+            unblockable_if_two_spells_cast_this_turn = True
+            continue
+        dpt_key = _parse_emissary_escort_dynamic_pt_line(line)
+        if dpt_key is not None:
+            # ``This creature gets +X/+0, where X is the greatest mana
+            # value among other artifacts you control.`` — Emissary
+            # Escort's printed dynamic-power static. Sets the
+            # ``dynamic_pt_formula`` kwarg below to the formula key
+            # ``"emissary_escort"``; the engine reads the key in
+            # ``game._dynamic_pt`` and applies the +X/+0 over the
+            # printed P/T at every P/T query. A card carries at most
+            # one dynamic-PT clause; a malformed printing with the line
+            # twice keeps the same key (idempotent).
+            dynamic_pt_formula = dpt_key
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1597,4 +1587,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         attack_bypass_if_artifact_entered_this_turn=(
             attack_bypass_if_artifact_entered_this_turn
         ),
+        unblockable_if_two_spells_cast_this_turn=(
+            unblockable_if_two_spells_cast_this_turn
+        ),
+        dynamic_pt_formula=dynamic_pt_formula,
     )

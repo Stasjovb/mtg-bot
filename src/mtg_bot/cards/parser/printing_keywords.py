@@ -343,6 +343,73 @@ def _parse_attack_bypass_if_artifact_entered_line(line: str) -> bool:
     return line.strip() == _ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE
 
 
+# ``This creature can't be blocked if you've cast two or more spells
+# this turn.`` — Illvoi Infiltrator's printed conditional-unblockable
+# static. The engine wires the unblockable check off the printing-level
+# ``unblockable_if_two_spells_cast_this_turn`` boolean flag (rather
+# than a generic ``StaticAbility`` shape, since the unblockability
+# decision sits in ``combat`` and reads the controller's per-turn
+# spells-cast counter). Matched as a literal string — Illvoi
+# Infiltrator is the only card in the pool with this exact surface
+# today; "broader grammar deferred until a second example exists" (a
+# future printing whose threshold differs — ``three or more spells``,
+# ``a noncreature spell``, etc. — would parameterize this recognizer's
+# threshold/spell-type capture).
+_UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE = (
+    "This creature can't be blocked if you've cast two or more spells "
+    "this turn."
+)
+
+
+def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    ``This creature can't be blocked if you've cast two or more spells
+    this turn.`` clause, else ``False``. Flips the
+    ``unblockable_if_two_spells_cast_this_turn`` kwarg on
+    ``make_creature``; the engine reads the flag in ``combat`` (both
+    legality at declare-blockers and the cast-time validation hook)
+    and treats the creature as unblockable once the controller has
+    cast two or more spells this turn.
+    """
+    return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
+
+
+# ``This creature gets +X/+0, where X is the greatest mana value among
+# other artifacts you control.`` — Emissary Escort's printed dynamic-
+# power static. The engine wires the dynamic P/T off the printing-level
+# ``dynamic_pt_formula`` string field (rather than a generic
+# ``StaticAbility`` shape, since the formula evaluation lives in
+# ``game._dynamic_pt`` and reads the controller's battlefield each
+# query). Matched as a literal string — Emissary Escort is the only
+# card in the pool with this exact surface today; "broader grammar
+# deferred until a second example exists" (a future printing whose
+# X-source phrase differs — e.g. ``+X/+0 where X is the number of
+# artifacts you control``, or a different baseline P/T offset — would
+# parameterize this recognizer's X-source capture).
+_EMISSARY_ESCORT_DYNAMIC_PT_LINE = (
+    "This creature gets +X/+0, where X is the greatest mana value "
+    "among other artifacts you control."
+)
+
+
+def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
+    """Return ``"emissary_escort"`` if ``line`` is Emissary Escort's
+    printed dynamic-power static, else ``None``. The returned string is
+    the formula key consumed by ``game._dynamic_pt``; the creature
+    builder forwards it as the ``dynamic_pt_formula`` kwarg on
+    ``make_creature``.
+
+    Distinct from a boolean recognizer because future X-source variants
+    (different formula keys mapping to different in-engine
+    computations) will share this same recognizer slot — each new
+    surface form lands its own line→key entry while the wiring stays
+    centralized.
+    """
+    if line.strip() == _EMISSARY_ESCORT_DYNAMIC_PT_LINE:
+        return "emissary_escort"
+    return None
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard
