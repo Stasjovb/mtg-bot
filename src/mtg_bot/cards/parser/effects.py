@@ -468,6 +468,20 @@ _DESTROY_ALL_TAPPED_CREATURES = re.compile(
 _DESTROY_ALL_UNTAPPED_CREATURES = re.compile(
     r"^destroy all untapped creatures$"
 )
+# "Destroy all creatures with power N or greater." — Restricted Office's
+# door trigger body in DSK ("destroy all creatures with power 3 or
+# greater"). Parameterized: the captured group is the minimum power
+# threshold (digit only — no card prints a spelled-out power bound on
+# this surface). Maps to ``DestroyAllCreatures(min_power=N)`` whose
+# ``effective_power`` walk at resolve time correctly accounts for
+# layer-7 pump effects and +1/+1 counters when filtering victims.
+# Sibling to the tapped/untapped branches above; sets a different
+# engine-class flag (``min_power`` rather than the tap-state bools)
+# so the dispatch is a separate ``re.match`` branch in the
+# ``destroy``-family neighborhood.
+_DESTROY_ALL_CREATURES_WITH_POWER_AT_LEAST = re.compile(
+    r"^destroy all creatures with power (\d+) or greater$"
+)
 # "Exile all creatures and Spacecraft." — Beyond the Quiet wrath. Capital
 # ``S`` on Spacecraft is preserved verbatim from the oracle text — the
 # normalization layer only lowercases the first letter of the phrase, so
@@ -2197,6 +2211,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyAllCreatures(tapped_only=True)
     if _DESTROY_ALL_UNTAPPED_CREATURES.match(phrase) is not None:
         return DestroyAllCreatures(untapped_only=True)
+    # ``destroy all creatures with power N or greater`` — Restricted
+    # Office's door trigger body. Parameterized over the power
+    # threshold; maps to ``DestroyAllCreatures(min_power=N)`` whose
+    # resolve walks ``effective_power`` so layer-7 pumps and +1/+1
+    # counters are accounted for when filtering victims.
+    m = _DESTROY_ALL_CREATURES_WITH_POWER_AT_LEAST.match(phrase)
+    if m is not None:
+        return DestroyAllCreatures(min_power=int(m.group(1)))
     m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
     if m is not None:
         return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))

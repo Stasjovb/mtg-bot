@@ -39,6 +39,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     CardPrinting,
     RoomHalf,
+    StaticAbility,
     TriggeredAbility,
     make_room,
     parse_mana_cost,
@@ -51,7 +52,6 @@ from mtg_bot.effects import (
     CreateToken,
     CreateTokenCopyOfTargetCreatureYouControl,
     DealDamageToOpponentCreatureByCardsInHand,
-    DestroyAllCreatures,
     DiscardSelf,
     DrawCards,
     EachOpponentLosesLife,
@@ -379,50 +379,6 @@ def _build_charred_foyer_warped_space() -> CardPrinting:
     )
 
 
-def _build_restricted_office_lecture_hall() -> CardPrinting:
-    """Restricted Office // Lecture Hall ``{2}{W}{W}`` // ``{5}{U}{U}``.
-
-    Restricted Office oracle:
-        When you unlock this door, destroy all creatures with power 3
-        or greater.
-
-    Lecture Hall oracle:
-        Other permanents you control have hexproof.
-
-    Restricted Office is a pure door trigger using the new ``min_power=
-    3`` rider on ``DestroyAllCreatures`` — same Wrath shape as Split
-    Up's tap-state filters but gating victim selection on
-    ``effective_power >= 3`` so layer-7 pumps and +1/+1 counters are
-    accounted for at resolve time.
-
-    Lecture Hall is a static "Other permanents you control have
-    hexproof" continuous ability. Hexproof is engine-unenforced
-    metadata in this codebase — no targeting site checks for it on
-    creatures or non-creature permanents — so the static is an honest
-    no-op (same observable behavior as Steaming Sauna's "no maximum
-    hand size" arm: the rule it would suspend isn't enforced anyway,
-    so unconditionally not-enforcing-it is equivalent). When hexproof
-    becomes engine-enforced in the future, the static gains a real
-    effect via the StaticAbility ``room_half`` gate already wired in
-    ``_active_static_abilities``; until then the half is purely a
-    cost-and-name placeholder so the parser can claim the Room.
-    """
-    return make_room(
-        _half(
-            "Restricted Office", "{2}{W}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DestroyAllCreatures(min_power=3),
-                ),
-            ),
-        ),
-        _half(
-            "Lecture Hall", "{5}{U}{U}",
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -432,8 +388,6 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Roaring Furnace // Steaming Sauna":
         _build_roaring_furnace_steaming_sauna,
-    "Restricted Office // Lecture Hall":
-        _build_restricted_office_lecture_hall,
     "Charred Foyer // Warped Space": _build_charred_foyer_warped_space,
     "Mirror Room // Fractured Realm": _build_mirror_room_fractured_realm,
 }
@@ -455,6 +409,7 @@ _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Grand Entryway // Elegant Rotunda",
     "Meat Locker // Drowned Diner",
     "Moldering Gym // Weight Room",
+    "Restricted Office // Lecture Hall",
     "Surgical Suite // Hospital Room",
     "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
@@ -477,15 +432,16 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
     unrecognized line surfaces as a parser miss for the whole face
     rather than a silently-dropped clause.
 
-    Activated abilities, static abilities, and keywords on a half
-    are not yet exercised by any unified-path Room — the helper
-    surfaces them as a parse failure (``None``) for now, so the
-    bespoke dispatch keeps owning halves with shapes outside the
-    triggered-ability grammar.
+    Triggered abilities AND static abilities are threaded onto the
+    produced ``RoomHalf``. Keywords and activated abilities on a
+    half aren't exercised by any unified-path Room today — those
+    surface as a parse failure (``None``) so the bespoke dispatch
+    can keep owning halves with those shapes.
     """
     name = face.get("name", "")
     mana_cost_str = face.get("mana_cost", "")
     triggers: list[TriggeredAbility] = []
+    statics: list[StaticAbility] = []
     for raw_line in face.get("oracle_text", "").split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
@@ -496,8 +452,11 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
         if clause.triggers:
             triggers.extend(clause.triggers)
             continue
-        # Keywords / activated / static on a Room half aren't claimed
-        # by the unified path yet — surface as a miss so the bespoke
+        if clause.static is not None:
+            statics.append(clause.static)
+            continue
+        # Keywords / activated on a Room half aren't claimed by the
+        # unified path yet — surface as a miss so the bespoke
         # dispatch can keep owning these shapes.
         return None
     return RoomHalf(
@@ -505,6 +464,7 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
         mana_cost_str=mana_cost_str,
         mana_cost=parse_mana_cost(mana_cost_str),
         triggered_abilities=tuple(triggers),
+        static_abilities=tuple(statics),
     )
 
 

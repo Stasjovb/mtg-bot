@@ -218,6 +218,19 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
     "creatures you control": StaticScope.CREATURES_YOU_CONTROL,
     "other creatures you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    # Lecture Hall (DSK Room half) prints ``Other permanents you control
+    # have hexproof.`` — strictly broader than "Other creatures" (also
+    # affects non-creature permanents). The engine's ``applies_to``
+    # walk is creature-only today (``is_creature_now`` short-circuits
+    # for non-creatures), so ``OTHER_CREATURES_YOU_CONTROL`` is the
+    # widest scope that produces an honest, engine-observable static —
+    # a faithful approximation of the printed surface where the
+    # difference (hexproof grant on non-creature permanents) is
+    # immaterial as long as hexproof remains engine-unenforced
+    # metadata. When hexproof becomes targeting-site-checked AND a
+    # broader ``OTHER_PERMANENTS_YOU_CONTROL`` scope ships, this entry
+    # should switch to that scope to recover full faithfulness.
+    "other permanents you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
 }
 
 # The subject's first letter is capitalized at the start of an oracle
@@ -227,7 +240,9 @@ _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
 # looking it up in ``_ANTHEM_SUBJECT_SCOPES``; both surface
 # capitalizations map to the same scope.
 _ANTHEM_SUBJECT_RE = (
-    r"(?P<subject>[Cc]reatures you control|[Oo]ther creatures you control)"
+    r"(?P<subject>[Cc]reatures you control"
+    r"|[Oo]ther creatures you control"
+    r"|[Oo]ther permanents you control)"
 )
 _ANTHEM_TURN_RIDER_RE = r"(?P<turn_rider>During your turn, )?"
 
