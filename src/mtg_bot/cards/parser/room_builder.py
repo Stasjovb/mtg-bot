@@ -58,7 +58,6 @@ from mtg_bot.effects import (
     ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
-    ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnTargetCreature,
@@ -277,55 +276,6 @@ def _build_surgical_suite_hospital_room() -> CardPrinting:
                     event=Event.YOU_ATTACK, predicate=Controlled(YOU),
                     effect=PutPlusOneCounterOnTargetCreature(
                         amount=1, attacking_only=True,
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_ticket_booth_tunnel_of_hate() -> CardPrinting:
-    """Ticket Booth // Tunnel of Hate ``{2}{R}`` // ``{4}{R}{R}``.
-
-    Ticket Booth oracle:
-        When you unlock this door, manifest dread.
-
-    Tunnel of Hate oracle:
-        Whenever you attack, target attacking creature gains double
-        strike until end of turn.
-
-    Ticket Booth is a pure door trigger reusing the existing
-    ``ManifestDread(count=1)`` primitive — the same effect Slimy
-    Aquarium and Weight Room layer counters on top of, here run bare
-    (no counter rider). Tunnel of Hate hooks ``Event.YOU_ATTACK`` and
-    routes to ``PumpTargetCreatureUntilEOT`` with no P/T bonus and a
-    sole granted keyword (``"double strike"``) — same primitive Most
-    Valuable Slayer uses for "+1/+0 and gains first strike", here
-    flipped to no pump and a different keyword. ``attacking_only=
-    True`` narrows the legal-target pool to the active player's
-    attackers, matching the printed "target attacking creature"
-    qualifier.
-    """
-    return make_room(
-        _half(
-            "Ticket Booth", "{2}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDread(count=1),
-                ),
-            ),
-        ),
-        _half(
-            "Tunnel of Hate", "{4}{R}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.YOU_ATTACK, predicate=Controlled(YOU),
-                    effect=PumpTargetCreatureUntilEOT(
-                        power_bonus=0,
-                        toughness_bonus=0,
-                        granted_keywords=frozenset({"double strike"}),
-                        attacking_only=True,
                     ),
                 ),
             ),
@@ -732,7 +682,6 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
-    "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
@@ -757,6 +706,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
+    "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
 })
 

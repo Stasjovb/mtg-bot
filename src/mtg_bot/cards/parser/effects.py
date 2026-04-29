@@ -1275,8 +1275,18 @@ _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
 # granted-keywords body is validated against the keyword-line
 # whitelist before the parsed effect is returned, mirroring the
 # behavior of the other grant-keywords primitives.
+#
+# The optional ``attacking `` qualifier narrows the legal-target pool
+# to creatures currently flagged ``attacking=True`` — same shape as
+# the ``(attacking )?`` group on ``_PUMP_AND_GAIN_KEYWORDS_UEOT``,
+# here lifted up to the no-pump grant-only sibling. Tunnel of Hate's
+# door-trigger body ``target attacking creature gains double strike
+# until end of turn`` is the surface form that motivated the
+# parameterization; the engine class's ``attacking_only=True`` flag
+# is the same one Hospital Room's pump uses, here flipped on by the
+# captured qualifier rather than by a literal-line entry.
 _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT = re.compile(
-    r"^target creature gains (.+) until end of turn$"
+    r"^target (attacking )?creature gains (.+) until end of turn$"
 )
 # "Target artifact or creature gains <kw>[ and <kw2>...] until end of
 # turn." — pure keyword-grant on a permanent target whose legal pool
@@ -2379,15 +2389,23 @@ def _parse_effect(phrase: str) -> Effect | None:
     # ``_parse_keyword_grant_body`` and validated against the
     # keyword-line whitelist; rejection returns ``None`` so an
     # unknown keyword keeps the wrapping spell unclaimed.
+    #
+    # Group 1 captures the optional ``attacking `` qualifier (None
+    # otherwise); when present, ``attacking_only=True`` flips on the
+    # legal-target filter (same flag Hospital Room's counter trigger
+    # uses) so Tunnel of Hate's ``target attacking creature gains
+    # double strike until end of turn`` lands here without a separate
+    # literal-line regex.
     m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
-        keywords = _parse_keyword_grant_body(m.group(1))
+        keywords = _parse_keyword_grant_body(m.group(2))
         if keywords is None:
             return None
         return PumpTargetCreatureUntilEOT(
             power_bonus=0,
             toughness_bonus=0,
             granted_keywords=keywords,
+            attacking_only=m.group(1) is not None,
         )
     # ``target artifact or creature gains <kw>[ and <kw2>...] until
     # end of turn`` — pure keyword grant on a permanent target whose
