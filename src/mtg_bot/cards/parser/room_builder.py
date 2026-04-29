@@ -50,8 +50,6 @@ from mtg_bot.effects import (
     ConditionalIfYouControlSubtype,
     CreateToken,
     CreateTokenCopyOfTargetCreatureYouControl,
-    DealDamageEachOpponent,
-    DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByCardsInHand,
     DestroyAllCreatures,
     DiscardSelf,
@@ -63,14 +61,12 @@ from mtg_bot.effects import (
     ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
-    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnTargetCreature,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
-    Surveil,
     TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
@@ -191,46 +187,6 @@ def _build_meat_locker_drowned_diner() -> CardPrinting:
                             DrawCards(amount=3),
                             DiscardSelf(amount=1),
                         ),
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_underwater_tunnel_slimy_aquarium() -> CardPrinting:
-    """Underwater Tunnel // Slimy Aquarium ``{U}`` // ``{3}{U}``.
-
-    Underwater Tunnel oracle:
-        When you unlock this door, surveil 2.
-
-    Slimy Aquarium oracle:
-        When you unlock this door, manifest dread, then put a +1/+1
-        counter on that creature.
-
-    Both halves are pure door triggers. Underwater Tunnel uses the
-    existing ``Surveil(amount=2)`` primitive; Slimy Aquarium uses the
-    new ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=1)``
-    primitive — manifest dread then drop the counter on the just-
-    manifested face-down 2/2.
-    """
-    return make_room(
-        _half(
-            "Underwater Tunnel", "{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Surveil(amount=2),
-                ),
-            ),
-        ),
-        _half(
-            "Slimy Aquarium", "{3}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
-                        counter_amount=1,
                     ),
                 ),
             ),
@@ -774,8 +730,6 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
-    "Underwater Tunnel // Slimy Aquarium":
-        _build_underwater_tunnel_slimy_aquarium,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
     "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
@@ -803,6 +757,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
+    "Underwater Tunnel // Slimy Aquarium",
 })
 
 
