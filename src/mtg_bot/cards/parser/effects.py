@@ -28,6 +28,8 @@ from mtg_bot.cards.base import (
     DealDamageToOpponentCreatureByArtifactCount,
     DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToTargetCreature,
+    DealDamageToTargetCreatureSpacecraftBoosted,
+    DealDamageToTargetCreatureWithExcessLanderRider,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
@@ -104,6 +106,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
+    SeedshipImpactEffect,
     SelfMill,
     Sequence,
     SingularityRuptureEffect,
@@ -312,6 +315,63 @@ _DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT = re.compile(
     r"^deals X damage to target attacking or blocking creature, "
     r"where X is (\d+) plus the number of creatures and/or "
     r"Spacecraft you control$"
+)
+# "<source> deals N damage to target creature. If excess damage was
+# dealt this way, create a Lander token." — Orbital Plunge `{3}{R}`
+# Sorcery: a fixed-amount burn whose Lander-creation rider fires only
+# when the damage exceeded the target's lethal threshold (overkill).
+# Two-sentence shape: the leading sentence is the bare damage; the
+# trailing ``If excess damage was dealt this way, create a Lander
+# token.`` clause is an anaphoric rider that doesn't parse as a
+# standalone effect (no per-clause primitive recognizes the back-
+# reference to the damage just dealt). The recognizer matches the
+# unsplit two-sentence body verbatim — ``_parse_spell_oracle_text``
+# tries the unsplit clause first via ``_parse_spell_effect_phrase``
+# before falling through to the per-sentence splitter, so this regex
+# claims Orbital Plunge before the splitter can carve the rider into
+# an unparseable piece.
+#
+# The capture group is the integer damage amount ``N`` (matches
+# Orbital Plunge's printed ``6``); maps to
+# ``DealDamageToTargetCreatureWithExcessLanderRider(amount=N)`` whose
+# resolve step deals the damage and gates Lander creation on the
+# excess-damage check at resolve time. Currently only Orbital Plunge
+# in the EoE pool fits this shape, but the regex captures the integer
+# amount as a parameter so a future printing with a different damage
+# value lands on the same primitive without further grammar work —
+# the parameterized-recognizer-preferred form per parser CLAUDE.md.
+_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER = re.compile(
+    r"^deals (\d+) damage to target creature\. "
+    r"If excess damage was dealt this way, create a Lander token$"
+)
+# "<source> deals N damage to target creature. It deals M damage
+# instead if you control a Spacecraft." — Invasive Maneuvers `{1}{R}`
+# Instant: a fixed-amount burn with a Spacecraft-state boost rider.
+# Two-sentence shape: the leading sentence is the bare damage; the
+# trailing ``It deals M damage instead if you control a Spacecraft.``
+# clause is an anaphoric rider that doesn't parse as a standalone
+# effect (the ``It deals M damage instead`` substitution-syntax has no
+# per-clause primitive). The recognizer matches the unsplit two-
+# sentence body verbatim — ``_parse_spell_oracle_text`` tries the
+# unsplit clause first via ``_parse_spell_effect_phrase`` before
+# falling through to the per-sentence splitter, so this regex claims
+# Invasive Maneuvers before the splitter can carve the rider into an
+# unparseable piece.
+#
+# Two capture groups: the base damage ``N`` (matches Invasive
+# Maneuvers's printed ``3``) and the boosted damage ``M`` (matches
+# the printed ``5``); maps to
+# ``DealDamageToTargetCreatureSpacecraftBoosted(base=N, boosted=M)``
+# whose resolve step picks ``base`` vs ``boosted`` by inspecting the
+# controller's battlefield for a Spacecraft. Currently only Invasive
+# Maneuvers in the EoE pool fits this shape, but the regex captures
+# both integer amounts as parameters so a future printing with
+# different base/boosted values lands on the same primitive without
+# further grammar work — the parameterized-recognizer-preferred form
+# per parser CLAUDE.md.
+_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT = re.compile(
+    r"^deals (\d+) damage to target creature\. "
+    r"It deals (\d+) damage instead if you control a Spacecraft$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -946,6 +1006,35 @@ _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
 # one excludes creatures, this one excludes lands.
 _DESTROY_TARGET_NONLAND_PERMANENT = re.compile(
     r"^destroy target nonland permanent$"
+)
+# "Destroy target artifact or enchantment. If its mana value was 2 or
+# less, create a Lander token." — Seedship Impact `{1}{G}` Instant: a
+# bare destroy on an artifact-or-enchantment target with a small-mana-
+# value Lander rider. Two-sentence shape: the leading sentence is the
+# bare destroy; the trailing ``If its mana value was 2 or less, create
+# a Lander token.`` clause is an anaphoric rider that doesn't parse as
+# a standalone effect (the ``its`` back-references the destroyed
+# permanent's mana value, with no per-clause primitive recognizing the
+# back-reference). The recognizer matches the unsplit two-sentence
+# body verbatim — ``_parse_spell_oracle_text`` tries the unsplit
+# clause first via ``_parse_spell_effect_phrase`` before falling
+# through to the per-sentence splitter, so this regex claims Seedship
+# Impact before the splitter can carve the rider into an unparseable
+# piece.
+#
+# Currently only Seedship Impact in the EoE pool fits this shape, so
+# the recognizer is a parameterless literal — broader generalization
+# (e.g. parameterizing the mana-value threshold or the destroy-target
+# type list) is deferred until a second card with a similar two-
+# sentence destroy-with-Lander-on-small-mv-rider shape exists. Sibling
+# to the destroy-target neighbors above; lives in the per-clause
+# grammar (rather than the whole-spell exact-text tier) per the
+# parser's generic-templates-over-literals guidance — a neighboring
+# recognizer is the natural landing site for the next card with this
+# shape rather than expanding the whole-spell tier.
+_SEEDSHIP_IMPACT = re.compile(
+    r"^destroy target artifact or enchantment\. "
+    r"If its mana value was 2 or less, create a Lander token$"
 )
 # "Add {<color>}." — single coin of a single color. Mana ability surface
 # form. The captured letter is one of WUBRG (no colorless single-coin
@@ -2231,6 +2320,41 @@ def _parse_effect(phrase: str) -> Effect | None:
     )
     if m is not None:
         return FocusFireEffect(base=int(m.group(1)))
+    # ``deals N damage to target creature. If excess damage was dealt
+    # this way, create a Lander token`` — Orbital Plunge's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``If excess damage was dealt this way, create
+    # a Lander token`` doesn't parse as a standalone effect, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. The captured integer
+    # parameterizes ``DealDamageToTargetCreatureWithExcessLanderRider
+    # (amount=N)`` whose resolve step gates Lander creation on the
+    # excess-damage check at resolve time. See the regex's docstring
+    # for the deferred-generalization plan when a second card with
+    # this shape ships.
+    m = _DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreatureWithExcessLanderRider(
+            amount=int(m.group(1)),
+        )
+    # ``deals N damage to target creature. It deals M damage instead
+    # if you control a Spacecraft`` — Invasive Maneuvers's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``It deals M damage instead`` substitution-
+    # syntax doesn't parse as a standalone effect, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. The captured integers
+    # parameterize ``DealDamageToTargetCreatureSpacecraftBoosted(
+    # base=N, boosted=M)`` whose resolve step picks ``base`` vs
+    # ``boosted`` by inspecting the controller's battlefield for a
+    # Spacecraft. See the regex's docstring for the deferred-
+    # generalization plan when a second card with this shape ships.
+    m = _DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreatureSpacecraftBoosted(
+            base=int(m.group(1)),
+            boosted=int(m.group(2)),
+        )
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare
@@ -2762,6 +2886,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``DestroyTargetNonlandPermanent`` whose ``legal_targets``
         # filters the battlefield to permanents that aren't lands.
         return DestroyTargetNonlandPermanent()
+    # ``destroy target artifact or enchantment. If its mana value was 2
+    # or less, create a Lander token`` — Seedship Impact's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``If its mana value was 2 or less`` back-
+    # references the destroyed permanent's mana value with no per-
+    # clause primitive recognizing the back-reference, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. Maps to the parameterless
+    # ``SeedshipImpactEffect`` engine class whose resolve step destroys
+    # the artifact-or-enchantment target and gates Lander creation on
+    # the destroyed permanent's printed mana value (≤ 2). See the
+    # regex's docstring for the deferred-generalization plan when a
+    # second card with this shape ships.
+    if _SEEDSHIP_IMPACT.match(phrase) is not None:
+        return SeedshipImpactEffect()
     if _DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE.match(phrase) is not None:
         # ``destroy target artifact or tapped creature`` — Radiant
         # Strike's destroy clause. The engine class's

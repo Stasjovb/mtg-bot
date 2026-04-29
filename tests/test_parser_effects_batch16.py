@@ -142,11 +142,11 @@ def test_dual_sun_technique_claimed_by_parser():
 
 
 def test_invasive_maneuvers_claimed_by_parser():
-    # Invasive Maneuvers ``{1}{R}`` Instant — bare burn with the
-    # ``It deals 5 damage instead if you control a Spacecraft.``
-    # boost rider. The rider's state-substitution syntax has no
-    # corresponding primitive in the per-clause grammar, so the
-    # spell is claimed via the whole-spell exact-text dispatcher.
+    # Invasive Maneuvers ``{1}{R}`` Instant — bare burn with a
+    # Spacecraft-state boost. Migrated from the whole-spell exact-
+    # text tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT``); claim is
+    # end-to-end via the active source's printing.
     assert "Invasive Maneuvers" in _claimed_names()
 
 
@@ -233,14 +233,23 @@ def test_dispatch_dual_sun_technique_returns_engine_class():
 
 
 def test_dispatch_invasive_maneuvers_returns_engine_class():
-    # The base burn is 3; the ``boosted=5`` field fires when the
-    # controller has a Spacecraft on the battlefield at resolve
-    # time.
-    eff = _try_whole_spell_exact_text(
+    # Invasive Maneuvers migrated from the whole-spell exact-text
+    # tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT``); whole-
+    # spell dispatch now falls through. End-to-end claim verified
+    # via the active source's printing carrying
+    # ``DealDamageToTargetCreatureSpacecraftBoosted(base=3,
+    # boosted=5)`` — the captured integers (``3``, ``5``)
+    # parameterize the engine class off the printed base/boosted
+    # damage values.
+    assert _try_whole_spell_exact_text(
         "Invasive Maneuvers deals 3 damage to target creature. "
         "It deals 5 damage instead if you control a Spacecraft."
-    )
-    assert eff == DealDamageToTargetCreatureSpacecraftBoosted(
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    im = get_active_source().get_printings().get("Invasive Maneuvers")
+    assert im is not None
+    assert im.spell_effect == DealDamageToTargetCreatureSpacecraftBoosted(
         base=3, boosted=5,
     )
 
@@ -402,13 +411,19 @@ def test_emergency_eject_claimed_by_parser():
 
 def test_orbital_plunge_claimed_by_parser():
     # Orbital Plunge ``{3}{R}`` Sorcery — 6-damage burn + excess-
-    # damage Lander rider.
+    # damage Lander rider. Migrated from the whole-spell exact-text
+    # tier to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER``);
+    # claim is end-to-end via the active source's printing.
     assert "Orbital Plunge" in _claimed_names()
 
 
 def test_seedship_impact_claimed_by_parser():
     # Seedship Impact ``{1}{G}`` Instant — destroy artifact-or-
-    # enchantment + small-mv Lander rider.
+    # enchantment + small-mv Lander rider. Migrated from the whole-
+    # spell exact-text tier to the per-clause grammar (effects.py's
+    # ``_SEEDSHIP_IMPACT``); claim is end-to-end via the active
+    # source's printing.
     assert "Seedship Impact" in _claimed_names()
 
 
@@ -465,21 +480,42 @@ def test_dispatch_emergency_eject_returns_engine_class():
 
 
 def test_dispatch_orbital_plunge_returns_engine_class():
-    # ``amount=6`` matches the printed damage; the bespoke class
-    # gates the Lander rider on excess damage at resolve time.
-    eff = _try_whole_spell_exact_text(
+    # Orbital Plunge migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's
+    # ``_DEAL_DAMAGE_N_TARGET_CREATURE_WITH_EXCESS_LANDER_RIDER``);
+    # whole-spell dispatch now falls through. End-to-end claim
+    # verified via the active source's printing carrying
+    # ``DealDamageToTargetCreatureWithExcessLanderRider(amount=6)``
+    # — the captured integer (``6``) parameterizes the engine class
+    # off the printed damage.
+    assert _try_whole_spell_exact_text(
         "Orbital Plunge deals 6 damage to target creature. "
         "If excess damage was dealt this way, create a Lander token."
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    op = get_active_source().get_printings().get("Orbital Plunge")
+    assert op is not None
+    assert op.spell_effect == DealDamageToTargetCreatureWithExcessLanderRider(
+        amount=6,
     )
-    assert eff == DealDamageToTargetCreatureWithExcessLanderRider(amount=6)
 
 
 def test_dispatch_seedship_impact_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+    # Seedship Impact migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's ``_SEEDSHIP_IMPACT``);
+    # whole-spell dispatch now falls through. End-to-end claim
+    # verified via the active source's printing carrying
+    # ``SeedshipImpactEffect()`` (parameterless, only card with this
+    # shape today — see the recognizer's docstring for the deferred-
+    # generalization plan).
+    assert _try_whole_spell_exact_text(
         "Destroy target artifact or enchantment. "
         "If its mana value was 2 or less, create a Lander token."
-    )
-    assert eff == SeedshipImpactEffect()
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    si = get_active_source().get_printings().get("Seedship Impact")
+    assert si is not None
+    assert si.spell_effect == SeedshipImpactEffect()
 
 
 def test_dispatch_scout_for_survivors_returns_engine_class():
