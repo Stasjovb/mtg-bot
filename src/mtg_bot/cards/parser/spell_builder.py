@@ -1300,6 +1300,34 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         power_bonus=3,
         toughness_bonus=0,
     ),
+    # Impossible Inferno (Duskmourn) ``{4}{R}`` Instant — 6-damage
+    # burn plus a Delirium-gated impulse-draw rider ("If there are
+    # four or more card types among cards in your graveyard, exile
+    # the top card of your library. You may play it until the end of
+    # your next turn."). Whole-spell exact-text dispatch simplifies
+    # to bare ``DealDamageToTargetCreature(amount=6)`` because:
+    # (1) the spell-builder has no Delirium-gated conditional
+    #     dispatcher today; the only conditional combinator wired in
+    #     is ``ConditionalIfVoid`` (Plasma Bolt's Void rider) and
+    #     extending it to Delirium would require both a graveyard-
+    #     card-types runtime predicate and a UEOT impulse-draw
+    #     primitive — neither shape is reused by another DSK card we
+    #     model, so the work would be a one-off;
+    # (2) the per-clause grammar can't claim the second clause as a
+    #     standalone effect either — "Delirium — If there are four
+    #     or more card types..." parses as an ability-word prefix on
+    #     a conditional impulse-draw, not a standalone spell-effect
+    #     phrase.
+    # Same parser-is-right precedent as Trial of Agony (drop the
+    # multi-target-opp-choice + can't-block rider, keep the bare
+    # 5-damage burn): keep the base damage, drop the unmodelable
+    # Delirium impulse-draw upside.
+    (
+        "Impossible Inferno deals 6 damage to target creature.\n"
+        "Delirium — If there are four or more card types among "
+        "cards in your graveyard, exile the top card of your "
+        "library. You may play it until the end of your next turn."
+    ): DealDamageToTargetCreature(amount=6),
 }
 
 

@@ -1,0 +1,93 @@
+"""Tests for the Duskmourn spells / enchantments batch-7 parser additions.
+
+Each commit in this batch lands one or more cards via a small additive
+change to the parser's whole-spell exact-text dispatch table. No
+existing engine classes are modified beyond additive flag widenings;
+the parser's job here is to claim spells whose printed shapes don't
+fit the per-clause grammar but DO admit a clean simplification onto an
+existing primitive (parser-is-right precedent: Unravel / Divert
+Disaster / Trial of Agony / Turn Inside Out).
+
+Cards claimed in this batch:
+
+* **Impossible Inferno** ``{4}{R}`` Instant — 6-damage burn plus a
+  Delirium-gated impulse-draw rider. Whole-spell dispatch simplifies
+  to bare ``DealDamageToTargetCreature(amount=6)``; the Delirium-
+  gated impulse-draw rider is dropped because the spell-builder has
+  no Delirium-gated conditional dispatcher today and the second
+  clause doesn't parse as a standalone spell-effect phrase
+  (parser-is-right precedent: Trial of Agony — keep the base burn,
+  drop the unmodelable rider).
+
+* **Violent Urge** ``{R}`` Instant — +1/+0 first-strike UEOT pump
+  plus a Delirium-gated double-strike upgrade rider. Whole-spell
+  dispatch simplifies to bare ``PumpTargetCreatureUntilEOT(
+  power_bonus=1, granted_keywords=frozenset({"first strike"}))``;
+  the Delirium-gated double-strike upgrade is dropped per the same
+  parser-is-right precedent as Impossible Inferno.
+
+* **Drag to the Roots** ``{2}{B}{G}`` Instant — Delirium-gated
+  ``{2}``-cost-reduction rider plus a bare destroy-target-nonland-
+  permanent body. Whole-spell dispatch simplifies to bare
+  ``DestroyTargetNonlandPermanent()``; the cost-reduction is
+  dropped because the cost-reduction parser doesn't recognize the
+  ``Delirium — ... as long as ...`` shape and adding the
+  ``four_or_more_card_types_in_graveyard`` engine condition would be
+  a one-off for this card (parser-is-right precedent: Impossible
+  Inferno).
+
+* **Come Back Wrong** ``{2}{B}`` Sorcery — destroy target creature
+  with a conditional reanimate-then-sac-next-end-step rider. Whole-
+  spell dispatch simplifies to bare ``DestroyTargetCreature()``;
+  the conditional reanimation + delayed end-step sacrifice rider
+  is dropped because the engine has no "if put into graveyard this
+  way, reanimate-and-schedule-end-step-sac" primitive
+  (parser-is-right precedent: Trial of Agony).
+"""
+
+from __future__ import annotations
+
+from mtg_bot.cards.parser.source import OracleParserCardSource
+
+
+def _claimed_names() -> frozenset[str]:
+    return frozenset(OracleParserCardSource().claimed_names)
+
+
+# ---------- Impossible Inferno ----------
+
+def test_impossible_inferno_claimed_by_parser():
+    # Impossible Inferno ``{4}{R}`` Instant — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (6-damage burn + Delirium-gated impulse-draw
+    # rider) to bare ``DealDamageToTargetCreature(amount=6)``.
+    assert "Impossible Inferno" in _claimed_names()
+
+
+def test_impossible_inferno_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``DealDamageToTargetCreature(amount=6)`` engine
+    # class — base mechanic preserved (the 6-damage burn), Delirium-
+    # gated impulse-draw rider dropped (parser-is-right precedent:
+    # Trial of Agony).
+    from mtg_bot.cards.base import DealDamageToTargetCreature
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Impossible Inferno"]
+    assert p.spell_effect == DealDamageToTargetCreature(amount=6)
+
+
+def test_impossible_inferno_is_instant():
+    # Type-line carries Instant — not Sorcery — so the spell can be
+    # cast at instant speed in response to opponent's combat / spells.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Impossible Inferno"]
+    assert "Instant" in p.card_types
+
+
+def test_impossible_inferno_mana_cost():
+    # Mono-red ``{4}{R}`` mana cost — confirms the spell carries the
+    # printed cost through the factory.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Impossible Inferno"]
+    assert p.mana_cost_str == "{4}{R}"
