@@ -80,6 +80,7 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnOpponentsCreature,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
@@ -779,6 +780,25 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_AS_SKELETON = re.compile(
     r"to the battlefield\. "
     r"It's a Skeleton in addition to its other types "
     r"and has no abilities$"
+)
+# "Return all creature cards from your graveyard to the battlefield"
+# — mass reanimation (Awakening Hall's door trigger; the half-card
+# behind Funeral Room // Awakening Hall is the only EoE/DSK printing
+# of this exact surface today). Maps to the existing
+# ``ReturnAllCreaturesFromYourGraveyardToBattlefield`` engine class.
+#
+# Literal-line recognizer per the architectural guidance: only one
+# card in the data pool fits this exact surface, and the engine has
+# no parameterized "all <zone>" sibling primitive yet (no
+# ``...ToHand`` mass-recursion engine class), so generalizing across
+# destination zones isn't expressible today. Deferred generalization:
+# when a future printing adds a sibling shape (e.g.
+# ``return all creature cards from your graveyard to your hand``) and
+# the engine grows the matching primitive, fold both into one regex
+# with a captured destination group rather than copy-paste this
+# literal.
+_RETURN_ALL_CREATURE_CARDS_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return all creature cards from your graveyard to the battlefield$"
 )
 # DSK Enduring cycle dies-trigger body: "return it to the battlefield
 # under its owner's control. It's an enchantment." Every Enduring
@@ -2151,6 +2171,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
+    # ``return all creature cards from your graveyard to the
+    # battlefield`` — Awakening Hall's door trigger (Funeral Room //
+    # Awakening Hall, the only EoE/DSK printing of this exact surface
+    # today). Maps to ``ReturnAllCreaturesFromYourGraveyardToBattlefield()``.
+    # Literal-line recognizer with a deferred-generalization note on
+    # the regex above — fold this and any future ``...to your hand``
+    # mass-recursion sibling into one parameterized regex when the
+    # engine grows the matching sibling primitive.
+    if _RETURN_ALL_CREATURE_CARDS_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        return ReturnAllCreaturesFromYourGraveyardToBattlefield()
     m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(phrase)
     if m is not None:
         # ``return target creature card with mana value N or less from

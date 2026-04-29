@@ -60,7 +60,6 @@ from mtg_bot.effects import (
     LoseLife,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
-    ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
@@ -93,55 +92,6 @@ def _half(
         mana_cost_str=mana_cost,
         mana_cost=parse_mana_cost(mana_cost),
         triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-def _build_funeral_room_awakening_hall() -> CardPrinting:
-    """Funeral Room // Awakening Hall ``{2}{B}`` // ``{6}{B}{B}``.
-
-    Funeral Room oracle:
-        Whenever a creature you control dies, each opponent loses 1
-        life and you gain 1 life.
-
-    Awakening Hall oracle:
-        When you unlock this door, return all creature cards from
-        your graveyard to the battlefield.
-
-    The Funeral Room half models the dies-to-drain trigger as a
-    DIES-event predicate trigger gated on ``IsCreature() &
-    Controlled(YOU)`` (matches Sothera's "creature you control dies"
-    shape). The Awakening Hall half is an ENTERS-event self-trigger
-    routed through the Room's ``unlocked_halves`` gate so it fires
-    once when the half becomes unlocked (either at cast time, if
-    Awakening Hall was the cast half, or via ``UnlockRoomHalf`` on
-    a later turn) — see ``_unlock_room_half`` /
-    ``_fire_unlock_door_triggers`` in ``actions.py``.
-    """
-    return make_room(
-        _half(
-            "Funeral Room", "{2}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DIES,
-                    predicate=IsCreature() & Controlled(YOU),
-                    effect=Sequence(
-                        effects=(
-                            EachOpponentLosesLife(amount=1),
-                            GainLife(amount=1),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Awakening Hall", "{6}{B}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnAllCreaturesFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
     )
 
 
@@ -627,7 +577,6 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
@@ -652,6 +601,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 # the unified path the set and the bespoke table both drop to zero
 # and the gate goes away with them.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
+    "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
     "Surgical Suite // Hospital Room",
