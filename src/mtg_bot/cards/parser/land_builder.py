@@ -275,18 +275,6 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # Mutavault: {T}: Add {C}. {1}: becomes 2/2 with all creature types UEOT.
-        "Mutavault": make_utility_land(
-            "Mutavault",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                    ),
-                    effect=BecomeLandCreatureUEOT(power=2, toughness=2),
-                ),
-            ),
-        ),
         # Blinkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Blinkmoth artifact flying UEOT.
         # {1},{T}: Target Blinkmoth gets +1/+1 UEOT.
         # Animation at index 0, explicit mana-tap at index 1, pump at index 2.
@@ -317,22 +305,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=1, toughness_bonus=1,
                         target_subtype="Blinkmoth",
-                    ),
-                ),
-            ),
-        ),
-        # Inkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Phyrexian Blinkmoth artifact
-        # creature with flying and infect UEOT.
-        "Inkmoth Nexus": make_utility_land(
-            "Inkmoth Nexus",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                    ),
-                    effect=BecomeLandCreatureUEOT(
-                        power=1, toughness=1,
-                        granted_keywords=frozenset({"flying", "infect"}),
                     ),
                 ),
             ),
@@ -629,13 +601,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Echoing Deeps: Land — Cave. May enter tapped as copy of any
-        # graveyard land (Cave in addition to its other types).
-        # {T}: Add {C}.
-        "Echoing Deeps": make_utility_land(
-            "Echoing Deeps", subtypes_str="Cave",
-            optional_copy_land_from_graveyard=True,
-        ),
         # Gemstone Caverns: Legendary. Opening-hand replacement effect
         # (not modeled — treated as always having a luck counter).
         # {T}: Add one mana of any color.
@@ -805,6 +770,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if fetch is not None:
         return fetch
+    optional_copy_cave = _try_build_optional_copy_cave_land(
+        card, text, supertypes, subtypes,
+    )
+    if optional_copy_cave is not None:
+        return optional_copy_cave
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1442,8 +1412,14 @@ def _try_build_keyword_colorless_utility_land(
 # strips it) to ``_PAID_EFFECT_BODIES`` paired with a factory that
 # returns a fresh ``Effect`` instance. Bodies / cost shapes outside
 # the table fall through to the silent-skip path.
+#
+# The ``{T}`` portion of the activation cost is optional in the regex:
+# Mutavault's ``{1}: This land becomes a 2/2 creature ...`` line has
+# no tap component, only a generic-mana payment. When the regex
+# matches without ``{T}`` (i.e. the ``tap`` named group is empty),
+# ``tap_self`` is omitted from the resulting ``ActivationCost``.
 _PAID_EFFECT_RE = re.compile(
-    r"^(?P<cost>(?:\{\d+\})+), \{T\}: (?P<rest>.+)\.$"
+    r"^(?P<cost>(?:\{\d+\})+)(?P<tap>, \{T\})?: (?P<rest>.+)\.$"
 )
 
 
@@ -1469,6 +1445,17 @@ def _paid_effect_becomes_copy_of_target_land() -> Effect:
 
 def _paid_effect_move_counter_between_permanents() -> Effect:
     return MovePlusOneCounterBetweenPermanentsYouControl()
+
+
+def _paid_effect_become_2_2_all_creature_types() -> Effect:
+    return BecomeLandCreatureUEOT(power=2, toughness=2)
+
+
+def _paid_effect_become_inkmoth_nexus() -> Effect:
+    return BecomeLandCreatureUEOT(
+        power=1, toughness=1,
+        granted_keywords=frozenset({"flying", "infect"}),
+    )
 
 
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
@@ -1497,6 +1484,41 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Move a counter from target permanent you control onto a second "
     "target permanent":
         _paid_effect_move_counter_between_permanents,
+    # Mutavault's ``{1}: This land becomes a 2/2 creature with all
+    # creature types until end of turn. It's still a land.`` (no
+    # ``{T}`` in the activation cost — the regex's optional ``tap``
+    # group is empty for this body, so ``tap_self`` is dropped from
+    # the resulting ``ActivationCost``). The static side simplifies
+    # the printed "with all creature types" clause to a plain 2/2
+    # animation; the body literal here pins that simplification by
+    # mapping the full printed sentence to a fresh
+    # ``BecomeLandCreatureUEOT(power=2, toughness=2)`` instance.
+    # Currently the only EoS land matching this body literal is
+    # Mutavault; deferred generalization would parameterize the
+    # P/T capture and the keyword/subtype tail when a sibling
+    # printing appears.
+    "This land becomes a 2/2 creature with all creature types "
+    "until end of turn. It's still a land":
+        _paid_effect_become_2_2_all_creature_types,
+    # Inkmoth Nexus's ``{1}: This land becomes a 1/1 Phyrexian
+    # Blinkmoth artifact creature with flying and infect until end
+    # of turn. It's still a land.`` (with the inline infect
+    # reminder stripped earlier). The static side simplifies the
+    # printed "Phyrexian Blinkmoth artifact" subtype/type tail to a
+    # plain creature animation that keeps only the granted keywords
+    # (flying + infect); the body literal pins that simplification
+    # by mapping the full printed sentence to a fresh
+    # ``BecomeLandCreatureUEOT`` with those two keywords. Currently
+    # the only EoS land matching this body literal is Inkmoth
+    # Nexus; deferred generalization would parameterize the P/T
+    # capture, granted-subtype/type capture, and keyword tail when a
+    # sibling printing of similar shape (Blinkmoth Nexus, on its
+    # own multi-ability shape, doesn't fit this two-line arm)
+    # appears.
+    "This land becomes a 1/1 Phyrexian Blinkmoth artifact "
+    "creature with flying and infect until end of turn. It's "
+    "still a land":
+        _paid_effect_become_inkmoth_nexus,
 }
 
 
@@ -1537,7 +1559,7 @@ def _try_build_paid_effect_utility_land(
 ) -> CardPrinting | None:
     """Return a generic-paid single-effect utility ``CardPrinting`` if
     ``text`` matches the strict two-line ``{T}: Add {C}.`` +
-    ``<MANA>, {T}: <BODY>.[ <RIDER>.]`` shape with a body on
+    ``<MANA>[, {T}]: <BODY>.[ <RIDER>.]`` shape with a body on
     ``_PAID_EFFECT_BODIES`` (and rider, if present, on
     ``_PAID_EFFECT_RIDERS``), else ``None``.
 
@@ -1545,6 +1567,18 @@ def _try_build_paid_effect_utility_land(
     capture is restricted to all-generic pips (``{1}``, ``{2}``, …) —
     cards with colored or hybrid pips on the activation cost would
     need a different cost shape and don't fit the current set.
+
+    The ``{T}`` part of the activation cost is optional: Mutavault's
+    ``{1}: This land becomes a 2/2 creature ...`` line activates
+    without tapping, so ``tap_self`` is conditionally set on the
+    ``ActivationCost`` only when the regex's ``tap`` group matched.
+
+    Per-line reminder text is stripped via ``_strip_reminder_text``
+    before any matching: Inkmoth Nexus's animation line carries an
+    inline ``(It deals damage to creatures in the form of -1/-1
+    counters and to players in the form of poison counters.)``
+    parenthetical that the engine doesn't need to see; stripping it
+    here keeps the body literal in ``_PAID_EFFECT_BODIES`` clean.
 
     The optional rider is a fixed activation-condition phrase (e.g.
     Bonders' Enclave's ``Activate only if you control a creature
@@ -1559,9 +1593,10 @@ def _try_build_paid_effect_utility_land(
         return None
     if subtypes:
         return None
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    if len(lines) != 2:
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 2:
         return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
     if lines[0] != _TAP_FOR_C_LINE:
         return None
     paid_match = _PAID_EFFECT_RE.match(lines[1])
@@ -1585,6 +1620,8 @@ def _try_build_paid_effect_utility_land(
     if factory is None:
         return None
     cost_str = paid_match.group("cost")
+    if paid_match.group("tap"):
+        cost_extra["tap_self"] = True
     return make_utility_land(
         card["name"],
         activated_abilities=(
@@ -1592,7 +1629,6 @@ def _try_build_paid_effect_utility_land(
                 cost=ActivationCost(
                     mana=parse_mana_cost(cost_str),
                     mana_str=cost_str,
-                    tap_self=True,
                     **cost_extra,
                 ),
                 effect=factory(),
@@ -1885,6 +1921,65 @@ def _try_build_low_life_dual_land(
         card["name"],
         produces=frozenset({c1, c2}),
         enters_tapped_unless_any_player_life_at_most=threshold,
+    )
+
+
+# Optional-copy-from-graveyard Cave land. Plain ``Land — Cave`` (no
+# supertypes), exactly two lines:
+#   1. ``You may have this land enter tapped as a copy of any land card
+#      in a graveyard, except it's a Cave in addition to its other
+#      types.``
+#   2. ``{T}: Add {C}.``  (intentionally dropped — the engine's
+#      auto-tap-for-cost generic-mana fallback covers tapping for
+#      ``{C}``; ``make_utility_land`` doesn't add an explicit ability.)
+#
+# The first line maps to ``optional_copy_land_from_graveyard=True`` on
+# the ``CardPrinting``, threading the static-side flag through.
+# Currently the only EoS land matching this exact two-line shape is
+# Echoing Deeps; recognizer is a literal-line match (deferred
+# generalization to a parameterized "<subtype>-in-addition-to-its-
+# other-types" recognizer if a sibling printing appears).
+_OPTIONAL_COPY_CAVE_FIRST_LINE = (
+    "You may have this land enter tapped as a copy of any land card "
+    "in a graveyard, except it's a Cave in addition to its other "
+    "types."
+)
+
+
+def _try_build_optional_copy_cave_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return an optional-copy-from-graveyard Cave ``CardPrinting`` if
+    ``text`` matches the strict two-line Echoing Deeps shape, else
+    ``None``.
+
+    ``Land — Cave`` only (no supertypes, single ``Cave`` subtype). The
+    first line is a literal match against the printed copy-from-
+    graveyard sentence; the second line is the dropped
+    ``{T}: Add {C}.``. The static-side
+    ``optional_copy_land_from_graveyard=True`` flag carries the
+    one-card behavior. Today's only printing matching this shape is
+    Echoing Deeps; deferred generalization to a parameterized
+    ``<subtype>-in-addition-to-its-other-types`` recognizer would
+    happen if a sibling printing appears.
+    """
+    if supertypes:
+        return None
+    if subtypes != ("Cave",):
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _OPTIONAL_COPY_CAVE_FIRST_LINE:
+        return None
+    if lines[1] != _DROPPED_TAP_FOR_C_LINE:
+        return None
+    return make_utility_land(
+        card["name"], subtypes_str="Cave",
+        optional_copy_land_from_graveyard=True,
     )
 
 
