@@ -1270,6 +1270,36 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "into your hand and the rest into your graveyard. You gain 3 "
         "life."
     ): CommuneWithEvilEffect(),
+    # Turn Inside Out (Duskmourn) ``{R}`` Instant — pump-target-creature
+    # +3/+0 UEOT plus a "When it dies this turn, manifest dread."
+    # death-triggered rider on the targeted creature. The static side
+    # simplifies to bare
+    # ``PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0)``
+    # because:
+    # (1) the engine has no UEOT-scoped death-trigger plumbing for
+    #     attaching a one-shot trigger to a targeted creature for the
+    #     remainder of the turn — the closest mechanism is the
+    #     creature-side ``triggered_abilities`` field on a printing,
+    #     which fires on every match against the printing (not on a
+    #     single targeted instance), and adding a per-resolve
+    #     ``state.dies_this_turn_manifest_dread_for_target`` registry
+    #     would be a non-trivial widening for a single card's rider;
+    # (2) the per-clause grammar can't claim the spell either — the
+    #     second sentence ``When it dies this turn, manifest dread.``
+    #     doesn't parse as a standalone spell-effect phrase (it's a
+    #     trigger fragment, not a self-contained effect).
+    # Same parser-is-right precedent as Jump Scare / Scorching
+    # Dragonfire — claim the bare base mechanic (the +3/+0 pump UEOT)
+    # and drop the death-trigger rider rather than leaving the spell
+    # unclaimed for an unmodeled rider. Reminder text inside the
+    # manifest parenthetical is stripped before dispatch.
+    (
+        "Target creature gets +3/+0 until end of turn. When it dies "
+        "this turn, manifest dread."
+    ): PumpTargetCreatureUntilEOT(
+        power_bonus=3,
+        toughness_bonus=0,
+    ),
 }
 
 

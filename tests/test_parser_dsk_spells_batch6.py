@@ -70,6 +70,14 @@ Cards claimed in this batch:
   Mirrors ``LookAtTopTwoSplitHandGraveyard`` in shape but generalizes
   the 2-card surveil-style split to a 4-card single-pick split with
   a trailing 3-life-gain rider.
+
+* **Turn Inside Out** ``{R}`` Instant — pump-target-creature +3/+0
+  UEOT plus a "When it dies this turn, manifest dread."
+  death-triggered rider. Whole-spell dispatch simplifies to bare
+  ``PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0)``;
+  the death-triggered manifest-dread rider is dropped because the
+  engine has no UEOT-scoped per-target death-trigger plumbing
+  (parser-is-right precedent: Jump Scare / Scorching Dragonfire).
 """
 
 from __future__ import annotations
@@ -512,3 +520,44 @@ def test_commune_with_evil_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Commune with Evil"]
     assert p.mana_cost_str == "{2}{B}"
+
+
+# ---------- Turn Inside Out ----------
+
+def test_turn_inside_out_claimed_by_parser():
+    # Turn Inside Out ``{R}`` Instant — claimed via the new whole-
+    # spell exact-text dispatch entry that simplifies the printed
+    # text (+3/+0 UEOT + death-triggered manifest-dread rider) to
+    # bare ``PumpTargetCreatureUntilEOT(power_bonus=3,
+    # toughness_bonus=0)``. Reminder text inside the manifest
+    # parenthetical is stripped before dispatch.
+    assert "Turn Inside Out" in _claimed_names()
+
+
+def test_turn_inside_out_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified pump engine class — power bonus preserved,
+    # death-triggered manifest-dread rider dropped (parser-is-right
+    # precedent).
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Turn Inside Out"]
+    assert p.spell_effect == PumpTargetCreatureUntilEOT(
+        power_bonus=3,
+        toughness_bonus=0,
+    )
+
+
+def test_turn_inside_out_is_instant():
+    # Type-line carries Instant — not Sorcery — so the spell can be
+    # cast in response to opponent's combat for a +3/+0 buff.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Turn Inside Out"]
+    assert "Instant" in p.card_types
+
+
+def test_turn_inside_out_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Turn Inside Out"]
+    assert p.mana_cost_str == "{R}"
