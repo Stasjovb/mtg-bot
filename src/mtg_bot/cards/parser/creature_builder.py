@@ -337,18 +337,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Fungal Colossus {6}{G} 5/5 Fungus Beast.
-        # Costs {1} less per differently-named land you control.
-        "Fungal Colossus": make_creature(
-            "Fungal Colossus", "{6}{G}", 5, 5,
-            cost_reductions=(
-                CostReduction(
-                    amount=1,
-                    condition="per_differently_named_land",
-                    per_land_group=True,
-                ),
-            ),
-        ),
         # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
         # ETB: another creature you control gets +2/+0 and gains
         # "when this creature dies, return it to bf tapped".
