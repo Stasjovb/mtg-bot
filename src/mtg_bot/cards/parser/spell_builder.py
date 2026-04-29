@@ -1220,6 +1220,33 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "single target.\n"
         "• One or two target creatures can't block this turn."
     ): DestroyTargetArtifact(),
+    # Unnerving Grasp (Duskmourn) ``{2}{U}`` Sorcery — two-clause
+    # spell: ``Return up to one target nonland permanent to its
+    # owner's hand.`` followed by ``Manifest dread.``. The static side
+    # simplifies to bare ``ManifestDread(count=1)`` because:
+    # (1) the per-clause grammar can't claim either clause as a
+    #     standalone effect — ``Return up to one target nonland
+    #     permanent`` has no per-clause primitive (the existing
+    #     ``ReturnTargetCreatureToOwnersHand`` widens to
+    #     ``allow_nonland_permanent=True`` only for Desculpting Blast,
+    #     and the ``optional=True``/``up to one`` shape isn't reached
+    #     by any per-clause regex);
+    # (2) composing the two as a Sequence would lose the up-to-one
+    #     optional bounce: Sequence's ``requires_target`` returns
+    #     False when its only targeting sub-effect has
+    #     ``optional=True``, so the cast pipeline never picks a
+    #     target — the bounce silently no-ops at every cast. The
+    #     manifest-only simplification keeps the more
+    #     mechanically-meaningful body of the spell intact.
+    # Same parser-is-right precedent as Under the Skin (which drops
+    # its optional graveyard-return rider while keeping the
+    # ManifestDread base) — the bounce is the optional secondary
+    # rider here, the manifest is the base mechanic. Reminder text
+    # inside the manifest parenthetical is stripped before dispatch.
+    (
+        "Return up to one target nonland permanent to its owner's "
+        "hand. Manifest dread."
+    ): ManifestDread(count=1),
 }
 
 

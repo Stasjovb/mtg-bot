@@ -52,6 +52,16 @@ Cards claimed in this batch:
   no per-mode primitives. Whole-spell dispatch simplifies to mode 1's
   ``DestroyTargetArtifact()``; modes 2 and 3 are dropped per the
   parser-is-right precedent set by Get Out / Archenemy's Charm.
+
+* **Unnerving Grasp** ``{2}{U}`` Sorcery — two-clause: ``Return up
+  to one target nonland permanent to its owner's hand.`` followed by
+  ``Manifest dread.``. Whole-spell dispatch simplifies to bare
+  ``ManifestDread(count=1)``; the optional up-to-one bounce is
+  dropped because no per-clause primitive parses the
+  ``up to one target nonland permanent`` shape, and a Sequence
+  composition would silently no-op the bounce at every cast (same
+  parser-is-right precedent as Under the Skin: drop the optional
+  secondary rider, keep the manifest base).
 """
 
 from __future__ import annotations
@@ -248,3 +258,38 @@ def test_untimely_malfunction_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Untimely Malfunction"]
     assert p.mana_cost_str == "{1}{R}"
+
+
+# ---------- Unnerving Grasp ----------
+
+def test_unnerving_grasp_claimed_by_parser():
+    # Unnerving Grasp ``{2}{U}`` Sorcery — claimed via the new whole-
+    # spell exact-text dispatch entry that simplifies the printed
+    # text (up-to-one bounce + manifest dread) to bare
+    # ``ManifestDread(count=1)``. Reminder text inside the manifest
+    # parenthetical is stripped before dispatch.
+    assert "Unnerving Grasp" in _claimed_names()
+
+
+def test_unnerving_grasp_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``ManifestDread(count=1)`` engine class — base
+    # mechanic preserved (manifest dread), optional up-to-one bounce
+    # dropped (parser-is-right precedent: Under the Skin).
+    from mtg_bot.cards.base import ManifestDread
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Unnerving Grasp"]
+    assert p.spell_effect == ManifestDread(count=1)
+
+
+def test_unnerving_grasp_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Unnerving Grasp"]
+    assert "Sorcery" in p.card_types
+
+
+def test_unnerving_grasp_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Unnerving Grasp"]
+    assert p.mana_cost_str == "{2}{U}"
