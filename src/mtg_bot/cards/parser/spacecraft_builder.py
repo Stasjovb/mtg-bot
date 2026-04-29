@@ -114,15 +114,12 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import (
     OptionalSacLandOrLanderForBasicLandRamp,
     Sequence,
 )
 from mtg_bot.effects.generic import (
-    CreateTokenPerMulticoloredPermanent,
     DealDamageToTargetCreature,
-    DrawCardPerMulticoloredPermanent,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
@@ -230,29 +227,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                         granted_keywords=frozenset({"flying"}),
                     ),
                     tier_threshold=2,
-                ),
-            ),
-        ),
-        # Infinite Guideline Station: Legendary. ETB create a tapped 2/2
-        # colorless Robot token for each multicolored permanent you control.
-        # Attack trigger draw a card for each multicolored permanent you
-        # control. Station 12+ flying.
-        make_spacecraft(
-            "Infinite Guideline Station", "{W}{U}{B}{R}{G}", 7, 15,
-            station_threshold=12,
-            stationed_keywords={"flying"},
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateTokenPerMulticoloredPermanent(
-                        token_printing=TOKEN_PRINTINGS["Robot"],
-                        tapped=True,
-                    ),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=DrawCardPerMulticoloredPermanent(),
                 ),
             ),
         ),
@@ -469,8 +443,13 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                 continue
             # Body wasn't a pure evergreen keyword list — try the
             # unified clause parser for the tier-gated trigger or
-            # tier-gated anthem-static arm.
-            clause = _parse_clause(body)
+            # tier-gated anthem-static arm. Forward the printing's own
+            # name so a tier-line trigger that references the source by
+            # its printed name (named-self short form, e.g.
+            # ``"Whenever Infinite Guideline Station attacks"``) is
+            # substituted to the canonical ``this Spacecraft`` form
+            # before the trigger phrase lookup.
+            clause = _parse_clause(body, name=name)
             if clause is None:
                 # Activated / unknown shape — out of scope.
                 return None
@@ -537,7 +516,13 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         # one self-ETB trigger and at most one self-ATTACKS trigger
         # per card from non-tier lines, plus any number of activated
         # abilities; static-only clauses are still out of scope.
-        clause = _parse_clause(line)
+        # Forward the printing's own name so trigger phrases that
+        # reference the source by name (Infinite Guideline Station,
+        # whose ETB and attack-trigger lines spell out the full name)
+        # are substituted to the canonical ``this Spacecraft`` form
+        # before the trigger phrase lookup. Same threading the creature
+        # builder does for legendary creatures via ``Syr Vondam``.
+        clause = _parse_clause(line, name=name)
         if clause is None:
             # Anything the unified parser doesn't recognize - attack
             # or ETB triggers whose effect phrases aren't modeled,

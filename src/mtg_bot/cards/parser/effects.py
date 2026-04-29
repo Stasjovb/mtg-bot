@@ -20,6 +20,7 @@ from mtg_bot.cards.base import (
     CounterTargetSpell,
     CreateLanderAndScheduleSacrifice,
     CreateToken,
+    CreateTokenPerMulticoloredPermanent,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
@@ -40,6 +41,7 @@ from mtg_bot.cards.base import (
     DiscardHandThenDrawN,
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,
+    DrawCardPerMulticoloredPermanent,
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
@@ -688,6 +690,42 @@ _CREATE_CREATURE_TOKEN = re.compile(
 _CREATE_BARE_NAME_TOKEN = re.compile(
     rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?"
     rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
+)
+# "Create a tapped 2/2 colorless Robot artifact creature token for each
+# multicolored permanent you control." — Infinite Guideline Station's
+# ETB. Maps to ``CreateTokenPerMulticoloredPermanent(token_printing=
+# TOKEN_PRINTINGS["Robot"], tapped=True)`` — same primitive the static
+# registry / bespoke factory uses. Literal-line recognizer with a
+# zero-capture surface: only Infinite Guideline Station in the EoE
+# pool prints this exact shape today, so a parameterized
+# ``create a tapped <P>/<T> <color> <Subtype> <type> token for each
+# multicolored permanent you control`` regex would have nothing else
+# to claim. Deferred generalization: when a second card ships with
+# the ``... for each multicolored permanent you control`` token-
+# creation tail (or with a sibling per-X gate like ``for each artifact
+# you control``), fold both literals into one regex with captured
+# count/stats/color/subtype groups dispatching through the existing
+# ``_parse_create_token_effect`` body to share the
+# ``TOKEN_PRINTINGS`` lookup with the bare-token shapes above.
+_CREATE_TAPPED_ROBOT_TOKEN_PER_MULTICOLORED_LINE = re.compile(
+    r"^create a tapped 2/2 colorless Robot artifact creature token "
+    r"for each multicolored permanent you control$"
+)
+# "Draw a card for each multicolored permanent you control." —
+# Infinite Guideline Station's attack trigger. Maps to
+# ``DrawCardPerMulticoloredPermanent()``. Literal-line recognizer
+# with a zero-capture surface: only Infinite Guideline Station in the
+# EoE pool prints this exact shape today, so a parameterized
+# ``<verb> for each multicolored permanent you control`` regex would
+# have nothing else to claim. Deferred generalization: when a second
+# card ships with a sibling per-X tail on a different verb (e.g.
+# ``each opponent loses 1 life for each multicolored permanent you
+# control``), fold the per-multicolored-permanent gate into a shared
+# tail recognizer dispatching to the matching primitive — same
+# approach the existing ``deal damage by artifact count`` recognizer
+# took.
+_DRAW_CARD_PER_MULTICOLORED_PERMANENT_LINE = re.compile(
+    r"^draw a card for each multicolored permanent you control$"
 )
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 # "Look at the top two cards of your library. Put one into your hand
@@ -1993,6 +2031,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_TAPPED_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetTappedCreature(amount=int(m.group(1)))
+    if _DRAW_CARD_PER_MULTICOLORED_PERMANENT_LINE.match(
+        phrase
+    ) is not None:
+        # ``draw a card for each multicolored permanent you control``
+        # — Infinite Guideline Station's attack trigger. Tried BEFORE
+        # the bare ``draw a card`` shape because the bare regex's
+        # ``draw a card$`` tail wouldn't match the ``for each
+        # multicolored permanent you control`` rider anyway, but
+        # more-specific before more-general is the convention here.
+        # See the regex comment for the deferred-generalization plan.
+        return DrawCardPerMulticoloredPermanent()
     if _DRAW_A_CARD.match(phrase) is not None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
@@ -2285,6 +2334,24 @@ def _parse_effect(phrase: str) -> Effect | None:
     # the first, so they can't be split into independent effects).
     if _CREATE_LANDER_AND_SCHEDULE_SAC.match(phrase) is not None:
         return CreateLanderAndScheduleSacrifice()
+    if _CREATE_TAPPED_ROBOT_TOKEN_PER_MULTICOLORED_LINE.match(
+        phrase
+    ) is not None:
+        # ``create a tapped 2/2 colorless Robot artifact creature
+        # token for each multicolored permanent you control`` —
+        # Infinite Guideline Station's ETB. Tried BEFORE the generic
+        # ``_parse_create_token_effect`` because that function's
+        # ``_CREATE_CREATURE_TOKEN`` regex also matches the head of
+        # this phrase (``create a tapped 2/2 colorless Robot artifact
+        # creature token``) but stops at the ``$`` anchor before the
+        # ``for each multicolored permanent you control`` tail —
+        # without this earlier dispatch, the generic shape would
+        # silently drop the per-multicolored gate. See the regex
+        # comment for the deferred-generalization plan.
+        return CreateTokenPerMulticoloredPermanent(
+            token_printing=TOKEN_PRINTINGS["Robot"],
+            tapped=True,
+        )
     token_eff = _parse_create_token_effect(phrase)
     if token_eff is not None:
         return token_eff

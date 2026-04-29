@@ -200,11 +200,16 @@ def test_build_spacecraft_printing_tier_gated_plus_standalone_trigger():
 def test_build_spacecraft_printing_skips_tier_gated_unparseable_effect():
     """A tier-gated trigger whose body parses as a recognized trigger
     phrase but whose effect phrase is outside the unified effect
-    grammar (here ``draw a card for each multicolored permanent you
-    control`` — Infinite Guideline Station's bespoke attack-trigger
-    body) falls through ``_parse_clause`` and the whole card skips.
-    Locks in that the tier-gated arm never silently drops the effect
-    — same fall-through invariant the standalone-trigger arm holds."""
+    grammar (here a synthetic ``draw a card for each blue creature
+    you control`` body — no per-blue-creature primitive lives in the
+    grammar today) falls through ``_parse_clause`` and the whole card
+    skips. Locks in that the tier-gated arm never silently drops the
+    effect — same fall-through invariant the standalone-trigger arm
+    holds. The previous version of this test used Infinite Guideline
+    Station's ``draw a card for each multicolored permanent you
+    control`` body as the unparseable phrase; that surface now claims
+    through the unified grammar (de-bespoke batch 4), so the synthetic
+    was swapped to a still-unparseable shape."""
     card = {
         "name": "Hand-Crafted Tier-Gated Unparseable Spacecraft",
         "mana_cost": "{4}{U}",
@@ -216,7 +221,7 @@ def test_build_spacecraft_printing_skips_tier_gated_unparseable_effect():
             "counters equal to its power on this Spacecraft. Station "
             "only as a sorcery. It's an artifact creature at 7+.)\n"
             "3+ | Whenever this Spacecraft attacks, draw a card for "
-            "each multicolored permanent you control.\n"
+            "each blue creature you control.\n"
             "7+ | Flying"
         ),
     }
