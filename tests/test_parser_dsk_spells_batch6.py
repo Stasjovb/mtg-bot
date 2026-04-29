@@ -18,6 +18,14 @@ Cards claimed in this batch:
   choice slot kind and the can't-block rider are dropped per the
   parser-is-right precedent set by Scorching Dragonfire (drop
   unmodelable rider, keep the base mechanic).
+
+* **Under the Skin** ``{2}{G}`` Sorcery — ``Manifest dread.`` plus
+  an optional ``You may return a permanent card from your graveyard
+  to your hand.`` rider. Whole-spell dispatch simplifies to bare
+  ``ManifestDread(count=1)``; the optional graveyard-return rider is
+  dropped because no per-clause primitive widens to "any nonland
+  permanent card from graveyard to hand with optionality"
+  (parser-is-right precedent).
 """
 
 from __future__ import annotations
@@ -66,3 +74,38 @@ def test_trial_of_agony_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Trial of Agony"]
     assert p.mana_cost_str == "{R}"
+
+
+# ---------- Under the Skin ----------
+
+def test_under_the_skin_claimed_by_parser():
+    # Under the Skin ``{2}{G}`` Sorcery — claimed via the new whole-
+    # spell exact-text dispatch entry that simplifies the printed text
+    # (manifest dread + optional grave-return rider) to bare
+    # ``ManifestDread(count=1)``. Reminder text inside the manifest
+    # parenthetical is stripped before dispatch.
+    assert "Under the Skin" in _claimed_names()
+
+
+def test_under_the_skin_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``ManifestDread(count=1)`` engine class — base
+    # mechanic preserved, optional graveyard-return rider dropped
+    # (parser-is-right precedent).
+    from mtg_bot.cards.base import ManifestDread
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Under the Skin"]
+    assert p.spell_effect == ManifestDread(count=1)
+
+
+def test_under_the_skin_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Under the Skin"]
+    assert "Sorcery" in p.card_types
+
+
+def test_under_the_skin_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Under the Skin"]
+    assert p.mana_cost_str == "{2}{G}"

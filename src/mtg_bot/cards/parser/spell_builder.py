@@ -68,6 +68,7 @@ from mtg_bot.cards.base import (
     ExorciseEffect,
     FocusFireEffect,
     LoseLife,
+    ManifestDread,
     ModalChooseOne,
     MutinousMassacreEffect,
     OptionalSacArtifactForEffect,
@@ -1103,6 +1104,30 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "deals 5 damage to that creature, and the other can't block "
         "this turn."
     ): DealDamageToTargetCreature(amount=5),
+    # Under the Skin (Duskmourn) ``{2}{G}`` Sorcery — two-clause spell:
+    # ``Manifest dread.`` followed by ``You may return a permanent
+    # card from your graveyard to your hand.``. The static side
+    # simplifies to bare ``ManifestDread(count=1)`` (the trailing
+    # parenthesized reminder text on the first clause is stripped
+    # before dispatch, but the SECOND clause is the rider being
+    # dropped here). The optional graveyard-return rider has no
+    # standalone primitive: the per-clause spell-effect grammar has
+    # no "may return a permanent card from your graveyard to your
+    # hand" parse — every existing ``Return*FromGraveyardToHand``
+    # primitive is creature-typed (single-target or up-to-N), and
+    # widening one to "any nonland permanent card" with optionality
+    # would be a non-trivial primitive change for a single card's
+    # rider. Same parser-is-right precedent as Unwanted Remake /
+    # Vengeful Possession — claim the bare base mechanic (manifest
+    # dread) and drop the optional secondary rider. Multi-line key
+    # carries the literal newline between the manifest clause and
+    # the optional return clause; reminder text inside the manifest
+    # clause's parenthetical is stripped before dispatch.
+    (
+        "Manifest dread.\n"
+        "You may return a permanent card from your graveyard to your "
+        "hand."
+    ): ManifestDread(count=1),
 }
 
 
