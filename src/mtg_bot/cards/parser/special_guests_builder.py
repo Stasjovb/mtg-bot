@@ -73,40 +73,11 @@ def _build_sliver_overlord() -> CardPrinting:
     )
 
 
-def _build_burgeoning() -> CardPrinting:
-    type_line = "Enchantment"
-    supertypes, card_types, subtypes = _parse_type_line(type_line)
-    mana_str = "{G}"
-    return CardPrinting(
-        name="Burgeoning",
-        mana_cost_str=mana_str,
-        mana_cost=parse_mana_cost(mana_str),
-        type_line=type_line,
-        supertypes=supertypes,
-        card_types=card_types,
-        subtypes=subtypes,
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.PLAYS_LAND,
-                predicate=Controlled(
-                    by=_Controller.OPPONENT, subject="controller",
-                ),
-                effect=OptionalPutLandFromHandOntoBattlefield(),
-            ),
-        ),
-    )
-
-
 # Name → (expected oracle text, factory). The oracle text check is a
 # defensive sanity belt: if Scryfall ever changes a printed wording
 # the parser falls through to the silent-skip path rather than
 # claiming a card whose text no longer matches the modeled flag.
 _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
-    "Burgeoning": (
-        "Whenever an opponent plays a land, you may put a land card from "
-        "your hand onto the battlefield.",
-        _build_burgeoning,
-    ),
     "Sliver Overlord": (
         "{3}: Search your library for a Sliver card, reveal that card, "
         "put it into your hand, then shuffle.\n"

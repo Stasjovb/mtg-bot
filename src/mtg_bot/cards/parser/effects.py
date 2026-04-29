@@ -65,6 +65,7 @@ from mtg_bot.cards.base import (
     OptionalDiscardCardThenDrawN,
     OptionalManaCostThenEffect,
     OptionalPutCreatureFromHandOntoBattlefield,
+    OptionalPutLandFromHandOntoBattlefield,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
@@ -1144,24 +1145,20 @@ _OPTIONAL_DISCARD_HAND_THEN_DRAW = re.compile(
     rf"^you may discard your hand\. If you do, "
     rf"draw (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
-# "You may put a creature card from your hand onto the battlefield." —
-# Sledge-Class Seedship's attack-trigger body. Parameterless literal
-# match against the verbatim sentence; maps to
-# ``OptionalPutCreatureFromHandOntoBattlefield()`` whose engine class
-# delegates the optional choice through the agent's
-# ``choose_card_from_library`` hook (declining is legal — the effect
-# resolves as a no-op).
-#
-# Only Sledge-Class Seedship in the EoE/DSK pool uses this exact
-# shape today. A sibling literal recognizer (``you may put a land
-# card from your hand onto the battlefield`` for Burgeoning, claimed
-# bespoke today by ``special_guests_builder``) would generalize this
-# into a shared ``you may put a (creature|land) card from your hand
-# onto the battlefield`` regex with the type-name driving an engine-
-# side dispatch — broader grammar deferred until that second example
-# migrates here.
-_OPTIONAL_PUT_CREATURE_FROM_HAND_ONTO_BATTLEFIELD = re.compile(
-    r"^you may put a creature card from your hand onto the battlefield$"
+# "You may put a (creature|land) card from your hand onto the
+# battlefield." — parameterized over the card-type word. Sledge-Class
+# Seedship (creature, attack trigger) and Burgeoning (land, opponent-
+# plays-land trigger) both fit this shape; the captured group drives
+# the engine-class dispatch:
+#   creature → ``OptionalPutCreatureFromHandOntoBattlefield()``
+#   land     → ``OptionalPutLandFromHandOntoBattlefield()``
+# Both classes delegate the optional choice through the resolving
+# player's agent and treat declining as a legal no-op. A future
+# printing with a different card-type word (artifact, enchantment, etc.)
+# would extend the alternation and add a matching engine class.
+_OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD = re.compile(
+    r"^you may put a (creature|land) card from your hand "
+    r"onto the battlefield$"
 )
 # "You may sacrifice another creature or artifact. If you do, this
 # creature gets +N/+M until end of turn." — the
@@ -2814,19 +2811,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         token = m.group(1)
         amount = 1 if token == "a" else _parse_amount(token)
         return DiscardHandThenDrawN(amount=amount)
-    if _OPTIONAL_PUT_CREATURE_FROM_HAND_ONTO_BATTLEFIELD.match(
-        phrase
-    ) is not None:
-        # ``you may put a creature card from your hand onto the
-        # battlefield`` — Sledge-Class Seedship's attack-trigger body.
-        # Literal-line recognizer; only one card with this exact shape
-        # in the current pool. The companion ``you may put a land card
-        # from your hand onto the battlefield`` shape (Burgeoning,
-        # claimed bespoke by ``special_guests_builder``) would
-        # generalize this into a shared regex with the type-name
-        # driving the engine class — broader grammar deferred until
-        # that second example migrates here.
-        return OptionalPutCreatureFromHandOntoBattlefield()
+    m = _OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD.match(phrase)
+    if m is not None:
+        # ``you may put a (creature|land) card from your hand onto the
+        # battlefield`` — Sledge-Class Seedship's attack-trigger body
+        # (creature) and Burgeoning's opponent-plays-land trigger body
+        # (land). The captured group drives the engine-class dispatch.
+        permanent_type = m.group(1)
+        if permanent_type == "creature":
+            return OptionalPutCreatureFromHandOntoBattlefield()
+        if permanent_type == "land":
+            return OptionalPutLandFromHandOntoBattlefield()
+        # The regex's alternation is closed; this branch is unreachable
+        # but keeps the dispatch explicit if the regex grows.
+        return None
     m = _OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_UEOT.match(phrase)
     if m is not None:
         # More-specific shape (self-pump consequence) — produces the
