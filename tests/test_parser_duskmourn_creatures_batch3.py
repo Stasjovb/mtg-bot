@@ -249,3 +249,122 @@ def test_clammy_prowler_claimed_by_parser():
     # phrase + the new ``another target attacking creature`` variant
     # of the unblockable-UEOT primitive.
     assert "Clammy Prowler" in _claimed_names()
+
+
+# ---------- ``unlocked doors among Rooms`` static gate ----------
+
+
+def test_static_unlocked_doors_gate_inactive_below_threshold():
+    # ``StaticAbility`` with ``requires_unlocked_doors_among_rooms=2``
+    # is inert until the controller's battlefield contains at least
+    # two unlocked doors (per-half count) across Rooms they control.
+    # With zero Rooms in play, the ability does NOT apply to its
+    # source.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import StaticAbility, StaticScope
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    src = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    static = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        requires_unlocked_doors_among_rooms=2,
+    )
+    assert static.applies_to(src, src, state) is False
+
+
+def test_static_unlocked_doors_gate_active_at_threshold():
+    # With two unlocked doors on the controller's battlefield (one
+    # Room with both halves unlocked, OR two Rooms with one half
+    # each), the ability applies to its source. Models Rampaging
+    # Soulrager's printed gate.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import StaticAbility, StaticScope
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    src = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    # Find any Room printing in the parser pool to use as a fixture.
+    printings = OracleParserCardSource().get_printings()
+    room_p = next(
+        p for p in printings.values()
+        if "Room" in p.subtypes
+    )
+    room = state.new_object(room_p, owner_id=0, zone=Zone.BATTLEFIELD)
+    room.unlocked_halves = frozenset(h.name for h in room_p.room_halves)
+    state.battlefield.append(room)
+    static = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        requires_unlocked_doors_among_rooms=2,
+    )
+    # Exactly 2 doors unlocked on the lone Room → applies.
+    assert static.applies_to(src, src, state) is True
+
+
+def test_static_unlocked_doors_gate_ignores_opponent_rooms():
+    # Rooms controlled by an opponent don't contribute to the source's
+    # controller's door count. With both halves of an opponent's Room
+    # unlocked, the source-side ability still doesn't apply.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import StaticAbility, StaticScope
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    src = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    printings = OracleParserCardSource().get_printings()
+    room_p = next(
+        p for p in printings.values()
+        if "Room" in p.subtypes
+    )
+    opp_room = state.new_object(room_p, owner_id=1, zone=Zone.BATTLEFIELD)
+    opp_room.unlocked_halves = frozenset(h.name for h in room_p.room_halves)
+    state.battlefield.append(opp_room)
+    static = StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=3,
+        requires_unlocked_doors_among_rooms=2,
+    )
+    assert static.applies_to(src, src, state) is False
+
+
+def test_rampaging_soulrager_claimed_by_parser():
+    # Rampaging Soulrager ``{2}{R}`` 1/4 Spirit. Single oracle line:
+    # ``This creature gets +3/+0 as long as there are two or more
+    # unlocked doors among Rooms you control.`` Claims via the
+    # existing trailing ``as long as <condition>`` static-ability
+    # grammar feeding the new ``requires_unlocked_doors_among_rooms``
+    # gate field on ``StaticAbility``.
+    assert "Rampaging Soulrager" in _claimed_names()
+
+
+def test_rampaging_soulrager_carries_unlocked_doors_static():
+    # The claimed printing must actually carry the new gate field on
+    # its static ability — otherwise the engine wouldn't gate the +3/+0
+    # bonus on the door threshold and the printing would over-pump
+    # whenever it's on the battlefield.
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    src = OracleParserCardSource()
+    soulrager = src.get_printings()["Rampaging Soulrager"]
+    statics = soulrager.static_abilities
+    assert len(statics) == 1
+    static = statics[0]
+    assert static.power_bonus == 3
+    assert static.toughness_bonus == 0
+    assert static.requires_unlocked_doors_among_rooms == 2

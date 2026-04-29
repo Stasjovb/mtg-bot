@@ -123,6 +123,17 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
         "requires_spells_cast_this_turn": 3
     },
     "it's your turn": {"active_turn_only": True},
+    # Duskmourn "doors among Rooms" gate. Rampaging Soulrager prints
+    # ``This creature gets +3/+0 as long as there are two or more
+    # unlocked doors among Rooms you control.`` — the trailing-shape
+    # static line lands here via its ``as long as <condition>`` tail.
+    # Maps to ``requires_unlocked_doors_among_rooms=2``; the engine
+    # gate walks the controller's battlefield, sums
+    # ``len(unlocked_halves)`` over every Room, and applies the
+    # ability only when the total clears the threshold.
+    "there are two or more unlocked doors among Rooms you control": {
+        "requires_unlocked_doors_among_rooms": 2
+    },
 }
 
 

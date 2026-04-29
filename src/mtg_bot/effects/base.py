@@ -332,6 +332,16 @@ class StaticAbility:
     # the ability to apply. 0 means "always on". Matches EoE's
     # "as long as you've cast two or more spells this turn" riders.
     requires_spells_cast_this_turn: int = 0
+    # Minimum unlocked doors among Rooms the source's controller
+    # controls for the ability to apply. 0 means "always on". Matches
+    # Duskmourn's "as long as there are two or more unlocked doors
+    # among Rooms you control" rider (Rampaging Soulrager). The count
+    # walks the controller's battlefield, sums ``len(unlocked_halves)``
+    # over every Room object, and gates on the total reaching the
+    # threshold. Distinct from a Room-count gate because a single Room
+    # with both halves unlocked counts as two doors here, mirroring the
+    # printed "doors" wording exactly.
+    requires_unlocked_doors_among_rooms: int = 0
     # DSK Rooms: when this static lives on a Room half, this is the
     # half-name (matches a key in ``CardPrinting.room_halves``). While
     # the half is locked (not in ``unlocked_halves``), the ability is
@@ -376,6 +386,25 @@ class StaticAbility:
                 controller.spells_cast_this_turn
                 < self.requires_spells_cast_this_turn
             ):
+                return False
+        # "As long as there are N or more unlocked doors among Rooms
+        # you control" gate. Walks the controller's battlefield and
+        # sums ``len(unlocked_halves)`` across every Room. A Room with
+        # both halves unlocked contributes 2; a Room with one half
+        # unlocked contributes 1; a Room not on the controller's
+        # battlefield contributes 0. Matches the printed "doors"
+        # wording exactly — a per-half count rather than a per-Room
+        # count.
+        if self.requires_unlocked_doors_among_rooms > 0:
+            if state is None:
+                return False
+            total_doors = sum(
+                len(o.unlocked_halves)
+                for o in state.battlefield
+                if o.controller_id == source.controller_id
+                and "Room" in o.printing.subtypes
+            )
+            if total_doors < self.requires_unlocked_doors_among_rooms:
                 return False
         if self.scope == StaticScope.SELF:
             return target.id == source.id
