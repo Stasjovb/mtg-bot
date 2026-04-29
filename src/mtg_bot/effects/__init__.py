@@ -232,6 +232,7 @@ from mtg_bot.effects.bespoke import (
     MemorialVaultActivatedEffect,
     MonoistCircuitFeederETBEffect,
     MutinousMassacreEffect,
+    OsseousSticktwisterEndStepEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
     PerigeeBeckonerDiesReturnTappedEffect,

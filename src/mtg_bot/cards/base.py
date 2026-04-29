@@ -222,6 +222,7 @@ from mtg_bot.effects import (
     LookAtTopTwoSplitHandGraveyard,
     ManifestDread,
     MutinousMassacreEffect,
+    OsseousSticktwisterEndStepEffect,
     Surveil,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,

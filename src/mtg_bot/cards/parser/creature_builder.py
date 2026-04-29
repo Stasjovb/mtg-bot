@@ -66,6 +66,7 @@ from mtg_bot.cards.base import (
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
     MoveSelfCountersToTargetCreatureYouControl,
+    OsseousSticktwisterEndStepEffect,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     PerigeeBeckonerDiesReturnTappedEffect,
     PossibilityTechnicianETBEffect,
@@ -953,6 +954,31 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ATTACKS, predicate=IsSelf(),
                     effect=AttackInTheBoxAttackEffect(),
+                ),
+            ),
+        ),
+        # Osseous Sticktwister {1}{B} 2/2 Scarecrow. Lifelink.
+        # "Delirium — At the beginning of your end step, if there are
+        # four or more card types among cards in your graveyard, each
+        # opponent may sacrifice a nonland permanent of their choice
+        # or discard a card. Then this creature deals damage equal to
+        # its power to each opponent who didn't sacrifice a permanent
+        # or discard a card this way."
+        # Lifelink rides the standard ``keywords`` kwarg; the Delirium
+        # gate composes ``Controlled(YOU) & Delirium()`` onto the
+        # end-step trigger, and the bespoke
+        # ``OsseousSticktwisterEndStepEffect`` engine class encodes the
+        # per-opponent three-mode choice (sac / discard / take damage).
+        "Osseous Sticktwister": make_creature(
+            "Osseous Sticktwister", "{1}{B}", 2, 2,
+            artifact=True,
+            subtypes=("Scarecrow",),
+            keywords={"lifelink"},
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_END_STEP,
+                    predicate=Controlled(YOU) & Delirium(),
+                    effect=OsseousSticktwisterEndStepEffect(),
                 ),
             ),
         ),

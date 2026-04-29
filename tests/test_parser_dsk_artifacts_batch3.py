@@ -644,3 +644,137 @@ def test_wickerfolk_thresher_no_op_on_empty_library():
     WickerfolkThresherAttackEffect().resolve(
         state, controller_id=0, targets=(),
     )
+
+
+# ---------- Osseous Sticktwister ----------
+
+def test_osseous_sticktwister_claimed_by_parser():
+    # Osseous Sticktwister lands via name-keyed bespoke dispatch in
+    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    assert "Osseous Sticktwister" in _claimed_names()
+
+
+def test_osseous_sticktwister_carries_lifelink_and_delirium_end_step_trigger():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the lifelink keyword and the Delirium-gated end-step trigger via
+    # the bespoke ``OsseousSticktwisterEndStepEffect`` engine class.
+    from mtg_bot.effects.bespoke import OsseousSticktwisterEndStepEffect
+
+    p = OracleParserCardSource().get_printings()["Osseous Sticktwister"]
+    assert p.power == 2 and p.toughness == 2
+    assert p.is_artifact is True
+    assert "Scarecrow" in p.subtypes
+    assert "lifelink" in p.keywords
+    end_step = [
+        t for t in p.triggered_abilities
+        if t.event == Event.BEGINNING_OF_END_STEP
+    ]
+    assert len(end_step) == 1
+    assert isinstance(
+        end_step[0].effect, OsseousSticktwisterEndStepEffect,
+    )
+    pred_repr = repr(end_step[0].predicate)
+    assert "Delirium" in pred_repr
+
+
+# ---------- OsseousSticktwisterEndStepEffect engine class ----------
+
+def test_osseous_sticktwister_effect_describe():
+    from mtg_bot.effects.bespoke import OsseousSticktwisterEndStepEffect
+
+    desc = OsseousSticktwisterEndStepEffect().describe()
+    assert "sacrifice" in desc
+    assert "discard" in desc
+    assert "damage" in desc
+
+
+def test_osseous_sticktwister_decline_takes_damage():
+    # Opponent picks decline (only choice when no permanents and no
+    # hand) → damage = source's effective power = 2.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import OsseousSticktwisterEndStepEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _Decline:
+        def choose_mode(self, state, pid, modes):
+            # With no permanents and no hand, the only option is the
+            # decline mode (last in the list).
+            return len(modes) - 1
+
+    osseous_pr = make_creature(
+        "Osseous Sticktwister", "{1}{B}", 2, 2,
+        artifact=True, subtypes=("Scarecrow",),
+        keywords={"lifelink"},
+    )
+    osseous = GameObject(
+        id=1, printing=osseous_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    p0 = Player(id=0, life=10)
+    p1 = Player(id=1, agent=_Decline(), life=20)
+    state = GameState(
+        players=[p0, p1],
+        battlefield=[osseous],
+        resolving_source=osseous,
+    )
+    OsseousSticktwisterEndStepEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # Source's effective power is 2; opponent loses 2 life.
+    assert p1.life == 18
+
+
+def test_osseous_sticktwister_sac_skips_damage():
+    # Opponent picks sacrifice → no damage to that opponent.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import OsseousSticktwisterEndStepEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _PickSac:
+        # The sacrifice mode is presented at index 0 when the opponent
+        # has at least one nonland permanent.
+        def choose_mode(self, state, pid, modes):
+            return 0
+
+        def choose_sacrifice(self, state, pid, legal_object_ids):
+            return legal_object_ids[0]
+
+    osseous_pr = make_creature(
+        "Osseous Sticktwister", "{1}{B}", 2, 2,
+        artifact=True, subtypes=("Scarecrow",),
+        keywords={"lifelink"},
+    )
+    osseous = GameObject(
+        id=1, printing=osseous_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    bear_pr = make_creature("Bear", "{1}{G}", 2, 2)
+    target = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    p0 = Player(id=0, life=10)
+    p1 = Player(id=1, agent=_PickSac(), life=20)
+    state = GameState(
+        players=[p0, p1],
+        battlefield=[osseous, target],
+        resolving_source=osseous,
+    )
+    OsseousSticktwisterEndStepEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # Bear was sacrificed; opponent takes no damage.
+    assert target not in state.battlefield
+    assert target in p1.graveyard
+    assert p1.life == 20
+
+
+def test_osseous_sticktwister_no_op_without_resolving_source():
+    # Defensive: missing source → silent no-op.
+    from mtg_bot.effects.bespoke import OsseousSticktwisterEndStepEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    OsseousSticktwisterEndStepEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
