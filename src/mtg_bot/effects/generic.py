@@ -4128,6 +4128,13 @@ class SearchLibraryForCard(Effect):
             return printing.is_spacecraft
         if fn == "sliver":
             return "Sliver" in printing.subtypes
+        # Demonic Counsel (Duskmourn) — tutor for a Demon creature
+        # card. Mirrors the ``sliver`` shape (subtype-keyed filter on
+        # creature printings); adding the filter here is purely
+        # additive and reuses the existing tutor-via-subtype
+        # convention.
+        if fn == "demon":
+            return "Demon" in printing.subtypes
         return False
 
     def resolve(

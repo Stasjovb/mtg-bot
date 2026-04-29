@@ -289,3 +289,74 @@ def test_lets_play_a_game_modal_not_or_both():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Let's Play a Game"]
     assert p.spell_effect.or_both is False
+
+
+# ---------- Demonic Counsel ----------
+
+def test_demonic_counsel_claimed_by_parser():
+    # Demonic Counsel ``{1}{B}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (Demon-tutor + Delirium-gated any-card upgrade)
+    # to bare ``SearchLibraryForCard(filter_name="demon",
+    # may_fail=False)``. The Demon-subtype filter is an additive
+    # branch on the existing ``SearchLibraryForCard._matches``
+    # dispatcher, mirroring the existing ``sliver`` shape.
+    assert "Demonic Counsel" in _claimed_names()
+
+
+def test_demonic_counsel_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``SearchLibraryForCard(filter_name="demon",
+    # may_fail=False)`` engine class — base mechanic preserved (the
+    # forced Demon tutor), Delirium-gated any-card upgrade dropped
+    # (parser-is-right precedent: Impossible Inferno).
+    from mtg_bot.cards.base import SearchLibraryForCard
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Demonic Counsel"]
+    assert p.spell_effect == SearchLibraryForCard(
+        filter_name="demon", may_fail=False,
+    )
+
+
+def test_demonic_counsel_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Demonic Counsel"]
+    assert "Sorcery" in p.card_types
+
+
+def test_demonic_counsel_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Demonic Counsel"]
+    assert p.mana_cost_str == "{1}{B}"
+
+
+def test_search_library_for_card_demon_filter_matches_demon_creature():
+    # Belt-and-suspenders that the additive ``demon`` filter on
+    # ``SearchLibraryForCard._matches`` keys off the printing's
+    # ``subtypes`` set (mirrors the existing ``sliver`` filter).
+    from mtg_bot.cards.base import SearchLibraryForCard, make_creature
+
+    eff = SearchLibraryForCard(filter_name="demon", may_fail=False)
+    demon_pr = make_creature(
+        "Test Demon", "{4}{B}{B}", power=6, toughness=6,
+        subtypes=("Demon",),
+    )
+    non_demon_pr = make_creature(
+        "Bear", "{1}{G}", power=2, toughness=2,
+    )
+    assert eff._matches(demon_pr) is True
+    assert eff._matches(non_demon_pr) is False
+
+
+def test_search_library_for_card_demon_filter_describe():
+    # The describe string interpolates the filter name; this confirms
+    # the additive ``demon`` filter doesn't break the existing
+    # describe() shape (no special-casing needed for the new filter).
+    from mtg_bot.cards.base import SearchLibraryForCard
+
+    desc = SearchLibraryForCard(
+        filter_name="demon", may_fail=False,
+    ).describe()
+    assert "demon" in desc
+    assert "library" in desc

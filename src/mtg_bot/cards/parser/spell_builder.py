@@ -87,6 +87,7 @@ from mtg_bot.cards.base import (
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    SearchLibraryForCard,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     SeedshipImpactEffect,
     Sequence,
@@ -1473,6 +1474,43 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
             ),
         ),
     ),
+    # Demonic Counsel (Duskmourn) ``{1}{B}`` Sorcery — tutor for a
+    # Demon creature card with a Delirium-gated upgrade ("If there
+    # are four or more card types among cards in your graveyard,
+    # instead search your library for any card, put it into your
+    # hand, then shuffle."). Whole-spell exact-text dispatch
+    # simplifies to bare
+    # ``SearchLibraryForCard(filter_name="demon", may_fail=False)``
+    # because:
+    # (1) the spell-builder has no Delirium-gated conditional
+    #     dispatcher today; the only conditional combinator wired in
+    #     is ``ConditionalIfVoid`` (Plasma Bolt's Void rider) and
+    #     extending it to Delirium would require a graveyard-card-
+    #     types runtime predicate that no other DSK card we model
+    #     reuses;
+    # (2) the per-clause grammar can't claim the Delirium upgrade
+    #     line as a standalone spell-effect phrase either —
+    #     ``Delirium — If there are four or more card types ...,
+    #     instead search your library for any card ...`` is a
+    #     conditional-replacement rider, not a standalone effect.
+    # The ``demon`` filter is added to ``SearchLibraryForCard`` as
+    # an additive subtype-keyed branch alongside the existing
+    # ``sliver`` filter (no new field — purely a new value of the
+    # existing ``filter_name`` enum). ``may_fail=False`` because the
+    # printed text says "Search your library for a Demon card,
+    # reveal it, put it into your hand, then shuffle" — no "you
+    # may" rider, so the controller doesn't get to decline the
+    # fetch when a Demon card is available (matches how the static
+    # registry models other forced tutors).
+    # Same parser-is-right precedent as Impossible Inferno (drop the
+    # Delirium-gated upgrade rider, keep the base mechanic).
+    (
+        "Search your library for a Demon card, reveal it, put it "
+        "into your hand, then shuffle.\n"
+        "Delirium — If there are four or more card types among "
+        "cards in your graveyard, instead search your library for "
+        "any card, put it into your hand, then shuffle."
+    ): SearchLibraryForCard(filter_name="demon", may_fail=False),
 }
 
 
