@@ -91,3 +91,42 @@ def test_impossible_inferno_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Impossible Inferno"]
     assert p.mana_cost_str == "{4}{R}"
+
+
+# ---------- Violent Urge ----------
+
+def test_violent_urge_claimed_by_parser():
+    # Violent Urge ``{R}`` Instant — claimed via the new whole-spell
+    # exact-text dispatch entry that simplifies the printed text
+    # (+1/+0 first-strike UEOT + Delirium-gated double-strike
+    # upgrade) to bare ``PumpTargetCreatureUntilEOT(power_bonus=1,
+    # granted_keywords=frozenset({"first strike"}))``.
+    assert "Violent Urge" in _claimed_names()
+
+
+def test_violent_urge_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified pump engine class — power bonus and first-strike
+    # keyword grant preserved, Delirium-gated double-strike upgrade
+    # rider dropped (parser-is-right precedent: Impossible Inferno).
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Violent Urge"]
+    assert p.spell_effect == PumpTargetCreatureUntilEOT(
+        power_bonus=1,
+        toughness_bonus=0,
+        granted_keywords=frozenset({"first strike"}),
+    )
+
+
+def test_violent_urge_is_instant():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Violent Urge"]
+    assert "Instant" in p.card_types
+
+
+def test_violent_urge_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Violent Urge"]
+    assert p.mana_cost_str == "{R}"

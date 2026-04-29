@@ -1328,6 +1328,32 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "cards in your graveyard, exile the top card of your "
         "library. You may play it until the end of your next turn."
     ): DealDamageToTargetCreature(amount=6),
+    # Violent Urge (Duskmourn) ``{R}`` Instant — +1/+0 first-strike
+    # UEOT pump plus a Delirium-gated double-strike upgrade rider
+    # ("If there are four or more card types among cards in your
+    # graveyard, that creature gains double strike until end of
+    # turn."). Whole-spell exact-text dispatch simplifies to bare
+    # ``PumpTargetCreatureUntilEOT(power_bonus=1, granted_keywords=
+    # frozenset({"first strike"}))`` — the base mechanic is preserved
+    # (the +1/+0 plus first strike UEOT) and the Delirium-gated
+    # double-strike upgrade is dropped. Same parser-is-right
+    # precedent as Impossible Inferno: no Delirium-gated conditional
+    # dispatcher in the spell-builder today, and the second clause
+    # doesn't parse as a standalone spell-effect phrase. The
+    # ``first strike`` keyword grant rides on the existing
+    # ``PumpTargetCreatureUntilEOT.granted_keywords`` field already
+    # used by other DSK pump spells (no new field needed).
+    (
+        "Target creature gets +1/+0 and gains first strike until end "
+        "of turn.\n"
+        "Delirium — If there are four or more card types among "
+        "cards in your graveyard, that creature gains double strike "
+        "until end of turn."
+    ): PumpTargetCreatureUntilEOT(
+        power_bonus=1,
+        toughness_bonus=0,
+        granted_keywords=frozenset({"first strike"}),
+    ),
 }
 
 
