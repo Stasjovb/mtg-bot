@@ -441,10 +441,14 @@ def _evaluate_cost_reduction(
         if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
             return rule.amount
     elif rule.condition == "attacked_with_spacecraft_this_turn":
-        if state.player_by_id(
-            caster_id
-        ).attacked_with_spacecraft_this_turn:
-            return rule.amount
+        # Walks the generalized ``attacked_this_turn`` latch and tests
+        # each declared attacker for the Spacecraft subtype. The latch
+        # itself records every attacker; the Spacecraft filter is
+        # applied at read time so a future "you attacked with a
+        # [type] this turn" gate doesn't need a new latch.
+        for attacker in state.player_by_id(caster_id).attacked_this_turn:
+            if "Spacecraft" in attacker.printing.subtypes:
+                return rule.amount
     elif rule.condition == "void_active":
         from mtg_bot.game import is_void_active
 

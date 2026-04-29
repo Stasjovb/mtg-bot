@@ -2951,7 +2951,7 @@ def test_thaumaton_torpedo_full_cost_when_no_spacecraft_attack():
     )
     state.battlefield.append(torpedo)
     ability = torpedo.printing.activated_abilities[0]
-    assert state.players[0].attacked_with_spacecraft_this_turn is False
+    assert state.players[0].attacked_this_turn == []
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 6
 
@@ -2968,7 +2968,12 @@ def test_thaumaton_torpedo_reduced_cost_after_spacecraft_attack():
     )
     state.battlefield.append(torpedo)
     ability = torpedo.printing.activated_abilities[0]
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    # Latch in a Spacecraft attacker — the AttackedWithThisTurn(filter)
+    # condition reads through the generalized list.
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 3
 
@@ -3000,7 +3005,10 @@ def test_thaumaton_torpedo_cost_reduction_floors_at_zero():
             ),
         ),
     )
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 0
 
@@ -4069,7 +4077,11 @@ def test_fungal_colossus_cost_reduction_per_land_group():
 
 
 def test_attacked_with_spacecraft_tracking_and_cleanup():
-    """declare_attackers sets the flag; cleanup clears it."""
+    """declare_attackers appends the attacker to ``attacked_this_turn``
+    (the generalized latch); cleanup clears it. The Spacecraft-subtype
+    filter is applied at read time by the
+    ``AttackedWithThisTurn(HasSubtype("Spacecraft"))`` condition rather
+    than baked into the latch."""
     from mtg_bot.combat import declare_attackers
     from mtg_bot.turn import run_cleanup_step
 
@@ -4081,9 +4093,9 @@ def test_attacked_with_spacecraft_tracking_and_cleanup():
     # Station it so it's a creature.
     ship.charge_counters = 10
     declare_attackers(state, [ship.id])
-    assert state.players[0].attacked_with_spacecraft_this_turn is True
+    assert state.players[0].attacked_this_turn == [ship]
     run_cleanup_step(state)
-    assert state.players[0].attacked_with_spacecraft_this_turn is False
+    assert state.players[0].attacked_this_turn == []
 
 
 def test_unknown_cost_reduction_condition_logged_and_ignored():
@@ -5161,9 +5173,12 @@ def test_cost_reduction_attacked_with_spacecraft_active():
         ),
     )
     state = _arena()
-    # Flag off → full cost.
+    # Latch empty → full cost.
     assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 1
 
 

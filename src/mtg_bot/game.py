@@ -1796,10 +1796,16 @@ class Player:
     # gates additional noncreature casts when any permanent on the
     # battlefield has ``restricts_noncreature_spells_to_one_per_turn``.
     noncreature_spells_cast_this_turn: int = 0
-    # True if this player has declared at least one Spacecraft as an
-    # attacker this turn. Reset at cleanup. Drives the
-    # "attacked_with_spacecraft_this_turn" cost-reduction condition.
-    attacked_with_spacecraft_this_turn: bool = False
+    # The ``GameObject``s this player has declared as attackers this
+    # turn (in declaration order). Populated by
+    # ``combat.declare_attackers`` immediately after each attacker has
+    # ``attacking=True`` set. Reset at the cleanup step in
+    # ``turn.run_cleanup_step``. Drives the
+    # ``AttackedWithThisTurn(filter)`` cost-reduction condition — the
+    # condition filters this list at evaluation time, so any future
+    # "you attacked with a [type] this turn" gate composes by swapping
+    # the filter rather than adding a new latch.
+    attacked_this_turn: list["GameObject"] = field(default_factory=list)
     # Number of artifacts that entered the battlefield under this
     # player's control this turn. Reset at cleanup. Incremented by
     # ``actions.put_into_battlefield`` whenever an artifact (including
