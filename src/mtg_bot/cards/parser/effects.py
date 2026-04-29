@@ -57,6 +57,8 @@ from mtg_bot.cards.base import (
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
+    ExorciseEffect,
+    FocusFireEffect,
     GainLife,
     GrantUnblockableUEOT,
     LookAtTopNRevealOrCounter,
@@ -104,6 +106,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForEquipmentToBattlefield,
     SelfMill,
     Sequence,
+    SingularityRuptureEffect,
     Surveil,
     TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
@@ -289,6 +292,27 @@ _DEAL_DAMAGE_COUNT_SOURCE_DISPATCH: dict[str, type] = {
     "artifacts you control": DealDamageToOpponentCreatureByArtifactCount,
     "cards in your hand": DealDamageToOpponentCreatureByCardsInHand,
 }
+# "<source> deals X damage to target attacking or blocking creature,
+# where X is N plus the number of creatures and/or Spacecraft you
+# control." — Focus Fire `{R}` Sorcery: variable-X burn whose X is a
+# fixed integer base plus a count of friendly creatures and Spacecraft
+# at resolve time. The capture group is the integer base ``N`` (matches
+# Focus Fire's printed ``2``); maps to ``FocusFireEffect(base=N)``
+# whose ``_amount`` walks ``state.battlefield`` for friendly creatures
+# and Spacecraft at resolve time.
+#
+# Currently only Focus Fire in the EoE pool fits this shape, but the
+# regex captures the integer base as a parameter so a future printing
+# with a different base (``where X is 3 plus ...`` etc.) lands on the
+# same primitive without further grammar work — the
+# parameterized-recognizer-preferred form per parser CLAUDE.md.
+# Lives in the per-clause grammar (rather than the whole-spell exact-
+# text tier) to claim future cards with this shape automatically.
+_DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT = re.compile(
+    r"^deals X damage to target attacking or blocking creature, "
+    r"where X is (\d+) plus the number of creatures and/or "
+    r"Spacecraft you control$"
+)
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
 # than a creature; ``DealDamageToTargetOpponent(amount=N)`` filters
@@ -468,6 +492,26 @@ _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Exile target artifact, enchantment, or creature with power 4 or
+# greater." — Exorcise `{1}{W}` Sorcery (Duskmourn): a single-sentence
+# three-way disjunctive exile (target an artifact OR an enchantment OR
+# a creature whose effective power is at least 4). Maps to the
+# parameterless ``ExorciseEffect`` engine class which evaluates the
+# disjunctive filter at both target-pick and resolve time using
+# ``effective_power`` for the creature arm.
+#
+# Currently only Exorcise in the EoE/DSK pool fits this shape, so the
+# recognizer is a parameterless literal — broader generalization (e.g.
+# ``exile target <type-list> with <p/t-threshold>``) is deferred until
+# a second card with a similar three-way disjunctive permanent-type
+# exile shape exists. Sibling to the bare ``exile target creature``
+# branch above; lives in the per-clause grammar (rather than the
+# whole-spell exact-text tier) per the parser's
+# generic-templates-over-literals guidance.
+_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE = re.compile(
+    r"^exile target artifact, enchantment, or creature with power "
+    r"4 or greater$"
+)
 # "Destroy all tapped creatures." / "Destroy all untapped creatures." —
 # Split Up's modal mode lines. Two separate regexes (rather than one
 # regex with a captured tap-state qualifier) because the matching engine
@@ -481,6 +525,27 @@ _DESTROY_ALL_TAPPED_CREATURES = re.compile(
 )
 _DESTROY_ALL_UNTAPPED_CREATURES = re.compile(
     r"^destroy all untapped creatures$"
+)
+# "Destroy all creatures, then any number of target players each mill
+# half their library, rounded down." — Singularity Rupture `{3}{U}{B}{B}`
+# Sorcery: a board wrath followed by a multi-target half-library mill on
+# any number of chosen players. Maps to the parameterless
+# ``SingularityRuptureEffect`` engine class which folds the wrath and
+# the per-target floor-divide mill into one resolve step (the cast-
+# pipeline target-count range is 0..players-bounded, with each chosen
+# target milling ``floor(library_size / 2)`` cards).
+#
+# Currently only Singularity Rupture in the EoE pool fits this shape, so
+# the recognizer is a parameterless literal — broader generalization
+# (e.g. ``destroy all creatures, then ... <any-mass-effect>``) is
+# deferred until a second card with this two-clause wrath-then-multi-
+# target-mass-effect shape exists. Sibling to the tapped/untapped
+# wrath branches above; lives in the per-clause grammar (rather than
+# the whole-spell exact-text tier) per the parser's
+# generic-templates-over-literals guidance.
+_SINGULARITY_RUPTURE = re.compile(
+    r"^destroy all creatures, then any number of target players "
+    r"each mill half their library, rounded down$"
 )
 # "Destroy all creatures with power N or greater." — Restricted Office's
 # door trigger body in DSK ("destroy all creatures with power 3 or
@@ -2126,6 +2191,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         cls = _DEAL_DAMAGE_COUNT_SOURCE_DISPATCH.get(m.group(1))
         if cls is not None:
             return cls()
+    # ``deals X damage to target attacking or blocking creature, where
+    # X is N plus the number of creatures and/or Spacecraft you
+    # control`` — Focus Fire's body (after the ``<Name> `` prefix
+    # strip in ``_normalize_spell_effect_phrase``). The captured
+    # integer base parameterizes ``FocusFireEffect(base=N)``; the
+    # dynamic +creatures-and-Spacecraft count is read at resolve
+    # time inside the engine class. See the regex's docstring for
+    # the deferred-generalization plan when a second card with this
+    # shape ships.
+    m = _DEAL_DAMAGE_X_BASE_PLUS_FRIENDLY_CREATURE_OR_SPACECRAFT_COUNT.match(
+        phrase
+    )
+    if m is not None:
+        return FocusFireEffect(base=int(m.group(1)))
     # ``deals N damage to target opponent`` — Biotech Specialist's
     # sacrifice-an-artifact trigger body. Tried BEFORE the bare
     # ``deals N damage to target creature`` regex because the bare
@@ -2405,6 +2484,21 @@ def _parse_effect(phrase: str) -> Effect | None:
     # a Spacecraft-aware engine class in lockstep with the static.
     if _EXILE_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return ExileTargetCreature()
+    # ``exile target artifact, enchantment, or creature with power 4 or
+    # greater`` — Exorcise's full single-sentence body. Maps to the
+    # parameterless ``ExorciseEffect`` engine class which evaluates the
+    # three-way disjunctive filter at both target-pick and resolve time.
+    # Tried BEFORE the bare ``exile target creature`` branch below
+    # because the bare regex's ``$`` anchor on ``creature`` wouldn't
+    # match this longer tail anyway, but ordering more-specific before
+    # more-general is the convention here. Sole card with this shape
+    # today; broader generalization deferred — see
+    # ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE`` regex
+    # comment.
+    if _EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE.match(
+        phrase
+    ) is not None:
+        return ExorciseEffect()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:
@@ -2419,6 +2513,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyAllCreatures(tapped_only=True)
     if _DESTROY_ALL_UNTAPPED_CREATURES.match(phrase) is not None:
         return DestroyAllCreatures(untapped_only=True)
+    # ``destroy all creatures, then any number of target players each
+    # mill half their library, rounded down`` — Singularity Rupture's
+    # full single-sentence body. Maps to the parameterless
+    # ``SingularityRuptureEffect`` engine class which folds the wrath
+    # and the per-target floor-divide mill into one resolve step. Sole
+    # card with this shape today; broader generalization deferred —
+    # see ``_SINGULARITY_RUPTURE`` regex comment.
+    if _SINGULARITY_RUPTURE.match(phrase) is not None:
+        return SingularityRuptureEffect()
     # ``destroy all creatures with power N or greater`` — Restricted
     # Office's door trigger body. Parameterized over the power
     # threshold; maps to ``DestroyAllCreatures(min_power=N)`` whose

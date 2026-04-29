@@ -69,8 +69,6 @@ from mtg_bot.cards.base import (
     EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
-    ExorciseEffect,
-    FocusFireEffect,
     GainLife,
     LoseLife,
     ManifestDread,
@@ -90,7 +88,6 @@ from mtg_bot.cards.base import (
     SearchLibraryForGreenCreatureWithMVAtMostX,
     SeedshipImpactEffect,
     Sequence,
-    SingularityRuptureEffect,
     Surveil,
     SystemsOverrideEffect,
     TakeExtraTurnAfterThisOne,
@@ -473,11 +470,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Then gain control of all creatures until end of turn. "
         "Untap them. They gain haste until end of turn."
     ): MutinousMassacreEffect(),
-    # Singularity Rupture: wrath + opt-in mass mill of half-library.
-    (
-        "Destroy all creatures, then any number of target players "
-        "each mill half their library, rounded down."
-    ): SingularityRuptureEffect(),
     # Depressurize: -3/-0 UEOT + state-based death check ("if power is 0
     # or less, destroy it"). The engine class folds the pump and the
     # conditional destroy into one resolve step, so the parser maps the
@@ -486,15 +478,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or less, destroy it."
     ): DepressurizeEffect(power_penalty=3),
-    # Focus Fire: variable-X burn whose X reads "2 plus the number of
-    # creatures and/or Spacecraft you control". The bespoke engine
-    # class computes X at resolve time; the parser dispatches on the
-    # printed surface form.
-    (
-        "Focus Fire deals X damage to target attacking or blocking "
-        "creature, where X is 2 plus the number of creatures and/or "
-        "Spacecraft you control."
-    ): FocusFireEffect(base=2),
     # Diplomatic Relations: pump-and-grant-vigilance on your creature
     # plus a fight-shaped damage rider where the chosen first target
     # deals damage equal to its (post-pump) power to a chosen second
@@ -1037,19 +1020,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Untap it. It gains haste until end of turn. "
         "You may discard a card. If you do, draw a card."
     ): VengefulPossessionEffect(),
-    # Exorcise (Duskmourn) — single-sentence three-way disjunctive
-    # exile: target artifact / target enchantment / target creature
-    # with power 4 or greater. The static ships ``ExorciseEffect()``
-    # which evaluates the three-arm filter at both target-pick and
-    # resolve time using ``effective_power`` for the creature arm.
-    # The whole-spell tier is the right place because the per-clause
-    # grammar has no shape that ORs across three target-type
-    # filters with one of them gated on a P/T threshold; modeling
-    # this as a generic primitive would over-engineer for one card.
-    (
-        "Exile target artifact, enchantment, or creature with "
-        "power 4 or greater."
-    ): ExorciseEffect(),
     # Coordinated Clobbering (Duskmourn) — two-clause multi-target
     # spell: tap 1-2 friendly untapped creatures, then each deals
     # power-as-damage to one target opp creature. The static ships

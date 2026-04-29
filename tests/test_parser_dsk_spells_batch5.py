@@ -449,9 +449,9 @@ def test_exorcise_recheck_at_resolve_for_debuffed_creature():
 # ---------- Exorcise parser claim ----------
 
 def test_exorcise_claimed_by_parser():
-    # Exorcise ``{1}{W}`` Sorcery — claimed via the new whole-spell
-    # exact-text dispatch entry mapping to the new
-    # ``ExorciseEffect`` engine class.
+    # Exorcise ``{1}{W}`` Sorcery — claimed via the per-clause grammar
+    # (effects.py's ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE``
+    # recognizer, mapping to ``ExorciseEffect``).
     assert "Exorcise" in _claimed_names()
 
 
@@ -467,6 +467,24 @@ def test_exorcise_is_sorcery():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Exorcise"]
     assert "Sorcery" in p.card_types
+
+
+def test_dispatch_exorcise_returns_engine_class():
+    # Exorcise migrated from the whole-spell exact-text tier to the
+    # per-clause grammar; whole-spell dispatch now falls through.
+    # End-to-end claim verified via the active source's printing.
+    from mtg_bot.cards.parser.spell_builder import (
+        _try_whole_spell_exact_text,
+    )
+
+    assert _try_whole_spell_exact_text(
+        "Exile target artifact, enchantment, or creature with "
+        "power 4 or greater."
+    ) is None
+    from mtg_bot.effects import ExorciseEffect
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Exorcise"]
+    assert p.spell_effect == ExorciseEffect()
 
 
 # ---------- CoordinatedClobberingEffect engine class ----------
