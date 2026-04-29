@@ -57,6 +57,7 @@ from mtg_bot.cards.base import (
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
+    ExorciseEffect,
     GainLife,
     GrantUnblockableUEOT,
     LookAtTopNRevealOrCounter,
@@ -467,6 +468,26 @@ _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Exile target artifact, enchantment, or creature with power 4 or
+# greater." — Exorcise `{1}{W}` Sorcery (Duskmourn): a single-sentence
+# three-way disjunctive exile (target an artifact OR an enchantment OR
+# a creature whose effective power is at least 4). Maps to the
+# parameterless ``ExorciseEffect`` engine class which evaluates the
+# disjunctive filter at both target-pick and resolve time using
+# ``effective_power`` for the creature arm.
+#
+# Currently only Exorcise in the EoE/DSK pool fits this shape, so the
+# recognizer is a parameterless literal — broader generalization (e.g.
+# ``exile target <type-list> with <p/t-threshold>``) is deferred until
+# a second card with a similar three-way disjunctive permanent-type
+# exile shape exists. Sibling to the bare ``exile target creature``
+# branch above; lives in the per-clause grammar (rather than the
+# whole-spell exact-text tier) per the parser's
+# generic-templates-over-literals guidance.
+_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE = re.compile(
+    r"^exile target artifact, enchantment, or creature with power "
+    r"4 or greater$"
+)
 # "Destroy all tapped creatures." / "Destroy all untapped creatures." —
 # Split Up's modal mode lines. Two separate regexes (rather than one
 # regex with a captured tap-state qualifier) because the matching engine
@@ -2329,6 +2350,21 @@ def _parse_effect(phrase: str) -> Effect | None:
     # a Spacecraft-aware engine class in lockstep with the static.
     if _EXILE_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return ExileTargetCreature()
+    # ``exile target artifact, enchantment, or creature with power 4 or
+    # greater`` — Exorcise's full single-sentence body. Maps to the
+    # parameterless ``ExorciseEffect`` engine class which evaluates the
+    # three-way disjunctive filter at both target-pick and resolve time.
+    # Tried BEFORE the bare ``exile target creature`` branch below
+    # because the bare regex's ``$`` anchor on ``creature`` wouldn't
+    # match this longer tail anyway, but ordering more-specific before
+    # more-general is the convention here. Sole card with this shape
+    # today; broader generalization deferred — see
+    # ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE`` regex
+    # comment.
+    if _EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE.match(
+        phrase
+    ) is not None:
+        return ExorciseEffect()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:

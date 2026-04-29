@@ -69,7 +69,6 @@ from mtg_bot.cards.base import (
     EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
-    ExorciseEffect,
     FocusFireEffect,
     GainLife,
     LoseLife,
@@ -1031,19 +1030,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Untap it. It gains haste until end of turn. "
         "You may discard a card. If you do, draw a card."
     ): VengefulPossessionEffect(),
-    # Exorcise (Duskmourn) — single-sentence three-way disjunctive
-    # exile: target artifact / target enchantment / target creature
-    # with power 4 or greater. The static ships ``ExorciseEffect()``
-    # which evaluates the three-arm filter at both target-pick and
-    # resolve time using ``effective_power`` for the creature arm.
-    # The whole-spell tier is the right place because the per-clause
-    # grammar has no shape that ORs across three target-type
-    # filters with one of them gated on a P/T threshold; modeling
-    # this as a generic primitive would over-engineer for one card.
-    (
-        "Exile target artifact, enchantment, or creature with "
-        "power 4 or greater."
-    ): ExorciseEffect(),
     # Coordinated Clobbering (Duskmourn) — two-clause multi-target
     # spell: tap 1-2 friendly untapped creatures, then each deals
     # power-as-damage to one target opp creature. The static ships
