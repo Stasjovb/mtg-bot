@@ -98,10 +98,18 @@ def test_green_suns_zenith_claimed_by_parser():
 # ---------- dispatch tests (direct lookup) ----------
 
 def test_dispatch_darkness_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+    # Darkness migrated from the whole-spell exact-text tier to the
+    # per-clause grammar (effects.py's
+    # `_PREVENT_ALL_COMBAT_DAMAGE_THIS_TURN`); whole-spell dispatch
+    # now falls through. End-to-end claim verified via the active
+    # source's printing.
+    assert _try_whole_spell_exact_text(
         "Prevent all combat damage that would be dealt this turn."
-    )
-    assert eff == PreventAllCombatDamageThisTurn()
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    darkness = get_active_source().get_printings().get("Darkness")
+    assert darkness is not None
+    assert darkness.spell_effect == PreventAllCombatDamageThisTurn()
 
 
 def test_dispatch_nexus_of_fate_returns_engine_class():

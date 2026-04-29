@@ -64,6 +64,7 @@ from mtg_bot.cards.base import (
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
@@ -134,6 +135,21 @@ _MANIFEST_DREAD = re.compile(
     r"|"
     r" (X|" + _SMALL_CARDINAL_PATTERN + r"|\d+) times"
     r")?$"
+)
+
+
+# "Prevent all combat damage that would be dealt this turn." — bare
+# global static spell effect. Maps to ``PreventAllCombatDamageThisTurn``
+# whose ``resolve`` flips ``state.prevent_combat_damage_this_turn`` and
+# the engine's combat damage step honors at apply time. Currently only
+# Darkness in the EoE pool today, but the surface form is a parameterless
+# whole-sentence shape so it lives in the per-clause grammar (rather
+# than the whole-spell exact-text tier) per the parser's
+# generic-templates-over-literals guidance — adding a future card with
+# a similar parameterless global effect lands its own neighboring
+# recognizer here.
+_PREVENT_ALL_COMBAT_DAMAGE_THIS_TURN = re.compile(
+    r"^prevent all combat damage that would be dealt this turn$"
 )
 
 
@@ -1569,6 +1585,8 @@ def _parse_effect(phrase: str) -> Effect | None:
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
+    if _PREVENT_ALL_COMBAT_DAMAGE_THIS_TURN.match(phrase) is not None:
+        return PreventAllCombatDamageThisTurn()
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
