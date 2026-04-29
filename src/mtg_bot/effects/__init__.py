@@ -245,6 +245,7 @@ from mtg_bot.effects.bespoke import (
     SingularityRuptureEffect,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
+    SplitskinDollETBEffect,
     SystemsOverrideEffect,
     TannukEnsignLandfallEffect,
     TerrapactIntimidatorETBEffect,

@@ -3559,3 +3559,82 @@ class HauntedScreenActivatedEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class SplitskinDollETBEffect(Effect):
+    """Splitskin Doll's ETB: "When this creature enters, draw a card.
+    Then discard a card unless you control another creature with power
+    2 or less."
+
+    Sequence: draw a card unconditionally, then discard a card unless
+    the controller controls another creature (any creature other than
+    the source) whose effective power is 2 or less. The "another" is
+    enforced relative to ``state.resolving_source`` (the just-entered
+    Splitskin Doll itself); the doll's printed power is 2 so technically
+    the doll satisfies the condition, but the printed "another" excludes
+    the source. Discard goes through the controller's agent's
+    ``choose_discard`` so the engine respects normal discard semantics
+    (opponent-discard triggers fire via ``fire_opponent_discards_triggers``).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, effective_power
+        from mtg_bot.turn import draw_n_cards, fire_opponent_discards_triggers
+
+        # Draw a card unconditionally.
+        draw_n_cards(state, controller_id, 1)
+        # Check the "unless you control another creature with power 2
+        # or less" gate. ``effective_power`` reflects pump and counters,
+        # matching the printed surface (power 2 or less is dynamic).
+        source = state.resolving_source
+        any_dodger = False
+        for o in state.battlefield:
+            if o.controller_id != controller_id:
+                continue
+            if not o.printing.is_creature:
+                continue
+            if source is not None and o.id == source.id:
+                continue
+            try:
+                p_val = effective_power(state, o)
+            except Exception:
+                continue
+            if p_val <= 2:
+                any_dodger = True
+                break
+        if any_dodger:
+            state.log.append(
+                f"P{controller_id} controls another creature with power "
+                f"2 or less — Splitskin Doll dodges discard"
+            )
+            return
+        # No dodger — discard one card.
+        p = state.player_by_id(controller_id)
+        if not p.hand:
+            return
+        if p.agent is None:
+            return
+        hand_ids = [c.id for c in p.hand]
+        chosen_id = p.agent.choose_discard(state, controller_id, hand_ids)
+        card = next((c for c in p.hand if c.id == chosen_id), None)
+        if card is None:
+            return
+        p.hand.remove(card)
+        card.zone = Zone.GRAVEYARD
+        p.graveyard.append(card)
+        state.log.append(
+            f"P{controller_id} discards {card.printing.name} "
+            f"(Splitskin Doll)"
+        )
+        fire_opponent_discards_triggers(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "draw a card; then discard a card unless you control another "
+            "creature with power 2 or less"
+        )
+
+
+

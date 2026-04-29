@@ -81,6 +81,7 @@ from mtg_bot.cards.base import (
     SelfcraftMechanETBEffect,
     SelfMill,
     Sequence,
+    SplitskinDollETBEffect,
     StaticAbility,
     StaticScope,
     TannukEnsignLandfallEffect,
@@ -908,6 +909,26 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                         "combat_damage_to_player"
                     ),
                     effect=PutPoisonCountersOnTargetPlayer(amount=2),
+                ),
+            ),
+        ),
+        # ── DSK artifacts batch 3 ─────────────────────────────────────
+        # Splitskin Doll {1}{W} 2/1 Toy.
+        # "When this creature enters, draw a card. Then discard a card
+        # unless you control another creature with power 2 or less."
+        # Bespoke single-effect ETB encoding the draw + conditional
+        # discard. The "another creature with power 2 or less" gate is
+        # source-relative (excludes the doll itself); since the doll is
+        # printed 2/1 it would otherwise trivially satisfy its own
+        # condition.
+        "Splitskin Doll": make_creature(
+            "Splitskin Doll", "{1}{W}", 2, 1,
+            artifact=True,
+            subtypes=("Toy",),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=SplitskinDollETBEffect(),
                 ),
             ),
         ),
