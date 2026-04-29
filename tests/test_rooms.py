@@ -2008,3 +2008,132 @@ def test_destroy_all_creatures_min_power_filter_resolve():
     assert weakling in state.battlefield
     assert bruiser not in state.battlefield
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Charred Foyer // Warped Space
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_charred_foyer_warped_space():
+    name = "Charred Foyer // Warped Space"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Charred Foyer", "Warped Space"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Charred Foyer"].mana_cost_str == "{3}{R}"
+    assert by_name["Warped Space"].mana_cost_str == "{4}{R}{R}"
+    # Only Charred Foyer contributes a triggered ability — Warped Space's
+    # "you may pay {0} rather than the mana cost" is an honest no-op
+    # permission in this engine (no alt-cost selection plumbing yet).
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Charred Foyer"]
+
+
+def test_charred_foyer_exiles_top_on_upkeep_when_unlocked():
+    """Charred Foyer's upkeep trigger exiles the top card of the
+    controller's library and marks it ``playable_from_exile_this_turn``
+    so the impulse-cast pipeline picks it up."""
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers
+
+    state = _new_state()
+    library_card = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(library_card)
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Charred Foyer // Warped Space"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Charred Foyer"})
+    run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
+    # Top library card moved to exile and is impulse-castable.
+    assert library_card in state.players[0].exile
+    assert library_card.playable_from_exile_this_turn is True
+
+
+def test_charred_foyer_locked_does_not_exile():
+    """If only Warped Space is unlocked, Charred Foyer's upkeep trigger
+    does not fire — the top card stays on the library."""
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers
+
+    state = _new_state()
+    library_card = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(library_card)
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Charred Foyer // Warped Space"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Warped Space"})
+    run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
+    assert library_card in state.players[0].library
+    assert library_card not in state.players[0].exile
+
+
+def test_charred_foyer_does_not_fire_on_opponent_upkeep():
+    """The trigger is gated ``Controlled(YOU)`` on a turn-structure
+    event — it should fire only on the Room controller's upkeep, not
+    the opponent's."""
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers
+
+    state = _new_state()
+    library_card = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    state.players[0].library.append(library_card)
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Charred Foyer // Warped Space"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Charred Foyer"})
+    # Flip the active player to P1 — it's the opponent's upkeep now.
+    state.active_player_idx = 1
+    state.priority_player_idx = 1
+    run_beginning_of_upkeep_triggers(state)
+    drain_stack(state)
+    # P0's library is untouched — Charred Foyer didn't fire on the
+    # opponent's upkeep.
+    assert library_card in state.players[0].library
+
+
+def test_exile_top_of_library_may_play_this_turn_describe_singular():
+    """The describe() string for the default ``amount=1`` form."""
+    from mtg_bot.effects import ExileTopOfLibraryMayPlayThisTurn
+
+    eff = ExileTopOfLibraryMayPlayThisTurn(amount=1)
+    desc = eff.describe()
+    assert "exile the top card" in desc
+    assert "may play it this turn" in desc
+
+
+def test_exile_top_of_library_may_play_this_turn_describe_plural():
+    """The describe() string for the multi-card form."""
+    from mtg_bot.effects import ExileTopOfLibraryMayPlayThisTurn
+
+    eff = ExileTopOfLibraryMayPlayThisTurn(amount=3)
+    desc = eff.describe()
+    assert "exile the top 3 cards" in desc
+    assert "may play them this turn" in desc
+
+
+def test_exile_top_of_library_may_play_this_turn_handles_empty_library():
+    """Running out of cards mid-exile simply stops; no exception, no
+    empty-library loss (impulse-cast doesn't draw)."""
+    from mtg_bot.effects import ExileTopOfLibraryMayPlayThisTurn
+
+    state = _new_state()
+    # Empty library — no cards to exile.
+    state.players[0].library.clear()
+    eff = ExileTopOfLibraryMayPlayThisTurn(amount=2)
+    eff.resolve(state, controller_id=0, targets=())
+    # Player 0 is still alive; nothing in exile.
+    assert state.players[0].exile == []
+

@@ -48,6 +48,7 @@ from mtg_bot.effects import (
     DiscardSelf,
     DrawCards,
     EachOpponentLosesLife,
+    ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
     ManifestDread,
@@ -699,6 +700,55 @@ def _build_roaring_furnace_steaming_sauna() -> CardPrinting:
     )
 
 
+def _build_charred_foyer_warped_space() -> CardPrinting:
+    """Charred Foyer // Warped Space ``{3}{R}`` // ``{4}{R}{R}``.
+
+    Charred Foyer oracle:
+        At the beginning of your upkeep, exile the top card of your
+        library. You may play it this turn.
+
+    Warped Space oracle:
+        Once each turn, you may pay {0} rather than pay the mana cost
+        for a spell you cast from exile.
+
+    Charred Foyer is a ``BEGINNING_OF_UPKEEP`` trigger gated on
+    ``Controlled(YOU)`` (your upkeep) wired to the new
+    ``ExileTopOfLibraryMayPlayThisTurn(amount=1)`` primitive — same
+    impulse-cast-flag mechanism Territorial Bruntar / Memorial Vault
+    use, packaged for the simple "exile the top card and you may play
+    it this turn" shape. The ``playable_from_exile_this_turn`` flag
+    expires at cleanup of the casting turn via the existing
+    ``turn.run_cleanup`` loop.
+
+    Warped Space is the optional alternative-cost permission "you may
+    pay {0} for a spell you cast from exile." It's an honest no-op
+    permission in this engine — the spell-casting pipeline doesn't
+    expose alt-costs as a choice yet, so a player who could "elect"
+    the {0} cost simply pays the printed mana cost instead. Same
+    permission-not-offered shape as a hypothetical convoke without
+    convoke-payment plumbing, or Steaming Sauna's "no maximum hand
+    size" arm: not modelling the optional benefit doesn't break
+    rules, it just makes the player miss a free spell. The half is
+    wired with cost-and-name only; once alt-cost machinery lands,
+    the static gains a real effect via the ``room_half`` lock gate.
+    """
+    return make_room(
+        _half(
+            "Charred Foyer", "{3}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_UPKEEP,
+                    predicate=Controlled(YOU),
+                    effect=ExileTopOfLibraryMayPlayThisTurn(amount=1),
+                ),
+            ),
+        ),
+        _half(
+            "Warped Space", "{4}{R}{R}",
+        ),
+    )
+
+
 def _build_restricted_office_lecture_hall() -> CardPrinting:
     """Restricted Office // Lecture Hall ``{2}{W}{W}`` // ``{5}{U}{U}``.
 
@@ -764,6 +814,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
         _build_roaring_furnace_steaming_sauna,
     "Restricted Office // Lecture Hall":
         _build_restricted_office_lecture_hall,
+    "Charred Foyer // Warped Space": _build_charred_foyer_warped_space,
 }
 
 

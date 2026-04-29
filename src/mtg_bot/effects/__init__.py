@@ -91,6 +91,7 @@ from mtg_bot.effects.generic import (
     ExileTargetCreature,
     ExileTargetCreatureUntilSourceLeaves,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
+    ExileTopOfLibraryMayPlayThisTurn,
     GainControlOfTargetSliverPermanently,
     GainLife,
     GrantLifeToEachOpponent,

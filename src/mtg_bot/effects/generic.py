@@ -3095,6 +3095,65 @@ class SelfMill(Effect):
 
 
 @dataclass(frozen=True)
+class ExileTopOfLibraryMayPlayThisTurn(Effect):
+    """Controller exiles the top ``amount`` cards of their own library
+    and marks each with ``playable_from_exile_this_turn`` so they're
+    castable / playable until cleanup of the resolving turn.
+
+    Matches Charred Foyer's upkeep trigger ("At the beginning of your
+    upkeep, exile the top card of your library. You may play it this
+    turn.") and any other "exile the top N cards of your library; you
+    may play them this turn" shape that doesn't carry an
+    until-next-turn rider. The flag clears at cleanup of the casting
+    turn via the existing turn.run_cleanup loop — same lifetime that
+    impulse-cast flag uses everywhere else (Territorial Bruntar,
+    Memorial Vault, Possibility Technician).
+
+    ``amount`` defaults to 1 (the Charred Foyer shape); call sites
+    that exile multiple cards (Painter's Studio's "exile the top two
+    cards" — when "until end of next turn" support lands) pass a
+    different value. Running out of cards mid-exile simply stops; no
+    empty-library loss is triggered (impulse-cast at sorcery speed
+    doesn't draw, so the empty-library loss check doesn't fire here).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        exiled = 0
+        for _ in range(self.amount):
+            if not p.library:
+                break
+            top = p.library.pop(0)
+            top.zone = Zone.EXILE
+            top.playable_from_exile_this_turn = True
+            p.exile.append(top)
+            exiled += 1
+        state.log.append(
+            f"P{controller_id} exiles {exiled} card(s) from top of "
+            f"library (may play this turn)"
+        )
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return (
+                "exile the top card of your library; you may play it "
+                "this turn"
+            )
+        return (
+            f"exile the top {self.amount} cards of your library; you "
+            f"may play them this turn"
+        )
+
+
+
+@dataclass(frozen=True)
 class MillTargetPlayer(Effect):
     """Target player puts the top N cards of their library into their
     graveyard.
