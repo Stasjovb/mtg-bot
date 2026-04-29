@@ -1384,9 +1384,25 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
     "with mana value N or less" rider. The threshold is inclusive on
     the bound; ``max_mv=0`` keeps the original Interceptor Mechan
     behaviour where every creature card in the graveyard qualifies.
+
+    ``or_spacecraft`` widens the legal-target pool to also include
+    Spacecraft cards in the graveyard (regardless of whether the
+    Spacecraft is also a creature). Matches oracle text "return a
+    creature or Spacecraft card from your graveyard to your hand" —
+    Fell Gravship's ETB body. Mirrors the ``or_spacecraft`` flag on
+    ``DestroyTargetCreature`` (Embrace Oblivion) and the
+    ``ReturnUpToNNonSpacecraftCreatures`` filter Specimen Freighter
+    uses; when True, both creature-card and Spacecraft-card graveyard
+    entries surface as legal targets via the same
+    ``("graveyard_creature", id)`` target tuple, so the resolve path
+    stays unified across kinds.
     """
 
     max_mv: int = 0
+    # When True, Spacecraft cards in the graveyard are also legal
+    # targets. Matches "return target creature or Spacecraft card from
+    # your graveyard to your hand" — Fell Gravship.
+    or_spacecraft: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -1398,7 +1414,10 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
         return [
             ("graveyard_creature", c.id)
             for c in p.graveyard
-            if c.printing.is_creature
+            if (
+                c.printing.is_creature
+                or (self.or_spacecraft and c.printing.is_spacecraft)
+            )
             and (self.max_mv == 0 or c.printing.mana_cost.total <= self.max_mv)
         ]
 
@@ -1428,12 +1447,18 @@ class ReturnCreatureFromYourGraveyardToHand(Effect):
         )
 
     def describe(self) -> str:
+        type_phrase = (
+            "creature or Spacecraft" if self.or_spacecraft else "creature"
+        )
         if self.max_mv > 0:
             return (
-                f"return target creature card with mana value "
+                f"return target {type_phrase} card with mana value "
                 f"{self.max_mv} or less from your graveyard to your hand"
             )
-        return "return target creature card from your graveyard to your hand"
+        return (
+            f"return target {type_phrase} card from your graveyard "
+            f"to your hand"
+        )
 
 
 

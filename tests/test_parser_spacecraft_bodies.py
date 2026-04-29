@@ -363,12 +363,17 @@ def test_build_spacecraft_printing_skips_attack_trigger_unparseable_card():
     """Synthetic counterpart of the source-level skip above: a hand-
     crafted Spacecraft with a parseable Station + tier-keyword pair
     but whose attack-trigger effect phrase isn't in the effect
-    grammar (``draw a card for each multicolored permanent you
-    control`` — Infinite Guideline Station's bespoke attack-trigger
-    body) returns ``None`` from the builder. The attack-trigger line
-    falls through ``_parse_clause`` (no matching trigger phrase +
-    effect combo) and the per-line dispatch bails on the first
-    unrecognized line."""
+    grammar (a synthetic ``draw a card for each blue creature you
+    control`` rider — no per-blue-creature primitive lives in the
+    unified grammar today) returns ``None`` from the builder. The
+    attack-trigger line falls through ``_parse_clause`` (no matching
+    trigger phrase + effect combo) and the per-line dispatch bails on
+    the first unrecognized line. The previous version of this test
+    used Infinite Guideline Station's
+    ``draw a card for each multicolored permanent you control`` body
+    as the unparseable phrase; that surface now claims through the
+    unified grammar (de-bespoke batch 4), so the synthetic was
+    swapped to a still-unparseable shape."""
     card = {
         "name": "Hand-Crafted Unparseable-Attack Spacecraft",
         "mana_cost": "{5}{U}",
@@ -381,7 +386,7 @@ def test_build_spacecraft_printing_skips_attack_trigger_unparseable_card():
             "only as a sorcery. It's an artifact creature at 9+.)\n"
             "9+ | Flying\n"
             "Whenever this Spacecraft attacks, draw a card for each "
-            "multicolored permanent you control."
+            "blue creature you control."
         ),
     }
     assert _build_spacecraft_printing(card) is None

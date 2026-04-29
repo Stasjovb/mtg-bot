@@ -52,7 +52,7 @@ This builder grew in several slices:
   forwarded to ``make_spacecraft(legendary=True)`` so a Legendary
   Spacecraft whose body falls inside the supported grammar can be
   claimed.
-- **Slice 4** (this batch) extends the ``"<N>+ | <body>"`` tier-line
+- **Slice 4** extends the ``"<N>+ | <body>"`` tier-line
   arm to claim **tier-gated triggered abilities**. A tier-line body
   that isn't a pure evergreen keyword list is re-tried through
   ``_parse_clause``; if it parses to a self-ETB or self-ATTACKS
@@ -60,8 +60,8 @@ This builder grew in several slices:
   trigger list with ``tier_threshold=N`` so the engine's
   ``TriggeredAbility.tier_threshold`` gate fires only when the
   Spacecraft has enough charge counters. Multi-tier static
-  **keyword** grants — the Lumen-Class Frigate / Synthesizer Labship
-  shape — were considered as a companion arm but rejected: the engine's
+  **keyword** grants — the Synthesizer Labship shape — were
+  considered as a companion arm but rejected: the engine's
   ``StaticAbility.applies_to`` requires the target be a creature now,
   and every real EoE printing's lower-tier keyword line falls below
   the Station threshold (i.e. while the Spacecraft is still an
@@ -69,6 +69,17 @@ This builder grew in several slices:
   ``tier_threshold=N`` would never fire. Modeling those grants
   correctly needs an engine-side change to ``stationed_keywords``
   (tier-keyed keyword sets) and is left for a future slice.
+- **Slice 5** (this batch) extends the tier-line arm a third way to
+  claim **tier-gated anthem statics**. A tier-line body that re-parses
+  through ``_parse_clause`` to a non-self-scoped ``StaticAbility``
+  (``CREATURES_YOU_CONTROL`` or ``OTHER_CREATURES_YOU_CONTROL``) gets
+  ``tier_threshold=N`` stamped on it and lands in
+  ``make_spacecraft(static_abilities=...)``. Lumen-Class Frigate's
+  ``2+ | Other creatures you control get +1/+1.`` is the EoE printing
+  in this shape; the slice-4 rejection of tier-gated keyword statics
+  doesn't apply because anthem scopes target *other* permanents and
+  fire as soon as the Spacecraft has enough charge counters
+  irrespective of whether the Spacecraft itself is animated.
 
 Anything outside the supported shape - lower-tier static/activated
 abilities, multiple tier-keyword lines (single-keyword-tier only is
@@ -103,22 +114,16 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import (
     OptionalSacLandOrLanderForBasicLandRamp,
-    Sequence,
 )
 from mtg_bot.effects.generic import (
-    CreateTokenPerMulticoloredPermanent,
     DealDamageToTargetCreature,
-    DrawCardPerMulticoloredPermanent,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     ReturnCreatureFromYourGraveyardToBattlefield,
-    ReturnCreatureFromYourGraveyardToHand,
     SearchLibraryForCard,
-    SelfMill,
     TargetArtifactBecomesCreatureUEOT,
     TargetPlayerLosesLife,
 )
@@ -139,22 +144,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Fell Gravship: ETB mill 3 then return a creature card from your
-        # graveyard to your hand. Station 8+ flying + lifelink.
-        make_spacecraft(
-            "Fell Gravship", "{2}{B}", 3, 2,
-            station_threshold=8,
-            stationed_keywords={"flying", "lifelink"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        SelfMill(amount=3),
-                        ReturnCreatureFromYourGraveyardToHand(),
-                    )),
-                ),
-            ),
-        ),
         # Larval Scoutlander: ETB optional sac land or Lander → search for up
         # to two basic lands onto battlefield tapped. Station 7+ flying.
         make_spacecraft(
@@ -219,43 +208,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                         granted_keywords=frozenset({"flying"}),
                     ),
                     tier_threshold=2,
-                ),
-            ),
-        ),
-        # Lumen-Class Frigate: 2+ tier static anthem (other creatures you
-        # control get +1/+1). Station 12+ flying + lifelink.
-        make_spacecraft(
-            "Lumen-Class Frigate", "{1}{W}", 3, 5,
-            station_threshold=12,
-            stationed_keywords={"flying", "lifelink"},
-            static_abilities=(
-                StaticAbility(
-                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-                    power_bonus=1, toughness_bonus=1,
-                    tier_threshold=2,
-                ),
-            ),
-        ),
-        # Infinite Guideline Station: Legendary. ETB create a tapped 2/2
-        # colorless Robot token for each multicolored permanent you control.
-        # Attack trigger draw a card for each multicolored permanent you
-        # control. Station 12+ flying.
-        make_spacecraft(
-            "Infinite Guideline Station", "{W}{U}{B}{R}{G}", 7, 15,
-            station_threshold=12,
-            stationed_keywords={"flying"},
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateTokenPerMulticoloredPermanent(
-                        token_printing=TOKEN_PRINTINGS["Robot"],
-                        tapped=True,
-                    ),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=DrawCardPerMulticoloredPermanent(),
                 ),
             ),
         ),
@@ -436,6 +388,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     stationed_keywords: frozenset[str] | None = None
     triggers: list[TriggeredAbility] = []
     activateds: list[ActivatedAbility] = []
+    statics: list[StaticAbility] = []
 
     for line in lines:
         m = _STATION_LINE_RE.match(line)
@@ -470,17 +423,54 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                 stationed_keywords = kw
                 continue
             # Body wasn't a pure evergreen keyword list — try the
-            # unified clause parser for the tier-gated trigger arm.
-            clause = _parse_clause(body)
+            # unified clause parser for the tier-gated trigger or
+            # tier-gated anthem-static arm. Forward the printing's own
+            # name so a tier-line trigger that references the source by
+            # its printed name (named-self short form, e.g.
+            # ``"Whenever Infinite Guideline Station attacks"``) is
+            # substituted to the canonical ``this Spacecraft`` form
+            # before the trigger phrase lookup.
+            clause = _parse_clause(body, name=name)
             if clause is None:
-                # Static / activated / unknown shape — out of scope.
+                # Activated / unknown shape — out of scope.
                 return None
+            if clause.static is not None:
+                # Tier-gated anthem static. Lumen-Class Frigate's
+                # ``2+ | Other creatures you control get +1/+1.`` is
+                # the EoE printing in this shape: an anthem-scope
+                # static ability whose targets are creatures *other
+                # than* the Spacecraft, gated on the Spacecraft having
+                # at least ``N`` charge counters. The reasoning the
+                # tier-keyword arm above rejects multi-tier-keyword
+                # bodies (engine ``StaticAbility.applies_to`` requires
+                # the Spacecraft itself be a creature for SELF-scoped
+                # grants) does NOT apply here: anthem scopes target
+                # other permanents on the battlefield, so the gate
+                # fires as soon as the Spacecraft accumulates enough
+                # charge counters regardless of whether it's animated.
+                # Restrict to the anthem scopes the static parser
+                # produces today (CREATURES_YOU_CONTROL /
+                # OTHER_CREATURES_YOU_CONTROL); SELF-scoped statics
+                # remain rejected because their faithfulness story is
+                # the unresolved one (would need engine work for
+                # tier-gated stationed-keyword grants, deferred to a
+                # future slice).
+                static_ab = clause.static
+                if static_ab.scope not in (
+                    StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    StaticScope.CREATURES_YOU_CONTROL,
+                ):
+                    return None
+                statics.append(
+                    dataclasses.replace(static_ab, tier_threshold=tier_n)
+                )
+                continue
             if clause.trigger is None:
-                # The clause parsed but as a non-trigger (static
-                # ability, activated ability, granted-keyword line).
-                # Tier-gated statics on Spacecraft aren't modeled by
-                # this builder yet — skip rather than silently drop
-                # the ability.
+                # The clause parsed but as a non-trigger and non-anthem
+                # (activated ability, granted-keyword line, self-scope
+                # static). Tier-gated activations and self-scope
+                # statics on Spacecraft aren't modeled by this builder
+                # yet — skip rather than silently drop the ability.
                 return None
             trig = clause.trigger
             if trig.predicate != IsSelf():
@@ -507,7 +497,13 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         # one self-ETB trigger and at most one self-ATTACKS trigger
         # per card from non-tier lines, plus any number of activated
         # abilities; static-only clauses are still out of scope.
-        clause = _parse_clause(line)
+        # Forward the printing's own name so trigger phrases that
+        # reference the source by name (Infinite Guideline Station,
+        # whose ETB and attack-trigger lines spell out the full name)
+        # are substituted to the canonical ``this Spacecraft`` form
+        # before the trigger phrase lookup. Same threading the creature
+        # builder does for legendary creatures via ``Syr Vondam``.
+        clause = _parse_clause(line, name=name)
         if clause is None:
             # Anything the unified parser doesn't recognize - attack
             # or ETB triggers whose effect phrases aren't modeled,
@@ -597,6 +593,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         station_threshold=station_threshold,
         stationed_keywords=stationed_keywords,
         triggered_abilities=ordered_triggers,
+        static_abilities=tuple(statics),
         activated_abilities=tuple(activateds),
         legendary=legendary,
     )

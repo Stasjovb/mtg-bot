@@ -20,6 +20,7 @@ from mtg_bot.cards.base import (
     CounterTargetSpell,
     CreateLanderAndScheduleSacrifice,
     CreateToken,
+    CreateTokenPerMulticoloredPermanent,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
@@ -40,6 +41,7 @@ from mtg_bot.cards.base import (
     DiscardHandThenDrawN,
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,
+    DrawCardPerMulticoloredPermanent,
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
@@ -689,6 +691,42 @@ _CREATE_BARE_NAME_TOKEN = re.compile(
     rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?"
     rf"([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) tokens?$"
 )
+# "Create a tapped 2/2 colorless Robot artifact creature token for each
+# multicolored permanent you control." — Infinite Guideline Station's
+# ETB. Maps to ``CreateTokenPerMulticoloredPermanent(token_printing=
+# TOKEN_PRINTINGS["Robot"], tapped=True)`` — same primitive the static
+# registry / bespoke factory uses. Literal-line recognizer with a
+# zero-capture surface: only Infinite Guideline Station in the EoE
+# pool prints this exact shape today, so a parameterized
+# ``create a tapped <P>/<T> <color> <Subtype> <type> token for each
+# multicolored permanent you control`` regex would have nothing else
+# to claim. Deferred generalization: when a second card ships with
+# the ``... for each multicolored permanent you control`` token-
+# creation tail (or with a sibling per-X gate like ``for each artifact
+# you control``), fold both literals into one regex with captured
+# count/stats/color/subtype groups dispatching through the existing
+# ``_parse_create_token_effect`` body to share the
+# ``TOKEN_PRINTINGS`` lookup with the bare-token shapes above.
+_CREATE_TAPPED_ROBOT_TOKEN_PER_MULTICOLORED_LINE = re.compile(
+    r"^create a tapped 2/2 colorless Robot artifact creature token "
+    r"for each multicolored permanent you control$"
+)
+# "Draw a card for each multicolored permanent you control." —
+# Infinite Guideline Station's attack trigger. Maps to
+# ``DrawCardPerMulticoloredPermanent()``. Literal-line recognizer
+# with a zero-capture surface: only Infinite Guideline Station in the
+# EoE pool prints this exact shape today, so a parameterized
+# ``<verb> for each multicolored permanent you control`` regex would
+# have nothing else to claim. Deferred generalization: when a second
+# card ships with a sibling per-X tail on a different verb (e.g.
+# ``each opponent loses 1 life for each multicolored permanent you
+# control``), fold the per-multicolored-permanent gate into a shared
+# tail recognizer dispatching to the matching primitive — same
+# approach the existing ``deal damage by artifact count`` recognizer
+# took.
+_DRAW_CARD_PER_MULTICOLORED_PERMANENT_LINE = re.compile(
+    r"^draw a card for each multicolored permanent you control$"
+)
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 # "Look at the top two cards of your library. Put one into your hand
 # and the other into your graveyard." — Codecracker Hound's ETB.
@@ -873,6 +911,34 @@ _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS = re.compile(
 # graveyard-to-hand reanimation surface.
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND = re.compile(
     r"^return target creature card from your graveyard to your hand$"
+)
+# "Return a creature or Spacecraft card from your graveyard to your
+# hand" — Fell Gravship's ETB body second sentence (after the
+# ``mill three cards, then`` connective is split off by the compound
+# parser). Maps to ``ReturnCreatureFromYourGraveyardToHand(
+# or_spacecraft=True)``. The article is ``a`` rather than ``target``
+# because Scryfall prints the choice as a non-target selection in
+# this position; the engine class's ``requires_target`` /
+# ``legal_targets`` still drive the choice through the agent at
+# resolve time. Tried BEFORE the bare ``return target creature card``
+# regex below so the more-specific ``or Spacecraft`` widening lands
+# first; the bare regex's ``$`` anchor on ``hand`` would never match
+# the ``or Spacecraft`` tail anyway, but ordering more-specific before
+# more-general is the convention in this dispatcher. Mirrors the
+# ``or_spacecraft`` widening on ``DestroyTargetCreature`` (Embrace
+# Oblivion) and the ``or_enchantment`` widening on the same engine
+# class (Withering Torment) — same precedent of adding a flag to an
+# existing graveyard / battlefield operator rather than a new engine
+# class. Literal-line recognizer with a single-card claim: only Fell
+# Gravship in the EoE pool prints this exact ``a creature or
+# Spacecraft card`` graveyard surface today; deferred generalization
+# would fold this and a future ``return a creature or Spacecraft
+# card from your graveyard to the battlefield`` sibling into one
+# regex with a captured destination word, dispatching across both
+# engine-class destinations.
+_RETURN_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_HAND = re.compile(
+    r"^return a creature or Spacecraft card "
+    r"from your graveyard to your hand$"
 )
 # "Return target creature card with mana value N or less from your
 # graveyard to your hand" — narrowed-by-MV graveyard-to-hand reanimation.
@@ -1993,6 +2059,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_TAPPED_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetTappedCreature(amount=int(m.group(1)))
+    if _DRAW_CARD_PER_MULTICOLORED_PERMANENT_LINE.match(
+        phrase
+    ) is not None:
+        # ``draw a card for each multicolored permanent you control``
+        # — Infinite Guideline Station's attack trigger. Tried BEFORE
+        # the bare ``draw a card`` shape because the bare regex's
+        # ``draw a card$`` tail wouldn't match the ``for each
+        # multicolored permanent you control`` rider anyway, but
+        # more-specific before more-general is the convention here.
+        # See the regex comment for the deferred-generalization plan.
+        return DrawCardPerMulticoloredPermanent()
     if _DRAW_A_CARD.match(phrase) is not None:
         return DrawCards(amount=1)
     m = _DRAW_N_CARDS.match(phrase)
@@ -2285,6 +2362,24 @@ def _parse_effect(phrase: str) -> Effect | None:
     # the first, so they can't be split into independent effects).
     if _CREATE_LANDER_AND_SCHEDULE_SAC.match(phrase) is not None:
         return CreateLanderAndScheduleSacrifice()
+    if _CREATE_TAPPED_ROBOT_TOKEN_PER_MULTICOLORED_LINE.match(
+        phrase
+    ) is not None:
+        # ``create a tapped 2/2 colorless Robot artifact creature
+        # token for each multicolored permanent you control`` —
+        # Infinite Guideline Station's ETB. Tried BEFORE the generic
+        # ``_parse_create_token_effect`` because that function's
+        # ``_CREATE_CREATURE_TOKEN`` regex also matches the head of
+        # this phrase (``create a tapped 2/2 colorless Robot artifact
+        # creature token``) but stops at the ``$`` anchor before the
+        # ``for each multicolored permanent you control`` tail —
+        # without this earlier dispatch, the generic shape would
+        # silently drop the per-multicolored gate. See the regex
+        # comment for the deferred-generalization plan.
+        return CreateTokenPerMulticoloredPermanent(
+            token_printing=TOKEN_PRINTINGS["Robot"],
+            tapped=True,
+        )
     token_eff = _parse_create_token_effect(phrase)
     if token_eff is not None:
         return token_eff
@@ -2518,6 +2613,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         # threshold; ``max_mv=0`` (unset) keeps the original unbounded
         # behaviour for Interceptor Mechan and the bare regex below.
         return ReturnCreatureFromYourGraveyardToHand(max_mv=int(m.group(1)))
+    if _RETURN_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_HAND.match(
+        phrase
+    ) is not None:
+        # ``return a creature or Spacecraft card from your graveyard
+        # to your hand`` — Fell Gravship's ETB body second sentence.
+        # Tried before the bare ``return target creature card`` regex
+        # below for the more-specific-first convention; the bare
+        # regex's ``$`` anchor on ``hand`` would never match the
+        # ``or Spacecraft`` rider anyway. ``or_spacecraft=True``
+        # widens the engine class's legal-target pool to include
+        # Spacecraft cards in the graveyard alongside creature cards,
+        # mirroring the ``or_spacecraft`` flag on
+        # ``DestroyTargetCreature`` (Embrace Oblivion).
+        return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND.match(phrase) is not None:
         return ReturnCreatureFromYourGraveyardToHand()
     # Xu-Ifit, Osteoharmonist's reanimate-as-Skeleton multi-sentence
