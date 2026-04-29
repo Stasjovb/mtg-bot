@@ -1369,10 +1369,21 @@ def make_enchantment(
     nonbasic_lands_are_mountains: bool = False,
     wipes_all_creature_abilities: bool = False,
     sets_all_creature_pt_to_1_1: bool = False,
+    ward: str | None = None,
 ) -> CardPrinting:
     """Build a non-Aura Enchantment permanent. Casts onto the battlefield
     like any other permanent and sits there firing triggers or providing
     static bonuses. Auras (enchant creature) aren't modeled yet.
+
+    ``ward`` (e.g. ``"{2}"``) wires the printed Ward keyword on the
+    enchantment ITSELF (Trapped in the Screen). Mirrors the same-named
+    kwarg on ``make_creature`` and routes through the same
+    ``CardPrinting.ward_cost`` / ``ward_cost_str`` fields the engine's
+    ward-check helpers (``effective_ward_cost``,
+    ``_apply_ward_check``) already read. Auras carry their own
+    ``attached_grants_ward`` kwarg on ``make_aura`` for the "Enchanted
+    permanent has ward" rider; that targets the enchanted permanent
+    rather than the Aura itself, so the two kwargs stay distinct.
     """
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Enchantment"
@@ -1404,6 +1415,8 @@ def make_enchantment(
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         wipes_all_creature_abilities=wipes_all_creature_abilities,
         sets_all_creature_pt_to_1_1=sets_all_creature_pt_to_1_1,
+        ward_cost=parse_mana_cost(ward) if ward else None,
+        ward_cost_str=ward or "",
     )
 
 

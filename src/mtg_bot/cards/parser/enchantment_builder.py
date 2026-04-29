@@ -18,6 +18,11 @@ Non-Aura enchantments (EoE):
 - Bioengineered Future ``{1}{G}{G}``
 - Eusocial Engineering ``{3}{G}{G}``
 
+Non-Aura enchantments (DSK):
+- Trapped in the Screen ``{2}{W}`` (Ward {2} + ETB exile-opp-permanent-
+  until-leaves; first non-Aura enchantment to ship the new ``ward``
+  kwarg on ``make_enchantment``)
+
 Aura enchantments (EoE):
 - Moonlit Meditation ``{2}{U}``
 - Tractor Beam ``{2}{U}{U}``
@@ -197,6 +202,38 @@ def _build_eusocial_engineering() -> CardPrinting:
                     token_printing=TOKEN_PRINTINGS["Robot"],
                     count=1,
                 ),
+            ),
+        ),
+    )
+
+
+def _build_trapped_in_the_screen() -> CardPrinting:
+    """Trapped in the Screen ``{2}{W}``: Enchantment.
+
+    Oracle text:
+        Ward {2}
+        When this enchantment enters, exile target artifact, creature,
+        or enchantment an opponent controls until this enchantment
+        leaves the battlefield.
+
+    Routes through the new ``ward`` kwarg on ``make_enchantment`` —
+    which threads the printed cost onto the enchantment's own
+    ``ward_cost`` / ``ward_cost_str`` fields, the same fields a
+    creature with Ward already populates. The ETB rides the existing
+    ``ExileOpponentsNonlandPermanentUntilLeaves`` engine class —
+    ``artifact, creature, or enchantment`` an opponent controls is
+    functionally equivalent to ``nonland permanent`` for the EoE/DSK
+    pool (planeswalkers aren't fully modeled and lands are excluded
+    either way), the same simplification Banishing Light's ETB
+    already uses.
+    """
+    return make_enchantment(
+        "Trapped in the Screen", "{2}{W}",
+        ward="{2}",
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(),
             ),
         ),
     )
@@ -442,6 +479,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Weapons Manufacturing": _build_weapons_manufacturing,
     "Bioengineered Future": _build_bioengineered_future,
     "Eusocial Engineering": _build_eusocial_engineering,
+    "Trapped in the Screen": _build_trapped_in_the_screen,
     # Auras
     "Moonlit Meditation": _build_moonlit_meditation,
     "Tractor Beam": _build_tractor_beam,
