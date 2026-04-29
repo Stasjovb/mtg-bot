@@ -1373,7 +1373,7 @@ function renderDecision(pending) {
     case 'declare_attackers': renderDeclareAttackers(pending); break;
     case 'declare_blockers':  renderDeclareBlockers(pending);  break;
     case 'choose_target':     renderChooseTarget(pending);    break;
-    case 'choose_discard':    renderChooseCard(pending, 'Discard a card', (id) => submitAction({ id })); break;
+    case 'choose_discard':    renderChooseDiscardBoard(pending);                                          break;
     case 'choose_sacrifice':  renderChooseObj(pending, 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
     case 'choose_surveil':    renderChooseSurveil(pending);   break;
     case 'choose_mode':       renderChooseMode(pending);      break;
@@ -1893,6 +1893,25 @@ function renderChooseMultiIds(pending) {
     skip.addEventListener('click', () => submitAction({ ids: [] }));
     row.append(confirm, skip);
     body.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// choose_discard: highlight the player's hand cards and let them click one
+// ---------------------------------------------------------------------------
+
+function renderChooseDiscardBoard(pending) {
+  elsI.prompt.textContent = 'Discard a card — click a card in your hand.';
+  elsI.options.replaceChildren();
+
+  (pending.cards || []).forEach(card => {
+    document.querySelectorAll(`.hand .card[data-obj-id="${card.id}"]`).forEach(el => {
+      el.classList.add('actionable');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        submitAction({ id: card.id });
+      });
+    });
   });
 }
 

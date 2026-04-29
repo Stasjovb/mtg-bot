@@ -1558,26 +1558,50 @@ def test_choose_mana_color_modal(page):
     assert submitted["response"]["color"] == "R"
 
 
-def test_choose_discard_modal(page):
+def test_choose_discard_clicks_hand_card(page):
+    """choose_discard now uses board-click: cards in the player's hand
+    glow yellow, an instruction is shown in the bottom panel, and clicking
+    a hand card submits the discard."""
     _start_play_game(page)
     _stub_post(page)
     page.evaluate("""() => {
+      // Inject two cards into P0's hand so the click handler has somewhere
+      // to land. Real games render real hand cards; the injection just
+      // gives the test a deterministic DOM to click on.
+      const hand = document.querySelector('#row-p0 .hand');
+      hand.replaceChildren();
+      for (const id of [201, 202]) {
+        const c = document.createElement('div');
+        c.className = 'card'; c.dataset.objId = String(id);
+        c.textContent = `Card ${id}`;
+        hand.appendChild(c);
+      }
       renderDecision({
         type: 'choose_discard',
         cards: [
-          {id: 1, name: 'Card A', scryfall_id: null},
-          {id: 2, name: 'Card B', scryfall_id: null},
+          {id: 201, name: 'Card A', scryfall_id: null},
+          {id: 202, name: 'Card B', scryfall_id: null},
         ],
       });
     }""")
+    # Instruction appears in the bottom panel.
     page.wait_for_function(
-        "() => document.querySelectorAll('#decision-modal-body .decision-card-option').length === 2",
+        "() => /[Dd]iscard/.test("
+        "document.getElementById('decision-prompt').textContent)",
         timeout=2000,
     )
-    page.locator("#decision-modal-body .decision-card-option").nth(1).click()
+    # Both hand cards get the actionable glow.
+    page.wait_for_function(
+        "() => document.querySelectorAll('.hand .card.actionable').length === 2",
+        timeout=2000,
+    )
+    # No modal — the decision body is the only UI surface.
+    assert page.locator("#decision-modal.hidden").count() == 1
+    # Click the second hand card.
+    page.click('.hand .card[data-obj-id="202"]')
     page.wait_for_function("() => window._submitted !== null", timeout=2000)
     submitted = page.evaluate("() => window._submitted")
-    assert submitted["response"]["id"] == 2
+    assert submitted["response"]["id"] == 202
 
 
 def test_choose_sacrifice_modal(page):
