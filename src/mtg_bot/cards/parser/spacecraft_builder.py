@@ -52,7 +52,7 @@ This builder grew in several slices:
   forwarded to ``make_spacecraft(legendary=True)`` so a Legendary
   Spacecraft whose body falls inside the supported grammar can be
   claimed.
-- **Slice 4** (this batch) extends the ``"<N>+ | <body>"`` tier-line
+- **Slice 4** extends the ``"<N>+ | <body>"`` tier-line
   arm to claim **tier-gated triggered abilities**. A tier-line body
   that isn't a pure evergreen keyword list is re-tried through
   ``_parse_clause``; if it parses to a self-ETB or self-ATTACKS
@@ -60,8 +60,8 @@ This builder grew in several slices:
   trigger list with ``tier_threshold=N`` so the engine's
   ``TriggeredAbility.tier_threshold`` gate fires only when the
   Spacecraft has enough charge counters. Multi-tier static
-  **keyword** grants — the Lumen-Class Frigate / Synthesizer Labship
-  shape — were considered as a companion arm but rejected: the engine's
+  **keyword** grants — the Synthesizer Labship shape — were
+  considered as a companion arm but rejected: the engine's
   ``StaticAbility.applies_to`` requires the target be a creature now,
   and every real EoE printing's lower-tier keyword line falls below
   the Station threshold (i.e. while the Spacecraft is still an
@@ -69,6 +69,17 @@ This builder grew in several slices:
   ``tier_threshold=N`` would never fire. Modeling those grants
   correctly needs an engine-side change to ``stationed_keywords``
   (tier-keyed keyword sets) and is left for a future slice.
+- **Slice 5** (this batch) extends the tier-line arm a third way to
+  claim **tier-gated anthem statics**. A tier-line body that re-parses
+  through ``_parse_clause`` to a non-self-scoped ``StaticAbility``
+  (``CREATURES_YOU_CONTROL`` or ``OTHER_CREATURES_YOU_CONTROL``) gets
+  ``tier_threshold=N`` stamped on it and lands in
+  ``make_spacecraft(static_abilities=...)``. Lumen-Class Frigate's
+  ``2+ | Other creatures you control get +1/+1.`` is the EoE printing
+  in this shape; the slice-4 rejection of tier-gated keyword statics
+  doesn't apply because anthem scopes target *other* permanents and
+  fire as soon as the Spacecraft has enough charge counters
+  irrespective of whether the Spacecraft itself is animated.
 
 Anything outside the supported shape - lower-tier static/activated
 abilities, multiple tier-keyword lines (single-keyword-tier only is
@@ -218,20 +229,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                         power=2, toughness=2,
                         granted_keywords=frozenset({"flying"}),
                     ),
-                    tier_threshold=2,
-                ),
-            ),
-        ),
-        # Lumen-Class Frigate: 2+ tier static anthem (other creatures you
-        # control get +1/+1). Station 12+ flying + lifelink.
-        make_spacecraft(
-            "Lumen-Class Frigate", "{1}{W}", 3, 5,
-            station_threshold=12,
-            stationed_keywords={"flying", "lifelink"},
-            static_abilities=(
-                StaticAbility(
-                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-                    power_bonus=1, toughness_bonus=1,
                     tier_threshold=2,
                 ),
             ),
@@ -436,6 +433,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     stationed_keywords: frozenset[str] | None = None
     triggers: list[TriggeredAbility] = []
     activateds: list[ActivatedAbility] = []
+    statics: list[StaticAbility] = []
 
     for line in lines:
         m = _STATION_LINE_RE.match(line)
@@ -470,17 +468,49 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                 stationed_keywords = kw
                 continue
             # Body wasn't a pure evergreen keyword list — try the
-            # unified clause parser for the tier-gated trigger arm.
+            # unified clause parser for the tier-gated trigger or
+            # tier-gated anthem-static arm.
             clause = _parse_clause(body)
             if clause is None:
-                # Static / activated / unknown shape — out of scope.
+                # Activated / unknown shape — out of scope.
                 return None
+            if clause.static is not None:
+                # Tier-gated anthem static. Lumen-Class Frigate's
+                # ``2+ | Other creatures you control get +1/+1.`` is
+                # the EoE printing in this shape: an anthem-scope
+                # static ability whose targets are creatures *other
+                # than* the Spacecraft, gated on the Spacecraft having
+                # at least ``N`` charge counters. The reasoning the
+                # tier-keyword arm above rejects multi-tier-keyword
+                # bodies (engine ``StaticAbility.applies_to`` requires
+                # the Spacecraft itself be a creature for SELF-scoped
+                # grants) does NOT apply here: anthem scopes target
+                # other permanents on the battlefield, so the gate
+                # fires as soon as the Spacecraft accumulates enough
+                # charge counters regardless of whether it's animated.
+                # Restrict to the anthem scopes the static parser
+                # produces today (CREATURES_YOU_CONTROL /
+                # OTHER_CREATURES_YOU_CONTROL); SELF-scoped statics
+                # remain rejected because their faithfulness story is
+                # the unresolved one (would need engine work for
+                # tier-gated stationed-keyword grants, deferred to a
+                # future slice).
+                static_ab = clause.static
+                if static_ab.scope not in (
+                    StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                    StaticScope.CREATURES_YOU_CONTROL,
+                ):
+                    return None
+                statics.append(
+                    dataclasses.replace(static_ab, tier_threshold=tier_n)
+                )
+                continue
             if clause.trigger is None:
-                # The clause parsed but as a non-trigger (static
-                # ability, activated ability, granted-keyword line).
-                # Tier-gated statics on Spacecraft aren't modeled by
-                # this builder yet — skip rather than silently drop
-                # the ability.
+                # The clause parsed but as a non-trigger and non-anthem
+                # (activated ability, granted-keyword line, self-scope
+                # static). Tier-gated activations and self-scope
+                # statics on Spacecraft aren't modeled by this builder
+                # yet — skip rather than silently drop the ability.
                 return None
             trig = clause.trigger
             if trig.predicate != IsSelf():
@@ -597,6 +627,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         station_threshold=station_threshold,
         stationed_keywords=stationed_keywords,
         triggered_abilities=ordered_triggers,
+        static_abilities=tuple(statics),
         activated_abilities=tuple(activateds),
         legendary=legendary,
     )

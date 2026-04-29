@@ -1,21 +1,27 @@
-"""Parser support for Spacecraft tier-gated triggered abilities —
-slice 4 of the Spacecraft builder.
+"""Parser support for Spacecraft tier-gated triggered abilities and
+tier-gated anthem statics — slices 4 and 5 of the Spacecraft builder.
 
 Slice 1 (``test_parser_spacecraft_builder.py``) covers the bare
 Station + single-tier-keyword shape and the negative cases for
 malformed grammar. Slice 2/3 (``test_parser_spacecraft_bodies.py``)
 adds standalone self-ETB and self-ATTACKS trigger lines. This file
-focuses on the new tier-gated-trigger arm:
+focuses on the tier-gated dispatch arms:
 
 - ``"<N>+ | When this Spacecraft enters, <effect>."`` and ``"<N>+ |
   Whenever this Spacecraft attacks, <effect>."`` tier lines whose
   body parses through ``_parse_clause`` to a self-ETB or self-ATTACKS
   trigger. The threshold ``N`` lands on
   ``TriggeredAbility.tier_threshold``.
+- ``"<N>+ | <anthem-static>."`` tier lines whose body parses to an
+  anthem-scope ``StaticAbility`` (``CREATURES_YOU_CONTROL`` /
+  ``OTHER_CREATURES_YOU_CONTROL``). The threshold ``N`` lands on
+  ``StaticAbility.tier_threshold``. Lumen-Class Frigate's
+  ``2+ | Other creatures you control get +1/+1.`` is the EoE printing
+  in this shape.
 
 The companion **multi-tier static keyword** arm (multiple
 ``"<N>+ | <evergreen-keywords>"`` lines on one card) was considered
-and intentionally NOT implemented in this slice: the engine's
+and intentionally NOT implemented in slice 4: the engine's
 ``StaticAbility.applies_to`` requires the target be a creature now,
 and every real EoE printing's lower-tier keyword line falls below
 the Station threshold (where the Spacecraft is still an artifact, not
@@ -24,15 +30,17 @@ would never fire. Modeling those grants correctly needs an engine-side
 change to ``stationed_keywords`` and is left for a future slice. The
 builder explicitly skips multi-tier-keyword cards (synthetic test
 below pins that bail-out path) so the half-modeled shape can't slip
-through.
+through. Slice 5's anthem-static arm doesn't run into this problem
+because anthem scopes target *other* creatures and fire as soon as the
+Spacecraft has enough charge counters regardless of whether it's
+animated.
 
-No real EoE Spacecraft fits the new tier-gated-trigger grammar end
-to end today — the multi-tier-trigger printings (Synthesizer Labship,
-Entropic Battlecruiser, Dawnsire) all carry at least one body whose
-effect or trigger phrase is outside the unified grammar. So every
-positive claim in this file is exercised by a synthetic Scryfall
-record that pins the new arm directly; the real-card claims still
-come from slice 1/2/3.
+The multi-tier-trigger printings (Synthesizer Labship, Entropic
+Battlecruiser, Dawnsire) all carry at least one body whose effect or
+trigger phrase is outside the unified grammar. So every positive
+synthetic-record claim in this file pins the new arm directly; the
+real-card claims still come from slice 1/2/3, plus Lumen-Class
+Frigate via slice 5.
 """
 
 from __future__ import annotations
@@ -215,13 +223,20 @@ def test_build_spacecraft_printing_skips_tier_gated_unparseable_effect():
     assert _build_spacecraft_printing(card) is None
 
 
-def test_build_spacecraft_printing_skips_tier_gated_static_body():
-    """A tier-line body that parses as a static (non-trigger) clause
-    via ``_parse_static_ability_line`` (here Lumen-Class Frigate's
-    ``"Other creatures you control get +1/+1."`` anthem) is rejected:
-    tier-gated statics on Spacecraft aren't yet modeled by this
-    builder. Pins that the tier-gated arm does NOT silently mis-claim
-    the static body as a trigger."""
+def test_build_spacecraft_printing_claims_tier_gated_anthem_static_body():
+    """A tier-line body that parses as an anthem-scope static
+    (``CREATURES_YOU_CONTROL`` / ``OTHER_CREATURES_YOU_CONTROL``) is
+    claimed: the static gets ``tier_threshold=N`` stamped on it and
+    lands in ``static_abilities``. Lumen-Class Frigate's
+    ``2+ | Other creatures you control get +1/+1.`` is the EoE printing
+    in this shape — pins the slice-5 grammar extension that admits
+    anthem statics alongside the tier-gated trigger arm.
+
+    Self-scope statics (``As long as ..., this creature gets +N/+N.``)
+    remain rejected because their faithfulness story still needs
+    engine work; ``test_build_spacecraft_printing_skips_tier_gated_self_static_body``
+    pins that boundary."""
+    from mtg_bot.cards.base import StaticAbility, StaticScope
     card = {
         "name": "Hand-Crafted Tier-Gated Static Spacecraft",
         "mana_cost": "{1}{W}",
@@ -233,6 +248,44 @@ def test_build_spacecraft_printing_skips_tier_gated_static_body():
             "counters equal to its power on this Spacecraft. Station "
             "only as a sorcery. It's an artifact creature at 6+.)\n"
             "2+ | Other creatures you control get +1/+1.\n"
+            "6+ | Flying"
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert printing.station_threshold == 6
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert printing.triggered_abilities == ()
+    assert printing.static_abilities == (
+        StaticAbility(
+            scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+            power_bonus=1,
+            toughness_bonus=1,
+            tier_threshold=2,
+        ),
+    )
+
+
+def test_build_spacecraft_printing_skips_tier_gated_self_static_body():
+    """Defensive: a tier-line body that parses as a self-scope static
+    (``As long as ..., this creature gets +N/+N.``) is rejected — the
+    slice-5 anthem-static arm is restricted to anthem scopes only,
+    because the engine's ``StaticAbility.applies_to`` semantics for
+    SELF-scoped grants on an unanimated Spacecraft are the unresolved
+    case the slice-4 docstring reasoning is about. Pins the boundary
+    so a future card with this shape doesn't half-claim."""
+    card = {
+        "name": "Hand-Crafted Tier-Gated Self-Static Spacecraft",
+        "mana_cost": "{2}{R}",
+        "type_line": "Artifact — Spacecraft",
+        "power": "3",
+        "toughness": "3",
+        "oracle_text": (
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 6+.)\n"
+            "2+ | This creature gets +2/+2 as long as you control "
+            "an artifact.\n"
             "6+ | Flying"
         ),
     }

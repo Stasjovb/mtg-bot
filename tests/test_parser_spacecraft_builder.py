@@ -222,10 +222,14 @@ def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
 
 
 def test_build_spacecraft_printing_skips_multi_tier_card():
-    """A Spacecraft with more than one tier line (like Lumen-Class
-    Frigate, with both ``2+ | <anthem>`` and ``12+ | Flying, lifelink``)
-    is out of scope - claiming only the highest tier would silently
-    drop the lower-tier ability from the printing."""
+    """A Spacecraft with more than one *keyword* tier line (synthetic
+    ``2+ | Flying`` + ``12+ | Flying, lifelink``) is out of scope —
+    the engine's ``stationed_keywords`` is a single-tier set, so
+    claiming only the highest tier would silently drop the lower-tier
+    keyword grant. Pins the tier-keyword bail-out path; tier-gated
+    triggers (slice 4) and tier-gated anthem statics (slice 5) compose
+    with a single keyword tier and are tested in
+    ``test_parser_spacecraft_tiers``."""
     card = {
         "name": "Hand-Crafted Multi-Tier Spacecraft",
         "mana_cost": "{1}{W}",
