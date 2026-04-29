@@ -110,6 +110,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_enters_with_plus_one_counter_if_creature_died_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
+    _parse_nonbasic_lands_are_mountains_line,
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_warp_line,
@@ -1433,6 +1434,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     devour: int = 0
     enters_tapped = False
     must_be_blocked_if_able = False
+    nonbasic_lands_are_mountains = False
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
@@ -1521,6 +1523,16 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # but has an eligible blocker.
             must_be_blocked_if_able = True
             continue
+        if _parse_nonbasic_lands_are_mountains_line(line):
+            # ``Nonbasic lands are Mountains.`` — Magus of the Moon's
+            # printing-level type-replacement static. Flips the
+            # ``nonbasic_lands_are_mountains`` kwarg below; the engine
+            # consumes the flag at land ETB and layer-4 type-
+            # replacement application time. Idempotent: a malformed
+            # printing with the line twice ends up with the field
+            # set once.
+            nonbasic_lands_are_mountains = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1603,4 +1615,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         enters_with_minus_one_counters_from_hand_cast=(
             enters_with_minus_one_counters_from_hand_cast
         ),
+        nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
     )
