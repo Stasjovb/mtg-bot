@@ -131,9 +131,16 @@ def test_thespians_stage_recopy_does_not_accumulate_abilities():
 # -----------------------
 
 
-def test_mirrorpool_is_legendary_and_enters_tapped():
+def test_mirrorpool_enters_tapped():
+    """Mirrorpool's printed type line in the Stellar Sights bonus
+    sheet is just ``Land`` (no Legendary supertype on the printed
+    surface — Scryfall reports ``type_line='Land'`` for the eos
+    printing). The previous bespoke factory carried a synthetic
+    ``legendary=True`` flag; the parser-side migration drops it to
+    stay faithful to the printed text per parser/CLAUDE.md.
+    """
     p = _PRINTINGS["Mirrorpool"]
-    assert "Legendary" in p.supertypes
+    assert "Legendary" not in p.supertypes
     assert p.enters_tapped is True
     assert len(p.activated_abilities) == 2
     # Both sac abilities.
