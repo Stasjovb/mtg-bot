@@ -65,6 +65,7 @@ from mtg_bot.effects.predicates import (
     Event,
     IsCreature,
     IsSelf,
+    LoneAttackerForYou,
 )
 
 
@@ -448,6 +449,74 @@ def _build_ticket_booth_tunnel_of_hate() -> CardPrinting:
     )
 
 
+def _build_derelict_attic_widows_walk() -> CardPrinting:
+    """Derelict Attic // Widow's Walk ``{2}{B}`` // ``{3}{B}``.
+
+    Derelict Attic oracle:
+        When you unlock this door, you draw two cards and you lose 2
+        life.
+
+    Widow's Walk oracle:
+        Whenever a creature you control attacks alone, it gets +1/+0
+        and gains deathtouch until end of turn.
+
+    Derelict Attic is a pure door trigger reusing
+    ``Sequence(DrawCards(2), LoseLife(2))`` — both primitives already
+    exist (Drowned Diner uses the same Sequence shape with
+    ``DiscardSelf`` instead of ``LoseLife``). Widow's Walk hooks the
+    once-per-pass ``Event.YOU_ATTACK`` event with the new
+    ``LoneAttackerForYou`` predicate, which gates firing on exactly
+    one creature attacking AND that lone attacker being controlled by
+    the source's (Room's) controller. We deliberately use
+    ``YOU_ATTACK`` instead of the per-attacker ``Event.ATTACKS`` —
+    ``ATTACKS`` dispatches inside the per-attacker loop in
+    ``combat.declare_attackers``, so a "lone attacker" check would
+    falsely match the first of N attackers before its siblings are
+    declared. ``YOU_ATTACK`` fires once after the entire pass, when
+    every attacker has flipped to ``attacking=True``, giving the
+    predicate the post-declaration battlefield to count.
+
+    The pump effect is ``PumpTargetCreatureUntilEOT`` with the
+    standard "target attacking creature you control" rider — when
+    ``LoneAttackerForYou`` matches, only one creature is attacking,
+    so ``attacking_only=True & you_control_only=True`` narrows
+    legal targets to that single attacker. The PickFirst agent
+    deterministically picks it.
+    """
+    return make_room(
+        _half(
+            "Derelict Attic", "{2}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=Sequence(
+                        effects=(
+                            DrawCards(amount=2),
+                            LoseLife(amount=2),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        _half(
+            "Widow's Walk", "{3}{B}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.YOU_ATTACK,
+                    predicate=Controlled(YOU) & LoneAttackerForYou(),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=1,
+                        toughness_bonus=0,
+                        granted_keywords=frozenset({"deathtouch"}),
+                        attacking_only=True,
+                        you_control_only=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -462,6 +531,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
     "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
+    "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
 }
 
 

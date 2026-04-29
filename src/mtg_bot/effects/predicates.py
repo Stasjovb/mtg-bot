@@ -878,3 +878,34 @@ class SpellsCastThisTurn(Predicate):
         except (KeyError, AttributeError):
             return False
         return getattr(player, "spells_cast_this_turn", 0) == self.n
+
+
+@dataclass(frozen=True)
+class LoneAttackerForYou(Predicate):
+    """Game-state predicate: exactly one creature is currently attacking
+    AND that lone attacker is controlled by the source's controller.
+
+    Models the "Whenever a creature you control attacks alone, ..."
+    trigger qualifier (Widow's Walk on Derelict Attic // Widow's Walk).
+    Pairs with the once-per-pass ``Event.YOU_ATTACK`` event so the
+    predicate is evaluated AFTER every attacker for the active
+    declare-attackers pass has flipped to ``attacking=True`` —
+    distinct from the per-attacker ``Event.ATTACKS`` event whose
+    dispatch fires inside the per-attacker loop in
+    ``combat.declare_attackers`` (where a "lone attacker" check would
+    falsely match the first of N attackers before its siblings are
+    declared).
+
+    The predicate ignores its event subjects — ``YOU_ATTACK``'s subject
+    is the attacking Player and the ``Controlled(YOU)`` predicate
+    on top of this one already gates the player-side qualifier.
+    The lone-attacker check is purely a battlefield walk: count
+    permanents flagged ``attacking`` and bail out unless exactly one
+    matches AND that one's controller equals the source's controller.
+    """
+
+    def matches(self, state, subjects, source):
+        attackers = [o for o in state.battlefield if o.attacking]
+        if len(attackers) != 1:
+            return False
+        return attackers[0].controller_id == source.controller_id

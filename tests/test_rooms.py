@@ -1174,3 +1174,200 @@ def test_tunnel_of_hate_locked_does_not_grant_keyword():
     assert "double strike" not in effective_keywords(state, bear)
 
 
+# ---------------------------------------------------------------------------
+# Parser claims: Derelict Attic // Widow's Walk
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_derelict_attic_widows_walk():
+    name = "Derelict Attic // Widow's Walk"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Derelict Attic", "Widow's Walk"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Derelict Attic"].mana_cost_str == "{2}{B}"
+    assert by_name["Widow's Walk"].mana_cost_str == "{3}{B}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Derelict Attic", "Widow's Walk"]
+
+
+def test_derelict_attic_draws_two_loses_two_on_unlock():
+    """Casting Derelict Attic unlocks the half; the door trigger draws
+    two cards and you lose 2 life."""
+    state = _new_state()
+    # Stock library so DrawCards has cards to draw.
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    _put_battlefield(state, BASIC_LANDS["Swamp"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Swamp"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Swamp"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        owner_id=0,
+    )
+    pre_hand = len(state.players[0].hand)
+    pre_life = state.players[0].life
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Derelict Attic"),
+    )
+    drain_stack(state)
+    # Cast removes Room from hand (-1) and Derelict Attic draws 2 (+2).
+    assert len(state.players[0].hand) == pre_hand - 1 + 2
+    # Lost 2 life.
+    assert state.players[0].life == pre_life - 2
+
+
+def test_derelict_attic_locked_does_not_fire():
+    """If only Widow's Walk is unlocked, Derelict Attic's draw / life-
+    loss trigger doesn't fire on a refired ENTERS dispatch."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    state = _new_state()
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Widow's Walk"})
+    pre_hand = len(state.players[0].hand)
+    pre_life = state.players[0].life
+    dispatch_event(state, Event.ENTERS, label="enters", obj=room)
+    drain_stack(state)
+    # Locked Derelict Attic — no draw, no life loss.
+    assert len(state.players[0].hand) == pre_hand
+    assert state.players[0].life == pre_life
+
+
+def test_widows_walk_pumps_lone_attacker_when_unlocked():
+    """Widow's Walk's YOU_ATTACK trigger gates on the LoneAttackerForYou
+    predicate: when exactly one creature you control is attacking, that
+    attacker gets +1/+0 and gains deathtouch UEOT."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_keywords, effective_power
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Widow's Walk"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    base_power = effective_power(state, bear)
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    # Lone attacker: +1/+0 and deathtouch UEOT.
+    assert effective_power(state, bear) == base_power + 1
+    assert "deathtouch" in effective_keywords(state, bear)
+
+
+def test_widows_walk_does_not_fire_when_not_alone():
+    """With two attackers, Widow's Walk's LoneAttackerForYou predicate
+    fails — no pump or deathtouch grant."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_keywords, effective_power
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Widow's Walk"})
+    bear_a = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    bear_b = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    base_a = effective_power(state, bear_a)
+    base_b = effective_power(state, bear_b)
+    declare_attackers(state, [bear_a.id, bear_b.id])
+    _drain(state)
+    # Two attackers — predicate fails, neither pumped nor deathtouched.
+    assert effective_power(state, bear_a) == base_a
+    assert effective_power(state, bear_b) == base_b
+    assert "deathtouch" not in effective_keywords(state, bear_a)
+    assert "deathtouch" not in effective_keywords(state, bear_b)
+
+
+def test_widows_walk_locked_does_not_fire():
+    """If Widow's Walk is locked (only Derelict Attic unlocked), the
+    trigger is gated off — no pump or deathtouch even on a lone attacker.
+    """
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_keywords, effective_power
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Derelict Attic"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    base = effective_power(state, bear)
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    assert effective_power(state, bear) == base
+    assert "deathtouch" not in effective_keywords(state, bear)
+
+
+def test_lone_attacker_predicate_ignores_opponent_attacker():
+    """The LoneAttackerForYou predicate is true ONLY when the lone
+    attacker is controlled by the source's controller. An opponent's
+    lone attacker doesn't fire your Widow's Walk."""
+    from mtg_bot.effects.predicates import LoneAttackerForYou
+
+    state = _new_state()
+    # Room belongs to P0; the lone attacker belongs to P1.
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Widow's Walk"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    bear.attacking = True
+    pred = LoneAttackerForYou()
+    assert pred.matches(state, {}, room) is False
+
+
+def test_lone_attacker_predicate_is_false_with_no_attackers():
+    """No attackers → predicate is false (length check fails before
+    the controller-id branch)."""
+    from mtg_bot.effects.predicates import LoneAttackerForYou
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"],
+        controller_id=0,
+    )
+    pred = LoneAttackerForYou()
+    assert pred.matches(state, {}, room) is False
+
