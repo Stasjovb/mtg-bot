@@ -651,21 +651,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Thespian's Stage: {T}: Add {C}. {2},{T}: This land becomes a
-        # copy of target land, except it has this ability.
-        "Thespian's Stage": make_utility_land(
-            "Thespian's Stage",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{2}"),
-                        mana_str="{2}",
-                        tap_self=True,
-                    ),
-                    effect=BecomesCopyOfTargetLand(),
-                ),
-            ),
-        ),
         # Echoing Deeps: Land — Cave. May enter tapped as copy of any
         # graveyard land (Cave in addition to its other types).
         # {T}: Add {C}.
@@ -1428,6 +1413,10 @@ def _paid_effect_draw_a_card() -> Effect:
     return DrawCards(amount=1)
 
 
+def _paid_effect_becomes_copy_of_target_land() -> Effect:
+    return BecomesCopyOfTargetLand()
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -1438,6 +1427,15 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "battlefield tapped":
         _paid_effect_put_basic_from_hand_tapped,
     "Draw a card": _paid_effect_draw_a_card,
+    # Thespian's Stage's ``{2}, {T}: This land becomes a copy of
+    # target land, except it has this ability.`` This recognizer
+    # claims the land via the standard paid-effect arm; the
+    # ``except it has this ability`` clause is part of the body
+    # surface form (``BecomesCopyOfTargetLand`` already implements
+    # the ability-preserving copy).
+    "This land becomes a copy of target land, except it has this "
+    "ability":
+        _paid_effect_becomes_copy_of_target_land,
 }
 
 
