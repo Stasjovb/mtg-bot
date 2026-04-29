@@ -3652,6 +3652,68 @@ class BoilerbilgesRipperETBEffect(Effect):
 
 
 @dataclass(frozen=True)
+class FanaticOfTheHarrowingETBEffect(Effect):
+    """Fanatic of the Harrowing's ETB: "Each player discards a card. If
+    you discarded a card this way, draw a card."
+
+    Resolution order matches the printed clause:
+    1. Each player (in turn order, starting with the controller and
+       proceeding to opponents) discards one card via ``choose_discard``.
+       A player with an empty hand simply skips — they had no card to
+       discard.
+    2. If the controller actually discarded a card in step 1 (i.e. they
+       had a non-empty hand), they draw a card.
+
+    The "if you discarded a card this way" gate is a state-based check
+    on the controller specifically — not on whether anyone discarded.
+    A controller with an empty hand at resolve time (rare, but possible
+    after a previous discard ladder) gets nothing.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import draw_n_cards, fire_opponent_discards_triggers
+
+        controller_discarded = False
+        # Iterate in turn order starting from the controller, then each
+        # other player (also in turn order). Each player's own agent
+        # picks which card.
+        n = len(state.players)
+        order = [
+            state.players[(state.players.index(state.player_by_id(controller_id)) + i) % n]
+            for i in range(n)
+        ]
+        for p in order:
+            if p.has_lost or not p.hand:
+                continue
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{p.id} discards {card.printing.name} "
+                f"(Fanatic of the Harrowing)"
+            )
+            fire_opponent_discards_triggers(state, p.id)
+            if p.id == controller_id:
+                controller_discarded = True
+        if controller_discarded:
+            draw_n_cards(state, controller_id, 1)
+
+    def describe(self) -> str:
+        return (
+            "each player discards a card; if you discarded a card this "
+            "way, draw a card"
+        )
+
+
+
+@dataclass(frozen=True)
 class SplitskinDollETBEffect(Effect):
     """Splitskin Doll's ETB: "When this creature enters, draw a card.
     Then discard a card unless you control another creature with power

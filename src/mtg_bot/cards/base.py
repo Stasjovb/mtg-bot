@@ -169,6 +169,7 @@ from mtg_bot.effects import (
     DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
     FamishedWorldsireETBEffect,
+    FanaticOfTheHarrowingETBEffect,
     PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     OptionalDiscardCardThenDrawN,
     OptionalSacLandOrLanderForBasicLandRamp,

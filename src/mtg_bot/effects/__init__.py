@@ -226,6 +226,7 @@ from mtg_bot.effects.bespoke import (
     EnduringDiesReturnAsEnchantmentEffect,
     ExorciseEffect,
     FamishedWorldsireETBEffect,
+    FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,

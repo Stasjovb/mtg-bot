@@ -60,6 +60,7 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FamishedWorldsireETBEffect,
+    FanaticOfTheHarrowingETBEffect,
     GainLife,
     IfGainedLifeThisTurnUntapSelf,
     KavaronHarrierAttackEffect,
@@ -730,6 +731,22 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=BoilerbilgesRipperETBEffect(),
+                ),
+            ),
+        ),
+        # Fanatic of the Harrowing {3}{B} 2/2 Human Cleric (DSK).
+        # ETB: "When this creature enters, each player discards a card.
+        # If you discarded a card this way, draw a card." The reflexive
+        # draw is gated specifically on the controller having actually
+        # discarded — a controller with an empty hand at resolve gets
+        # no draw. Each player's own ``choose_discard`` agent hook
+        # picks which card to discard.
+        "Fanatic of the Harrowing": make_creature(
+            "Fanatic of the Harrowing", "{3}{B}", 2, 2,
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=FanaticOfTheHarrowingETBEffect(),
                 ),
             ),
         ),
