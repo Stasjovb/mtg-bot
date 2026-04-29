@@ -35,6 +35,11 @@ Aura enchantments (EoE):
 Aura enchantments (DSK):
 - Duskmourn's Domination ``{4}{U}{U}``
 - Frantic Strength ``{1}{R}`` (Flash + +2/+2 + trample)
+- Shardmage's Rescue ``{W}`` (Flash + Enchant-creature-you-control +
+  +1/+1; ``as long as this Aura entered this turn, enchanted creature
+  has hexproof`` is dropped — hexproof is engine-unenforced metadata
+  in this codebase per the rooms-batch6 precedent, so a conditional
+  hexproof grant is also a no-op.)
 - Sheltered by Ghosts ``{1}{W}`` (Enchant-creature-you-control + ETB
   exile-opp-permanent-until-leaves + +1/+0 + lifelink + ward {2})
 """
@@ -436,6 +441,46 @@ def _build_sheltered_by_ghosts() -> CardPrinting:
     )
 
 
+def _build_shardmages_rescue() -> CardPrinting:
+    """Shardmage's Rescue ``{W}``: Enchantment — Aura.
+
+    Oracle text:
+        Flash
+        Enchant creature you control
+        As long as this Aura entered this turn, enchanted creature has
+        hexproof.
+        Enchanted creature gets +1/+1.
+
+    Maps cleanly onto the existing ``make_aura`` flag set:
+
+    - ``keywords=frozenset({"flash"})`` for the printed Flash on the
+      Aura itself — same instant-speed gate Frantic Strength rides
+      through ``CardPrinting.keywords`` and ``legal.py``.
+    - ``aura_yours_only=True`` for the ``Enchant creature you control``
+      target restriction — same flag Sheltered by Ghosts ships.
+    - ``power_bonus=1, toughness_bonus=1`` for the unconditional
+      ``Enchanted creature gets +1/+1`` rider — shared
+      ``equipment_bonuses`` machinery.
+
+    The conditional hexproof line (``As long as this Aura entered this
+    turn, enchanted creature has hexproof``) is dropped as an honest
+    no-op: hexproof is engine-unenforced metadata in this codebase
+    today (no targeting site checks for it — same observation Lecture
+    Hall's "other permanents you control have hexproof" rests on per
+    the dsk-rooms-batch6 precedent). Since the unconditional grant
+    would already be a no-op, the conditional ``as long as`` gated
+    grant is just as much a no-op — not modelling the optional
+    benefit makes the printing miss a defensive shield it never had
+    anyway.
+    """
+    return make_aura(
+        "Shardmage's Rescue", "{W}",
+        power_bonus=1, toughness_bonus=1,
+        keywords=frozenset({"flash"}),
+        aura_yours_only=True,
+    )
+
+
 def _build_duskmourns_domination() -> CardPrinting:
     """Duskmourn's Domination ``{4}{U}{U}``: Enchantment — Aura.
 
@@ -491,6 +536,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     # Duskmourn (DSK) Auras
     "Duskmourn's Domination": _build_duskmourns_domination,
     "Frantic Strength": _build_frantic_strength,
+    "Shardmage's Rescue": _build_shardmages_rescue,
     "Sheltered by Ghosts": _build_sheltered_by_ghosts,
 }
 
