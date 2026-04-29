@@ -7912,6 +7912,46 @@ class EachOpponentSacrificesCreature(Effect):
 
 
 @dataclass(frozen=True)
+class TapEnchantedPermanent(Effect):
+    """Tap the source Aura's enchanted permanent.
+
+    Used by Stay Hidden, Stay Silent's ETB ``When this Aura enters,
+    tap enchanted creature.`` Identifies the host via
+    ``state.resolving_source.attached_to`` and routes through
+    ``mtg_bot.turn.tap_permanent`` so the tap goes through the same
+    pipeline an action-tap would. Mirrors
+    ``DestroyEnchantedPermanent`` 's host-resolution pattern; safe to
+    re-use for any Aura ETB that taps the host.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        aura = state.resolving_source
+        if aura is None or aura.attached_to is None:
+            return
+        host = next(
+            (o for o in state.battlefield if o.id == aura.attached_to),
+            None,
+        )
+        if host is None:
+            return
+        if host.tapped:
+            return
+        state.log.append(
+            f"{host.printing.name} is tapped by {aura.printing.name}"
+        )
+        tap_permanent(state, host)
+
+    def describe(self) -> str:
+        return "tap enchanted permanent"
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentSacrificesCreatureOtherThanEnchanted(Effect):
     """"Target opponent sacrifices a creature of their choice other
     than enchanted creature."

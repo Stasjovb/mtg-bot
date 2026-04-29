@@ -52,6 +52,9 @@ Aura enchantments (DSK):
   exile-opp-permanent-until-leaves + +1/+0 + lifelink + ward {2})
 - Sporogenic Infection ``{1}{B}`` (ETB target-opp-sacs-creature-other-
   than-enchanted + DEALT_DAMAGE-destroys-enchanted)
+- Stay Hidden, Stay Silent ``{1}{U}`` (ETB tap-enchanted +
+  attached-prevents-untap; the {4}{U}{U} sorcery-speed activated
+  ability is dropped as honest no-op for unoffered alt-cost)
 """
 
 from __future__ import annotations
@@ -77,6 +80,7 @@ from mtg_bot.effects import (
     SacrificeSelfUnlessVoidActive,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
+    TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
     TractorBeamETBEffect,
@@ -525,6 +529,53 @@ def _build_cracked_skull() -> CardPrinting:
     )
 
 
+def _build_stay_hidden_stay_silent() -> CardPrinting:
+    """Stay Hidden, Stay Silent ``{1}{U}``: Enchantment — Aura.
+
+    Oracle text:
+        Enchant creature
+        When this Aura enters, tap enchanted creature.
+        Enchanted creature doesn't untap during its controller's
+        untap step.
+        {4}{U}{U}: Shuffle enchanted creature into its owner's
+        library, then manifest dread. Activate only as a sorcery.
+
+    Composes the new ``TapEnchantedPermanent`` ETB and the existing
+    ``attached_prevents_untap`` static rider (Tractor Beam precedent):
+
+    - ETB: ``TapEnchantedPermanent()`` — taps the host via
+      ``mtg_bot.turn.tap_permanent``, idempotent if the host is
+      already tapped.
+    - Static: ``attached_prevents_untap=True`` for the printed
+      ``doesn't untap during its controller's untap step`` clause —
+      same flag Tractor Beam ships, gated by the engine's untap-step
+      walk on every Aura attached to the host.
+
+    Simplification — the activated ability ``{4}{U}{U}: Shuffle
+    enchanted creature into its owner's library, then manifest
+    dread. Activate only as a sorcery.`` is dropped as an honest
+    no-op. The activated ability is OPTIONAL (the controller chooses
+    whether to pay {4}{U}{U}), so not offering it through ``legal``
+    means the controller misses the option but doesn't violate
+    rules. Same permission-not-offered shape Lecture Hall ships per
+    dsk-rooms-batch6, applied to an alt-cost activated ability
+    rather than a static. The ETB tap and the don't-untap static are
+    the load-bearing pieces of the printing — every game with this
+    Aura on the battlefield has the host stuck-tapped indefinitely
+    regardless of whether the activated ability is ever used.
+    """
+    return make_aura(
+        "Stay Hidden, Stay Silent", "{1}{U}",
+        attached_prevents_untap=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=TapEnchantedPermanent(),
+            ),
+        ),
+    )
+
+
 def _build_sporogenic_infection() -> CardPrinting:
     """Sporogenic Infection ``{1}{B}``: Enchantment — Aura.
 
@@ -661,6 +712,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Shardmage's Rescue": _build_shardmages_rescue,
     "Sheltered by Ghosts": _build_sheltered_by_ghosts,
     "Sporogenic Infection": _build_sporogenic_infection,
+    "Stay Hidden, Stay Silent": _build_stay_hidden_stay_silent,
 }
 
 

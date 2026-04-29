@@ -165,6 +165,7 @@ from mtg_bot.effects.generic import (
     SwitchSourcePowerToughnessUEOT,
     TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
+    TapEnchantedPermanent,
     TargetArtifactBecomesCreatureUEOT,
     TakeExtraTurnAfterThisOne,
     TapTargetArtifactOrCreature,

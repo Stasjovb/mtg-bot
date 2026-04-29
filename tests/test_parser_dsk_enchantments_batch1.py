@@ -38,6 +38,15 @@ Cards newly claimed in this batch:
   the mana cost`` alt cost) are inert in this engine today. Cost-
   and-name-only printing; same permission-not-offered shape Lecture
   Hall ships per dsk-rooms-batch6.
+
+* **Stay Hidden, Stay Silent** ``{1}{U}`` Enchantment — Aura. ETB-
+  tap-enchanted via the new ``TapEnchantedPermanent`` engine class
+  + ``attached_prevents_untap=True`` static (Tractor Beam
+  precedent). The ``{4}{U}{U}: Shuffle enchanted creature into its
+  owner's library, then manifest dread. Activate only as a
+  sorcery.`` activated ability is dropped as honest no-op — the
+  activation is optional (controller's choice to pay), so not
+  offering it through ``legal`` is the unoffered-alt-cost shape.
 """
 
 from __future__ import annotations
@@ -474,6 +483,128 @@ def test_leyline_of_mutation_claimed_by_parser():
     # Leyline of Mutation ``{2}{G}{G}`` — claimed via the name-keyed
     # ``_ENCHANTMENT_BUILDERS`` dispatch.
     assert "Leyline of Mutation" in _claimed_names()
+
+
+def test_stay_hidden_stay_silent_claimed_by_parser():
+    # Stay Hidden, Stay Silent ``{1}{U}`` Enchantment — Aura — claimed
+    # via the name-keyed ``_ENCHANTMENT_BUILDERS`` dispatch.
+    assert "Stay Hidden, Stay Silent" in _claimed_names()
+
+
+def test_stay_hidden_stay_silent_carries_etb_tap_and_static():
+    # The produced ``CardPrinting`` carries:
+    # - one ETB trigger (``TapEnchantedPermanent``);
+    # - the printing-level ``attached_prevents_untap`` flag for the
+    #   printed ``doesn't untap during its controller's untap step``
+    #   static rider — same flag Tractor Beam ships.
+    # - no activated abilities (dropped as honest no-op for the
+    #   ``{4}{U}{U}: Shuffle ... Activate only as a sorcery.`` line).
+    from mtg_bot.effects import TapEnchantedPermanent
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Stay Hidden, Stay Silent"]
+    assert len(p.triggered_abilities) == 1
+    assert isinstance(p.triggered_abilities[0].effect, TapEnchantedPermanent)
+    assert p.attached_prevents_untap is True
+    assert p.activated_abilities == ()
+
+
+def test_stay_hidden_stay_silent_is_aura_with_correct_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Stay Hidden, Stay Silent"]
+    assert p.mana_cost_str == "{1}{U}"
+    assert p.is_aura is True
+
+
+# ---------- TapEnchantedPermanent ----------
+
+
+def test_tap_enchanted_permanent_taps_host():
+    # End-to-end resolve sanity: the host is currently untapped; after
+    # the effect resolves it's tapped.
+    from mtg_bot.cards.base import make_aura, make_creature
+    from mtg_bot.effects import TapEnchantedPermanent
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura_pr = make_aura("Test Aura", "{U}")
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    host = GameObject(
+        id=10, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura = GameObject(
+        id=20, printing=aura_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = host.id
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[host, aura],
+        resolving_source=aura,
+    )
+    eff = TapEnchantedPermanent()
+    eff.resolve(state, controller_id=0)
+    assert host.tapped is True
+
+
+def test_tap_enchanted_permanent_idempotent_when_already_tapped():
+    # Already-tapped host: no double-tap event, no log spam, silent
+    # no-op. The ETB happily resolves.
+    from mtg_bot.cards.base import make_aura, make_creature
+    from mtg_bot.effects import TapEnchantedPermanent
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura_pr = make_aura("Test Aura", "{U}")
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    host = GameObject(
+        id=10, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    aura = GameObject(
+        id=20, printing=aura_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    aura.attached_to = host.id
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[host, aura],
+        resolving_source=aura,
+    )
+    eff = TapEnchantedPermanent()
+    eff.resolve(state, controller_id=0)
+    # Still tapped, no double-tap log line.
+    assert host.tapped is True
+
+
+def test_tap_enchanted_permanent_no_host_silent_no_op():
+    # If the source isn't attached (somehow lost its host between
+    # trigger and resolve), the effect silently no-ops.
+    from mtg_bot.cards.base import make_aura
+    from mtg_bot.effects import TapEnchantedPermanent
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura_pr = make_aura("Test Aura", "{U}")
+    aura = GameObject(
+        id=20, printing=aura_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    # No attached_to set.
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[aura],
+        resolving_source=aura,
+    )
+    eff = TapEnchantedPermanent()
+    eff.resolve(state, controller_id=0)
+    # Nothing to assert beyond not raising.
+
+
+def test_tap_enchanted_permanent_describe():
+    from mtg_bot.effects import TapEnchantedPermanent
+
+    desc = TapEnchantedPermanent().describe()
+    assert "tap" in desc
+    assert "enchanted" in desc
 
 
 def test_leyline_of_mutation_is_honest_no_op_static_enchantment():
