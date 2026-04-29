@@ -101,6 +101,7 @@ from mtg_bot.effects.generic import (
     LoseLife,
     MagicalHackTextChangeEffect,
     ManifestDread,
+    ManifestDreadThenAttachSelf,
     ManifestDreadThenPutPlusOneCountersOnIt,
     SleightOfMindTextChangeEffect,
     MillTargetPlayer,

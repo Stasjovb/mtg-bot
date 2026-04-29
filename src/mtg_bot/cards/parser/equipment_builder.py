@@ -29,6 +29,15 @@ optional ETB triggers. The grammar this builder claims today covers:
   against ``TOKEN_PRINTINGS["Glimmer"]`` — Glimmerlight's ETB. Distinct
   from the Auxiliary Boosters shape because the Equipment does NOT
   attach to the created token;
+- a single ETB trigger of the form
+  ``"When this Equipment enters, manifest dread, then attach this
+  Equipment to that creature."`` wired through the bespoke
+  ``ManifestDreadThenAttachSelf`` engine class — Duskmourn Equipment
+  family (Conductive Machete, Killer's Mask, Cursed Windbreaker,
+  Dissection Tools). "That creature" refers back to the just-
+  manifested face-down 2/2, parallel to the Slimy Aquarium / Weight
+  Room door triggers' ``ManifestDreadThenPutPlusOneCountersOnIt``
+  back-reference;
 - Hylderblade's Void rider — a literal beginning-of-end-step
   attach-to-target-creature trigger gated on ``requires_void=True``
   (the engine's stand-in for the EoE intervening-if condition);
@@ -72,6 +81,7 @@ from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     CreateToken,
     CreateTokenAndAttachSelf,
+    ManifestDreadThenAttachSelf,
     PhaseOutEquippedCreature,
 )
 from mtg_bot.effects.predicates import Controlled, Event, IsHost, IsSelf, YOU
@@ -162,6 +172,24 @@ _ETB_CREATE_ROBOT_AND_ATTACH_LINE = (
 _ETB_CREATE_GLIMMER_LINE = (
     "When this Equipment enters, create a 1/1 white Glimmer "
     "enchantment creature token."
+)
+
+
+# ETB manifest-dread-then-attach used by the Duskmourn Equipment family
+# (Conductive Machete, Killer's Mask, Cursed Windbreaker, Dissection
+# Tools). "That creature" in the printed line refers back to the just-
+# manifested face-down 2/2 — same back-reference shape as the Slimy
+# Aquarium / Weight Room "manifest dread, then put a +1/+1 counter on
+# that creature" door triggers, which is why the engine class
+# ``ManifestDreadThenAttachSelf`` parallels
+# ``ManifestDreadThenPutPlusOneCountersOnIt``. Matched as a literal so
+# the bespoke combined effect survives end-to-end without parser
+# guesswork. The Auxiliary Boosters / Glimmerlight literals above are
+# the precedent for keeping per-token ETB families as sibling literal
+# entries rather than expanding into a parameterized regex.
+_ETB_MANIFEST_DREAD_AND_ATTACH_LINE = (
+    "When this Equipment enters, manifest dread, then attach this "
+    "Equipment to that creature."
 )
 
 
@@ -393,6 +421,19 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                         token_printing=TOKEN_PRINTINGS["Glimmer"],
                         count=1,
                     ),
+                )
+            )
+            continue
+        # ETB manifest-dread-then-attach — DSK Equipment family
+        # (Conductive Machete, Killer's Mask, Cursed Windbreaker,
+        # Dissection Tools). One literal line; the bespoke
+        # ``ManifestDreadThenAttachSelf`` engine class folds the
+        # manifest and the auto-attach into one resolve step.
+        if line == _ETB_MANIFEST_DREAD_AND_ATTACH_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ManifestDreadThenAttachSelf(),
                 )
             )
             continue

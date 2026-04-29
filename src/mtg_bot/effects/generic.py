@@ -2899,6 +2899,65 @@ class ManifestDreadThenPutPlusOneCountersOnIt(Effect):
 
 
 @dataclass(frozen=True)
+class ManifestDreadThenAttachSelf(Effect):
+    """Manifest dread, then attach the source Equipment to that creature.
+
+    Matches the Duskmourn Equipment ETB family — Conductive Machete,
+    Killer's Mask, Cursed Windbreaker, Dissection Tools — whose oracle
+    text reads ``"When this Equipment enters, manifest dread, then
+    attach this Equipment to that creature."``. "That creature" refers
+    to the just-manifested face-down 2/2 (the same back-reference
+    ``ManifestDreadThenPutPlusOneCountersOnIt`` resolves), so the
+    Equipment auto-attaches without a printed-target choice — no
+    ``requires_target`` machinery needed.
+
+    Implementation parallels ``ManifestDreadThenPutPlusOneCountersOnIt``:
+    snapshot the battlefield ids before manifesting, run
+    ``ManifestDread(count=1)``, then identify the new face-down
+    permanent by id-set difference. With fewer than two cards left in
+    the library, ``ManifestDread`` may manifest one or zero cards —
+    the attach step then either lands on the lone manifested face-down
+    (one new id) or no-ops (no new id, Equipment stays unattached).
+    No-ops if the source isn't an Equipment (defensive — only Equipment
+    builds wire this engine class today).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        if "Equipment" not in source.printing.subtypes:
+            return
+        pre_ids = {o.id for o in state.battlefield}
+        ManifestDread(count=1).resolve(state, controller_id, ())
+        new_ids = [o.id for o in state.battlefield if o.id not in pre_ids]
+        if not new_ids:
+            return
+        # Manifest dread enters exactly one face-down creature when it
+        # successfully resolves; pick that single new id as the attach
+        # target.
+        manifested_id = new_ids[-1]
+        manifested = next(
+            (o for o in state.battlefield if o.id == manifested_id), None,
+        )
+        if manifested is None:
+            return
+        source.attached_to = manifested.id
+        state.log.append(
+            f"{source.printing.name} is attached to "
+            f"{manifested.printing.name or 'manifested face-down creature'}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "manifest dread, then attach this Equipment to that creature"
+        )
+
+
+@dataclass(frozen=True)
 class Surveil(Effect):
     """Surveil N: look at the top N cards of your library; for each one, you
     may put it into your graveyard. The rest stay on top in their original
