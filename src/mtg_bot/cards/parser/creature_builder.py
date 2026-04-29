@@ -62,6 +62,7 @@ from mtg_bot.cards.base import (
     FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     GainLife,
+    HouseCartographerSurvivalEffect,
     IfGainedLifeThisTurnUntapSelf,
     KavaronHarrierAttackEffect,
     LookAtTopNRevealOrCounter,
@@ -128,6 +129,7 @@ from mtg_bot.effects.predicates import (
     IsLand,
     IsPlayer,
     IsSelf,
+    IsTapped,
     SpellsCastThisTurn,
 )
 
@@ -747,6 +749,31 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=FanaticOfTheHarrowingETBEffect(),
+                ),
+            ),
+        ),
+        # House Cartographer {1}{G} 2/2 Human Scout Survivor (DSK).
+        # Survival trigger: "Survival — At the beginning of your second
+        # main phase, if this creature is tapped, reveal cards from the
+        # top of your library until you reveal a land card. Put that
+        # card into your hand and the rest on the bottom of your
+        # library in a random order."
+        # The Survival ability-word strips through the parser's
+        # ``Survival —`` recognizer; the predicate then anchors on
+        # ``BEGINNING_OF_POSTCOMBAT_MAIN`` with the controller-gate
+        # ``Controlled(YOU)`` and the intervening-if gate
+        # ``IsSelf() & IsTapped()``. The body is a bespoke library
+        # walk because the reveal-until-land mechanic isn't in the
+        # generic effect grammar today; the bespoke effect class
+        # handles the walk + random-order bottom placement.
+        "House Cartographer": make_creature(
+            "House Cartographer", "{1}{G}", 2, 2,
+            subtypes=("Human", "Scout", "Survivor"),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_POSTCOMBAT_MAIN,
+                    predicate=Controlled(YOU) & IsSelf() & IsTapped(),
+                    effect=HouseCartographerSurvivalEffect(),
                 ),
             ),
         ),

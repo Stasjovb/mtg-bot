@@ -154,6 +154,7 @@ from mtg_bot.effects import (
     AttackInTheBoxAttackEffect,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
+    HouseCartographerSurvivalEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
     AttachToTargetCreatureYouControl,

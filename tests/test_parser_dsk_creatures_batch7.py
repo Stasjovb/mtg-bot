@@ -339,3 +339,120 @@ def test_parse_deal_damage_equal_source_power_phrase():
         "it deals damage equal to its power to any target"
     )
     assert parsed == DealDamageEqualToSourcePowerAnyTarget()
+
+
+# ---------- House Cartographer ----------
+
+
+def test_house_cartographer_claimed_by_parser():
+    # House Cartographer ``{1}{G}`` 2/2 Human Scout Survivor. Single
+    # oracle line: ``Survival — At the beginning of your second main
+    # phase, if this creature is tapped, reveal cards from the top of
+    # your library until you reveal a land card. Put that card into
+    # your hand and the rest on the bottom of your library in a
+    # random order.`` Claims via the new
+    # ``HouseCartographerSurvivalEffect`` bespoke trigger.
+    assert "House Cartographer" in _claimed_names()
+
+
+def test_house_cartographer_carries_survival_trigger():
+    # Belt-and-suspenders: the claimed printing must wire the
+    # ``HouseCartographerSurvivalEffect`` on a
+    # ``BEGINNING_OF_POSTCOMBAT_MAIN`` trigger with the standard
+    # Survival predicate (controller-gate AND IsSelf AND IsTapped).
+    from mtg_bot.effects import HouseCartographerSurvivalEffect
+    from mtg_bot.effects.predicates import Event
+    src = OracleParserCardSource()
+    hc = src.get_printings()["House Cartographer"]
+    assert hc.is_creature
+    assert hc.power == 2
+    assert hc.toughness == 2
+    assert len(hc.triggered_abilities) == 1
+    trig = hc.triggered_abilities[0]
+    assert trig.event == Event.BEGINNING_OF_POSTCOMBAT_MAIN
+    assert trig.effect == HouseCartographerSurvivalEffect()
+
+
+def test_house_cartographer_reveals_first_land_to_hand():
+    # Library top-down: [Bear (non-land), Plains (LAND), Bear].
+    # The library walk pops the Bear (not land), keeps it for "the
+    # rest", then pops the Plains (land), stops. Plains goes to hand;
+    # the Bear (and any further non-lands not popped) go to the bottom
+    # in random order.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
+    from mtg_bot.effects import HouseCartographerSurvivalEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    p = state.players[0]
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    p.library.append(bear)
+    plains = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    p.library.append(plains)
+    bear2 = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+    )
+    p.library.append(bear2)
+    eff = HouseCartographerSurvivalEffect()
+    eff.resolve(state, controller_id=0)
+    # The Plains landed in hand.
+    assert plains in p.hand
+    # The first Bear went back to the library bottom; Bear2 stayed in
+    # the library at its original position (not popped).
+    assert bear in p.library
+    assert bear2 in p.library
+
+
+def test_house_cartographer_no_land_in_library_no_hand_change():
+    # When the library has no land cards at all, every revealed card
+    # is non-land. They all go to the bottom in random order; the
+    # hand stays empty.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import HouseCartographerSurvivalEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    p = state.players[0]
+    for _ in range(3):
+        c = state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+        p.library.append(c)
+    eff = HouseCartographerSurvivalEffect()
+    eff.resolve(state, controller_id=0)
+    assert len(p.hand) == 0
+    assert len(p.library) == 3
+
+
+def test_house_cartographer_empty_library_no_op():
+    # An empty library walks zero iterations and silently no-ops.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.effects import HouseCartographerSurvivalEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    p = state.players[0]
+    assert not p.library
+    eff = HouseCartographerSurvivalEffect()
+    eff.resolve(state, controller_id=0)
+    assert len(p.hand) == 0
+    assert len(p.library) == 0
+
+
+def test_house_cartographer_describe():
+    from mtg_bot.effects import HouseCartographerSurvivalEffect
+    eff = HouseCartographerSurvivalEffect()
+    assert eff.describe() == (
+        "reveal cards from the top of your library until you reveal "
+        "a land card; put that card into your hand and the rest on "
+        "the bottom of your library in a random order"
+    )

@@ -3560,6 +3560,77 @@ class HauntedScreenActivatedEffect(Effect):
 
 
 @dataclass(frozen=True)
+class HouseCartographerSurvivalEffect(Effect):
+    """House Cartographer's Survival body: "Reveal cards from the top of
+    your library until you reveal a land card. Put that card into your
+    hand and the rest on the bottom of your library in a random order."
+
+    The reveal-until-land mechanic is a one-shot library walk:
+    1. Pop cards from the top of the controller's library until either
+       the library is empty OR a land card is revealed.
+    2. The revealed land card (if any) goes to the controller's hand.
+    3. All other revealed cards (the non-land "rest") go to the bottom
+       of the library in a random order — implemented by shuffling the
+       collected non-lands and appending them.
+
+    If the library has no land cards at all, every revealed card is
+    non-land; they all go to the bottom in random order and the library
+    ends up shuffled. Matches CR 701.18a (search-and-reveal effects
+    with "in a random order" tail).
+
+    The shuffling uses ``state.rng`` so the choice is reproducible
+    under a fixed-seed simulation (mirrors how every other random-order
+    primitive in the codebase folds in).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        revealed: list = []
+        land_card = None
+        while p.library:
+            top = p.library.pop(0)
+            if top.printing.is_land:
+                land_card = top
+                break
+            revealed.append(top)
+        if land_card is not None:
+            land_card.zone = Zone.HAND
+            p.hand.append(land_card)
+            state.log.append(
+                f"P{controller_id} reveals {land_card.printing.name} "
+                f"and puts it into hand (House Cartographer)"
+            )
+        else:
+            state.log.append(
+                f"P{controller_id} found no land in their library "
+                f"(House Cartographer)"
+            )
+        # Non-lands go to the bottom of the library in a random order.
+        state.rng.shuffle(revealed)
+        for card in revealed:
+            card.zone = Zone.LIBRARY
+            p.library.append(card)
+        if revealed:
+            state.log.append(
+                f"P{controller_id} puts {len(revealed)} non-land card(s) "
+                f"on the bottom of their library in a random order"
+            )
+
+    def describe(self) -> str:
+        return (
+            "reveal cards from the top of your library until you reveal "
+            "a land card; put that card into your hand and the rest on "
+            "the bottom of your library in a random order"
+        )
+
+
+
+@dataclass(frozen=True)
 class BoilerbilgesRipperETBEffect(Effect):
     """Boilerbilges Ripper's ETB: "You may sacrifice another creature or
     enchantment. When you do, this creature deals 2 damage to any
