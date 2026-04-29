@@ -84,7 +84,6 @@ from mtg_bot.cards.base import (
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     SearchLibraryForCard,
     SearchLibraryForGreenCreatureWithMVAtMostX,
-    SeedshipImpactEffect,
     Sequence,
     Surveil,
     SystemsOverrideEffect,
@@ -578,13 +577,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Destroy target nonland permanent. "
         "Its controller creates a Lander token."
     ): DestroyTargetNonlandPermanentWithLanderForController(),
-    # Seedship Impact: destroy artifact-or-enchantment + small-mv
-    # Lander rider. The bespoke engine class gates the Lander on
-    # the destroyed permanent's mana value (≤ 2).
-    (
-        "Destroy target artifact or enchantment. "
-        "If its mana value was 2 or less, create a Lander token."
-    ): SeedshipImpactEffect(),
     # Scout for Survivors: return up to three small creature cards
     # from graveyard to battlefield, each with a +1/+1 counter.
     (

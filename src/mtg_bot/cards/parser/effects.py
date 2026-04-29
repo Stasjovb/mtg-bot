@@ -106,6 +106,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
+    SeedshipImpactEffect,
     SelfMill,
     Sequence,
     SingularityRuptureEffect,
@@ -979,6 +980,35 @@ _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
 # one excludes creatures, this one excludes lands.
 _DESTROY_TARGET_NONLAND_PERMANENT = re.compile(
     r"^destroy target nonland permanent$"
+)
+# "Destroy target artifact or enchantment. If its mana value was 2 or
+# less, create a Lander token." — Seedship Impact `{1}{G}` Instant: a
+# bare destroy on an artifact-or-enchantment target with a small-mana-
+# value Lander rider. Two-sentence shape: the leading sentence is the
+# bare destroy; the trailing ``If its mana value was 2 or less, create
+# a Lander token.`` clause is an anaphoric rider that doesn't parse as
+# a standalone effect (the ``its`` back-references the destroyed
+# permanent's mana value, with no per-clause primitive recognizing the
+# back-reference). The recognizer matches the unsplit two-sentence
+# body verbatim — ``_parse_spell_oracle_text`` tries the unsplit
+# clause first via ``_parse_spell_effect_phrase`` before falling
+# through to the per-sentence splitter, so this regex claims Seedship
+# Impact before the splitter can carve the rider into an unparseable
+# piece.
+#
+# Currently only Seedship Impact in the EoE pool fits this shape, so
+# the recognizer is a parameterless literal — broader generalization
+# (e.g. parameterizing the mana-value threshold or the destroy-target
+# type list) is deferred until a second card with a similar two-
+# sentence destroy-with-Lander-on-small-mv-rider shape exists. Sibling
+# to the destroy-target neighbors above; lives in the per-clause
+# grammar (rather than the whole-spell exact-text tier) per the
+# parser's generic-templates-over-literals guidance — a neighboring
+# recognizer is the natural landing site for the next card with this
+# shape rather than expanding the whole-spell tier.
+_SEEDSHIP_IMPACT = re.compile(
+    r"^destroy target artifact or enchantment\. "
+    r"If its mana value was 2 or less, create a Lander token$"
 )
 # "Add {<color>}." — single coin of a single color. Mana ability surface
 # form. The captured letter is one of WUBRG (no colorless single-coin
@@ -2819,6 +2849,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``DestroyTargetNonlandPermanent`` whose ``legal_targets``
         # filters the battlefield to permanents that aren't lands.
         return DestroyTargetNonlandPermanent()
+    # ``destroy target artifact or enchantment. If its mana value was 2
+    # or less, create a Lander token`` — Seedship Impact's full two-
+    # sentence body. Compound parsing fails on this phrase because the
+    # rider's anaphoric ``If its mana value was 2 or less`` back-
+    # references the destroyed permanent's mana value with no per-
+    # clause primitive recognizing the back-reference, so
+    # ``_parse_compound_effect`` returns None and dispatch reaches this
+    # multi-sentence literal-line recognizer. Maps to the parameterless
+    # ``SeedshipImpactEffect`` engine class whose resolve step destroys
+    # the artifact-or-enchantment target and gates Lander creation on
+    # the destroyed permanent's printed mana value (≤ 2). See the
+    # regex's docstring for the deferred-generalization plan when a
+    # second card with this shape ships.
+    if _SEEDSHIP_IMPACT.match(phrase) is not None:
+        return SeedshipImpactEffect()
     if _DESTROY_TARGET_ARTIFACT_OR_TAPPED_CREATURE.match(phrase) is not None:
         # ``destroy target artifact or tapped creature`` — Radiant
         # Strike's destroy clause. The engine class's

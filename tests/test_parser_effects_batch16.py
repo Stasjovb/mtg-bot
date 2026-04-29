@@ -420,7 +420,10 @@ def test_orbital_plunge_claimed_by_parser():
 
 def test_seedship_impact_claimed_by_parser():
     # Seedship Impact ``{1}{G}`` Instant — destroy artifact-or-
-    # enchantment + small-mv Lander rider.
+    # enchantment + small-mv Lander rider. Migrated from the whole-
+    # spell exact-text tier to the per-clause grammar (effects.py's
+    # ``_SEEDSHIP_IMPACT``); claim is end-to-end via the active
+    # source's printing.
     assert "Seedship Impact" in _claimed_names()
 
 
@@ -498,11 +501,21 @@ def test_dispatch_orbital_plunge_returns_engine_class():
 
 
 def test_dispatch_seedship_impact_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+    # Seedship Impact migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's ``_SEEDSHIP_IMPACT``);
+    # whole-spell dispatch now falls through. End-to-end claim
+    # verified via the active source's printing carrying
+    # ``SeedshipImpactEffect()`` (parameterless, only card with this
+    # shape today — see the recognizer's docstring for the deferred-
+    # generalization plan).
+    assert _try_whole_spell_exact_text(
         "Destroy target artifact or enchantment. "
         "If its mana value was 2 or less, create a Lander token."
-    )
-    assert eff == SeedshipImpactEffect()
+    ) is None
+    from mtg_bot.cards.source import get_active_source
+    si = get_active_source().get_printings().get("Seedship Impact")
+    assert si is not None
+    assert si.spell_effect == SeedshipImpactEffect()
 
 
 def test_dispatch_scout_for_survivors_returns_engine_class():
