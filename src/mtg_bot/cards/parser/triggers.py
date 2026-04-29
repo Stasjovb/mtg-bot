@@ -200,6 +200,29 @@ _TRIGGERED_ABILITY_INTERVENING_IF_LINE = re.compile(
 )
 
 
+# Intervening-while shape: ``When/Whenever <condition> while <gate>,
+# <effect>.`` Mechanically equivalent to the middle-clause
+# intervening-if shape (CR 603.4) — the gate sits BETWEEN the trigger
+# condition and the effect, gated on game state at trigger time. The
+# surface uses ``while`` instead of ``, if`` and the gate isn't
+# delimited by a leading ``, `` boundary; the gate captures everything
+# between `` while `` and the trailing ``, ``. Hand That Feeds prints
+# ``Delirium — Whenever this creature attacks while there are four or
+# more card types among cards in your graveyard, it gets +2/+0 and
+# gains menace until end of turn.`` — the ``while`` clause is the
+# canonical Delirium gate phrase, same predicate as the
+# ``_INTERVENING_IF_PHRASES`` middle-clause table reuses.
+#
+# Tried AFTER the standard ``, if <gate>, `` intervening-if regex so a
+# line carrying both shapes (none today) claims via the more-explicit
+# ``, if `` shape first; the ``while`` shape's ``<condition>`` capture
+# is non-greedy and stops at the first `` while `` boundary, keeping
+# the trigger condition's body intact.
+_TRIGGERED_ABILITY_INTERVENING_WHILE_LINE = re.compile(
+    r"^(?:When|Whenever) (.+?) while (.+?), (.+)\.$"
+)
+
+
 # Trailing-if shape: ``When/Whenever <condition>, <effect> if <gate>.``
 # Mechanically equivalent to the middle-clause intervening-if shape
 # above (CR 603.4) — the gate sits AFTER the effect rather than
@@ -914,6 +937,25 @@ def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
     return _INTERVENING_IF_PHRASES.get(phrase.strip())
 
 
+# Intervening-``while`` gate phrases. The DSK Delirium "while X"
+# shape (Hand That Feeds) reuses the same surface text as the
+# middle-clause ``, if X,`` shape, so the phrasebook is identical
+# today — a single registered entry for the four-or-more-card-types
+# threshold. Kept as a separate dict (vs. routing the ``while`` lookup
+# into ``_INTERVENING_IF_PHRASES``) so future ``while``-only or
+# ``if``-only gate phrasings land cleanly on their own table without
+# silently widening the other surface form's grammar.
+_INTERVENING_WHILE_PHRASES: dict[str, Predicate] = {
+    "there are four or more card types among cards in your graveyard": (
+        Delirium()
+    ),
+}
+
+
+def _parse_intervening_while_phrase(phrase: str) -> Predicate | None:
+    return _INTERVENING_WHILE_PHRASES.get(phrase.strip())
+
+
 def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
     """Look up ``phrase`` (a trailing-``if`` gate clause from the
     ``... if <gate>.`` tail) in ``_TRAILING_IF_PHRASES``. Returns the
@@ -1252,6 +1294,36 @@ def _parse_triggered_ability_line(
         # below preserve the same precedence as the no-gate path; if
         # only the legacy string-key table claims the condition phrase
         # we decline rather than silently drop the gate.
+        pred_match = _parse_predicate_trigger_phrase(condition)
+        if pred_match is None:
+            return None
+        event, base_predicate = pred_match
+        return TriggeredAbility(
+            event=event,
+            predicate=base_predicate & gate_pred,
+            effect=effect,
+            once_per_turn=once_per_turn,
+        )
+    # Intervening-``while`` shape: ``When/Whenever <condition> while
+    # <gate>, <effect>.`` Same trigger-time gate semantics as the
+    # middle-clause intervening-if path (CR 603.4) — same predicate
+    # AND-ed onto the same base trigger predicate — but the printed
+    # surface text uses ``while`` instead of ``, if``. Hand That
+    # Feeds is the canonical example. Tried AFTER the ``, if `` regex
+    # so a line carrying both shapes (none today) claims via the
+    # more-explicit form first; an unrecognized while-gate rejects
+    # outright (same don't-silently-drop-the-gate discipline as
+    # the ``, if `` path).
+    iwhile_match = _TRIGGERED_ABILITY_INTERVENING_WHILE_LINE.match(line)
+    if iwhile_match is not None:
+        condition = iwhile_match.group(1)
+        gate_phrase = iwhile_match.group(2)
+        gate_pred = _parse_intervening_while_phrase(gate_phrase)
+        if gate_pred is None:
+            return None
+        effect = _parse_effect_phrase(iwhile_match.group(3))
+        if effect is None:
+            return None
         pred_match = _parse_predicate_trigger_phrase(condition)
         if pred_match is None:
             return None

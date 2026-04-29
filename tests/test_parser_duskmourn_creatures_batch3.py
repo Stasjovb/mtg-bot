@@ -368,3 +368,98 @@ def test_rampaging_soulrager_carries_unlocked_doors_static():
     assert static.power_bonus == 3
     assert static.toughness_bonus == 0
     assert static.requires_unlocked_doors_among_rooms == 2
+
+
+# ---------- intervening-``while`` trigger shape ----------
+
+
+def test_parse_pump_self_with_it_subject_pronoun():
+    # Belt-and-suspenders that the relaxed self-pump regexes accept the
+    # ``it`` source-subject pronoun (``it gets +N/+M ...``) — Hand That
+    # Feeds prints its trigger body with ``it`` rather than the
+    # ``this creature`` form Eerie cards use, and the
+    # ``_normalize_creature_effect_phrase`` normalizer strips ``it ``
+    # leaving the bare ``gets +N/+M`` shape that the regexes now
+    # tolerate via an optional ``(?:this creature )?`` prefix.
+    from mtg_bot.cards.base import PumpSelfUntilEOT
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    parsed = _parse_effect_phrase(
+        "it gets +2/+0 and gains menace until end of turn"
+    )
+    assert parsed == PumpSelfUntilEOT(
+        power_bonus=2, toughness_bonus=0,
+        granted_keywords=frozenset({"menace"}),
+    )
+
+
+def test_parse_pump_self_with_this_creature_subject_unchanged():
+    # Belt-and-suspenders that adding the optional ``(?:this creature
+    # )?`` prefix didn't break the canonical surface — the
+    # ``this creature gets +N/+M`` form Eerie cards use must continue
+    # to claim the same engine class.
+    from mtg_bot.cards.base import PumpSelfUntilEOT
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    parsed = _parse_effect_phrase(
+        "this creature gets +2/+0 and gains lifelink until end of turn"
+    )
+    assert parsed == PumpSelfUntilEOT(
+        power_bonus=2, toughness_bonus=0,
+        granted_keywords=frozenset({"lifelink"}),
+    )
+
+
+def test_parse_intervening_while_trigger_line():
+    # End-to-end through the trigger-line parser. The intervening-
+    # ``while`` shape composes the trigger condition (``this creature
+    # attacks``) with the ``while`` gate predicate (``Delirium``) via
+    # plain ``And``, mirroring the middle-clause intervening-if path.
+    from mtg_bot.cards.base import (
+        PumpSelfUntilEOT,
+        TriggeredAbility,
+    )
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    from mtg_bot.effects.predicates import (
+        Delirium,
+        Event,
+        IsSelf,
+    )
+    line = (
+        "Whenever this creature attacks while there are four or more "
+        "card types among cards in your graveyard, it gets +2/+0 and "
+        "gains menace until end of turn."
+    )
+    parsed = _parse_triggered_ability_line(line)
+    assert parsed == TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf() & Delirium(),
+        effect=PumpSelfUntilEOT(
+            power_bonus=2, toughness_bonus=0,
+            granted_keywords=frozenset({"menace"}),
+        ),
+    )
+
+
+def test_parse_intervening_while_unrecognized_gate_rejects():
+    # An unrecognized ``while`` gate phrase rejects the whole line —
+    # same don't-silently-drop-the-gate discipline as the
+    # ``, if `` middle-clause path. The line shape regex matches
+    # because the ``while`` boundary is present, but the gate phrase
+    # lookup fails so the parser declines.
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    line = (
+        "Whenever this creature attacks while the moon is full, "
+        "it gets +1/+0 until end of turn."
+    )
+    assert _parse_triggered_ability_line(line) is None
+
+
+def test_hand_that_feeds_claimed_by_parser():
+    # Hand That Feeds ``{1}{R}`` 2/2 Mutant. Single oracle line:
+    # ``Delirium — Whenever this creature attacks while there are four
+    # or more card types among cards in your graveyard, it gets +2/+0
+    # and gains menace until end of turn.`` Claims via the existing
+    # ``Delirium —`` ability-word prefix strip + the new
+    # intervening-``while`` line shape feeding the existing
+    # ``Delirium()`` gate predicate, with the body parsing through the
+    # relaxed ``it``-or-``this creature`` self-pump-and-grant grammar.
+    assert "Hand That Feeds" in _claimed_names()

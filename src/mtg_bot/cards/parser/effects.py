@@ -1034,7 +1034,7 @@ _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
 # (which produces ``PutPlusOneCounterOnSelf``) — counters persist past
 # end of turn while the pump bonus clears at cleanup.
 _PUMP_SELF_UEOT = re.compile(
-    r"^this creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
+    r"^(?:this creature )?gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
 # "This creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
 # turn" — source pumps itself AND grants itself one or more evergreen
@@ -1053,7 +1053,7 @@ _PUMP_SELF_UEOT = re.compile(
 # rejects the ``and gains …`` tail anyway, but ordering more-specific
 # before more-general is the convention here).
 _PUMP_AND_GAIN_KEYWORDS_SELF_UEOT = re.compile(
-    r"^this creature gets ([+-]\d+)/([+-]\d+) and gains "
+    r"^(?:this creature )?gets ([+-]\d+)/([+-]\d+) and gains "
     r"(.+) until end of turn$"
 )
 # "This creature gains <kw>[ and <kw2>...] until end of turn" — pure
@@ -1065,7 +1065,7 @@ _PUMP_AND_GAIN_KEYWORDS_SELF_UEOT = re.compile(
 # ``_GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT`` precedent for the
 # targeted variant. Validated via ``_parse_keyword_grant_body``.
 _GAIN_KEYWORDS_SELF_UEOT = re.compile(
-    r"^this creature gains (.+) until end of turn$"
+    r"^(?:this creature )?gains (.+) until end of turn$"
 )
 # "Another target creature you control gains <kw>[ and <kw2>...] until
 # end of turn." — pure keyword-grant variant with no P/T pump,
