@@ -106,7 +106,6 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import (
-    OptionalPutCreatureFromHandOntoBattlefield,
     OptionalSacLandOrLanderForBasicLandRamp,
     Sequence,
 )
@@ -264,19 +263,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
-        # Sledge-Class Seedship: attack trigger optionally put a creature card
-        # from hand onto the battlefield. Station 7+ flying.
-        make_spacecraft(
-            "Sledge-Class Seedship", "{2}{G}", 4, 5,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=OptionalPutCreatureFromHandOntoBattlefield(),
                 ),
             ),
         ),
