@@ -23,8 +23,8 @@ Currently supports three land kinds:
 - **Planet lands** (``Land — Planet`` subtype, EoE) — claimed by the
   parameterized ``_try_build_planet_land`` recognizer that captures
   the produced color and drops Station + tier-gated abilities.
-- **EoE bespoke lands** — Command Bridge (EoE Land with
-  sac-self-unless-tap ETB) claimed by name in ``_BESPOKE_EOE_LANDS``.
+- **Command Bridge** — EoE Land (sac-self-unless-tap ETB +
+  any-color tap) claimed by ``_try_build_command_bridge_land``.
 """
 
 from __future__ import annotations
@@ -628,47 +628,6 @@ _BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
 _BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
 
 
-# ---------------------------------------------------------------------------
-# Bespoke EoE (Edge of Eternities) land dispatch table.
-#
-# EoE-specific non-basic lands that require sac-self-unless-tap ETB
-# triggers or any-color mana abilities that the generic grammar arms
-# don't cover.  Keyed by name; dispatcher in ``_build_land_printing``
-# gates on ``card.get("set") == "eoe"``.
-#
-# Planet lands (``Land — Planet`` subtype) are no longer here — they
-# are claimed by the parameterized ``_try_build_planet_land`` arm.
-#
-# Each entry must exactly match the corresponding ``make_utility_land``
-# call in ``src/mtg_bot/cards/lands.py``.
-# ---------------------------------------------------------------------------
-def _make_bespoke_eoe_lands() -> dict[str, CardPrinting]:
-    return {
-        # Command Bridge: enters tapped, ETB sac-unless-tap-permanent,
-        # {T}: Add one mana of any color.
-        "Command Bridge": make_utility_land(
-            "Command Bridge",
-            enters_tapped=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SacrificeSelfUnlessTapPermanent(),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("any", 1),)),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
-    }
-
-
-_BESPOKE_EOE_LANDS: dict[str, CardPrinting] = _make_bespoke_eoe_lands()
-
-
 # Planet lands (EoE).
 #
 # ``Land — Planet`` cards (no supertypes, single ``Planet`` subtype)
@@ -734,6 +693,80 @@ def _try_build_planet_land(
     return make_planet_land(card["name"], tap_match.group(1))
 
 
+# Command Bridge — EoE plain Land with three-line shape:
+#   1. ``This land enters tapped.``
+#   2. ``When this land enters, sacrifice it unless you tap an
+#      untapped permanent you control.``
+#   3. ``{T}: Add one mana of any color.``
+# Maps to ``make_utility_land(enters_tapped=True,
+# triggered_abilities=(<sac-unless-tap ETB>,),
+# activated_abilities=(<tap-for-any-color mana>,))``. Only Command
+# Bridge in the EoE pool fits this exact shape today; deferred
+# generalization is to fold the recognizer into a parameterized arm
+# whose middle clause and mana-tail capture vary, when a sibling
+# printing of similar shape exists.
+_COMMAND_BRIDGE_ENTERS_TAPPED_LINE = "This land enters tapped."
+_COMMAND_BRIDGE_SAC_UNLESS_TAP_LINE = (
+    "When this land enters, sacrifice it unless you tap an untapped "
+    "permanent you control."
+)
+_COMMAND_BRIDGE_TAP_FOR_ANY_LINE = "{T}: Add one mana of any color."
+
+
+def _try_build_command_bridge_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Command-Bridge-shape ``CardPrinting`` if ``text``
+    matches the strict three-line ``enters tapped`` +
+    ``sacrifice-unless-tap-permanent`` ETB +
+    ``{T}: Add one mana of any color.`` shape on a plain
+    ``Land`` type line, else ``None``.
+
+    Only Command Bridge in the EoE pool fits this shape today
+    (literal-line recognizer per the architectural rule —
+    deferred-generalization noted above the constants). The
+    set-gate matches the previous ``_BESPOKE_EOE_LANDS`` entry's
+    ``card.set == "eoe"`` filter so a hypothetical reprint of the
+    same name from a different set wouldn't accidentally claim.
+    """
+    if card.get("set") != "eoe":
+        return None
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _COMMAND_BRIDGE_ENTERS_TAPPED_LINE:
+        return None
+    if lines[1] != _COMMAND_BRIDGE_SAC_UNLESS_TAP_LINE:
+        return None
+    if lines[2] != _COMMAND_BRIDGE_TAP_FOR_ANY_LINE:
+        return None
+    return make_utility_land(
+        card["name"],
+        enters_tapped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=SacrificeSelfUnlessTapPermanent(),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
 def _build_land_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for a land ``card`` (a Scryfall
     record). Returns ``None`` if the card is not a land or if its shape
@@ -759,18 +792,15 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
         bespoke = _BESPOKE_EOS_LANDS.get(card["name"])
         if bespoke is not None:
             return bespoke
-    # Bespoke EoE lands: Command Bridge. Checked after the EoS table so
-    # reprints with the same name don't get claimed here. Planet lands
-    # used to live in this table; they now claim through the
-    # parameterized ``_try_build_planet_land`` arm below.
-    if card.get("set") == "eoe":
-        bespoke_eoe = _BESPOKE_EOE_LANDS.get(card["name"])
-        if bespoke_eoe is not None:
-            return bespoke_eoe
     # Non-basic land shapes follow.
     planet = _try_build_planet_land(card, text, supertypes, subtypes)
     if planet is not None:
         return planet
+    command_bridge = _try_build_command_bridge_land(
+        card, text, supertypes, subtypes,
+    )
+    if command_bridge is not None:
+        return command_bridge
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:
         return shock
