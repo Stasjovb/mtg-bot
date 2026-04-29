@@ -3254,3 +3254,102 @@ class SawAttacksOptionalSacDrawEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class CommuneWithEvilEffect(Effect):
+    """Commune with Evil ``{2}{B}`` (Duskmourn): "Look at the top four
+    cards of your library. Put one of them into your hand and the rest
+    into your graveyard. You gain 3 life."
+
+    Three-step single-resolve effect:
+
+    1. Look at the top four cards of the controller's library.
+    2. Agent picks one of those cards via ``choose_card_from_library``;
+       it goes to hand. The other three go to the controller's
+       graveyard.
+    3. Controller gains 3 life.
+
+    Mirrors ``LookAtTopTwoSplitHandGraveyard`` (Codecracker Hound's
+    ETB) in shape — examine the top cards, split into hand/graveyard
+    piles via the agent — but generalizes the 2-card split to a
+    4-card hand-vs-graveyard distribution where exactly ONE card goes
+    to hand and the rest to graveyard. A new bespoke class rather
+    than parameterizing the existing one because:
+
+    - the existing class's per-card surveil-vs-hand prompt has the
+      agent decide each card individually (picking ``False`` means
+      "this one to hand"; ``True`` means graveyard), with the
+      asymmetric outcome of "exactly one to hand";
+    - Commune with Evil's printed text reads as a single forced choice
+      ("put one of them into your hand"), best modeled by
+      ``choose_card_from_library`` (a single id-pick prompt) rather
+      than four sequential surveil prompts;
+    - the trailing ``You gain 3 life.`` rider is bundled into the
+      same resolve step rather than a Sequence wrapper because the
+      static side ships the spell as one engine class.
+
+    Library < 4 cards: examines whatever's available (1, 2, or 3
+    cards). With 0 cards left, the spell simply gains 3 life and
+    no-ops the look. The chosen-to-hand card is the agent's pick (or
+    the top card, when no agent is seated for unit tests / when the
+    agent declines / picks an out-of-pool id). The remaining
+    examined cards always go to graveyard regardless of count.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, gain_life, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        examined = p.library[:4]
+        if examined:
+            # Agent picks one card to put into hand; default to the top
+            # card when no agent is seated or the agent declines /
+            # picks an out-of-pool id.
+            chosen_id: int | None = None
+            if p.agent is not None:
+                chosen_id = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in examined],
+                )
+            hand_card = next(
+                (c for c in examined if c.id == chosen_id), None
+            )
+            if hand_card is None:
+                hand_card = examined[0]
+            # Move the chosen card to hand.
+            p.library.remove(hand_card)
+            hand_card.zone = Zone.HAND
+            p.hand.append(hand_card)
+            reveal_to_all(state, hand_card)
+            state.log.append(
+                f"P{controller_id} puts {hand_card.printing.name} into "
+                f"hand (Commune with Evil)"
+            )
+            # Move the rest of the examined cards to graveyard.
+            for c in [c for c in examined if c is not hand_card]:
+                p.library.remove(c)
+                c.zone = Zone.GRAVEYARD
+                p.graveyard.append(c)
+                state.log.append(
+                    f"P{controller_id} puts {c.printing.name} into "
+                    f"graveyard (Commune with Evil)"
+                )
+        # Trailing life-gain rider always fires, even with an empty
+        # library (parallel to GainLife resolving against the same
+        # state path used everywhere else in the codebase).
+        gain_life(state, controller_id, 3)
+        state.log.append(
+            f"P{controller_id} gains 3 life "
+            f"(life: {p.life}; Commune with Evil)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "look at the top four cards of your library; put one of "
+            "them into your hand and the rest into your graveyard; "
+            "you gain 3 life"
+        )
+
+
+

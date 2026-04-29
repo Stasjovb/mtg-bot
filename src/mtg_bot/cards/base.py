@@ -156,6 +156,7 @@ from mtg_bot.effects import (
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,
+    CommuneWithEvilEffect,
     ConsultTheStarChartsEffect,
     CreateTokenPerMulticoloredPermanent,
     DrawCardPerMulticoloredPermanent,

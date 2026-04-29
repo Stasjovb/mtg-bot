@@ -207,6 +207,7 @@ from mtg_bot.effects.bespoke import (
     BiosynthicBurstEffect,
     ChoraleReanimateDefenderGraveCreatureEffect,
     CloseEncounterEffect,
+    CommuneWithEvilEffect,
     ConsultTheStarChartsEffect,
     CoordinatedClobberingEffect,
     CutPropulsionEffect,

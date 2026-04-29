@@ -62,6 +62,14 @@ Cards claimed in this batch:
   composition would silently no-op the bounce at every cast (same
   parser-is-right precedent as Under the Skin: drop the optional
   secondary rider, keep the manifest base).
+
+* **Commune with Evil** ``{2}{B}`` Sorcery — claimed via a new
+  bespoke ``CommuneWithEvilEffect`` engine class that folds the
+  three-step single-resolve effect (look at top 4, put one into
+  hand, rest into graveyard, gain 3 life) into a single resolve.
+  Mirrors ``LookAtTopTwoSplitHandGraveyard`` in shape but generalizes
+  the 2-card surveil-style split to a 4-card single-pick split with
+  a trailing 3-life-gain rider.
 """
 
 from __future__ import annotations
@@ -293,3 +301,214 @@ def test_unnerving_grasp_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Unnerving Grasp"]
     assert p.mana_cost_str == "{2}{U}"
+
+
+# ---------- CommuneWithEvilEffect engine class ----------
+
+def test_commune_with_evil_effect_exists():
+    # New bespoke engine class wired in ``mtg_bot.effects.bespoke``
+    # next to ``ConsultTheStarChartsEffect``. Imports cleanly and is
+    # exposed via ``mtg_bot.effects``.
+    from mtg_bot.effects import CommuneWithEvilEffect
+
+    eff = CommuneWithEvilEffect()
+    # Untargeted spell — controller-only effect with no target picker.
+    assert eff.requires_target() is False
+
+
+def test_commune_with_evil_describe():
+    from mtg_bot.effects import CommuneWithEvilEffect
+
+    desc = CommuneWithEvilEffect().describe()
+    assert "top four" in desc
+    assert "hand" in desc
+    assert "graveyard" in desc
+    assert "3 life" in desc
+
+
+def test_commune_with_evil_resolves_split_and_life_gain():
+    # End-to-end: 4-card library, agent picks card-3 to hand; cards 0,
+    # 1, 2 go to graveyard; controller gains 3 life.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CommuneWithEvilEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    state = GameState(
+        players=[
+            Player(id=0, life=20),
+            Player(id=1, life=20),
+        ],
+    )
+    # Stock 4 cards in P0's library.
+    cards = []
+    for i in range(4):
+        c = GameObject(
+            id=100 + i, printing=bear_pr, owner_id=0, controller_id=0,
+            zone=Zone.LIBRARY,
+        )
+        state.players[0].library.append(c)
+        cards.append(c)
+
+    # Stub agent that always picks the third examined card (id 102).
+    class PickThird:
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return 102
+
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    state.players[0].agent = PickThird()
+    CommuneWithEvilEffect().resolve(state, controller_id=0)
+    # Card 102 went to hand; the other three to graveyard.
+    assert cards[2] in state.players[0].hand
+    assert cards[0] in state.players[0].graveyard
+    assert cards[1] in state.players[0].graveyard
+    assert cards[3] in state.players[0].graveyard
+    # Library now empty (we examined all four).
+    assert state.players[0].library == []
+    # Controller gained 3 life (20 → 23).
+    assert state.players[0].life == 23
+
+
+def test_commune_with_evil_no_agent_default_picks_top():
+    # Without an agent seated, the controller's pick defaults to the
+    # top card (matches the existing LookAtTopTwoSplitHandGraveyard
+    # convention for unit-test paths). The other three examined cards
+    # go to graveyard.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CommuneWithEvilEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    state = GameState(
+        players=[
+            Player(id=0, life=20),
+            Player(id=1, life=20),
+        ],
+    )
+    cards = []
+    for i in range(4):
+        c = GameObject(
+            id=200 + i, printing=bear_pr, owner_id=0, controller_id=0,
+            zone=Zone.LIBRARY,
+        )
+        state.players[0].library.append(c)
+        cards.append(c)
+    state.players[0].agent = None
+    CommuneWithEvilEffect().resolve(state, controller_id=0)
+    # Top card (cards[0]) went to hand; the other three to graveyard.
+    assert cards[0] in state.players[0].hand
+    assert cards[1] in state.players[0].graveyard
+    assert cards[2] in state.players[0].graveyard
+    assert cards[3] in state.players[0].graveyard
+    assert state.players[0].life == 23
+
+
+def test_commune_with_evil_short_library_uses_what_is_available():
+    # Library has only 2 cards — the spell examines both; one to hand,
+    # one to graveyard. Life gain still fires.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CommuneWithEvilEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    state = GameState(
+        players=[
+            Player(id=0, life=20),
+            Player(id=1, life=20),
+        ],
+    )
+    cards = []
+    for i in range(2):
+        c = GameObject(
+            id=300 + i, printing=bear_pr, owner_id=0, controller_id=0,
+            zone=Zone.LIBRARY,
+        )
+        state.players[0].library.append(c)
+        cards.append(c)
+    state.players[0].agent = None
+    CommuneWithEvilEffect().resolve(state, controller_id=0)
+    assert cards[0] in state.players[0].hand
+    assert cards[1] in state.players[0].graveyard
+    assert state.players[0].library == []
+    assert state.players[0].life == 23
+
+
+def test_commune_with_evil_empty_library_only_gains_life():
+    # Library has 0 cards — the spell skips the look entirely (no
+    # cards to examine) and fires the life-gain rider regardless.
+    from mtg_bot.effects import CommuneWithEvilEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(
+        players=[Player(id=0, life=20), Player(id=1, life=20)],
+    )
+    CommuneWithEvilEffect().resolve(state, controller_id=0)
+    assert state.players[0].life == 23
+
+
+def test_commune_with_evil_agent_invalid_pick_falls_back_to_top():
+    # If the agent picks an id not in the examined pool, the spell
+    # falls back to the top card going to hand (defensive: matches
+    # the existing LookAtTopTwoSplitHandGraveyard's default-on-invalid
+    # convention, prevents agent bugs from desynchronizing the
+    # resolve).
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CommuneWithEvilEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    state = GameState(
+        players=[Player(id=0, life=20), Player(id=1, life=20)],
+    )
+    cards = []
+    for i in range(4):
+        c = GameObject(
+            id=400 + i, printing=bear_pr, owner_id=0, controller_id=0,
+            zone=Zone.LIBRARY,
+        )
+        state.players[0].library.append(c)
+        cards.append(c)
+
+    class BogusPick:
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return 99999  # not in the pool
+
+    state.players[0].agent = BogusPick()
+    CommuneWithEvilEffect().resolve(state, controller_id=0)
+    assert cards[0] in state.players[0].hand
+    assert cards[1] in state.players[0].graveyard
+    assert cards[2] in state.players[0].graveyard
+    assert cards[3] in state.players[0].graveyard
+
+
+# ---------- Commune with Evil parser claim ----------
+
+def test_commune_with_evil_claimed_by_parser():
+    # Commune with Evil ``{2}{B}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry mapping to the new
+    # ``CommuneWithEvilEffect`` engine class.
+    assert "Commune with Evil" in _claimed_names()
+
+
+def test_commune_with_evil_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the ``CommuneWithEvilEffect`` engine class.
+    from mtg_bot.effects import CommuneWithEvilEffect
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Commune with Evil"]
+    assert p.spell_effect == CommuneWithEvilEffect()
+
+
+def test_commune_with_evil_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Commune with Evil"]
+    assert "Sorcery" in p.card_types
+
+
+def test_commune_with_evil_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Commune with Evil"]
+    assert p.mana_cost_str == "{2}{B}"
