@@ -86,6 +86,7 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     PutPlusOneCounterOnOpponentsCreature,
     PutLoyaltyCounterOnSelf,
     PutPlusOneCounterOnSelf,
@@ -1560,6 +1561,27 @@ _PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER = re.compile(
 _PUT_PLUS_ONE_COUNTER_ON_EACH_CREATURE_YOU_CONTROL = re.compile(
     r"^put a \+1/\+1 counter on each creature you control$"
 )
+# "Put X +1/+1 counters on each creature you control, where X is this
+# creature's power" — Ouroboroid's beginning-of-combat trigger body.
+# Mass per-controller-creature counter spread scaled by the source's
+# current power; the X-source phrase ``where X is this creature's
+# power`` reads ``state.resolving_source.power`` at resolve time
+# (matching the engine class
+# ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower``).
+# Literal-line recognizer with no captures — only Ouroboroid in the
+# pool prints this exact shape today; broader grammar deferred until
+# a second example exists. A future printing whose X-source phrase
+# differs (e.g. ``where X is the number of artifacts you control``)
+# would land its own primitive rather than parameterizing this one,
+# matching the precedent already documented for
+# ``_PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER`` (where X is
+# this creature's power).
+_PUT_X_PLUS_ONE_COUNTERS_ON_EACH_CREATURE_YOU_CONTROL_WHERE_X_IS_SOURCE_POWER = (
+    re.compile(
+        r"^put X \+1/\+1 counters on each creature you control, "
+        r"where X is this creature's power$"
+    )
+)
 # "Put a +1/+1 counter on each creature you control other than this
 # creature" — Dawnstrike Vanguard's tapped-creatures-gated end-step
 # trigger body. Mass +1/+1-counter spread on each creature the
@@ -2202,6 +2224,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnEachCreatureYouControl(
             amount=1, exclude_source=True,
         )
+    # ``put X +1/+1 counters on each creature you control, where X is
+    # this creature's power`` — Ouroboroid's beginning-of-combat
+    # trigger body. Tried BEFORE the bare
+    # ``_PUT_PLUS_ONE_COUNTER_ON_EACH_CREATURE_YOU_CONTROL`` regex —
+    # the bare regex's ``$`` anchor would never match the X-form tail
+    # anyway, but ordering more-specific before more-general is the
+    # convention here. Maps to
+    # ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()``
+    # with no parameters — every aspect of the effect (X-source from
+    # ``state.resolving_source.power``, per-creature spread on every
+    # creature the controller controls) is encoded by the engine
+    # class.
+    if (
+        _PUT_X_PLUS_ONE_COUNTERS_ON_EACH_CREATURE_YOU_CONTROL_WHERE_X_IS_SOURCE_POWER
+    ).match(phrase) is not None:
+        return PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
     # ``put a +1/+1 counter on each creature you control`` —
     # Atmospheric Greenhouse's ETB trigger body. Mass +1/+1-counter
     # spread on every creature the controller controls. Tried AFTER

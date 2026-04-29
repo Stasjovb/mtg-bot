@@ -77,7 +77,6 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnCreatureYouControl,
     PutPlusOneCounterOnEachCreatureYouControl,
     PutPlusOneCounterOnSelf,
-    PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     PutPoisonCountersOnTargetPlayer,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
@@ -525,20 +524,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=FamishedWorldsireETBEffect(),
-                ),
-            ),
-        ),
-        # Ouroboroid {2}{G}{G} 1/3 Plant Wurm.
-        # At the beginning of combat on your turn, put X +1/+1 counters
-        # on each creature you control where X is this creature's power.
-        "Ouroboroid": make_creature(
-            "Ouroboroid", "{2}{G}{G}", 1, 3,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_COMBAT, predicate=Controlled(YOU),
-                    effect=(
-                        PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
-                    ),
                 ),
             ),
         ),
