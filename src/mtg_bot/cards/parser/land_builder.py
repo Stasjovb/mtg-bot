@@ -459,26 +459,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Lotus Field: Hexproof. Enters tapped. ETB sac 2 lands.
-        # {T}: Add three mana of any one color.
-        "Lotus Field": make_utility_land(
-            "Lotus Field",
-            keywords=frozenset({"hexproof"}),
-            enters_tapped=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SacrificeNLandsYouControl(count=2),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddNManaOfChosenColor(amount=3),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
         # Mirrorpool: Legendary, enters tapped. {T}: Add {C}.
         # {2}{C},{T},Sac self: copy target instant/sorcery you control.
         # {4}{C},{T},Sac self: create token copy of target creature you control.
@@ -814,6 +794,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if pain_dual is not None:
         return pain_dual
+    lotus_field = _try_build_keyword_etb_sac_chosen_color_land(
+        card, text, supertypes, subtypes,
+    )
+    if lotus_field is not None:
+        return lotus_field
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1289,7 +1274,9 @@ _PAID_FANCY_MANA_BODIES: dict[str, "callable"] = {
 }
 
 
-_LAND_KEYWORD_WHITELIST = frozenset({"indestructible", "exalted"})
+_LAND_KEYWORD_WHITELIST = frozenset(
+    {"indestructible", "exalted", "hexproof"},
+)
 
 
 def _try_build_paid_fancy_mana_land(
@@ -2282,6 +2269,116 @@ def _try_build_chosen_color_cave_land(
                     produces=(("any", 2),),
                     spend_restriction="land_activation",
                 ),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Lotus-Field-shape: keyword + tapped + ETB-sac-N-lands trigger +
+# tap-for-N-any-color mana ability. Plain ``Land`` (no supertypes,
+# no subtypes), exactly four lines:
+#   1. <single-keyword-line>      (on ``_LAND_KEYWORD_WHITELIST``,
+#      with reminder text stripped)
+#   2. ``This land enters tapped.``
+#   3. ``When this land enters, sacrifice <N> lands.`` (ETB trigger
+#      that sacrifices a fixed number of other lands the controller
+#      controls; ``SacrificeNLandsYouControl(count=<N>)`` carries the
+#      semantics — the sac excludes the entering land per the
+#      static side, matching the printed "two lands" reading)
+#   4. ``{T}: Add <K> mana of any one color.``  (chosen-color tap;
+#      ``AddNManaOfChosenColor(amount=<K>)`` produces the K-coin)
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring "explicitly notes why it isn't generalized today
+# (typically: 'only card in the pool with this shape; broader grammar
+# deferred until a second example exists')." Lotus Field is the only
+# EoS land matching this four-line keyword + ETB-sac + chosen-color
+# shape; broader grammar (parameterized over the keyword set, the sac
+# count, or the produced-mana count) deferred until a sibling printing
+# of similar shape exists. The ``<N>`` sac count and ``<K>`` mana
+# count are captured so the recognizer is faithful to the printed
+# surface even though only the (2, 3) pairing exists today.
+_LOTUS_FIELD_TAPPED_LINE = "This land enters tapped."
+_LOTUS_FIELD_SAC_LANDS_RE = re.compile(
+    r"^When this land enters, sacrifice "
+    r"(?P<count>two|three|four|five|six) lands\.$"
+)
+_LOTUS_FIELD_TAP_FOR_ANY_COLOR_RE = re.compile(
+    r"^\{T\}: Add (?P<amount>two|three|four|five|six) mana of any one "
+    r"color\.$"
+)
+_NUMBER_WORD_TO_INT: dict[str, int] = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+}
+
+
+def _try_build_keyword_etb_sac_chosen_color_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Lotus-Field-shape ``CardPrinting`` if ``text`` matches
+    the strict four-line keyword + ``This land enters tapped.`` +
+    ``When this land enters, sacrifice <N> lands.`` ETB trigger +
+    ``{T}: Add <K> mana of any one color.`` shape on a plain ``Land``
+    type line, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The keyword line
+    is restricted to a single capitalized word on
+    ``_LAND_KEYWORD_WHITELIST`` (today: ``Hexproof`` for Lotus Field).
+    Reminder text on the keyword line is stripped via
+    ``_strip_reminder_text`` before the keyword lookup. The ``<N>``
+    sac count and ``<K>`` produced-mana count are captured number
+    words; the recognizer is faithful to the printed surface even
+    though only the ``(2, 3)`` pairing exists today.
+
+    Per parser/CLAUDE.md: literal-line recognizers are acceptable only
+    when "exactly one card in the current data pool fits that printed
+    surface" and the docstring explicitly notes deferred generalization.
+    Lotus Field is the only EoS land matching this shape; broader
+    grammar deferred until a second example exists.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 4:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    kw_match = _KEYWORD_LINE_RE.match(lines[0])
+    if kw_match is None:
+        return None
+    kw = kw_match.group(1).lower()
+    if kw not in _LAND_KEYWORD_WHITELIST:
+        return None
+    if lines[1] != _LOTUS_FIELD_TAPPED_LINE:
+        return None
+    sac_match = _LOTUS_FIELD_SAC_LANDS_RE.match(lines[2])
+    if sac_match is None:
+        return None
+    tap_match = _LOTUS_FIELD_TAP_FOR_ANY_COLOR_RE.match(lines[3])
+    if tap_match is None:
+        return None
+    sac_count = _NUMBER_WORD_TO_INT[sac_match.group("count")]
+    mana_amount = _NUMBER_WORD_TO_INT[tap_match.group("amount")]
+    return make_utility_land(
+        card["name"],
+        keywords=frozenset({kw}),
+        enters_tapped=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=SacrificeNLandsYouControl(count=sac_count),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddNManaOfChosenColor(amount=mana_amount),
                 is_mana_ability=True,
             ),
         ),

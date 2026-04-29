@@ -119,10 +119,10 @@ def test_paid_fancy_skips_unknown_keyword_line():
     """Leading-line keyword outside the land-keyword whitelist must
     skip — the parser would otherwise drop the keyword silently."""
     card = {
-        "name": "Hypothetical Hexproof Land",
+        "name": "Hypothetical Lifelink Land",
         "type_line": "Land",
         "oracle_text": (
-            "Hexproof\n"
+            "Lifelink\n"
             "{T}: Add {C}.\n"
             "{5}, {T}: Add {W}{U}{B}{R}{G}."
         ),
