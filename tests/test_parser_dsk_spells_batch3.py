@@ -50,6 +50,15 @@ Cards newly claimed in this batch:
   existing ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
   engine class with the new ``nonland_permanent`` flag, then the
   trailing ``Surveil 1`` rides the existing ``Surveil`` primitive.
+
+* **Bear Trap** ``{1}`` Artifact — Flash + ``{3}, {T}, Sacrifice this
+  artifact: It deals 3 damage to target creature.`` Claimed by
+  widening the ``deals N damage to target creature`` regex with an
+  optional ``it `` prefix, mirroring the ``(?:this creature )?``
+  shape on ``_DEAL_DAMAGE_TARGET_OPPONENT`` / ``_DEAL_N_DAMAGE_EACH_*``.
+  The activated normalizer lowercases the first letter but doesn't
+  strip the source pronoun (unlike the creature-trigger normalizer);
+  the regex prefix accepts the surface form as it lands.
 """
 
 from __future__ import annotations
@@ -430,3 +439,60 @@ def test_vanish_from_sight_engine_class():
         ),
         Surveil(amount=1, use_artifact_count=False),
     ))
+
+
+# ---------- Bear Trap: ``it deals N damage to target creature`` ----------
+
+def test_parse_it_deals_damage_to_target_creature():
+    # New surface form: optional ``it `` prefix on the existing
+    # ``deals N damage to target creature`` regex. Activated abilities
+    # whose body uses ``It`` to refer to the source artifact (Bear
+    # Trap) lowercase to ``it deals 3 damage to target creature`` after
+    # the activated normalizer's first-letter-lowercase pass.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import DealDamageToTargetCreature
+
+    eff = _parse_effect("it deals 3 damage to target creature")
+    assert eff == DealDamageToTargetCreature(amount=3)
+
+
+def test_parse_deals_damage_to_target_creature_bare_form_unchanged():
+    # The bare ``deals N damage to target creature`` (no source-pronoun
+    # prefix) must continue to parse — creature-trigger normalization
+    # strips ``it `` before the regex sees it, and that path still
+    # works after the regex widening.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import DealDamageToTargetCreature
+
+    eff = _parse_effect("deals 3 damage to target creature")
+    assert eff == DealDamageToTargetCreature(amount=3)
+
+
+def test_bear_trap_claimed_by_parser():
+    # Bear Trap ``{1}`` Artifact — Flash + ``{3}, {T}, Sacrifice this
+    # artifact: It deals 3 damage to target creature.`` Claimed via the
+    # widened ``(?:it )?deals N damage to target creature`` regex. The
+    # activated body parses through the unified activated-grammar
+    # dispatch in ``parser.activated``.
+    assert "Bear Trap" in _claimed_names()
+
+
+def test_bear_trap_carries_flash_and_activated_ability():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # both halves of the printed text:
+    # - Flash on the artifact itself (``keywords`` containing ``flash``);
+    # - one activated ability with cost ``{3}, {T}, Sacrifice this
+    #   artifact`` and effect ``DealDamageToTargetCreature(amount=3)``.
+    from mtg_bot.effects.generic import DealDamageToTargetCreature
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Bear Trap"]
+    assert "flash" in p.keywords
+    # Exactly one activated ability — the {3}/T/sac one. The bare-cost
+    # mana ability synthesis only fires for Equipment ``equip_cost``.
+    assert len(p.activated_abilities) == 1
+    ability = p.activated_abilities[0]
+    assert ability.cost.mana_str == "{3}"
+    assert ability.cost.tap_self is True
+    assert ability.cost.sacrifice_self is True
+    assert ability.effect == DealDamageToTargetCreature(amount=3)

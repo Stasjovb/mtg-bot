@@ -135,7 +135,16 @@ _DEAL_DAMAGE_ANY_TARGET = re.compile(
     r"^deals (\d+) damage to any target$"
 )
 _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
-    r"^deals (\d+) damage to target creature$"
+    # Optional ``it `` prefix accepts the activated-ability surface
+    # where the source is referred to by pronoun — Bear Trap's
+    # ``It deals 3 damage to target creature.`` body uses ``It`` for
+    # the source artifact, and the activated normalizer lowercases
+    # the first letter but doesn't strip the pronoun (unlike the
+    # creature-trigger normalizer's ``it ``-strip). Same shape as
+    # the ``(?:this creature )?`` prefix on
+    # ``_DEAL_DAMAGE_TARGET_OPPONENT`` / ``_DEAL_N_DAMAGE_EACH_OPPONENT`` /
+    # ``_DEAL_N_DAMAGE_EACH_CREATURE``.
+    r"^(?:it )?deals (\d+) damage to target creature$"
 )
 # "<source> deals N damage to target creature an opponent controls" —
 # Nova Hellkite's ETB. Maps to ``DealDamageToOpponentCreature(amount=N)``
