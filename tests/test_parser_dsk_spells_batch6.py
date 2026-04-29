@@ -26,6 +26,16 @@ Cards claimed in this batch:
   dropped because no per-clause primitive widens to "any nonland
   permanent card from graveyard to hand with optionality"
   (parser-is-right precedent).
+
+* **Midnight Mayhem** ``{2}{R}{W}`` Sorcery — three Gremlin tokens +
+  a UEOT subtype-filtered keyword grant ("Gremlins you control gain
+  menace, lifelink, and haste until end of turn"). Whole-spell
+  dispatch simplifies to bare
+  ``CreateToken(Gremlin, count=3)``; the subtype-filtered keyword
+  grant is dropped because the existing
+  ``PumpCreaturesYouControlUntilEOT`` widens to ALL your creatures
+  (no subtype filter), and adding one for a single card's rider
+  would over-engineer (parser-is-right precedent: Terminal Velocity).
 """
 
 from __future__ import annotations
@@ -109,3 +119,41 @@ def test_under_the_skin_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Under the Skin"]
     assert p.mana_cost_str == "{2}{G}"
+
+
+# ---------- Midnight Mayhem ----------
+
+def test_midnight_mayhem_claimed_by_parser():
+    # Midnight Mayhem ``{2}{R}{W}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (3 Gremlin tokens + Gremlin-only UEOT pump) to
+    # bare ``CreateToken(Gremlin, count=3)``. The trailing
+    # parenthesized menace reminder text is stripped before dispatch.
+    assert "Midnight Mayhem" in _claimed_names()
+
+
+def test_midnight_mayhem_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``CreateToken(Gremlin, count=3)`` engine class —
+    # base mechanic preserved (3 Gremlin tokens), UEOT keyword grant
+    # rider dropped (parser-is-right precedent).
+    from mtg_bot.cards.base import CreateToken
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Midnight Mayhem"]
+    assert p.spell_effect == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Gremlin"], count=3,
+    )
+
+
+def test_midnight_mayhem_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Midnight Mayhem"]
+    assert "Sorcery" in p.card_types
+
+
+def test_midnight_mayhem_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Midnight Mayhem"]
+    assert p.mana_cost_str == "{2}{R}{W}"

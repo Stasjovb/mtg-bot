@@ -1128,6 +1128,36 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "You may return a permanent card from your graveyard to your "
         "hand."
     ): ManifestDread(count=1),
+    # Midnight Mayhem (Duskmourn) ``{2}{R}{W}`` Sorcery — three-Gremlin
+    # token creation plus a UEOT keyword grant ("Gremlins you control
+    # gain menace, lifelink, and haste until end of turn"). The static
+    # side simplifies to bare ``CreateToken(Gremlin, count=3)``: the
+    # UEOT keyword grant on a creature subtype is dropped because:
+    # (1) the engine has no
+    #     ``PumpCreaturesYouControlOfSubtypeUntilEOT`` primitive — the
+    #     existing ``PumpCreaturesYouControlUntilEOT`` widens to ALL
+    #     your creatures, not a subtype-filtered subset, and adding
+    #     the subtype filter would require a new optional kwarg or a
+    #     sibling class for one card's rider;
+    # (2) the just-created Gremlin tokens with haste are the
+    #     mechanically dominant payload — three 1/1 attackers UEOT
+    #     under any combinator-style Sequence still wouldn't get the
+    #     keywords on the freshly-created tokens unless the pump runs
+    #     against creatures-you-control-with-subtype-Gremlin AT
+    #     resolve time, which the existing
+    #     ``PumpCreaturesYouControlUntilEOT`` doesn't do.
+    # Same parser-is-right precedent as Terminal Velocity / Pull
+    # Through the Weft — claim the bare token-creation payload and
+    # drop the UEOT keyword-grant rider rather than leaving the spell
+    # unclaimed for an unmodeled rider. The trailing parenthesized
+    # menace reminder text is stripped before dispatch.
+    (
+        "Create three 1/1 red Gremlin creature tokens. "
+        "Gremlins you control gain menace, lifelink, and haste until "
+        "end of turn."
+    ): CreateToken(
+        token_printing=TOKEN_PRINTINGS["Gremlin"], count=3,
+    ),
 }
 
 
