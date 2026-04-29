@@ -210,6 +210,7 @@ from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
     AtomicMicrosizerAttackEffect,
+    AttackInTheBoxAttackEffect,
     BiosynthicBurstEffect,
     ChoraleReanimateDefenderGraveCreatureEffect,
     CloseEncounterEffect,

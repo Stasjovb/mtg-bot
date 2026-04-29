@@ -43,6 +43,7 @@ from mtg_bot.cards.base import (
     AnticausalVestigeLeavesEffect,
     ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
+    AttackInTheBoxAttackEffect,
     CardPrinting,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfYouGainedLifeAtLeast,
@@ -930,6 +931,26 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=SplitskinDollETBEffect(),
+                ),
+            ),
+        ),
+        # Attack-in-the-Box {3} 2/4 Toy.
+        # "Whenever this creature attacks, you may have it get +4/+0
+        # until end of turn. If you do, sacrifice it at the beginning
+        # of the next end step."
+        # Bespoke attack trigger: agent.choose_yes_no gates the optional
+        # +4/+0 UEOT pump and the schedule-self-sac delayed trigger.
+        # Decline = silent no-op; accept = pump + delayed-trigger entry
+        # keyed at the current turn (same shape Devastating Onslaught
+        # uses for its haste-token end-step sacrifice).
+        "Attack-in-the-Box": make_creature(
+            "Attack-in-the-Box", "{3}", 2, 4,
+            artifact=True,
+            subtypes=("Toy",),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ATTACKS, predicate=IsSelf(),
+                    effect=AttackInTheBoxAttackEffect(),
                 ),
             ),
         ),

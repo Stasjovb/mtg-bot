@@ -150,6 +150,7 @@ from mtg_bot.effects import (
     AllFatesScrollDrawEffect,
     AlpharaelDreamingAcolyteDiscardEffect,
     ArabellaAttackEffect,
+    AttackInTheBoxAttackEffect,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
     AstelliReclaimerETBEffect,

@@ -338,3 +338,121 @@ def test_arabella_effect_no_op_when_x_is_zero():
     ArabellaAttackEffect().resolve(state, controller_id=0, targets=())
     assert p1.life == 20
     assert p0.life == 10
+
+
+# ---------- Attack-in-the-Box ----------
+
+def test_attack_in_the_box_claimed_by_parser():
+    # Attack-in-the-Box lands via name-keyed bespoke dispatch in
+    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    assert "Attack-in-the-Box" in _claimed_names()
+
+
+def test_attack_in_the_box_carries_attacks_trigger_with_bespoke_effect():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the attack trigger via the bespoke ``AttackInTheBoxAttackEffect``
+    # engine class.
+    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+
+    p = OracleParserCardSource().get_printings()["Attack-in-the-Box"]
+    assert p.power == 2 and p.toughness == 4
+    assert p.is_artifact is True
+    assert "Toy" in p.subtypes
+    attacks = [
+        t for t in p.triggered_abilities if t.event == Event.ATTACKS
+    ]
+    assert len(attacks) == 1
+    assert isinstance(attacks[0].effect, AttackInTheBoxAttackEffect)
+
+
+def test_attack_in_the_box_effect_describe():
+    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+
+    desc = AttackInTheBoxAttackEffect().describe()
+    assert "+4/+0" in desc
+    assert "sacrifice" in desc
+
+
+def test_attack_in_the_box_effect_decline_is_no_op():
+    # When the agent declines, no pump and no scheduled sac.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _AgentDeclines:
+        def choose_yes_no(self, state, pid, prompt):
+            return False
+
+    box_pr = make_creature(
+        "Attack-in-the-Box", "{3}", 2, 4, artifact=True,
+        subtypes=("Toy",),
+    )
+    box = GameObject(
+        id=1, printing=box_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    p0 = Player(id=0, agent=_AgentDeclines())
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[box], resolving_source=box,
+    )
+    AttackInTheBoxAttackEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # No delayed trigger scheduled.
+    assert state.delayed_triggers == []
+
+
+def test_attack_in_the_box_effect_accept_pumps_and_schedules_sac():
+    # When the agent accepts, the source gets +4/+0 UEOT and a delayed
+    # ``SacrificeSourceDelayed`` trigger is scheduled at the current
+    # turn (matches Devastating Onslaught's "next end step" wording).
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+    from mtg_bot.effects.generic import SacrificeSourceDelayed
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone, effective_power,
+    )
+
+    class _AgentAccepts:
+        def choose_yes_no(self, state, pid, prompt):
+            return True
+
+    box_pr = make_creature(
+        "Attack-in-the-Box", "{3}", 2, 4, artifact=True,
+        subtypes=("Toy",),
+    )
+    box = GameObject(
+        id=1, printing=box_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    p0 = Player(id=0, agent=_AgentAccepts())
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[box], resolving_source=box,
+        turn_number=4,
+    )
+    AttackInTheBoxAttackEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # Power went from 2 → 6 (printed 2 + UEOT pump 4).
+    assert effective_power(state, box) == 6
+    # Exactly one delayed trigger scheduled at the current turn,
+    # targeting the source for sacrifice.
+    assert len(state.delayed_triggers) == 1
+    entry = state.delayed_triggers[0]
+    assert entry["fire_at_turn"] == 4
+    assert entry["source_id"] == box.id
+    assert isinstance(entry["effect"], SacrificeSourceDelayed)
+
+
+def test_attack_in_the_box_effect_no_op_without_resolving_source():
+    # Defensive: no resolving_source → silent no-op rather than raising.
+    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    AttackInTheBoxAttackEffect().resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert state.delayed_triggers == []
