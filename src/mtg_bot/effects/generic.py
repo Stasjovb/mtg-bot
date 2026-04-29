@@ -3931,6 +3931,12 @@ class SearchLibraryForCard(Effect):
             return (
                 printing.is_creature and "Legendary" in printing.supertypes
             )
+        # Generic ``basic land card`` (any of the five basics) — Spineseeker
+        # Centipede's ETB tutor. Distinct from the per-color
+        # ``basic_plains`` / ``basic_island`` / ... filters which pin a
+        # single basic by name.
+        if fn == "basic_land":
+            return printing.is_basic_land
         if fn.startswith("basic_"):
             wanted = fn[len("basic_"):].capitalize()
             return printing.is_basic_land and printing.name == wanted

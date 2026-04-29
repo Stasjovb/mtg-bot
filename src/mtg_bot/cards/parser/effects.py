@@ -429,6 +429,21 @@ _SEARCH_LIBRARY_FOR_ARTIFACT_CARD = re.compile(
     r"^search your library for an artifact card, "
     r"reveal it, put it into your hand, then shuffle$"
 )
+# "Search your library for a basic land card, reveal it, put it into
+# your hand, then shuffle." — Spineseeker Centipede's ETB tutor (and
+# any future generic basic-land-to-hand tutor with the same surface).
+# Maps to ``SearchLibraryForCard(filter_name="basic_land", may_fail=
+# True)``. Like the artifact-tutor sibling above, the full surface
+# form (reveal / put-into-hand / shuffle tail) is required — the bare
+# ``search your library for a basic land card`` shape isn't a complete
+# oracle clause for any DSK printing today, and the all-or-nothing
+# tail keeps the regex's claim narrow enough that an unrelated tutor
+# with a different reward (onto-the-battlefield, into-graveyard) won't
+# accidentally match.
+_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
+    r"^search your library for a basic land card, "
+    r"reveal it, put it into your hand, then shuffle$"
+)
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
 #
@@ -1731,6 +1746,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # tutor today; if one ships, gate it on a different surface form.
         return SearchLibraryForCard(
             filter_name="artifact", may_fail=True,
+        )
+    if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD.match(phrase) is not None:
+        # ``may_fail=True`` mirrors the existing artifact-tutor sibling —
+        # the controller may decline the fetch (and shuffle anyway). No
+        # DSK oracle text spells out a non-may basic-land tutor today,
+        # but the engine field defaults the way the mandatory phrasing
+        # would expect, so any future ``... reveal it, put it into your
+        # hand, then shuffle`` printing landing here will keep parity.
+        return SearchLibraryForCard(
+            filter_name="basic_land", may_fail=True,
         )
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
