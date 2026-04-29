@@ -195,6 +195,7 @@ from mtg_bot.effects import (
     SystemsOverrideEffect,
     TerrapactIntimidatorETBEffect,
     VengefulPossessionEffect,
+    WickerfolkThresherAttackEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,

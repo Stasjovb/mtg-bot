@@ -255,5 +255,6 @@ from mtg_bot.effects.bespoke import (
     TractorBeamETBEffect,
     VengefulPossessionEffect,
     WeftwalkingETBEffect,
+    WickerfolkThresherAttackEffect,
     ZeroPointBalladEffect,
 )

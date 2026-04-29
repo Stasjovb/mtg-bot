@@ -84,6 +84,7 @@ from mtg_bot.cards.base import (
     SelfMill,
     Sequence,
     SplitskinDollETBEffect,
+    WickerfolkThresherAttackEffect,
     StaticAbility,
     StaticScope,
     TannukEnsignLandfallEffect,
@@ -116,6 +117,7 @@ from mtg_bot.effects.predicates import (
     YOU,
     Always,
     Controlled,
+    Delirium,
     Event,
     HasSubtype,
     IsArtifact,
@@ -951,6 +953,31 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                 TriggeredAbility(
                     event=Event.ATTACKS, predicate=IsSelf(),
                     effect=AttackInTheBoxAttackEffect(),
+                ),
+            ),
+        ),
+        # Wickerfolk Thresher {3}{G} 5/4 Scarecrow.
+        # "Delirium — Whenever this creature attacks, if there are four
+        # or more card types among cards in your graveyard, look at the
+        # top card of your library. If it's a land card, you may put it
+        # onto the battlefield. If you don't put the card onto the
+        # battlefield, put it into your hand."
+        # The Delirium ability-word prefix carries no rules consequence
+        # (CR 207.2c); the gate is enforced via a ``Delirium()`` predicate
+        # AND-ed onto the base ``IsSelf()`` ATTACKS predicate, matching
+        # the parser's intervening-if discipline (see
+        # ``_INTERVENING_IF_PHRASES`` in triggers.py). The bespoke
+        # ``WickerfolkThresherAttackEffect`` engine class encodes the
+        # peek-and-may-put-on-battlefield-otherwise-hand body.
+        "Wickerfolk Thresher": make_creature(
+            "Wickerfolk Thresher", "{3}{G}", 5, 4,
+            artifact=True,
+            subtypes=("Scarecrow",),
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ATTACKS,
+                    predicate=IsSelf() & Delirium(),
+                    effect=WickerfolkThresherAttackEffect(),
                 ),
             ),
         ),
