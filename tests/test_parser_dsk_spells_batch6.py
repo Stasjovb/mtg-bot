@@ -36,6 +36,15 @@ Cards claimed in this batch:
   ``PumpCreaturesYouControlUntilEOT`` widens to ALL your creatures
   (no subtype filter), and adding one for a single card's rider
   would over-engineer (parser-is-right precedent: Terminal Velocity).
+
+* **Get Out** ``{U}{U}`` Instant — two-mode modal whose mode 2
+  ("Return one or two target creatures and/or enchantments you own
+  to your hand.") has no per-mode primitive. Whole-spell dispatch
+  simplifies to mode 1's
+  ``CounterTargetSpell(filter_types=frozenset({"Creature",
+  "Enchantment"}))``; mode 2 is dropped per the parser-is-right
+  precedent set by Archenemy's Charm (claim a well-modeled mode of a
+  multi-mode modal rather than leaving the spell unclaimed).
 """
 
 from __future__ import annotations
@@ -157,3 +166,44 @@ def test_midnight_mayhem_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Midnight Mayhem"]
     assert p.mana_cost_str == "{2}{R}{W}"
+
+
+# ---------- Get Out ----------
+
+def test_get_out_claimed_by_parser():
+    # Get Out ``{U}{U}`` Instant — claimed via the new whole-spell
+    # exact-text dispatch entry that simplifies the printed text
+    # (modal: counter creature/enchantment spell OR return
+    # creatures/enchantments to hand) to mode 1's
+    # ``CounterTargetSpell(filter_types=frozenset({"Creature",
+    # "Enchantment"}))``.
+    assert "Get Out" in _claimed_names()
+
+
+def test_get_out_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``CounterTargetSpell`` engine class with the
+    # creature-or-enchantment filter — base mechanic preserved
+    # (filtered counter), bounce mode dropped per parser-is-right.
+    from mtg_bot.cards.base import CounterTargetSpell
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Get Out"]
+    assert p.spell_effect == CounterTargetSpell(
+        filter_types=frozenset({"Creature", "Enchantment"}),
+    )
+
+
+def test_get_out_is_instant():
+    # Type-line carries Instant — not Sorcery — so the spell can be
+    # cast in response to an opponent's spell on the stack (the whole
+    # point of a counterspell).
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Get Out"]
+    assert "Instant" in p.card_types
+
+
+def test_get_out_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Get Out"]
+    assert p.mana_cost_str == "{U}{U}"

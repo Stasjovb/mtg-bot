@@ -1158,6 +1158,41 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     ): CreateToken(
         token_printing=TOKEN_PRINTINGS["Gremlin"], count=3,
     ),
+    # Get Out (Duskmourn) ``{U}{U}`` Instant — two-mode modal: ``•
+    # Counter target creature or enchantment spell.`` and ``• Return
+    # one or two target creatures and/or enchantments you own to your
+    # hand.``. The static side simplifies to bare
+    # ``CounterTargetSpell(filter_types=frozenset({"Creature",
+    # "Enchantment"}))`` because:
+    # (1) the per-mode parser (``_parse_modal_choose_one``) can't
+    #     claim this spell — mode 2's ``return one or two target
+    #     creatures and/or enchantments you own to your hand`` shape
+    #     has no per-mode primitive (the existing
+    #     ``ReturnUpToNCreaturesFromYourGraveyardToHand`` /
+    #     ``ReturnUpToNTargetCreaturesToOwnersHands`` are
+    #     creature-typed, and widening to "creatures and/or
+    #     enchantments you own" plus the multi-target ``one or two``
+    #     framing on the BATTLEFIELD-to-hand bounce path would need a
+    #     new primitive for one card's mode);
+    # (2) mode 1 is a faithful, well-modeled counter — the existing
+    #     ``CounterTargetSpell(filter_types=frozenset({"Creature",
+    #     "Enchantment"}))`` exactly captures the printed scope (same
+    #     filter shape Warping Wail's mode 2 ``filter_types=frozenset
+    #     ({"Sorcery"})`` uses).
+    # Same parser-is-right precedent as Archenemy's Charm — claim a
+    # well-modeled mode of a multi-mode modal spell rather than
+    # leaving the spell unclaimed; the engine's mode-selection plumbing
+    # would normally route through ``ModalChooseOne`` but the
+    # whole-spell tier yields a single fixed effect when only one of
+    # the modes is modelable.
+    (
+        "Choose one —\n"
+        "• Counter target creature or enchantment spell.\n"
+        "• Return one or two target creatures and/or enchantments "
+        "you own to your hand."
+    ): CounterTargetSpell(
+        filter_types=frozenset({"Creature", "Enchantment"}),
+    ),
 }
 
 
