@@ -47,7 +47,9 @@ from mtg_bot.effects import (
     EachOpponentLosesLife,
     GainLife,
     LoseLife,
+    ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,
+    PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnTargetCreature,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
@@ -397,6 +399,55 @@ def _build_surgical_suite_hospital_room() -> CardPrinting:
     )
 
 
+def _build_ticket_booth_tunnel_of_hate() -> CardPrinting:
+    """Ticket Booth // Tunnel of Hate ``{2}{R}`` // ``{4}{R}{R}``.
+
+    Ticket Booth oracle:
+        When you unlock this door, manifest dread.
+
+    Tunnel of Hate oracle:
+        Whenever you attack, target attacking creature gains double
+        strike until end of turn.
+
+    Ticket Booth is a pure door trigger reusing the existing
+    ``ManifestDread(count=1)`` primitive — the same effect Slimy
+    Aquarium and Weight Room layer counters on top of, here run bare
+    (no counter rider). Tunnel of Hate hooks ``Event.YOU_ATTACK`` and
+    routes to ``PumpTargetCreatureUntilEOT`` with no P/T bonus and a
+    sole granted keyword (``"double strike"``) — same primitive Most
+    Valuable Slayer uses for "+1/+0 and gains first strike", here
+    flipped to no pump and a different keyword. ``attacking_only=
+    True`` narrows the legal-target pool to the active player's
+    attackers, matching the printed "target attacking creature"
+    qualifier.
+    """
+    return make_room(
+        _half(
+            "Ticket Booth", "{2}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ManifestDread(count=1),
+                ),
+            ),
+        ),
+        _half(
+            "Tunnel of Hate", "{4}{R}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.YOU_ATTACK, predicate=Controlled(YOU),
+                    effect=PumpTargetCreatureUntilEOT(
+                        power_bonus=0,
+                        toughness_bonus=0,
+                        granted_keywords=frozenset({"double strike"}),
+                        attacking_only=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -410,6 +461,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
         _build_underwater_tunnel_slimy_aquarium,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
+    "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
 }
 
 

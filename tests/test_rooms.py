@@ -1074,3 +1074,103 @@ def test_hospital_room_locked_does_not_fire():
     assert bear.plus_one_counters == 0
 
 
+# ---------------------------------------------------------------------------
+# Parser claims: Ticket Booth // Tunnel of Hate
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_ticket_booth_tunnel_of_hate():
+    name = "Ticket Booth // Tunnel of Hate"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Ticket Booth", "Tunnel of Hate"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Ticket Booth"].mana_cost_str == "{2}{R}"
+    assert by_name["Tunnel of Hate"].mana_cost_str == "{4}{R}{R}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Ticket Booth", "Tunnel of Hate"]
+
+
+def test_ticket_booth_manifests_one_card_on_unlock():
+    """Ticket Booth's door trigger manifests dread — examines top two,
+    keeps one face-down on the battlefield, the other goes to the
+    graveyard. No +1/+1 counter rider (distinct from Slimy Aquarium /
+    Weight Room which add counters on top)."""
+    state = _new_state()
+    for _ in range(2):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Ticket Booth // Tunnel of Hate"],
+        owner_id=0,
+    )
+    pre_bf = len(state.battlefield)
+    pre_grave = len(state.players[0].graveyard)
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Ticket Booth"),
+    )
+    drain_stack(state)
+    # One face-down creature entered (the Room is the +1; the manifested
+    # face-down is the +2). The other examined card went to graveyard.
+    facedowns = [o for o in state.battlefield if o.face_down]
+    assert len(facedowns) == 1
+    assert facedowns[0].plus_one_counters == 0  # bare ManifestDread, no counter
+    assert len(state.battlefield) == pre_bf + 2  # room + manifested
+    assert len(state.players[0].graveyard) == pre_grave + 1
+
+
+def test_tunnel_of_hate_grants_double_strike_to_attacker_when_unlocked():
+    """Tunnel of Hate's YOU_ATTACK trigger grants double strike UEOT to
+    the (lone) attacking creature when unlocked."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_keywords
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Ticket Booth // Tunnel of Hate"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Tunnel of Hate"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    # The PickFirst agent picks the lone attacker — double strike UEOT.
+    assert "double strike" in effective_keywords(state, bear)
+
+
+def test_tunnel_of_hate_locked_does_not_grant_keyword():
+    """If Tunnel of Hate is locked, the YOU_ATTACK trigger doesn't fire
+    — the attacker doesn't gain double strike."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import effective_keywords
+
+    state = _new_state()
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Ticket Booth // Tunnel of Hate"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Ticket Booth"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    _drain(state)
+    assert "double strike" not in effective_keywords(state, bear)
+
+
