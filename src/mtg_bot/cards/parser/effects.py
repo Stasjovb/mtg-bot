@@ -163,6 +163,20 @@ _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     # ``_DEAL_N_DAMAGE_EACH_CREATURE``.
     r"^(?:it )?deals (\d+) damage to target creature$"
 )
+# "<source> deals N damage to up to one target creature" — Pinnacle
+# Kill-Ship's ETB body (``it deals 10 damage to up to one target
+# creature``). Mirror of the bare ``deals N damage to target creature``
+# shape with the ``up to one`` qualifier promoting the target count
+# range from 1..1 to 0..1; maps to ``DealDamageToTargetCreature(amount=N,
+# optional=True)`` whose engine class flips ``requires_target`` /
+# ``target_count_range`` accordingly and resolves as a no-op when no
+# target is chosen. The ``it `` prefix is the same source-pronoun the
+# bare regex accepts; the creature-trigger normalizer doesn't strip it
+# from this phrase because the phrase starts with the pronoun (the
+# ``deals`` verb is right after).
+_DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE = re.compile(
+    r"^(?:it )?deals (\d+) damage to up to one target creature$"
+)
 # "<source> deals N damage to target creature an opponent controls" —
 # Nova Hellkite's ETB. Maps to ``DealDamageToOpponentCreature(amount=N)``
 # whose ``legal_targets`` filters to creatures NOT controlled by the
@@ -1592,6 +1606,24 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_TARGET_CREATURE.match(phrase)
     if m is not None:
         return DealDamageToTargetCreature(amount=int(m.group(1)))
+    # ``deals N damage to up to one target creature`` — Pinnacle
+    # Kill-Ship's ETB body. Mirrors the bare ``deals N damage to
+    # target creature`` shape but with the ``up to one`` qualifier
+    # flipping ``DealDamageToTargetCreature.optional`` to True so the
+    # engine treats target selection as 0..1 (resolves as a no-op
+    # when no creature is chosen). Tried AFTER the bare-target form
+    # because the bare regex's ``$`` anchor on ``target creature``
+    # wouldn't match the ``up to one target creature`` tail anyway,
+    # but ordering more-specific shapes after the more-general bare
+    # form is the convention here for damage primitives — the bare
+    # form acts as the default and modifiers (``up to one``,
+    # ``an opponent controls``, ``tapped``) layer on top via
+    # dedicated regexes.
+    m = _DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE.match(phrase)
+    if m is not None:
+        return DealDamageToTargetCreature(
+            amount=int(m.group(1)), optional=True,
+        )
     # ``deals N damage to each opponent`` — mass-burn opponents (Ruinous
     # Rampage's burn mode). Tried after the targeted ``deals N damage to
     # any target`` / ``… target creature`` regexes because those bind

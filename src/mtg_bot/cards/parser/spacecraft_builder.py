@@ -163,19 +163,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # Pinnacle Kill-Ship: ETB deals 10 damage to up to one target creature,
-        # 7+ flying.
-        make_spacecraft(
-            "Pinnacle Kill-Ship", "{7}", 7, 7,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageToTargetCreature(amount=10, optional=True),
-                ),
-            ),
-        ),
         # Susurian Dirgecraft: ETB each opponent sacrifices a nontoken
         # creature of their choice, 7+ flying.
         make_spacecraft(
