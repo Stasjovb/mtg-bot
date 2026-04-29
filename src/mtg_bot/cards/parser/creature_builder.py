@@ -111,6 +111,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
+    _parse_extra_etb_trigger_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
@@ -388,14 +389,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=SearchLibraryForEquipmentToBattlefield(),
                 ),
             ),
-        ),
-        # Starfield Vocalist {3}{U} 3/4 — warp {1}{U}.
-        # Static: ETB-triggered abilities trigger an additional time
-        # (extra_etb_trigger=1).
-        "Starfield Vocalist": make_creature(
-            "Starfield Vocalist", "{3}{U}", 3, 4,
-            warp="{1}{U}",
-            extra_etb_trigger=1,
         ),
         # Elegy Acolyte {2}{B}{B} 4/4 Human Cleric — lifelink.
         # Void trigger: at beginning of end step, if void is active,
@@ -1410,6 +1403,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
     is_token_doubler = False
+    extra_etb_trigger = 0
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1516,6 +1510,21 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # field set once.
             is_token_doubler = True
             continue
+        if _parse_extra_etb_trigger_line(line):
+            # ``If a permanent entering the battlefield causes a
+            # triggered ability of a permanent you control to trigger,
+            # that ability triggers an additional time.`` — Starfield
+            # Vocalist's Panharmonicon-style ETB-trigger doubler.
+            # Increments the ``extra_etb_trigger`` kwarg below; the
+            # engine reads the controller's battlefield total at
+            # trigger enqueue time and adds that many extra firings.
+            # Accumulating rather than overwriting matches the
+            # static-registry semantics — multiple copies on the same
+            # printing would each contribute one extra firing (no card
+            # in the pool today carries the line twice, but the int
+            # field handles it).
+            extra_etb_trigger += 1
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1611,4 +1620,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         is_token_doubler=is_token_doubler,
+        extra_etb_trigger=extra_etb_trigger,
     )
