@@ -77,6 +77,7 @@ from mtg_bot.cards.base import (
     make_utility_land,
     parse_mana_cost,
 )
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
 
@@ -274,12 +275,6 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # Cathedral of War: enters tapped, exalted keyword, {T}: Add {C}.
-        "Cathedral of War": make_utility_land(
-            "Cathedral of War",
-            enters_tapped=True,
-            keywords=frozenset({"exalted"}),
-        ),
         # Mutavault: {T}: Add {C}. {1}: becomes 2/2 with all creature types UEOT.
         "Mutavault": make_utility_land(
             "Mutavault",
@@ -780,6 +775,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if paid_fancy is not None:
         return paid_fancy
+    keyword_colorless = _try_build_keyword_colorless_utility_land(
+        card, text, supertypes, subtypes,
+    )
+    if keyword_colorless is not None:
+        return keyword_colorless
     paid_effect = _try_build_paid_effect_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1280,7 +1280,7 @@ _PAID_FANCY_MANA_BODIES: dict[str, "callable"] = {
 }
 
 
-_LAND_KEYWORD_WHITELIST = frozenset({"indestructible"})
+_LAND_KEYWORD_WHITELIST = frozenset({"indestructible", "exalted"})
 
 
 def _try_build_paid_fancy_mana_land(
@@ -1341,6 +1341,73 @@ def _try_build_paid_fancy_mana_land(
                 is_mana_ability=True,
             ),
         ),
+    )
+
+
+# Keyword-only utility lands.
+#
+# Plain ``Land`` cards (no supertypes, no subtypes) whose oracle text
+# is the strict three-line shape:
+#   1. ``This land enters tapped.``
+#   2. <single-keyword-line>      (on ``_LAND_KEYWORD_WHITELIST``)
+#   3. ``{T}: Add {C}.``          (intentionally dropped — the
+#      static-side ``make_utility_land`` doesn't add an explicit
+#      ability for it; the engine's auto-tap-for-cost generic-mana
+#      fallback covers tapping for ``{C}``)
+#
+# Currently claims:
+# - Cathedral of War — ``This land enters tapped.`` +
+#   ``Exalted (...)`` + ``{T}: Add {C}.``
+#
+# The keyword-line reminder text is stripped per-line via
+# ``_strip_reminder_text`` before the ``_KEYWORD_LINE_RE`` lookup.
+# Distinct from the paid-fancy-mana branch (which expects a paid
+# mana ability after ``{T}: Add {C}.``) and the colorless-utility
+# branch (which doesn't model ``enters_tapped`` and doesn't accept
+# a keyword line).
+_KEYWORD_TAPPED_TAP_FOR_C_LINE = "This land enters tapped."
+
+
+def _try_build_keyword_colorless_utility_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a keyword-only colorless utility ``CardPrinting`` if
+    ``text`` matches the strict three-line ``This land enters
+    tapped.`` + <keyword> + ``{T}: Add {C}.`` shape, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The keyword
+    line is restricted to a single capitalized word on
+    ``_LAND_KEYWORD_WHITELIST`` (today: ``Exalted`` for Cathedral of
+    War). The ``{T}: Add {C}.`` line is intentionally not modeled as
+    an explicit activated ability — the engine's auto-tap-for-cost
+    generic-mana fallback covers it, matching the static side's
+    ``make_utility_land(enters_tapped=True, keywords=...)`` shape.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _KEYWORD_TAPPED_TAP_FOR_C_LINE:
+        return None
+    kw_match = _KEYWORD_LINE_RE.match(lines[1])
+    if kw_match is None:
+        return None
+    kw = kw_match.group(1).lower()
+    if kw not in _LAND_KEYWORD_WHITELIST:
+        return None
+    if lines[2] != _DROPPED_TAP_FOR_C_LINE:
+        return None
+    return make_utility_land(
+        card["name"],
+        enters_tapped=True,
+        keywords=frozenset({kw}),
     )
 
 
