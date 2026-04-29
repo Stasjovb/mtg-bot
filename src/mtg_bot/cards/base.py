@@ -158,6 +158,7 @@ from mtg_bot.effects import (
     AttachToTargetCreatureYouControl,
     EquipToTargetCreatureYouControl,
     BiosynthicBurstEffect,
+    BoilerbilgesRipperETBEffect,
     CreateLanderAndScheduleSacrifice,
     CreateTokenAndAttachSelf,
     CloseEncounterEffect,

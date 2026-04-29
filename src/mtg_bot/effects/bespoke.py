@@ -3560,6 +3560,98 @@ class HauntedScreenActivatedEffect(Effect):
 
 
 @dataclass(frozen=True)
+class BoilerbilgesRipperETBEffect(Effect):
+    """Boilerbilges Ripper's ETB: "You may sacrifice another creature or
+    enchantment. When you do, this creature deals 2 damage to any
+    target."
+
+    The sacrifice is optional. If declined (or no legal candidate
+    exists), the entire reflexive rider does nothing — no damage. If
+    the controller sacrifices, the source deals 2 damage to one chosen
+    "any target" (creature or player). Targets are reused from the
+    parent ETB's target slot via the standard target-selection
+    pipeline; ``legal_targets`` mirrors ``DealDamageAnyTarget`` so the
+    cast-time pool is the standard creature ∪ player set.
+
+    "Another creature or enchantment" excludes the source itself even
+    when Boilerbilges Ripper has no other creature/enchantment subtypes
+    — CR 109.5's "another" exclusion. The candidate pool checks
+    ``is_creature`` OR ``is_enchantment`` on the printing layer (room
+    halves and enchantment creatures both qualify since
+    ``is_enchantment`` is True for any printing carrying
+    ``"Enchantment"`` in ``card_types``).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+        targets: list[Target] = []
+        for o in state.battlefield:
+            if is_creature_now(o):
+                targets.append(("creature", o.id))
+        for p in state.players:
+            if not p.has_lost:
+                targets.append(("player", p.id))
+        return targets
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        p = state.player_by_id(controller_id)
+        source_id = source.id if source is not None else None
+        candidates = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.id != source_id
+            and (o.printing.is_creature or o.printing.is_enchantment)
+        ]
+        if not candidates:
+            state.log.append(
+                "Boilerbilges Ripper: no legal sacrifice candidate — "
+                "ETB does nothing"
+            )
+            return
+        if p.agent is None or not p.agent.choose_yes_no(
+            state, controller_id,
+            "Sacrifice another creature or enchantment?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines to sacrifice "
+                f"(Boilerbilges Ripper)"
+            )
+            return
+        pick_id = p.agent.choose_sacrifice(
+            state, controller_id, [o.id for o in candidates],
+        )
+        chosen = next(
+            (o for o in candidates if o.id == pick_id), candidates[0],
+        )
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} "
+            f"(Boilerbilges Ripper)"
+        )
+        _sacrifice(state, chosen)
+        if not targets:
+            return
+        _apply_damage(state, targets[0], 2)
+
+    def describe(self) -> str:
+        return (
+            "you may sacrifice another creature or enchantment; if you "
+            "do, this creature deals 2 damage to any target"
+        )
+
+
+
+@dataclass(frozen=True)
 class SplitskinDollETBEffect(Effect):
     """Splitskin Doll's ETB: "When this creature enters, draw a card.
     Then discard a card unless you control another creature with power

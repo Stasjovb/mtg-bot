@@ -212,6 +212,7 @@ from mtg_bot.effects.bespoke import (
     AtomicMicrosizerAttackEffect,
     AttackInTheBoxAttackEffect,
     BiosynthicBurstEffect,
+    BoilerbilgesRipperETBEffect,
     ChoraleReanimateDefenderGraveCreatureEffect,
     CloseEncounterEffect,
     CommuneWithEvilEffect,
