@@ -106,7 +106,6 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import (
-    OptionalPutCreatureFromHandOntoBattlefield,
     OptionalSacLandOrLanderForBasicLandRamp,
     Sequence,
 )
@@ -120,10 +119,10 @@ from mtg_bot.effects.generic import (
     DrawCardPerMulticoloredPermanent,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
+    EachOpponentSacrificesCreature,
     PumpSelfUntilEOT,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
-    ReturnUpToNTargetCreaturesToOwnersHands,
     SearchLibraryForCard,
     SelfMill,
     TargetArtifactBecomesCreatureUEOT,
@@ -146,19 +145,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Pinnacle Kill-Ship: ETB deals 10 damage to up to one target creature,
-        # 7+ flying.
-        make_spacecraft(
-            "Pinnacle Kill-Ship", "{7}", 7, 7,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageToTargetCreature(amount=10, optional=True),
-                ),
-            ),
-        ),
         # Warmaker Gunship: ETB deals damage equal to artifact count to target
         # creature an opponent controls, 6+ flying.
         make_spacecraft(
@@ -232,39 +218,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ReturnCreatureFromYourGraveyardToBattlefield(),
-                ),
-            ),
-        ),
-        # Sledge-Class Seedship: attack trigger optionally put a creature card
-        # from hand onto the battlefield. Station 7+ flying.
-        make_spacecraft(
-            "Sledge-Class Seedship", "{2}{G}", 4, 5,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=OptionalPutCreatureFromHandOntoBattlefield(),
-                ),
-            ),
-        ),
-        # Specimen Freighter: ETB return up to two non-Spacecraft creatures to
-        # owners' hands. Whenever attacks, each opponent mills 4. Station 9+
-        # flying.
-        make_spacecraft(
-            "Specimen Freighter", "{5}{U}", 4, 7,
-            station_threshold=9,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnUpToNTargetCreaturesToOwnersHands(
-                        max_n=2, exclude_spacecraft=True,
-                    ),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=EachOpponentMillsCards(amount=4),
                 ),
             ),
         ),
