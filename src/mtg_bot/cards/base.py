@@ -639,6 +639,15 @@ class CardPrinting:
     # wouldn't find a legal target otherwise). Accepts "creature" or
     # "artifact". Only consumed when is_aura is True.
     aura_enchant_type: str = "creature"
+    # Aura target controller restriction — when True, the cast-time
+    # target picker for ``is_aura`` cards only offers permanents the
+    # caster controls. Mirrors the printed "Enchant creature you
+    # control" / "Enchant artifact you control" line — the printed
+    # restriction is independent of ``aura_enchant_type``. Default
+    # False (the default Scryfall "Enchant creature" wording allows
+    # any creature). Sheltered by Ghosts is the first DSK Aura that
+    # carries this restriction in the parser pool.
+    aura_yours_only: bool = False
     # Dynamic power/toughness formula. When set, overrides the printed
     # power/toughness inside effective_power and effective_toughness.
     # Currently supported:
@@ -1245,6 +1254,7 @@ def make_aura(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     aura_enchant_type: str = "creature",
+    aura_yours_only: bool = False,
     attached_prevents_untap: bool = False,
     attached_grants_control: bool = False,
     attached_sets_base_pt: "tuple[int, int] | None" = None,
@@ -1290,6 +1300,7 @@ def make_aura(
             power_bonus, toughness_bonus, frozenset(granted_keywords)
         ),
         aura_enchant_type=aura_enchant_type,
+        aura_yours_only=aura_yours_only,
         attached_prevents_untap=attached_prevents_untap,
         attached_grants_control=attached_grants_control,
         attached_sets_base_pt=attached_sets_base_pt,

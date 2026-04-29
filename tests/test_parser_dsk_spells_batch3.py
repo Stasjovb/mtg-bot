@@ -1,13 +1,20 @@
 """Tests for the Duskmourn spells / enchantments / equipment / artifacts
 batch-3 parser additions.
 
-This batch claims more unclaimed Duskmourn cards by extending the
-existing builders with one new literal-line entry per shape and one
-small primitive widening. Each new primitive remains reusable: the
-literal-Equipment-ETB pattern is the same one Auxiliary Boosters
-already rides, and the spell-side Sequence path keeps working with
-existing primitives once the new ``OwnerPutsTargetNonlandPermanent
-OnTopOrBottomOfLibrary`` engine class lands.
+Each commit in this batch lands one card via a small additive change:
+a literal-line entry on an existing builder, a name-keyed dispatch
+factory on an existing builder, or a small flag widening on an existing
+engine class. No new bespoke engine classes are introduced.
+
+New engine fields on ``CardPrinting``:
+
+* ``aura_yours_only`` — when True, the cast-time target picker for
+  ``is_aura`` cards only offers permanents the caster controls.
+  Mirrors the printed "Enchant creature you control" / "Enchant
+  artifact you control" line. The flag is independent of
+  ``aura_enchant_type`` (creature / artifact). Default False so
+  existing plain "Enchant creature" Auras (Frantic Strength, Tractor
+  Beam, ...) keep their previous behavior.
 
 Cards newly claimed in this batch:
 
@@ -17,6 +24,16 @@ Cards newly claimed in this batch:
   with the printed Glimmer line, dispatching to bare ``CreateToken``
   (NOT ``CreateTokenAndAttachSelf`` — the printed text never says
   "and attach").
+
+* **Sheltered by Ghosts** ``{1}{W}`` Enchantment — Aura — ETB exile
+  target nonland permanent an opponent controls (until the Aura
+  leaves), +1/+0 + lifelink + ward {2}, and the printed "Enchant
+  creature you control" controller restriction. Claimed by name-
+  keyed dispatch in ``enchantment_builder``, using the new
+  ``aura_yours_only`` flag plus the existing
+  ``ExileOpponentsNonlandPermanentUntilLeaves`` ETB and the existing
+  ``attached_grants_ward`` rider that Hardlight Containment also
+  uses.
 """
 
 from __future__ import annotations
@@ -112,3 +129,140 @@ def test_glimmerlight_resolves_etb_glimmer_token_creation():
     assert glimmer_tokens[0].controller_id == 0
     # Glimmerlight itself stays unattached — no attach effect fired.
     assert eq_obj.attached_to is None
+
+
+# ---------- aura_yours_only flag ----------
+
+def test_make_aura_aura_yours_only_kwarg():
+    # New ``aura_yours_only`` kwarg on ``make_aura`` lands on the
+    # ``CardPrinting.aura_yours_only`` field that the cast-time target
+    # picker reads to filter the legal pool to permanents the caster
+    # controls.
+    from mtg_bot.cards.base import make_aura
+
+    aura = make_aura(
+        "Test Aura", "{1}{W}",
+        power_bonus=1, toughness_bonus=0,
+        aura_yours_only=True,
+    )
+    assert aura.aura_yours_only is True
+
+
+def test_make_aura_yours_only_default_false():
+    # Backward-compat sanity: the new kwarg defaults to False, so
+    # existing call sites that don't pass ``aura_yours_only=`` keep
+    # their previous behavior (any creature is a legal Aura target).
+    from mtg_bot.cards.base import make_aura
+
+    aura = make_aura("Plain Aura", "{U}")
+    assert aura.aura_yours_only is False
+
+
+def test_aura_yours_only_filters_legal_targets():
+    # Belt-and-suspenders that the new flag actually filters the
+    # cast-time legal-target pool. With ``aura_yours_only=True``, an
+    # opponent's creature is NOT offered as a legal target — only
+    # creatures the caster controls survive.
+    from mtg_bot.actions import _select_spell_targets
+    from mtg_bot.cards.base import make_aura, make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    aura = make_aura(
+        "Test", "{W}",
+        power_bonus=1, toughness_bonus=0,
+        aura_yours_only=True,
+    )
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    yours = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    theirs = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+
+    class _PickFirst:
+        def choose_target(self, state, pid, legal):
+            return legal[0] if legal else None
+
+    p0 = Player(id=0, agent=_PickFirst())
+    p1 = Player(id=1)
+    state = GameState(players=[p0, p1], battlefield=[yours, theirs])
+    aura_obj = GameObject(
+        id=10, printing=aura, owner_id=0, controller_id=0, zone=Zone.HAND,
+    )
+    p0.hand.append(aura_obj)
+    targets = _select_spell_targets(state, 0, aura_obj)
+    # Only your creature (id=1) is a legal target.
+    assert targets == (("creature", 1),)
+
+
+# ---------- Sheltered by Ghosts ----------
+
+def test_sheltered_by_ghosts_claimed_by_parser():
+    # Sheltered by Ghosts ``{1}{W}`` Aura — claimed via the name-keyed
+    # ``_ENCHANTMENT_BUILDERS`` dispatch in ``parser.enchantment_builder``.
+    assert "Sheltered by Ghosts" in _claimed_names()
+
+
+def test_sheltered_by_ghosts_carries_aura_fields():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # all five hooks the static side ships:
+    # - +1/+0 in the ``equipment_bonuses`` triple plus lifelink in
+    #   the granted-keywords slot;
+    # - ``aura_yours_only=True`` for the "Enchant creature you control"
+    #   restriction;
+    # - ``attached_grants_ward_str="{2}"`` for the ward {2} rider;
+    # - the ``ExileOpponentsNonlandPermanentUntilLeaves`` ETB.
+    from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Sheltered by Ghosts"]
+    assert p.is_aura is True
+    assert p.aura_yours_only is True
+    assert p.equipment_bonuses == (1, 0, frozenset({"lifelink"}))
+    assert p.attached_grants_ward_str == "{2}"
+    assert any(
+        isinstance(t.effect, ExileOpponentsNonlandPermanentUntilLeaves)
+        for t in p.triggered_abilities
+    )
+
+
+def test_sheltered_by_ghosts_etb_exiles_opp_permanent():
+    # End-to-end resolve sanity: with the Aura on the battlefield, the
+    # ETB targets an opponent's permanent and exiles it — same shape
+    # Banishing Light uses. Targets one of P1's permanents; P0's own
+    # permanent is excluded by the legal-targets filter.
+    from mtg_bot.cards.base import make_creature, make_enchantment
+    from mtg_bot.effects import ExileOpponentsNonlandPermanentUntilLeaves
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    parser = OracleParserCardSource()
+    sheltered = parser.get_printings()["Sheltered by Ghosts"]
+    sheltered_obj = GameObject(
+        id=1, printing=sheltered, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    # P0's own creature — not a legal target (opponents-only).
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    yours = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    # P1's enchantment — a legal nonland permanent target.
+    ench_pr = make_enchantment("Tome", "{1}{U}")
+    theirs = GameObject(
+        id=3, printing=ench_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[sheltered_obj, yours, theirs],
+        resolving_source=sheltered_obj,
+    )
+    eff = ExileOpponentsNonlandPermanentUntilLeaves()
+    legal = eff.legal_targets(state, controller_id=0)
+    # P0's own creature excluded; P1's enchantment in the pool.
+    assert ("permanent", 2) not in legal
+    assert ("permanent", 3) in legal

@@ -30,6 +30,8 @@ Aura enchantments (EoE):
 Aura enchantments (DSK):
 - Duskmourn's Domination ``{4}{U}{U}``
 - Frantic Strength ``{1}{R}`` (Flash + +2/+2 + trample)
+- Sheltered by Ghosts ``{1}{W}`` (Enchant-creature-you-control + ETB
+  exile-opp-permanent-until-leaves + +1/+0 + lifelink + ward {2})
 """
 
 from __future__ import annotations
@@ -348,6 +350,55 @@ def _build_frantic_strength() -> CardPrinting:
     )
 
 
+def _build_sheltered_by_ghosts() -> CardPrinting:
+    """Sheltered by Ghosts ``{1}{W}``: Enchantment — Aura.
+
+    Oracle text:
+        Enchant creature you control
+        When this Aura enters, exile target nonland permanent an
+        opponent controls until this Aura leaves the battlefield.
+        Enchanted creature gets +1/+0 and has lifelink and ward {2}.
+
+    Composes three existing engine pieces against the new
+    ``aura_yours_only`` flag (which restricts the cast-time target
+    picker to creatures the caster controls — the printed
+    "Enchant creature you control" line):
+
+    - ``aura_yours_only=True`` for the controller-restricted enchant
+      target. First DSK Aura that ships this restriction; the flag
+      defaults to False so existing "Enchant creature" Auras keep
+      their previous behavior.
+    - ``ExileOpponentsNonlandPermanentUntilLeaves()`` ETB — same
+      Banishing-Light-style exile-until-leaves shape. The
+      ``max_mv=0`` default disables the optional MV cap (Sheltered
+      doesn't have one).
+    - ``power_bonus=1, toughness_bonus=0`` and
+      ``granted_keywords=frozenset({"lifelink"})`` for the static
+      ``Enchanted creature gets +1/+0 and has lifelink`` rider —
+      shared ``equipment_bonuses`` machinery.
+    - ``attached_grants_ward="{2}"`` for the ``ward {2}`` rider —
+      same Hardlight-Containment-style ward grant, just with a
+      stronger cost.
+
+    No new engine effect classes are needed: the new
+    ``aura_yours_only`` flag is the only engine plumbing this card
+    requires.
+    """
+    return make_aura(
+        "Sheltered by Ghosts", "{1}{W}",
+        power_bonus=1, toughness_bonus=0,
+        granted_keywords=frozenset({"lifelink"}),
+        aura_yours_only=True,
+        attached_grants_ward="{2}",
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(),
+            ),
+        ),
+    )
+
+
 def _build_duskmourns_domination() -> CardPrinting:
     """Duskmourn's Domination ``{4}{U}{U}``: Enchantment — Aura.
 
@@ -402,6 +453,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     # Duskmourn (DSK) Auras
     "Duskmourn's Domination": _build_duskmourns_domination,
     "Frantic Strength": _build_frantic_strength,
+    "Sheltered by Ghosts": _build_sheltered_by_ghosts,
 }
 
 

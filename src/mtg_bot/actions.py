@@ -1423,19 +1423,26 @@ def _select_spell_targets(
     # recorded on the StackItem and consumed at resolution to set
     # attached_to. ``aura_enchant_type`` picks the scope: "creature"
     # (default) or "artifact" (Hardlight Containment).
+    # ``aura_yours_only`` further restricts the legal pool to permanents
+    # the caster controls — the printed "Enchant creature you control"
+    # line. Sheltered by Ghosts ships this; default off mirrors the
+    # plain "Enchant creature" wording.
     if card.printing.is_aura:
         enchant_type = card.printing.aura_enchant_type
+        yours_only = card.printing.aura_yours_only
         if enchant_type == "artifact":
             legal = [
                 (enchant_type, o.id)
                 for o in state.battlefield
                 if o.printing.is_artifact
+                and (not yours_only or o.controller_id == player_id)
             ]
         else:
             legal = [
                 ("creature", o.id)
                 for o in state.battlefield
                 if o.printing.is_creature
+                and (not yours_only or o.controller_id == player_id)
             ]
         if legal:
             chosen = p.agent.choose_target(state, player_id, legal)
