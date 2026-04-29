@@ -62,6 +62,7 @@ from mtg_bot.cards.base import (
     DepressurizeEffect,
     DestroyTargetArtifact,
     DestroyTargetCreature,
+    DestroyTargetNonlandPermanent,
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
     DrawCards,
@@ -1354,6 +1355,34 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         toughness_bonus=0,
         granted_keywords=frozenset({"first strike"}),
     ),
+    # Drag to the Roots (Duskmourn) ``{2}{B}{G}`` Instant — Delirium-
+    # gated ``{2}``-cost-reduction rider plus a bare destroy-target-
+    # nonland-permanent body. Whole-spell exact-text dispatch
+    # simplifies to bare ``DestroyTargetNonlandPermanent()`` because:
+    # (1) the cost-reduction parser ``_parse_cost_reduction_line``
+    #     recognizes only the ``This spell costs {N} less to cast if
+    #     <condition>.`` and ``... cast <connector>.`` shapes, not
+    #     the ``Delirium — This spell costs {N} less to cast as
+    #     long as <condition>.`` shape with the ability-word prefix
+    #     and the ``as long as`` connector — adding it would require
+    #     a new ``four_or_more_card_types_in_graveyard`` engine
+    #     condition key plus a matching branch in
+    #     ``mtg_bot.actions._evaluate_cost_reduction``, neither of
+    #     which exists today and would be a one-off for this card;
+    # (2) the per-clause grammar drops the cost-reduction rider via
+    #     ``_parse_cost_reduction_line`` only when that helper
+    #     recognizes the line, so an unrecognized cost-reduction
+    #     leaves the clause intact and the spell fails to parse.
+    # Same parser-is-right precedent as the other Delirium-gated
+    # drops (Impossible Inferno, Violent Urge): keep the base
+    # mechanic (destroy a nonland permanent at the printed full
+    # cost) and drop the unmodelable Delirium cost discount.
+    (
+        "Delirium — This spell costs {2} less to cast as long "
+        "as there are four or more card types among cards in your "
+        "graveyard.\n"
+        "Destroy target nonland permanent."
+    ): DestroyTargetNonlandPermanent(),
 }
 
 

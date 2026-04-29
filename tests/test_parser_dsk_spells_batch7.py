@@ -130,3 +130,53 @@ def test_violent_urge_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Violent Urge"]
     assert p.mana_cost_str == "{R}"
+
+
+# ---------- Drag to the Roots ----------
+
+def test_drag_to_the_roots_claimed_by_parser():
+    # Drag to the Roots ``{2}{B}{G}`` Instant — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (Delirium-gated {2} cost reduction + destroy
+    # target nonland permanent) to bare
+    # ``DestroyTargetNonlandPermanent()``. The cost reduction is
+    # dropped because the cost-reduction parser doesn't recognize
+    # the ``Delirium — ... as long as ...`` shape.
+    assert "Drag to the Roots" in _claimed_names()
+
+
+def test_drag_to_the_roots_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``DestroyTargetNonlandPermanent()`` engine
+    # class — base mechanic preserved (the destroy), Delirium-gated
+    # cost reduction dropped (parser-is-right precedent: Impossible
+    # Inferno).
+    from mtg_bot.cards.base import DestroyTargetNonlandPermanent
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Drag to the Roots"]
+    assert p.spell_effect == DestroyTargetNonlandPermanent()
+
+
+def test_drag_to_the_roots_is_instant():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Drag to the Roots"]
+    assert "Instant" in p.card_types
+
+
+def test_drag_to_the_roots_mana_cost():
+    # Full ``{2}{B}{G}`` mana cost — the Delirium cost-reduction
+    # rider was dropped during simplification, so the printed cost
+    # is what the engine uses (no ``cost_reductions`` rule attached).
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Drag to the Roots"]
+    assert p.mana_cost_str == "{2}{B}{G}"
+
+
+def test_drag_to_the_roots_no_cost_reductions():
+    # The Delirium cost-reduction was dropped (it isn't a recognized
+    # cost-reduction shape), so the printing has no
+    # ``cost_reductions`` rule attached.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Drag to the Roots"]
+    assert p.cost_reductions == ()
