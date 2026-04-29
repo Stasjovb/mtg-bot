@@ -198,23 +198,24 @@ def test_build_spacecraft_printing_skips_missing_power_toughness():
 
 def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
     """A Spacecraft with an ETB trigger whose effect phrase isn't in
-    the unified effect grammar (e.g. Susurian Dirgecraft's ``"each
-    opponent sacrifices a nontoken creature of their choice"``) falls
-    through ``_parse_clause`` and the whole card skips - we never
-    half-claim a Spacecraft by silently dropping its ETB."""
+    the unified effect grammar (e.g. Rescue Skiff's ``"return target
+    creature or enchantment card from your graveyard to the
+    battlefield"``) falls through ``_parse_clause`` and the whole
+    card skips - we never half-claim a Spacecraft by silently
+    dropping its ETB."""
     card = {
         "name": "Hand-Crafted Spacecraft With Unparseable ETB",
-        "mana_cost": "{4}{B}",
+        "mana_cost": "{5}{W}",
         "type_line": "Artifact — Spacecraft",
-        "power": "4",
-        "toughness": "3",
+        "power": "5",
+        "toughness": "6",
         "oracle_text": (
-            "When this Spacecraft enters, each opponent sacrifices a "
-            "nontoken creature of their choice.\n"
+            "When this Spacecraft enters, return target creature or "
+            "enchantment card from your graveyard to the battlefield.\n"
             "Station (Tap another creature you control: Put charge "
             "counters equal to its power on this Spacecraft. Station "
-            "only as a sorcery. It's an artifact creature at 7+.)\n"
-            "7+ | Flying"
+            "only as a sorcery. It's an artifact creature at 10+.)\n"
+            "10+ | Flying"
         ),
     }
     assert _build_spacecraft_printing(card) is None

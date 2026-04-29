@@ -43,6 +43,7 @@ from mtg_bot.cards.base import (
     DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
     EachOpponentLosesLife,
+    EachOpponentSacrificesCreature,
     EachPlayerDraws,
     Effect,
     EnduringDiesReturnAsEnchantmentEffect,
@@ -1030,6 +1031,19 @@ _OPTIONAL_SAC_ANOTHER_FOR_EFFECT = re.compile(
 _EACH_OPPONENT_DISCARDS = re.compile(
     rf"^each opponent discards (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
 )
+# "Each opponent sacrifices a nontoken creature of their choice." —
+# Susurian Dirgecraft's ETB trigger body. Untargeted opponent-wide
+# sacrifice; each affected opponent picks via their agent's
+# ``choose_sacrifice``. Maps to ``EachOpponentSacrificesCreature()``
+# whose engine class skips opponents with no legal nontoken creature.
+# The ``of their choice`` tail is verbatim oracle text — the standard
+# MTG wording that places target choice on the sacrificing player
+# rather than the source's controller. No targeted variant exists in
+# the current pool, so this is a single literal-line regex with no
+# captured groups.
+_EACH_OPPONENT_SACRIFICES_CREATURE = re.compile(
+    r"^each opponent sacrifices a nontoken creature of their choice$"
+)
 # "Exile target creature or Spacecraft." — Gravkill's printed surface.
 # The static ``cards/eoe_spells.py`` Gravkill entry intentionally fudges
 # this to ``ExileTargetCreature()`` because Spacecraft aren't yet a
@@ -1875,6 +1889,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         token = m.group(1)
         count = 1 if token == "a" else _parse_amount(token)
         return EachOpponentDiscards(count=count)
+    if _EACH_OPPONENT_SACRIFICES_CREATURE.match(phrase) is not None:
+        # ``each opponent sacrifices a nontoken creature of their
+        # choice`` — Susurian Dirgecraft's ETB trigger body.
+        # Untargeted opponent-wide sacrifice. Maps to
+        # ``EachOpponentSacrificesCreature()`` whose engine class
+        # walks each opponent and routes through their agent's
+        # ``choose_sacrifice`` (skipping opponents with no legal
+        # nontoken creature).
+        return EachOpponentSacrificesCreature()
     # ``create a Lander token. At the beginning of the end step on
     # your next turn, sacrifice that token`` — Kav Landseeker's ETB.
     # Tried BEFORE the bare token-creation dispatcher because the

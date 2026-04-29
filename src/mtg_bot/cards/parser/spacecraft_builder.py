@@ -120,7 +120,6 @@ from mtg_bot.effects.generic import (
     DrawCardPerMulticoloredPermanent,
     EachOpponentDiscardsOrLosesLife,
     EachOpponentMillsCards,
-    EachOpponentSacrificesCreature,
     PumpSelfUntilEOT,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
@@ -157,19 +156,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=DealDamageToTargetCreature(amount=10, optional=True),
-                ),
-            ),
-        ),
-        # Susurian Dirgecraft: ETB each opponent sacrifices a nontoken
-        # creature of their choice, 7+ flying.
-        make_spacecraft(
-            "Susurian Dirgecraft", "{4}{B}", 4, 3,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=EachOpponentSacrificesCreature(),
                 ),
             ),
         ),
