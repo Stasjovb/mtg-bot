@@ -32,6 +32,11 @@ Currently supports three land kinds:
   ``_try_build_chosen_color_cave_land`` for the simplified
   "any-color" static collapse of the printed
   "as it enters, choose a color" clause.
+- **Artifact-restricted mana lands** (Power Depot) — claimed by
+  ``_try_build_artifact_restricted_mana_land`` for the
+  ``Artifact Land`` four-line shape with the printed
+  ``{T}: Add {C}.`` and ``Modular 1`` lines dropped per the
+  static-side simplification.
 """
 
 from __future__ import annotations
@@ -477,29 +482,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Power Depot: Artifact Land. Enters tapped. {T}: Add one mana of
-        # any color (artifact spells only). Modular 1 is not modeled.
-        "Power Depot": CardPrinting(
-            name="Power Depot",
-            mana_cost_str="",
-            mana_cost=ManaCost(),
-            type_line="Artifact Land",
-            supertypes=(),
-            card_types=("Artifact", "Land"),
-            subtypes=(),
-            produces=frozenset(),
-            enters_tapped=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(
-                        produces=(("any", 1),),
-                        spend_restriction="artifact_spell",
-                    ),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
         # Lotus Field: Hexproof. Enters tapped. ETB sac 2 lands.
         # {T}: Add three mana of any one color.
         "Lotus Field": make_utility_land(
@@ -815,6 +797,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if chosen_color_cave is not None:
         return chosen_color_cave
+    artifact_restricted = _try_build_artifact_restricted_mana_land(
+        card, text, supertypes, card_types, subtypes,
+    )
+    if artifact_restricted is not None:
+        return artifact_restricted
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2104,6 +2091,103 @@ def _try_build_opening_hand_luck_counter_land(
             ActivatedAbility(
                 cost=ActivationCost(tap_self=True),
                 effect=AddManaToPool(produces=(("any", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Artifact-restricted any-color mana land. ``Artifact Land``
+# (card_types ``("Artifact", "Land")``, no supertypes, no subtypes),
+# exactly four lines:
+#   1. ``This land enters tapped.``
+#   2. ``{T}: Add {C}.``                  (intentionally dropped — the
+#      static side relies on the engine's auto-tap-for-cost generic-
+#      mana fallback for tapping for ``{C}``.)
+#   3. ``{T}: Add one mana of any color. Spend this mana only to cast
+#      artifact spells or activate abilities of artifacts.``
+#   4. ``Modular 1``                      (intentionally dropped — the
+#      Modular keyword isn't modeled by the engine today; the static
+#      registry omits it.)
+#
+# The static side carries a single mana ability — the restricted
+# any-color line — with ``spend_restriction="artifact_spell"``. The
+# dropped ``{T}: Add {C}.`` and ``Modular 1`` lines mirror the
+# static-side ``CardPrinting`` exactly.
+#
+# Per parser/CLAUDE.md: literal-line recognizers are acceptable when
+# "exactly one card in the current data pool fits that printed surface"
+# and the docstring notes deferred generalization. Power Depot is the
+# only Artifact Land in the EoS pool; broader grammar (parameterized
+# over the restriction phrase, or extended to non-Artifact restricted
+# any-color lands) deferred until a sibling printing exists.
+_ARTIFACT_RESTRICTED_LAND_LINE_1 = "This land enters tapped."
+_ARTIFACT_RESTRICTED_LAND_LINE_2 = "{T}: Add {C}."
+_ARTIFACT_RESTRICTED_LAND_LINE_3 = (
+    "{T}: Add one mana of any color. Spend this mana only to cast "
+    "artifact spells or activate abilities of artifacts."
+)
+_ARTIFACT_RESTRICTED_LAND_LINE_4 = "Modular 1"
+
+
+def _try_build_artifact_restricted_mana_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    card_types: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return an Artifact-Land CardPrinting if ``text`` matches the
+    strict four-line Power Depot shape, else ``None``.
+
+    Type-line gate: ``Artifact Land`` (card_types exactly
+    ``("Artifact", "Land")``, no supertypes, no subtypes). The static
+    side drops both the explicit ``{T}: Add {C}.`` ability (covered by
+    the engine's auto-tap-for-cost fallback) and the printed
+    ``Modular 1`` keyword (Modular not modeled). The single retained
+    activated ability produces ``("any", 1)`` mana with
+    ``spend_restriction="artifact_spell"``.
+
+    Per parser/CLAUDE.md: a literal-line recognizer is acceptable
+    here because Power Depot is "the only card in the current data
+    pool that fits that printed surface" and "broader grammar deferred
+    until a second example exists" (e.g. another Artifact Land with a
+    similarly restricted any-color activation).
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    if card_types != ("Artifact", "Land"):
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 4:
+        return None
+    if lines[0] != _ARTIFACT_RESTRICTED_LAND_LINE_1:
+        return None
+    if lines[1] != _ARTIFACT_RESTRICTED_LAND_LINE_2:
+        return None
+    if lines[2] != _ARTIFACT_RESTRICTED_LAND_LINE_3:
+        return None
+    if lines[3] != _ARTIFACT_RESTRICTED_LAND_LINE_4:
+        return None
+    return CardPrinting(
+        name=card["name"],
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Artifact Land",
+        supertypes=(),
+        card_types=("Artifact", "Land"),
+        subtypes=(),
+        produces=frozenset(),
+        enters_tapped=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(
+                    produces=(("any", 1),),
+                    spend_restriction="artifact_spell",
+                ),
                 is_mana_ability=True,
             ),
         ),
