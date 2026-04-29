@@ -41,6 +41,7 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
     ConditionalIfYouControlSubtype,
     CreateToken,
+    CreateTokenCopyOfTargetCreatureYouControl,
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByCardsInHand,
@@ -700,6 +701,58 @@ def _build_roaring_furnace_steaming_sauna() -> CardPrinting:
     )
 
 
+def _build_mirror_room_fractured_realm() -> CardPrinting:
+    """Mirror Room // Fractured Realm ``{2}{U}`` // ``{5}{U}{U}``.
+
+    Mirror Room oracle:
+        When you unlock this door, create a token that's a copy of
+        target creature you control, except it's a Reflection in
+        addition to its other creature types.
+
+    Fractured Realm oracle:
+        If a triggered ability of a permanent you control triggers,
+        that ability triggers an additional time.
+
+    Mirror Room is a pure door trigger using
+    ``CreateTokenCopyOfTargetCreatureYouControl(additional_subtype=
+    "Reflection")`` — same Mirrorpool-mode-2 primitive used for the
+    base copy, with the new ``additional_subtype`` rider that injects
+    "Reflection" into the copy's printed subtype tuple. Existing
+    layer-3/4 walks (``effective_subtypes``) read the merged
+    subtypes off the token's printing directly.
+
+    Fractured Realm is the static trigger-doubler (CR 603.10b — "if
+    [trigger condition], that ability triggers an additional time").
+    The engine doesn't model trigger doubling, so the printed effect
+    is an honest no-op permission-style miss in the same family as
+    Lecture Hall's hexproof-on-permanents and Warped Space's
+    pay-{0}-for-spells-from-exile: not modelling the optional
+    extra-fire doesn't break rules, the player just doesn't get the
+    doubled trigger. Default engine behaviour (single fire) is the
+    rules-correct base; the doubler would only ever ADD benefits.
+    The half is wired with cost-and-name only; once a trigger-
+    doubling layer lands, the static gains a real effect via the
+    ``room_half`` lock gate already in
+    ``_active_static_abilities``.
+    """
+    return make_room(
+        _half(
+            "Mirror Room", "{2}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateTokenCopyOfTargetCreatureYouControl(
+                        additional_subtype="Reflection",
+                    ),
+                ),
+            ),
+        ),
+        _half(
+            "Fractured Realm", "{5}{U}{U}",
+        ),
+    )
+
+
 def _build_charred_foyer_warped_space() -> CardPrinting:
     """Charred Foyer // Warped Space ``{3}{R}`` // ``{4}{R}{R}``.
 
@@ -815,6 +868,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Restricted Office // Lecture Hall":
         _build_restricted_office_lecture_hall,
     "Charred Foyer // Warped Space": _build_charred_foyer_warped_space,
+    "Mirror Room // Fractured Realm": _build_mirror_room_fractured_realm,
 }
 
 

@@ -2137,3 +2137,140 @@ def test_exile_top_of_library_may_play_this_turn_handles_empty_library():
     # Player 0 is still alive; nothing in exile.
     assert state.players[0].exile == []
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Mirror Room // Fractured Realm
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_mirror_room_fractured_realm():
+    name = "Mirror Room // Fractured Realm"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Mirror Room", "Fractured Realm"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Mirror Room"].mana_cost_str == "{2}{U}"
+    assert by_name["Fractured Realm"].mana_cost_str == "{5}{U}{U}"
+    # Only Mirror Room contributes a triggered ability — Fractured
+    # Realm's trigger-doubler static is an honest no-op (not yet modelled
+    # by the engine; default single-fire is rules-correct base).
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Mirror Room"]
+
+
+def test_mirror_room_creates_reflection_copy_on_unlock():
+    """Casting Mirror Room unlocks the half; the door trigger creates a
+    token copy of a chosen creature you control with Reflection injected
+    into its subtype list."""
+    state = _new_state()
+    # Target creature on the battlefield to copy.
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    # Pay {2}{U} — three Islands.
+    for _ in range(3):
+        _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Mirror Room // Fractured Realm"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Mirror Room"),
+    )
+    drain_stack(state)
+    # Find the new token: a Wild Bear copy controlled by P0 that's
+    # NOT the original `bear` object.
+    copies = [
+        o for o in state.battlefield
+        if o.id != bear.id
+        and o.controller_id == 0
+        and o.printing.name == bear.printing.name
+        and "Token" in o.printing.supertypes
+    ]
+    assert len(copies) == 1
+    token = copies[0]
+    # Reflection injected into the copy's subtype tuple alongside
+    # whatever subtypes the target's printing already carried.
+    assert "Reflection" in token.printing.subtypes
+    # The target's printed subtypes (if any) survive the merge.
+    for st in bear.printing.subtypes:
+        assert st in token.printing.subtypes
+
+
+def test_mirror_room_locked_does_not_create_token():
+    """If only Fractured Realm is unlocked, Mirror Room's door trigger
+    does not fire on a synthetic ENTERS dispatch."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    state = _new_state()
+    _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Mirror Room // Fractured Realm"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Fractured Realm"})
+    pre_count = len(state.battlefield)
+    dispatch_event(state, Event.ENTERS, label="enters", obj=room)
+    drain_stack(state)
+    assert len(state.battlefield) == pre_count
+
+
+def test_create_token_copy_with_additional_subtype_idempotent():
+    """If the target's printing already lists the additional subtype,
+    the injection is a no-op — duplicates aren't appended."""
+    import dataclasses as _dc
+    from mtg_bot.effects import CreateTokenCopyOfTargetCreatureYouControl
+
+    state = _new_state()
+    # Build a synthetic creature that already has "Reflection" in its
+    # printed subtypes so we can verify idempotent injection.
+    base = SYNTHETIC_CREATURES["Wild Bear"]
+    reflection_bear = _dc.replace(
+        base, subtypes=tuple(list(base.subtypes) + ["Reflection"]),
+    )
+    bear = _put_battlefield(state, reflection_bear, controller_id=0)
+    eff = CreateTokenCopyOfTargetCreatureYouControl(
+        additional_subtype="Reflection",  # already on the printing
+    )
+    eff.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    copies = [
+        o for o in state.battlefield
+        if o.id != bear.id
+        and "Token" in o.printing.supertypes
+        and o.printing.name == bear.printing.name
+    ]
+    assert len(copies) == 1
+    # Reflection listed exactly once — no duplicate injection.
+    assert copies[0].printing.subtypes.count("Reflection") == 1
+
+
+def test_create_token_copy_with_additional_subtype_describe():
+    """The describe() string surfaces the added-subtype clause."""
+    from mtg_bot.effects import CreateTokenCopyOfTargetCreatureYouControl
+
+    eff = CreateTokenCopyOfTargetCreatureYouControl(
+        additional_subtype="Reflection",
+    )
+    desc = eff.describe()
+    assert "Reflection" in desc
+    assert "addition to its other creature types" in desc
+
+
+def test_create_token_copy_no_targets_noop():
+    """No-target resolution is a defensive no-op (no exception)."""
+    from mtg_bot.effects import CreateTokenCopyOfTargetCreatureYouControl
+
+    state = _new_state()
+    eff = CreateTokenCopyOfTargetCreatureYouControl(
+        additional_subtype="Reflection",
+    )
+    pre = len(state.battlefield)
+    eff.resolve(state, controller_id=0, targets=())
+    assert len(state.battlefield) == pre
+

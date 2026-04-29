@@ -5039,7 +5039,19 @@ class CreateTokenCopyOfTargetCreatureYouControl(Effect):
     The token shares the target's printing with the Token supertype
     injected. Uses the existing CreateToken machinery so doublers and
     ETB triggers work normally.
+
+    ``additional_subtype`` (default ``None``) injects a fixed extra
+    creature subtype into the token's printing, on top of the
+    target's printed subtypes. Matches Mirror Room's "create a token
+    that's a copy of target creature you control, except it's a
+    Reflection in addition to its other creature types" — the
+    Reflection subtype is added to the copy's subtype tuple so
+    type-line, oracle and any HasSubtype predicate sees the merged
+    list. Idempotent: if the target's printing already lists the
+    subtype, the injection is a no-op.
     """
+
+    additional_subtype: "str | None" = None
 
     def requires_target(self) -> bool:
         return True
@@ -5070,18 +5082,38 @@ class CreateTokenCopyOfTargetCreatureYouControl(Effect):
             return
         base = target.printing
         # Inject Token supertype if not already present.
+        new_supertypes = tuple(
+            list(base.supertypes)
+            + (["Token"] if "Token" not in base.supertypes else [])
+        )
+        # Inject the additional creature subtype, if requested and
+        # not already present on the target's printing — Mirror Room
+        # adds "Reflection" to whatever the target already is.
+        if (
+            self.additional_subtype is not None
+            and self.additional_subtype not in base.subtypes
+        ):
+            new_subtypes = tuple(
+                list(base.subtypes) + [self.additional_subtype]
+            )
+        else:
+            new_subtypes = base.subtypes
         token_printing = _dc.replace(
             base,
-            supertypes=tuple(
-                list(base.supertypes)
-                + (["Token"] if "Token" not in base.supertypes else [])
-            ),
+            supertypes=new_supertypes,
+            subtypes=new_subtypes,
         )
         CreateToken(
             token_printing=token_printing, count=1,
         ).resolve(state, controller_id, ())
 
     def describe(self) -> str:
+        if self.additional_subtype is not None:
+            return (
+                f"create a token that's a copy of target creature you "
+                f"control, except it's a {self.additional_subtype} in "
+                f"addition to its other creature types"
+            )
         return (
             "create a token that's a copy of target creature you control"
         )
