@@ -43,6 +43,7 @@ from mtg_bot.effects import (
     CreateToken,
     DealDamageEachOpponent,
     DealDamageToOpponentCreature,
+    DealDamageToOpponentCreatureByCardsInHand,
     DiscardSelf,
     DrawCards,
     EachOpponentLosesLife,
@@ -647,6 +648,56 @@ def _build_bottomless_pool_locker_room() -> CardPrinting:
     )
 
 
+def _build_roaring_furnace_steaming_sauna() -> CardPrinting:
+    """Roaring Furnace // Steaming Sauna ``{1}{R}`` // ``{3}{U}{U}``.
+
+    Roaring Furnace oracle:
+        When you unlock this door, this Room deals damage equal to the
+        number of cards in your hand to target creature an opponent
+        controls.
+
+    Steaming Sauna oracle:
+        You have no maximum hand size.
+        At the beginning of your end step, draw a card.
+
+    Roaring Furnace is a pure door trigger using the new
+    ``DealDamageToOpponentCreatureByCardsInHand`` primitive — same
+    shape as Warmaker Gunship's ``DealDamageToOpponentCreatureByArtifact
+    Count`` but counting hand size at resolve time instead of artifact
+    count.
+
+    Steaming Sauna is a ``BEGINNING_OF_END_STEP`` trigger gated on
+    ``Controlled(YOU)`` (your end step) — same shape as Shattered Yard
+    — wired to ``DrawCards(amount=1)``. The "no maximum hand size"
+    arm is a no-op in our engine: the simulation has no max hand size
+    enforcement, so unconditionally not enforcing it for this Room's
+    controller has the same observable behaviour as the printed
+    static. No new plumbing required for that arm; the cleanup-step
+    discard rule simply doesn't exist as something to suppress.
+    """
+    return make_room(
+        _half(
+            "Roaring Furnace", "{1}{R}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=DealDamageToOpponentCreatureByCardsInHand(),
+                ),
+            ),
+        ),
+        _half(
+            "Steaming Sauna", "{3}{U}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.BEGINNING_OF_END_STEP,
+                    predicate=Controlled(YOU),
+                    effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -664,6 +715,8 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
+    "Roaring Furnace // Steaming Sauna":
+        _build_roaring_furnace_steaming_sauna,
 }
 
 

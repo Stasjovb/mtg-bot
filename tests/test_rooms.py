@@ -1762,3 +1762,145 @@ def test_locker_room_locked_does_not_fire():
     assert len(state.players[0].hand) == pre_hand
     clear_combat_state(state)
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Roaring Furnace // Steaming Sauna
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_roaring_furnace_steaming_sauna():
+    name = "Roaring Furnace // Steaming Sauna"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Roaring Furnace", "Steaming Sauna"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Roaring Furnace"].mana_cost_str == "{1}{R}"
+    assert by_name["Steaming Sauna"].mana_cost_str == "{3}{U}{U}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Roaring Furnace", "Steaming Sauna"]
+
+
+def test_roaring_furnace_burns_target_by_hand_size_on_unlock():
+    """Casting Roaring Furnace unlocks it; the door trigger deals damage
+    equal to the number of cards in your hand to target enemy creature.
+    With 3 cards in hand at resolution time, a 2/2 enemy bear takes 3
+    and dies."""
+    state = _new_state()
+    enemy = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    # Stuff three filler cards into hand BEFORE casting (Wild Bears in
+    # hand are fine — they aren't on the battlefield).
+    for _ in range(3):
+        _put_hand(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Roaring Furnace // Steaming Sauna"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Roaring Furnace"),
+    )
+    drain_stack(state)
+    # Cast cleared the Room from hand — 3 filler cards remain at resolve.
+    # Bear takes 3 damage and dies (2 toughness).
+    assert enemy not in state.battlefield
+    assert enemy in state.players[1].graveyard
+
+
+def test_roaring_furnace_no_damage_with_empty_hand():
+    """With zero cards in hand at resolution time, the trigger deals no
+    damage — the bear survives."""
+    state = _new_state()
+    enemy = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    _put_battlefield(state, BASIC_LANDS["Mountain"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Roaring Furnace // Steaming Sauna"],
+        owner_id=0,
+    )
+    # Casting the Room removes it from hand → 0 cards left at resolve.
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Roaring Furnace"),
+    )
+    drain_stack(state)
+    # Bear unhurt.
+    assert enemy in state.battlefield
+    assert enemy.damage == 0
+
+
+def test_steaming_sauna_draws_at_your_end_step_when_unlocked():
+    """Steaming Sauna's end-step trigger draws a card on YOUR end step
+    when the half is unlocked."""
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _new_state()
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Roaring Furnace // Steaming Sauna"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Steaming Sauna"})
+    pre_hand = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    assert len(state.players[0].hand) == pre_hand + 1
+
+
+def test_steaming_sauna_locked_does_not_draw():
+    """If only Roaring Furnace is unlocked, Steaming Sauna's end-step
+    draw doesn't fire."""
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    state = _new_state()
+    state.players[0].library.append(
+        state.new_object(
+            SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+        )
+    )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Roaring Furnace // Steaming Sauna"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Roaring Furnace"})
+    pre_hand = len(state.players[0].hand)
+    run_beginning_of_end_step_triggers(state)
+    drain_stack(state)
+    assert len(state.players[0].hand) == pre_hand
+
+
+def test_deal_damage_to_opponent_creature_by_cards_in_hand_no_target_noop():
+    """The new primitive is a no-op when no target is chosen / available
+    (defensive resolve guard)."""
+    from mtg_bot.effects import DealDamageToOpponentCreatureByCardsInHand
+
+    state = _new_state()
+    eff = DealDamageToOpponentCreatureByCardsInHand()
+    # No targets → no-op (no exception).
+    eff.resolve(state, controller_id=0, targets=())
+
+
+def test_deal_damage_to_opponent_creature_by_cards_in_hand_describe():
+    """The describe() string mentions the hand-count formulation."""
+    from mtg_bot.effects import DealDamageToOpponentCreatureByCardsInHand
+
+    eff = DealDamageToOpponentCreatureByCardsInHand()
+    desc = eff.describe()
+    assert "cards in your hand" in desc
+    assert "creature" in desc
+

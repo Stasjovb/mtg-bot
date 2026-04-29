@@ -7453,6 +7453,58 @@ class DealDamageToOpponentCreatureByArtifactCount(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreatureByCardsInHand(Effect):
+    """Deal damage equal to the number of cards in your hand to target
+    creature an opponent controls.
+
+    Matches Roaring Furnace's door trigger oracle: "this Room deals
+    damage equal to the number of cards in your hand to target creature
+    an opponent controls". The hand size is read at resolve time from
+    the controller's ``hand`` (post any cast/pay-cost effects, mirroring
+    MTG's resolution-time evaluation of the count).
+
+    The Room itself is NOT in the controller's hand at resolution time
+    (it's already on the battlefield by the time the door trigger
+    resolves), so a hand-of-N + the cast Room produces N damage, not
+    N+1 — same hand count an opponent or a third-party observer would
+    see at resolve time.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature and o.controller_id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, _ = targets[0]
+        if kind != "creature":
+            return
+        hand_size = len(state.player_by_id(controller_id).hand)
+        if hand_size <= 0:
+            return
+        _apply_damage(state, targets[0], hand_size)
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of cards in your hand to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
     """Deal ``base`` damage to a target creature; ``boosted`` instead if you
     control a Spacecraft.
