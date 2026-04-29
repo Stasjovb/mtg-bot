@@ -97,6 +97,10 @@ from mtg_bot.effects.predicates import (
     IsNontoken,
     IsSelf,
 )
+from mtg_bot.cards.parser.printing_keywords import (
+    _parse_restricts_noncreature_spells_line,
+)
+from mtg_bot.cards.parser.text import _strip_reminder_text
 
 
 # ---------------------------------------------------------------------------
@@ -717,12 +721,15 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 
 
 def _build_enchantment_printing(card: dict) -> CardPrinting | None:
-    """Claim an EoE main-set Enchantment card via name-keyed dispatch.
+    """Claim an Enchantment card via name-keyed dispatch, falling back to
+    a printing-flag-only oracle-text path for cards whose entire oracle
+    text consists of recognized printing-level static lines (Deafening
+    Silence's noncreature-spell restriction etc.).
 
-    Returns the canonical ``CardPrinting`` if the card's type line
-    matches Enchantment (but not Creature, Land, or Artifact) and the
-    card's name appears in ``_ENCHANTMENT_BUILDERS``. Returns ``None``
-    otherwise so the builder chain continues.
+    Returns the canonical ``CardPrinting`` if either path claims the
+    card. Returns ``None`` otherwise so the builder chain continues.
+    The exclusion guard rejects hybrid card types (Creature /
+    Land / Artifact); their own builders own those.
     """
     type_line = card.get("type_line", "")
     if "Enchantment" not in type_line:
@@ -732,6 +739,49 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
         if exclusion in type_line:
             return None
     factory = _ENCHANTMENT_BUILDERS.get(card.get("name", ""))
-    if factory is None:
+    if factory is not None:
+        return factory()
+    return _build_enchantment_via_oracle_text(card)
+
+
+def _build_enchantment_via_oracle_text(
+    card: dict,
+) -> CardPrinting | None:
+    """Fallback path: claim an Enchantment whose entire oracle text
+    consists of recognized printing-level static lines, building the
+    printing via ``make_enchantment`` with the matching kwargs flipped.
+
+    The grammar is intentionally narrow today — the only line shape
+    recognized here is Deafening Silence's noncreature-spell
+    restriction. Returns ``None`` for any card with an unrecognized
+    line so the silent-skip path mirrors the rest of the parser.
+    """
+    text = card.get("oracle_text", "")
+    legendary = "Legendary" in card.get("type_line", "")
+    restricts_noncreature_spells = False
+
+    for raw_line in text.split("\n"):
+        line = _strip_reminder_text(raw_line)
+        if not line:
+            continue
+        if _parse_restricts_noncreature_spells_line(line):
+            restricts_noncreature_spells = True
+            continue
+        # Anything else — Aura grammar, triggered abilities, activated
+        # abilities, or unrecognized statics — falls through to the
+        # silent-skip path.
         return None
-    return factory()
+
+    if not restricts_noncreature_spells:
+        # No printing-flag line was recognized — leave the card for a
+        # future grammar slice rather than emit a blank Enchantment.
+        return None
+
+    return make_enchantment(
+        name=card["name"],
+        cost=card.get("mana_cost", ""),
+        legendary=legendary,
+        restricts_noncreature_spells_to_one_per_turn=(
+            restricts_noncreature_spells
+        ),
+    )

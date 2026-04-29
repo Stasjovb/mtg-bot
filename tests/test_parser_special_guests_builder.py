@@ -29,7 +29,13 @@ def test_magus_of_the_moon_matches_static():
     assert parsed == _PRINTINGS["Magus of the Moon"]
 
 
-def test_deafening_silence_matches_static():
+def test_deafening_silence_falls_through_to_enchantment_builder():
+    """Deafening Silence is no longer claimed by the special-guests
+    dispatch — the noncreature-spell static is recognized by the
+    enchantment builder's printing-flag-only fallback path, which sets
+    the ``restricts_noncreature_spells_to_one_per_turn`` flag. The
+    special-guests builder returns ``None`` so the chain falls
+    through."""
     card = {
         "name": "Deafening Silence",
         "type_line": "Enchantment",
@@ -39,9 +45,10 @@ def test_deafening_silence_matches_static():
         ),
         "set": "spg",
     }
-    parsed = _build_special_guest_printing(card)
-    assert parsed is not None
-    assert parsed == _PRINTINGS["Deafening Silence"]
+    assert _build_special_guest_printing(card) is None
+    # End-to-end: the active source still claims it (via enchantment).
+    ds = _PRINTINGS["Deafening Silence"]
+    assert ds.restricts_noncreature_spells_to_one_per_turn is True
 
 
 def test_burgeoning_matches_static():

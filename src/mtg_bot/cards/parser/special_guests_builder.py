@@ -63,22 +63,6 @@ def _build_magus_of_the_moon() -> CardPrinting:
     )
 
 
-def _build_deafening_silence() -> CardPrinting:
-    type_line = "Enchantment"
-    supertypes, card_types, subtypes = _parse_type_line(type_line)
-    mana_str = "{W}"
-    return CardPrinting(
-        name="Deafening Silence",
-        mana_cost_str=mana_str,
-        mana_cost=parse_mana_cost(mana_str),
-        type_line=type_line,
-        supertypes=supertypes,
-        card_types=card_types,
-        subtypes=subtypes,
-        restricts_noncreature_spells_to_one_per_turn=True,
-    )
-
-
 def _build_sliver_overlord() -> CardPrinting:
     type_line = "Legendary Creature — Sliver Mutant"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
@@ -143,10 +127,6 @@ _SPECIAL_GUEST_BUILDERS: dict[str, tuple[str, "callable"]] = {
     "Magus of the Moon": (
         "Nonbasic lands are Mountains.",
         _build_magus_of_the_moon,
-    ),
-    "Deafening Silence": (
-        "Each player can't cast more than one noncreature spell each turn.",
-        _build_deafening_silence,
     ),
     "Burgeoning": (
         "Whenever an opponent plays a land, you may put a land card from "
