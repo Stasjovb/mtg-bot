@@ -83,7 +83,6 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     RovingActuatorETBEffect,
     SearchLibraryForCard,
-    SearchLibraryForEquipmentToBattlefield,
     SelfcraftMechanETBEffect,
     SelfMill,
     Sequence,
@@ -107,6 +106,7 @@ from mtg_bot.cards.parser.cost_reduction import (
     _parse_external_cost_reduction_line,
 )
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
@@ -337,18 +337,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Fungal Colossus {6}{G} 5/5 Fungus Beast.
-        # Costs {1} less per differently-named land you control.
-        "Fungal Colossus": make_creature(
-            "Fungal Colossus", "{6}{G}", 5, 5,
-            cost_reductions=(
-                CostReduction(
-                    amount=1,
-                    condition="per_differently_named_land",
-                    per_land_group=True,
-                ),
-            ),
-        ),
         # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
         # ETB: another creature you control gets +2/+0 and gains
         # "when this creature dies, return it to bf tapped".
@@ -367,27 +355,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                             effect=PerigeeBeckonerDiesReturnTappedEffect(),
                         ),
                     ),
-                ),
-            ),
-        ),
-        # Honored Knight-Captain {1}{W} 1/1.
-        # ETB create 1/1 Human Soldier token.
-        # Activated: {4}{W}{W}, sacrifice self → search for Equipment.
-        "Honored Knight-Captain": make_creature(
-            "Honored Knight-Captain", "{1}{W}", 1, 1,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Human Soldier"],
-                        count=1,
-                    ),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{4}{W}{W}", sacrifice_self=True),
-                    effect=SearchLibraryForEquipmentToBattlefield(),
                 ),
             ),
         ),
@@ -818,16 +785,6 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
                     effect=KavaronHarrierAttackEffect(),
                 ),
             ),
-        ),
-        # Mechan Shieldmate {1}{U} 3/2 Robot Soldier.
-        # "Defender. As long as an artifact entered the battlefield under
-        # your control this turn, this creature can attack as though it
-        # didn't have defender." — attack_bypass_if_artifact_entered_this_turn.
-        "Mechan Shieldmate": make_creature(
-            "Mechan Shieldmate", "{1}{U}", 3, 2,
-            artifact=True,
-            keywords={"defender"},
-            attack_bypass_if_artifact_entered_this_turn=True,
         ),
         # Monoist Circuit-Feeder {4}{B}{B} 4/4 Nautilus.
         # "Flying. When this creature enters, until end of turn, target
@@ -1390,6 +1347,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     is_token_doubler = False
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
+    attack_bypass_if_artifact_entered_this_turn = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1523,6 +1481,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # with the line twice ends up with the field set once.
             replaces_draw_with_extra_when_hand_at_most_one = True
             continue
+        if _parse_attack_bypass_if_artifact_entered_line(line):
+            # ``As long as an artifact entered the battlefield under
+            # your control this turn, this creature can attack as
+            # though it didn't have defender.`` — Mechan Shieldmate's
+            # printed defender-bypass static. Flips the
+            # ``attack_bypass_if_artifact_entered_this_turn`` kwarg
+            # below; the engine consumes the flag in
+            # ``combat._can_attack_through_defender`` to let the source
+            # attack despite Defender once the controller's per-turn
+            # artifact-entered counter is positive. Idempotent: a
+            # malformed printing with the line twice ends up with the
+            # field set once.
+            attack_bypass_if_artifact_entered_this_turn = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1621,5 +1593,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         extra_etb_trigger=extra_etb_trigger,
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
+        ),
+        attack_bypass_if_artifact_entered_this_turn=(
+            attack_bypass_if_artifact_entered_this_turn
         ),
     )

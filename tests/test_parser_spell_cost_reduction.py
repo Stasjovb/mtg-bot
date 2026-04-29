@@ -167,16 +167,24 @@ def test_recognizer_rejects_if_condition_not_on_whitelist():
     assert _parse_cost_reduction_line(line) is None
 
 
-def test_recognizer_rejects_x_amount_shape():
+def test_recognizer_accepts_x_amount_per_differently_named_land_shape():
     # Fungal Colossus's ``{X}``-amount variant uses
-    # ``per_land_group=True`` semantics on a different surface form
-    # (``where X is the number of differently named lands you
-    # control``). Out of scope this slice.
+    # ``per_land_group=True`` semantics on the surface form
+    # ``where X is the number of differently named lands you
+    # control``. The recognizer maps this literal to a unit-amount
+    # ``CostReduction`` with ``per_land_group=True`` so the engine's
+    # ``apply_cost_reductions`` per-land-group branch multiplies it
+    # by the controller's distinctly-named-land count at cast time.
     line = (
         "This spell costs {X} less to cast, where X is the number of "
         "differently named lands you control."
     )
-    assert _parse_cost_reduction_line(line) is None
+    rule = _parse_cost_reduction_line(line)
+    assert rule == CostReduction(
+        amount=1,
+        condition="per_differently_named_land",
+        per_land_group=True,
+    )
 
 
 def test_recognizer_rejects_affinity_keyword_shape():
@@ -484,11 +492,20 @@ def test_temporal_intervention_claimed_via_void_prefix_and_whole_spell():
     )
 
 
-def test_fungal_colossus_claimed_via_bespoke():
-    # Fungal Colossus is now claimed via the bespoke dispatch table
-    # (per_differently_named_land CostReduction with per_land_group=True).
-    # _build_creature_printing must return its canonical printing, not None.
+def test_fungal_colossus_claimed_via_grammar():
+    # Fungal Colossus is now claimed via the grammar's per-line
+    # cost-reduction recognizer (the X-amount per-differently-named-land
+    # surface form), no longer via the bespoke dispatch table.
+    # _build_creature_printing must return its canonical printing
+    # carrying the per-land-group CostReduction rider.
     card = _eoe_card("Fungal Colossus")
     printing = _build_creature_printing(card)
     assert printing is not None
     assert printing.name == "Fungal Colossus"
+    assert printing.cost_reductions == (
+        CostReduction(
+            amount=1,
+            condition="per_differently_named_land",
+            per_land_group=True,
+        ),
+    )

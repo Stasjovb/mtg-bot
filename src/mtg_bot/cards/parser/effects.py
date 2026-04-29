@@ -99,6 +99,7 @@ from mtg_bot.cards.base import (
     ReturnUpToNTargetCreaturesToOwnersHands,
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
+    SearchLibraryForEquipmentToBattlefield,
     SelfMill,
     Sequence,
     Surveil,
@@ -644,6 +645,24 @@ _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
 _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD = re.compile(
     r"^search your library for a basic land card, "
     r"put it onto the battlefield tapped, then shuffle$"
+)
+# "Search your library for an Equipment card, put it onto the
+# battlefield, then shuffle." — Honored Knight-Captain's activated-
+# ability body (sac-self → tutor for an Equipment). Maps to the
+# existing ``SearchLibraryForEquipmentToBattlefield()`` engine class.
+# Distinct from the ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_
+# BATTLEFIELD`` sibling above on the filter (Equipment vs basic land)
+# AND the tap state (untapped vs tapped); the two shapes are mutually
+# exclusive at the regex level so ordering doesn't matter. Literal-
+# line recognizer with a single capture-less surface — Honored
+# Knight-Captain is the only printing in the EoE/Duskmourn pool whose
+# activated body prints this exact sentence today; broader grammar
+# (parameterizing the filter-card-type — Aura, Vehicle, etc. — or the
+# tapped-vs-untapped tail) is deferred until a second example with a
+# varying piece exists.
+_SEARCH_LIBRARY_FOR_EQUIPMENT_CARD_ONTO_BATTLEFIELD = re.compile(
+    r"^search your library for an Equipment card, "
+    r"put it onto the battlefield, then shuffle$"
 )
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
@@ -2343,6 +2362,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         # land bodies and stays narrow to that builder's
         # tap-and-sacrifice activation shape.
         return SearchLibraryForBasicLandTapped()
+    if _SEARCH_LIBRARY_FOR_EQUIPMENT_CARD_ONTO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``search your library for an Equipment card, put it onto the
+        # battlefield, then shuffle`` — Honored Knight-Captain's
+        # activated-ability body (sac-self → tutor for Equipment).
+        # Maps to the existing ``SearchLibraryForEquipmentToBattlefield``
+        # engine class. Distinct from the basic-land-tapped sibling on
+        # the filter (Equipment vs basic land) AND the tap state
+        # (untapped vs tapped); a future ``put it onto the battlefield
+        # tapped`` Equipment tutor would land its own surface and an
+        # ``Equipment``-keyed payload class with a ``tapped=True``
+        # construction (no DSK printing today carries that shape).
+        return SearchLibraryForEquipmentToBattlefield()
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))

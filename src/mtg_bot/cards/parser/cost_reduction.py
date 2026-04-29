@@ -13,13 +13,17 @@ Predator) and noncreature spells (Dark Endurance, Temporal
 Intervention), so the recognizer is factored out here and reused by
 both the creature builder and the spell builder.
 
+Variable-amount riders of the shape::
+
+    This spell costs {X} less to cast, where X is <land-group-phrase>.
+
+are also recognized for the ``per_differently_named_land`` engine
+condition (Fungal Colossus). The reduction is computed at cast time by
+the engine's ``apply_cost_reductions`` per-land-group branch — see
+``actions.py``.
+
 Out of scope this slice:
 
-* ``This spell costs {X} less to cast, where X is …`` —  variable
-  reductions like Fungal Colossus's per-differently-named-land
-  count. Different surface shape and would need a per-condition
-  ``per_land_group=True`` (or similar) flag on the parsed
-  ``CostReduction``.
 * ``Affinity for <type> (This spell costs {1} less to cast for each
   …)`` — Thrumming Hivepool. Different surface shape (the rider is
   inside the parenthesized reminder of the Affinity keyword).
@@ -72,6 +76,26 @@ _COST_REDUCTION_LINE_VOID_PREFIX = re.compile(
     r"^Void — This spell costs \{(\d+)\} less to cast "
     r"if a nonland permanent left the battlefield this turn "
     r"or a spell was warped this turn\.$"
+)
+# Variable-amount X-cost reduction. Fungal Colossus is the only EoE
+# printing today carrying this shape; the verbatim line is::
+#
+#   ``This spell costs {X} less to cast, where X is the number of
+#     differently named lands you control.``
+#
+# Maps to ``CostReduction(amount=1, condition="per_differently_named_
+# land", per_land_group=True)`` — the engine's
+# ``apply_cost_reductions`` per-land-group branch (see
+# ``actions._evaluate_cost_reduction``) multiplies the unit amount by
+# the number of distinctly-named lands the controller controls at cast
+# time. Literal-line recognizer with no capture groups — the entire
+# surface is the parameter; broader grammar (parameterizing the land-
+# group counter on a different distinctness criterion, or pointing at
+# a different battlefield set such as creatures or artifacts) is
+# deferred until a second printing with a varying piece exists.
+_COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND = (
+    "This spell costs {X} less to cast, where X is the number of "
+    "differently named lands you control."
 )
 
 
@@ -195,18 +219,32 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     """Return a ``CostReduction`` for a single oracle-text line of the
     shape ``This spell costs {N} less to cast if <condition>.``,
     ``This spell costs {N} less to cast <connector>.`` (Mental
-    Modulation's ``...less to cast during your turn.``), or
+    Modulation's ``...less to cast during your turn.``),
     ``Void — This spell costs {N} less to cast if a nonland
     permanent left the battlefield this turn or a spell was warped
-    this turn.`` (Temporal Intervention), or ``None`` if the line
-    shape doesn't match or the condition phrase isn't on the
-    recognized whitelist.
+    this turn.`` (Temporal Intervention), or
+    ``This spell costs {X} less to cast, where X is the number of
+    differently named lands you control.`` (Fungal Colossus), or
+    ``None`` if the line shape doesn't match or the condition phrase
+    isn't on the recognized whitelist.
 
     The caller is responsible for stripping reminder text and trimming
     surrounding whitespace before calling this helper, matching the
     convention used elsewhere in the parser.
     """
     stripped = line.strip()
+    # Per-differently-named-land variable-amount X-cost reduction
+    # (Fungal Colossus). Tried first because the ``{X} less`` template
+    # is a unique gate that can't be confused with the ``{N} less``
+    # numeric-template shapes below; recognizing the whole rider in
+    # one shot keeps the canonical per-land-group mapping adjacent
+    # to the literal surface check.
+    if stripped == _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND:
+        return CostReduction(
+            amount=1,
+            condition="per_differently_named_land",
+            per_land_group=True,
+        )
     # Void-prefix shape (Temporal Intervention). Tried first because
     # the ``Void — `` prefix is a unique gate; recognizing the whole
     # rider in one shot keeps the canonical Void-state mapping
