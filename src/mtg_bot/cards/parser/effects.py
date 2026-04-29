@@ -27,6 +27,7 @@ from mtg_bot.cards.base import (
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
+    DestroyAllCreatures,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
     DestroyTargetArtifactOrTappedCreature,
@@ -316,6 +317,20 @@ _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Destroy all tapped creatures." / "Destroy all untapped creatures." —
+# Split Up's modal mode lines. Two separate regexes (rather than one
+# regex with a captured tap-state qualifier) because the matching engine
+# class flag is a per-flag bool — cleaner to set the named bool from the
+# matched regex than to dispatch on captured surface text. The bare
+# ``destroy all creatures`` (untargeted Wrath) shape isn't used by any
+# spell in the current pool, so it's not a regex here yet — add it as a
+# sibling if/when one ships.
+_DESTROY_ALL_TAPPED_CREATURES = re.compile(
+    r"^destroy all tapped creatures$"
+)
+_DESTROY_ALL_UNTAPPED_CREATURES = re.compile(
+    r"^destroy all untapped creatures$"
+)
 # "Exile all creatures and Spacecraft." — Beyond the Quiet wrath. Capital
 # ``S`` on Spacecraft is preserved verbatim from the oracle text — the
 # normalization layer only lowercases the first letter of the phrase, so
@@ -1670,6 +1685,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:
         return ExileAllCreaturesAndSpacecraft()
+    # ``destroy all tapped creatures`` / ``destroy all untapped
+    # creatures`` — Split Up's modal mode lines. Two separate
+    # branches because the matching ``DestroyAllCreatures`` engine-
+    # class flag is a per-flag bool. The bare ``destroy all creatures``
+    # untargeted Wrath shape isn't used by any spell in the current
+    # pool — add it as a sibling branch if/when one ships.
+    if _DESTROY_ALL_TAPPED_CREATURES.match(phrase) is not None:
+        return DestroyAllCreatures(tapped_only=True)
+    if _DESTROY_ALL_UNTAPPED_CREATURES.match(phrase) is not None:
+        return DestroyAllCreatures(untapped_only=True)
     m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
     if m is not None:
         return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))

@@ -6359,7 +6359,16 @@ class DestroyAllCreatures(Effect):
 
     Indestructible creatures survive (routes each kill through
     turn.destroy()). Tokens cease to exist normally.
+
+    ``tapped_only`` / ``untapped_only`` narrow the wrath to only
+    creatures matching that tap-state (Split Up's modal "destroy all
+    tapped creatures" / "destroy all untapped creatures"). Mutually
+    exclusive — at most one may be True. The default (both False) is
+    the unrestricted Wrath shape.
     """
+
+    tapped_only: bool = False
+    untapped_only: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -6368,11 +6377,19 @@ class DestroyAllCreatures(Effect):
         from mtg_bot.turn import destroy
 
         victims = [o for o in state.battlefield if o.printing.is_creature]
+        if self.tapped_only:
+            victims = [o for o in victims if o.tapped]
+        elif self.untapped_only:
+            victims = [o for o in victims if not o.tapped]
         for obj in victims:
             state.log.append(f"{obj.printing.name} is destroyed (wrath)")
             destroy(state, obj)
 
     def describe(self) -> str:
+        if self.tapped_only:
+            return "destroy all tapped creatures"
+        if self.untapped_only:
+            return "destroy all untapped creatures"
         return "destroy all creatures"
 
 

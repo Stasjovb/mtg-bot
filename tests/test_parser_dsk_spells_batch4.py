@@ -57,6 +57,15 @@ Cards newly claimed in this batch:
 * **Cursed Windbreaker** ``{2}{U}`` Artifact — Equipment — same ETB
   shape as Conductive Machete + ``Equipped creature has flying`` +
   ``Equip {3}``. Reuses the same literal ETB line dispatch.
+
+* **Split Up** ``{1}{W}{W}`` Sorcery — modal ``Choose one —`` with
+  ``Destroy all tapped creatures.`` / ``Destroy all untapped
+  creatures.`` modes. Claimed via two new sibling regexes in
+  ``parser.effects`` against the existing ``DestroyAllCreatures``
+  engine class, now extended with mutually-exclusive
+  ``tapped_only`` / ``untapped_only`` filter flags. The bare
+  ``destroy all creatures`` Wrath shape isn't a regex yet — no spell
+  in the pool prints it without a tap-state qualifier.
 """
 
 from __future__ import annotations
@@ -384,3 +393,130 @@ def test_cursed_windbreaker_carries_etb_and_flying_and_equip_cost():
         if a.cost.mana_str
     ]
     assert "{3}" in equip_costs
+
+
+# ---------- Split Up: tap-state-gated wraths ----------
+
+def test_parse_destroy_all_tapped_creatures():
+    # New surface form: ``destroy all tapped creatures`` — the tap-
+    # state-gated wrath used by Split Up's first modal mode. Maps to
+    # ``DestroyAllCreatures(tapped_only=True)`` whose ``resolve``
+    # filters the wrath victims to only currently-tapped creatures.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import DestroyAllCreatures
+
+    eff = _parse_effect("destroy all tapped creatures")
+    assert eff == DestroyAllCreatures(tapped_only=True)
+
+
+def test_parse_destroy_all_untapped_creatures():
+    # Sibling surface form: ``destroy all untapped creatures`` — Split
+    # Up's second modal mode. Maps to
+    # ``DestroyAllCreatures(untapped_only=True)`` whose ``resolve``
+    # filters the wrath victims to only currently-untapped creatures.
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import DestroyAllCreatures
+
+    eff = _parse_effect("destroy all untapped creatures")
+    assert eff == DestroyAllCreatures(untapped_only=True)
+
+
+def test_destroy_all_tapped_creatures_filters_resolution():
+    # End-to-end resolve sanity: only tapped creatures are destroyed;
+    # untapped creatures survive. Mirrors the existing
+    # ``DestroyAllCreatures`` Wrath path but with a tap-state filter.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import DestroyAllCreatures
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    tapped_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    untapped_obj = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=False,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[tapped_obj, untapped_obj],
+    )
+    DestroyAllCreatures(tapped_only=True).resolve(
+        state, controller_id=0, targets=()
+    )
+    survivors = [o.id for o in state.battlefield]
+    # The tapped one is destroyed; the untapped one survives.
+    assert 1 not in survivors
+    assert 2 in survivors
+
+
+def test_destroy_all_untapped_creatures_filters_resolution():
+    # Mirror image of the tapped-only filter: only untapped creatures
+    # are destroyed; tapped creatures survive.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import DestroyAllCreatures
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    tapped_obj = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    untapped_obj = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=False,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[tapped_obj, untapped_obj],
+    )
+    DestroyAllCreatures(untapped_only=True).resolve(
+        state, controller_id=0, targets=()
+    )
+    survivors = [o.id for o in state.battlefield]
+    assert 1 in survivors
+    assert 2 not in survivors
+
+
+def test_destroy_all_creatures_describe_reflects_filter():
+    # Belt-and-suspenders that the describe helper reflects the new
+    # filter flags so logs / explanations don't lie about what the
+    # effect did.
+    from mtg_bot.effects.generic import DestroyAllCreatures
+
+    assert (
+        DestroyAllCreatures(tapped_only=True).describe()
+        == "destroy all tapped creatures"
+    )
+    assert (
+        DestroyAllCreatures(untapped_only=True).describe()
+        == "destroy all untapped creatures"
+    )
+    # Default (unrestricted Wrath) still describes as before.
+    assert DestroyAllCreatures().describe() == "destroy all creatures"
+
+
+def test_split_up_claimed_by_parser():
+    # Split Up ``{1}{W}{W}`` Sorcery — claimed via the existing
+    # ``Choose one —`` modal-spell path now that both mode lines
+    # parse through the new ``destroy all tapped/untapped creatures``
+    # primitives.
+    assert "Split Up" in _claimed_names()
+
+
+def test_split_up_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the ``ModalChooseOne`` shape with two ``DestroyAllCreatures``
+    # arms — first arm tapped-only, second arm untapped-only.
+    from mtg_bot.cards.base import ModalChooseOne
+    from mtg_bot.effects.generic import DestroyAllCreatures
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Split Up"]
+    assert p.spell_effect == ModalChooseOne(
+        modes=(
+            DestroyAllCreatures(tapped_only=True),
+            DestroyAllCreatures(untapped_only=True),
+        ),
+    )
