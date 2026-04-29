@@ -3183,3 +3183,74 @@ class CoordinatedClobberingEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class SawAttacksOptionalSacDrawEffect(Effect):
+    """Saw's equipped-attacks trigger: "Whenever equipped creature
+    attacks, you may sacrifice a permanent other than that creature or
+    this Equipment. If you do, draw a card."
+
+    Resolves on the Equipment as the trigger source. The Equipment's
+    ``attached_to`` points at the equipped creature; the legal
+    sacrifice pool is "permanents the controller controls, excluding
+    the source Equipment AND the equipped creature." If no legal
+    permanent exists the effect silently no-ops (the controller has
+    nothing to sacrifice). Otherwise the controller decides via
+    ``choose_yes_no``: declining is a free no-op (no draw); accepting
+    fires ``choose_sacrifice`` to pick which permanent and then draws
+    one card.
+
+    The "may" is honored at the agent layer rather than baked into the
+    effect because sacrificing a strictly worse permanent for a card is
+    sometimes correct and sometimes not; the agent gets the final call.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_n_cards, sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None:
+            return
+        host_id = getattr(source, "attached_to", None)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.id != source.id
+            and o.id != host_id
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            "Sacrifice a permanent for Saw's draw?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines Saw's optional sacrifice"
+            )
+            return
+        if p.agent is None:
+            chosen = options[0]
+        else:
+            pick_id = p.agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options]
+            )
+            chosen = next(
+                (o for o in options if o.id == pick_id), options[0]
+            )
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name} (Saw)"
+        )
+        _sacrifice(state, chosen)
+        draw_n_cards(state, controller_id, 1)
+
+    def describe(self) -> str:
+        return (
+            "you may sacrifice a permanent other than that creature or "
+            "this Equipment; if you do, draw a card"
+        )
+
+
+

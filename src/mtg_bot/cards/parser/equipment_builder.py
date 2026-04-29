@@ -76,7 +76,10 @@ from mtg_bot.cards.parser.keywords import _KEYWORD_LINES, _parse_keyword_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
+from mtg_bot.effects.bespoke import (
+    AtomicMicrosizerAttackEffect,
+    SawAttacksOptionalSacDrawEffect,
+)
 from mtg_bot.effects.generic import (
     AttachToTargetCreatureYouControl,
     CreateToken,
@@ -190,6 +193,23 @@ _ETB_CREATE_GLIMMER_LINE = (
 _ETB_MANIFEST_DREAD_AND_ATTACH_LINE = (
     "When this Equipment enters, manifest dread, then attach this "
     "Equipment to that creature."
+)
+
+
+# Saw's equipped-attacks "may sacrifice a permanent other than that
+# creature or this Equipment. If you do, draw a card." trigger. The
+# legal-sacrifice pool ("permanent other than ...") doesn't fit the
+# narrower ``OptionalSacAnotherForEffect`` (creatures-or-artifacts only)
+# or the artifact-only ``OptionalSacArtifactForEffect`` shapes — Saw
+# accepts ANY permanent the controller controls except the Equipment
+# itself and the equipped creature. The bespoke effect class
+# ``SawAttacksOptionalSacDrawEffect`` encodes this exclusion plus the
+# trailing ``If you do, draw a card.`` rider as one resolve step. The
+# only Equipment in the DSK pool today carrying this exact shape, so a
+# literal-line match is sufficient.
+_EQUIPPED_ATTACKS_SAC_PERMANENT_DRAW_LINE = (
+    "Whenever equipped creature attacks, you may sacrifice a permanent "
+    "other than that creature or this Equipment. If you do, draw a card."
 )
 
 
@@ -434,6 +454,22 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
                 TriggeredAbility(
                     event=Event.ENTERS, predicate=IsSelf(),
                     effect=ManifestDreadThenAttachSelf(),
+                )
+            )
+            continue
+        # Saw's equipped-attacks may-sac-permanent draw rider — bespoke
+        # effect class wraps the (sacrifice, draw) pair plus the
+        # "permanent other than that creature or this Equipment"
+        # exclusion. ``IsHost(subject="attacker")`` matches the
+        # ``Whenever equipped creature attacks`` trigger condition the
+        # same way Atomic Microsizer's bespoke factory wires its attack
+        # trigger.
+        if line == _EQUIPPED_ATTACKS_SAC_PERMANENT_DRAW_LINE:
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ATTACKS,
+                    predicate=IsHost(subject="attacker"),
+                    effect=SawAttacksOptionalSacDrawEffect(),
                 )
             )
             continue

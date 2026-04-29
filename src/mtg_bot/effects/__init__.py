@@ -229,6 +229,7 @@ from mtg_bot.effects.bespoke import (
     RequiemMonolithActivatedEffect,
     RequiemMonolithDealtDamageEffect,
     RovingActuatorETBEffect,
+    SawAttacksOptionalSacDrawEffect,
     SeedshipImpactEffect,
     SelfcraftMechanETBEffect,
     SingularityRuptureEffect,
