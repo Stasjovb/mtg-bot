@@ -180,3 +180,42 @@ def test_drag_to_the_roots_no_cost_reductions():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Drag to the Roots"]
     assert p.cost_reductions == ()
+
+
+# ---------- Come Back Wrong ----------
+
+def test_come_back_wrong_claimed_by_parser():
+    # Come Back Wrong ``{2}{B}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (destroy target creature + conditional reanimate-
+    # to-your-control + delayed end-step sacrifice rider) to bare
+    # ``DestroyTargetCreature()``.
+    assert "Come Back Wrong" in _claimed_names()
+
+
+def test_come_back_wrong_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``DestroyTargetCreature()`` engine class — base
+    # mechanic preserved (the destroy), conditional reanimation +
+    # delayed end-step sacrifice rider dropped (parser-is-right
+    # precedent: Trial of Agony — drop the unmodelable rider, keep
+    # the base mechanic).
+    from mtg_bot.cards.base import DestroyTargetCreature
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Come Back Wrong"]
+    assert p.spell_effect == DestroyTargetCreature()
+
+
+def test_come_back_wrong_is_sorcery():
+    # Type-line carries Sorcery — not Instant — so the spell can
+    # only be cast at sorcery speed.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Come Back Wrong"]
+    assert "Sorcery" in p.card_types
+
+
+def test_come_back_wrong_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Come Back Wrong"]
+    assert p.mana_cost_str == "{2}{B}"

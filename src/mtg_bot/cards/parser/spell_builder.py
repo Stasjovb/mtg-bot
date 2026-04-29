@@ -1383,6 +1383,37 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "graveyard.\n"
         "Destroy target nonland permanent."
     ): DestroyTargetNonlandPermanent(),
+    # Come Back Wrong (Duskmourn) ``{2}{B}`` Sorcery — destroy
+    # target creature with a conditional reanimate-then-sac-next-
+    # end-step rider ("If a creature card is put into a graveyard
+    # this way, return it to the battlefield under your control.
+    # Sacrifice it at the beginning of your next end step."). Whole-
+    # spell exact-text dispatch simplifies to bare
+    # ``DestroyTargetCreature()`` because:
+    # (1) the rider is a conditional reanimation chained to the
+    #     destruction's outcome (only fires if the destroyed
+    #     creature was actually put into a graveyard — tokens,
+    #     indestructible creatures, and replacement-effect-killed
+    #     creatures don't trigger it), plus a one-shot delayed
+    #     end-step sacrifice trigger on the reanimated creature;
+    #     the engine has no "if a creature card was put into
+    #     graveyard this way, reanimate-and-schedule-end-step-sac"
+    #     primitive and no per-target delayed sacrifice trigger
+    #     plumbing;
+    # (2) the per-clause grammar can't claim the second and third
+    #     sentences as standalone spell-effect phrases either —
+    #     both are riders on the resolution of the first sentence,
+    #     not self-contained effects.
+    # Same parser-is-right precedent as Trial of Agony (drop the
+    # multi-target opp-choice + can't-block rider, keep the bare
+    # 5-damage burn): keep the base destroy and drop the
+    # unmodelable conditional reanimation rider.
+    (
+        "Destroy target creature. If a creature card is put into a "
+        "graveyard this way, return it to the battlefield under "
+        "your control. Sacrifice it at the beginning of your next "
+        "end step."
+    ): DestroyTargetCreature(),
 }
 
 
