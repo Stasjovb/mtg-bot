@@ -182,6 +182,7 @@ from mtg_bot.effects import (
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     SetLifeToHalfStartingRoundedUp,
     SwitchSourcePowerToughnessUEOT,
+    ExorciseEffect,
     SingularityRuptureEffect,
     SystemsOverrideEffect,
     TerrapactIntimidatorETBEffect,

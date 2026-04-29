@@ -2953,3 +2953,93 @@ class VengefulPossessionEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class ExorciseEffect(Effect):
+    """Exorcise ``{1}{W}`` (Duskmourn): "Exile target artifact,
+    enchantment, or creature with power 4 or greater."
+
+    Three-way disjunctive target filter — the chosen target must be
+    an artifact OR an enchantment OR a creature whose effective power
+    is at least 4. The first two arms are unconditional (any artifact
+    or enchantment is legal regardless of P/T); only the third arm
+    has the power gate. A permanent that's BOTH an enchantment and
+    a creature (e.g. an enduring creature, an aura'd creature) is
+    legal under the enchantment arm even at low power.
+
+    Exiles via ``move_off_battlefield(state, obj, destination=
+    "exile")`` — the same path ``ExileTargetCreature`` and
+    ``ExileTargetCreatureWithPowerOrToughnessAtMost`` use. Uses
+    effective_power (not printed power) so static anthems and pump
+    auras count toward the 4+ threshold at both targeting and
+    resolution. Re-checks the condition at resolution because a
+    pump between cast and resolve could change effective power
+    (e.g. a -X/-Y debuff trims the attacker below 4 mid-stack).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def _matches(self, state, obj) -> bool:
+        # Defense-in-depth: re-evaluate effective_power against
+        # current state every time we filter, so a target picked at
+        # high power and debuffed mid-stack falls out of the legal
+        # set on the resolve recheck.
+        from mtg_bot.game import effective_power
+
+        if obj.printing.is_artifact:
+            return True
+        if "Enchantment" in obj.printing.card_types:
+            return True
+        if obj.printing.is_creature and effective_power(state, obj) >= 4:
+            return True
+        return False
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if self._matches(state, o)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # Re-check the disjunctive filter at resolve time — a pump
+        # between cast and resolve could push the creature target
+        # below the 4-power threshold (and the artifact / enchantment
+        # arms could fail if the target lost its type via Duskmourn's
+        # Domination's lose-all-abilities or a similar effect, though
+        # that's not common).
+        if not self._matches(state, obj):
+            state.log.append(
+                f"{obj.printing.name} no longer matches "
+                f"artifact/enchantment/4+-power-creature — "
+                f"Exorcise fizzles"
+            )
+            return
+        state.log.append(f"{obj.printing.name} is exiled (Exorcise)")
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return (
+            "exile target artifact, enchantment, or creature with "
+            "power 4 or greater"
+        )
+
+
+
