@@ -8364,3 +8364,100 @@ class ScuttlemuttColorChangeUEOT(Effect):
         )
 
 
+
+@dataclass(frozen=True)
+class LockOrUnlockDoorOfTargetRoomYouControl(Effect):
+    """Keys to the House: "Lock or unlock a door of target Room you
+    control. Activate only as a sorcery."
+
+    Resolves on a target Room permanent the controller controls. The
+    controller chooses one of the Room's two doors to toggle (via
+    ``choose_target`` over the legal-target pool — Rooms — and then
+    ``choose_mode`` over a per-Room ``["lock <X>", "unlock <X>", ...]``
+    label list). The chosen half flips its membership in
+    ``GameObject.unlocked_halves``: a locked half being unlocked is
+    added to the set; an unlocked half being locked is removed.
+
+    The ``Activate only as a sorcery.`` rider is honored at the
+    activated-ability level (``sorcery_speed=True``), not in the
+    effect; the effect itself is happy to resolve at any point.
+
+    Unlike the printed ``UnlockRoomHalf`` action (sorcery-speed special
+    action that pays the half's mana cost), this effect skips the cost
+    payment — the controller's "Keys" sacrifice already paid for the
+    privilege. The unlock side-effects (Eerie observers, etc.) follow
+    the same path the action takes: the predicate-style ENTERS event
+    on a half-name filter does NOT re-fire here because the engine
+    layer's ``_unlock_room_half_with_triggers`` is the canonical entry
+    point. We mirror its observable state change (modify
+    ``unlocked_halves``) without re-firing the per-half on-unlock
+    triggered abilities — keeps the effect surgical.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.controller_id == controller_id
+            and o.printing.is_room
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None or obj.controller_id != controller_id:
+            return
+        if not obj.printing.is_room:
+            return
+        # Build the choose_mode label list: one entry per door, each
+        # pre-prefixed with "lock" or "unlock" depending on the door's
+        # current state. The controller's pick maps directly to the
+        # door name and the new state.
+        labels: list[str] = []
+        actions: list[tuple[str, str]] = []  # (door_name, "lock"/"unlock")
+        for half in obj.printing.room_halves:
+            if half.name in obj.unlocked_halves:
+                labels.append(f"lock {half.name}")
+                actions.append((half.name, "lock"))
+            else:
+                labels.append(f"unlock {half.name}")
+                actions.append((half.name, "unlock"))
+        if not labels:
+            return
+        p = state.player_by_id(controller_id)
+        pick = 0
+        if p.agent is not None:
+            pick = p.agent.choose_mode(state, controller_id, labels)
+            pick = max(0, min(pick, len(labels) - 1))
+        door_name, op = actions[pick]
+        if op == "unlock":
+            obj.unlocked_halves = obj.unlocked_halves | {door_name}
+            state.log.append(
+                f"P{controller_id} unlocks {door_name} on "
+                f"{obj.printing.name}"
+            )
+        else:
+            obj.unlocked_halves = obj.unlocked_halves - {door_name}
+            state.log.append(
+                f"P{controller_id} locks {door_name} on "
+                f"{obj.printing.name}"
+            )
+
+    def describe(self) -> str:
+        return "lock or unlock a door of target Room you control"
+
+

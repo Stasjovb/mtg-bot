@@ -536,3 +536,322 @@ def test_make_artifact_face_down_default_false():
 
     art = make_artifact("Plain", "{1}")
     assert art.looks_at_opponents_face_down_creatures is False
+
+
+# ---------- Keys to the House: Room lock/unlock activation ----------
+
+def test_keys_to_the_house_claimed_by_parser():
+    # Keys to the House ``{1}`` Artifact - claimed via the unified
+    # activated grammar for the first ability (basic-land tutor) plus
+    # the new literal-line dispatch for the second ability (lock/unlock
+    # door of target Room).
+    assert "Keys to the House" in _claimed_names()
+
+
+def test_keys_to_the_house_carries_two_activations():
+    # First ability: ``{1}, {T}, Sacrifice this artifact`` cost +
+    # SearchLibraryForCard(filter_name="basic_land") body via the
+    # unified activated grammar.
+    # Second ability: ``{3}, {T}, Sacrifice this artifact`` cost
+    # (sorcery-speed) + LockOrUnlockDoorOfTargetRoomYouControl body
+    # via the new literal-line dispatch.
+    from mtg_bot.effects import (
+        LockOrUnlockDoorOfTargetRoomYouControl,
+        SearchLibraryForCard,
+    )
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Keys to the House"]
+    assert len(p.activated_abilities) == 2
+    # Tutor ability
+    tutor = next(
+        a for a in p.activated_abilities
+        if isinstance(a.effect, SearchLibraryForCard)
+    )
+    assert tutor.cost.mana_str == "{1}"
+    assert tutor.cost.tap_self is True
+    assert tutor.cost.sacrifice_self is True
+    assert tutor.sorcery_speed is False
+    # Lock/unlock ability
+    lock = next(
+        a for a in p.activated_abilities
+        if isinstance(a.effect, LockOrUnlockDoorOfTargetRoomYouControl)
+    )
+    assert lock.cost.mana_str == "{3}"
+    assert lock.cost.tap_self is True
+    assert lock.cost.sacrifice_self is True
+    assert lock.sorcery_speed is True
+
+
+# ---------- LockOrUnlockDoorOfTargetRoomYouControl engine class ----------
+
+def test_lock_unlock_room_legal_targets_filters_to_your_rooms():
+    # Legal-target pool is "Rooms YOU control" - opponents' Rooms and
+    # non-Rooms are excluded.
+    from mtg_bot.cards.base import (
+        ManaCost, RoomHalf, make_creature,
+    )
+    from mtg_bot.cards.base import CardPrinting
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    # Build a fake Room printing.
+    half_a = RoomHalf(name="A", mana_cost_str="{W}", mana_cost=ManaCost(generic=0))
+    half_b = RoomHalf(name="B", mana_cost_str="{U}", mana_cost=ManaCost(generic=0))
+    room_pr = CardPrinting(
+        name="Test Room",
+        mana_cost_str="{W}",
+        mana_cost=ManaCost(generic=0),
+        type_line="Enchantment - Room",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Room",),
+        room_halves=(half_a, half_b),
+    )
+    yours_room = GameObject(
+        id=1, printing=room_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A"}),
+    )
+    theirs_room = GameObject(
+        id=2, printing=room_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A"}),
+    )
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=3, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[yours_room, theirs_room, bear],
+    )
+    legal = LockOrUnlockDoorOfTargetRoomYouControl().legal_targets(
+        state, controller_id=0,
+    )
+    assert ("permanent", 1) in legal  # your Room
+    assert ("permanent", 2) not in legal  # opponent's Room
+    assert ("permanent", 3) not in legal  # non-Room
+
+
+def test_lock_unlock_room_describe():
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+
+    desc = LockOrUnlockDoorOfTargetRoomYouControl().describe()
+    assert "lock" in desc
+    assert "unlock" in desc
+    assert "Room" in desc
+
+
+def test_lock_unlock_room_unlocks_chosen_door():
+    # Default agent (no choose_mode override) picks index 0. With one
+    # door locked and one unlocked, the labels are
+    # ["lock A", "unlock B"]; pick=0 picks "lock A" → unlocks_halves
+    # loses "A".
+    from mtg_bot.cards.base import ManaCost, RoomHalf
+    from mtg_bot.cards.base import CardPrinting
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _AgentPicksUnlock:
+        def choose_mode(self, state, pid, labels):
+            for i, lab in enumerate(labels):
+                if lab.startswith("unlock"):
+                    return i
+            return 0
+
+    half_a = RoomHalf(
+        name="A", mana_cost_str="{W}", mana_cost=ManaCost(generic=0),
+    )
+    half_b = RoomHalf(
+        name="B", mana_cost_str="{U}", mana_cost=ManaCost(generic=0),
+    )
+    room_pr = CardPrinting(
+        name="Test Room",
+        mana_cost_str="{W}",
+        mana_cost=ManaCost(generic=0),
+        type_line="Enchantment - Room",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Room",),
+        room_halves=(half_a, half_b),
+    )
+    room = GameObject(
+        id=1, printing=room_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A"}),  # B is locked
+    )
+    p0 = Player(id=0, agent=_AgentPicksUnlock())
+    state = GameState(
+        players=[p0, Player(id=1)],
+        battlefield=[room],
+    )
+    LockOrUnlockDoorOfTargetRoomYouControl().resolve(
+        state, controller_id=0, targets=(("permanent", 1),),
+    )
+    # B is now unlocked.
+    assert "B" in room.unlocked_halves
+    assert "A" in room.unlocked_halves
+
+
+def test_lock_unlock_room_locks_chosen_door():
+    # Picking the "lock <X>" label removes that half from
+    # unlocked_halves.
+    from mtg_bot.cards.base import ManaCost, RoomHalf
+    from mtg_bot.cards.base import CardPrinting
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _AgentPicksLock:
+        def choose_mode(self, state, pid, labels):
+            for i, lab in enumerate(labels):
+                if lab.startswith("lock"):
+                    return i
+            return 0
+
+    half_a = RoomHalf(
+        name="A", mana_cost_str="{W}", mana_cost=ManaCost(generic=0),
+    )
+    half_b = RoomHalf(
+        name="B", mana_cost_str="{U}", mana_cost=ManaCost(generic=0),
+    )
+    room_pr = CardPrinting(
+        name="Test Room",
+        mana_cost_str="{W}",
+        mana_cost=ManaCost(generic=0),
+        type_line="Enchantment - Room",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Room",),
+        room_halves=(half_a, half_b),
+    )
+    room = GameObject(
+        id=1, printing=room_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A", "B"}),  # both unlocked
+    )
+    p0 = Player(id=0, agent=_AgentPicksLock())
+    state = GameState(
+        players=[p0, Player(id=1)],
+        battlefield=[room],
+    )
+    LockOrUnlockDoorOfTargetRoomYouControl().resolve(
+        state, controller_id=0, targets=(("permanent", 1),),
+    )
+    # Only one half is now unlocked (whichever was picked).
+    assert len(room.unlocked_halves) == 1
+
+
+def test_lock_unlock_room_no_target_is_noop():
+    # A 0-target resolution is a silent no-op.
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    LockOrUnlockDoorOfTargetRoomYouControl().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # Nothing to assert beyond "didn't raise".
+
+
+def test_lock_unlock_room_invalid_target_is_noop():
+    # Defensive: non-Room target, missing object, wrong kind, or
+    # opponent-controlled Room are all silent no-ops.
+    from mtg_bot.cards.base import (
+        ManaCost, RoomHalf, make_creature,
+    )
+    from mtg_bot.cards.base import CardPrinting
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=3, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    half_a = RoomHalf(
+        name="A", mana_cost_str="{W}", mana_cost=ManaCost(generic=0),
+    )
+    half_b = RoomHalf(
+        name="B", mana_cost_str="{U}", mana_cost=ManaCost(generic=0),
+    )
+    room_pr = CardPrinting(
+        name="Test Room",
+        mana_cost_str="{W}",
+        mana_cost=ManaCost(generic=0),
+        type_line="Enchantment - Room",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Room",),
+        room_halves=(half_a, half_b),
+    )
+    theirs_room = GameObject(
+        id=2, printing=room_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A"}),
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[bear, theirs_room],
+    )
+    eff = LockOrUnlockDoorOfTargetRoomYouControl()
+    # Wrong kind.
+    eff.resolve(
+        state, controller_id=0, targets=(("creature", 3),),
+    )
+    # Missing object.
+    eff.resolve(
+        state, controller_id=0, targets=(("permanent", 999),),
+    )
+    # Non-Room.
+    eff.resolve(
+        state, controller_id=0, targets=(("permanent", 3),),
+    )
+    # Opponent-controlled Room.
+    eff.resolve(
+        state, controller_id=0, targets=(("permanent", 2),),
+    )
+    # All no-ops; opponent Room state unchanged.
+    assert theirs_room.unlocked_halves == frozenset({"A"})
+
+
+def test_lock_unlock_room_no_agent_uses_index_zero():
+    # When the controller has no agent, the effect picks index 0 of
+    # the labels list (the first door's natural lock-or-unlock toggle)
+    # rather than raising.
+    from mtg_bot.cards.base import ManaCost, RoomHalf
+    from mtg_bot.cards.base import CardPrinting
+    from mtg_bot.effects import LockOrUnlockDoorOfTargetRoomYouControl
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    half_a = RoomHalf(
+        name="A", mana_cost_str="{W}", mana_cost=ManaCost(generic=0),
+    )
+    half_b = RoomHalf(
+        name="B", mana_cost_str="{U}", mana_cost=ManaCost(generic=0),
+    )
+    room_pr = CardPrinting(
+        name="Test Room",
+        mana_cost_str="{W}",
+        mana_cost=ManaCost(generic=0),
+        type_line="Enchantment - Room",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Room",),
+        room_halves=(half_a, half_b),
+    )
+    room = GameObject(
+        id=1, printing=room_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+        unlocked_halves=frozenset({"A"}),
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[room],
+    )
+    # No agent on player 0 → picks index 0 = "lock A" → A removed.
+    LockOrUnlockDoorOfTargetRoomYouControl().resolve(
+        state, controller_id=0, targets=(("permanent", 1),),
+    )
+    assert "A" not in room.unlocked_halves

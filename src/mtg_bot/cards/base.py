@@ -32,6 +32,7 @@ from mtg_bot.effects import (
     ExileTargetAttackingCreatureUntilEndStep,
     GrantLifeToEachOpponent,
     GrantUnblockableUEOT,
+    LockOrUnlockDoorOfTargetRoomYouControl,
     PutBasicLandFromHandOntoBattlefieldTapped,
     ReturnTargetLandFromGraveyardToHand,
     SacrificeNLandsYouControl,

@@ -118,6 +118,7 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CostReduction,
     DrawCards,
+    LockOrUnlockDoorOfTargetRoomYouControl,
     MemorialVaultActivatedEffect,
     PinnacleStarcageETBEffect,
     PinnacleStarcageSacEffect,
@@ -205,6 +206,30 @@ def _pinnacle_starcage_sac_activation() -> ActivatedAbility:
     )
 
 
+def _keys_to_the_house_lock_or_unlock_activation() -> ActivatedAbility:
+    """Build Keys to the House's ``{3}, {T}, Sacrifice this artifact``
+    sorcery-speed activation: "Lock or unlock a door of target Room
+    you control."
+
+    The activation is parser-roundtrip equivalent to the supported
+    cost shape ``{3}, {T}, Sacrifice this artifact`` (existing
+    activated cost grammar) plus the new generic
+    ``LockOrUnlockDoorOfTargetRoomYouControl`` engine class for the
+    body. The trailing ``Activate only as a sorcery.`` rider lifts to
+    ``sorcery_speed=True`` on the ability.
+    """
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{3}"),
+            mana_str="{3}",
+            tap_self=True,
+            sacrifice_self=True,
+        ),
+        effect=LockOrUnlockDoorOfTargetRoomYouControl(),
+        sorcery_speed=True,
+    )
+
+
 def _all_fates_scroll_draw_activation() -> ActivatedAbility:
     """Build All-Fates Scroll's ``{7}, {T}, Sacrifice this artifact``
     activation drawing X cards (X = number of differently named lands
@@ -255,6 +280,21 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "creature token for each card put into a graveyard this way. "
     "Sacrifice this artifact.":
         _pinnacle_starcage_sac_activation,
+    # Keys to the House — sorcery-speed lock/unlock-door activation.
+    # The cost ``{3}, {T}, Sacrifice this artifact`` is parser-grammar
+    # standard; only the body ``Lock or unlock a door of target Room
+    # you control.`` is bespoke (no other printed card uses this body
+    # in the current pool, so the new ``LockOrUnlockDoorOfTargetRoom
+    # YouControl`` engine class lives in ``effects.generic`` reserved
+    # for future Keys-style printings). Inline ``Activate only as a
+    # sorcery.`` rider flips ``sorcery_speed=True``. The first ability
+    # ``{1}, {T}, Sacrifice this artifact: Search your library for a
+    # basic land card, reveal it, put it into your hand, then shuffle.``
+    # parses through the unified activated grammar (the basic-land-tutor
+    # primitive) - no literal entry needed for that line.
+    "{3}, {T}, Sacrifice this artifact: Lock or unlock a door of "
+    "target Room you control. Activate only as a sorcery.":
+        _keys_to_the_house_lock_or_unlock_activation,
 }
 
 

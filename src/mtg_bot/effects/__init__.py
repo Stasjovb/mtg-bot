@@ -97,6 +97,7 @@ from mtg_bot.effects.generic import (
     GrantTriggeredAbilityUEOT,
     GrantUnblockableUEOT,
     IfGainedLifeThisTurnUntapSelf,
+    LockOrUnlockDoorOfTargetRoomYouControl,
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
