@@ -102,7 +102,10 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
-from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
+from mtg_bot.cards.parser.cost_reduction import (
+    _parse_cost_reduction_line,
+    _parse_external_cost_reduction_line,
+)
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_devour_line,
     _parse_enters_tapped_line,
@@ -168,17 +171,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             subtypes=("Beast",),
             ward="{2}",
             dynamic_pt_formula="harmonious_grovestrider",
-        ),
-        # Uthros Psionicist {2}{U} 2/4.
-        # "The second spell you cast each turn costs {2} less to cast."
-        "Uthros Psionicist": make_creature(
-            "Uthros Psionicist", "{2}{U}", 2, 4,
-            external_cost_reductions=(
-                ExternalCostReduction(
-                    amount=2,
-                    condition="second_spell_this_turn",
-                ),
-            ),
         ),
         # Illvoi Infiltrator {2}{U} 1/3.
         # Static flag: unblockable when controller has cast 2+ spells.
@@ -1120,20 +1112,6 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Sami, Wildcat Captain `{4}{R}{W}` 4/4 Legendary Creature —
-        # Human Artificer Rogue. Double strike, vigilance.
-        # Static: spells you cast have affinity for artifacts ({1} less
-        # per artifact you control).
-        "Sami, Wildcat Captain": make_creature(
-            "Sami, Wildcat Captain", "{4}{R}{W}", 4, 4,
-            keywords={"double strike", "vigilance"},
-            legendary=True,
-            external_cost_reductions=(
-                ExternalCostReduction(
-                    amount=1, condition="affinity_for_artifacts",
-                ),
-            ),
-        ),
         # Alpharael, Dreaming Acolyte `{1}{U}{B}` 2/3 Legendary Creature
         # — Human Cleric.
         # ETB: draw two cards, then discard two unless you discard an
@@ -1426,6 +1404,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     activated: list[ActivatedAbility] = []
     statics: list[StaticAbility] = []
     cost_reductions: list[CostReduction] = []
+    external_cost_reductions: list[ExternalCostReduction] = []
     warp: str | None = None
     ward: str | None = None
     ward_discard_chosen = False
@@ -1545,6 +1524,16 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # today, but the engine handles a tuple).
             cost_reductions.append(cost_reduction)
             continue
+        external_cost_reduction = _parse_external_cost_reduction_line(line)
+        if external_cost_reduction is not None:
+            # Permanent-on-battlefield static that grants a flat cost
+            # reduction to OTHER spells the controller casts (e.g.
+            # Uthros Psionicist's ``The second spell you cast each turn
+            # costs {2} less to cast.``). Accumulated; the engine's
+            # ``apply_cost_reductions`` scans every ETB permanent for
+            # these at cast time.
+            external_cost_reductions.append(external_cost_reduction)
+            continue
         if _is_sorcery_rider_line(line):
             # The rider attaches to the immediately preceding activated
             # ability on the same card. With no preceding ability there's
@@ -1586,6 +1575,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         activated_abilities=tuple(activated),
         static_abilities=tuple(statics),
         cost_reductions=tuple(cost_reductions),
+        external_cost_reductions=tuple(external_cost_reductions),
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
