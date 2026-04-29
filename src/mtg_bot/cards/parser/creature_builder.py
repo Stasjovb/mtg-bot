@@ -55,7 +55,6 @@ from mtg_bot.cards.base import (
     DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyTargetNonlandPermanent,
     DrawCards,
-    DrawCardsEqualToResolvingCombatDamage,
     DyadrineAttackEffect,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
@@ -65,7 +64,6 @@ from mtg_bot.cards.base import (
     HouseCartographerSurvivalEffect,
     IfGainedLifeThisTurnUntapSelf,
     KavaronHarrierAttackEffect,
-    LookAtTopNRevealOrCounter,
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -135,7 +133,6 @@ from mtg_bot.effects.predicates import (
     IsArtifact,
     IsCreature,
     IsLand,
-    IsPlayer,
     IsSelf,
     IsTapped,
     SpellsCastThisTurn,
@@ -213,24 +210,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                         ),
                         PutPlusOneCounterOnEachCreatureYouControl(amount=1),
                     )),
-                ),
-            ),
-        ),
-        # Starwinder {5}{U}{U} 7/7. Warp {2}{U}{U}.
-        # Trigger: whenever a creature you control deals combat damage to
-        # a player, draw that many cards.
-        "Starwinder": make_creature(
-            "Starwinder", "{5}{U}{U}", 7, 7,
-            warp="{2}{U}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsCreature(subject="source")
-                        & Controlled(YOU, subject="source")
-                        & IsPlayer(subject="target")
-                    ),
-                    effect=DrawCardsEqualToResolvingCombatDamage(),
                 ),
             ),
         ),
@@ -359,54 +338,12 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Pulsar Squadron Ace {1}{W} 1/2 Human Pilot.
-        # ETB: look at top 5, may reveal Spacecraft → hand; if not,
-        # put a +1/+1 counter on this creature.
-        "Pulsar Squadron Ace": make_creature(
-            "Pulsar Squadron Ace", "{1}{W}", 1, 2,
-            subtypes=("Human", "Pilot"),
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=LookAtTopNRevealOrCounter(
-                        n=5, filter_name="spacecraft",
-                    ),
-                ),
-            ),
-        ),
         # ── Batch 22b ──────────────────────────────────────────────────
         # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
         # Simplified: drops ETB "each opponent exiles a card" clause.
         "Lightstall Inquisitor": make_creature(
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
-        ),
-        # Biomechan Engineer {G}{U} 2/2 Insect Artificer.
-        # ETB: create a Lander token.
-        # Activated: {8} → draw 2 + create Robot token.
-        "Biomechan Engineer": make_creature(
-            "Biomechan Engineer", "{G}{U}", 2, 2,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Lander"],
-                        count=1,
-                    ),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{8}"),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        CreateToken(
-                            token_printing=TOKEN_PRINTINGS["Robot"],
-                            count=1,
-                        ),
-                    )),
-                ),
-            ),
         ),
         # Blade of the Swarm {3}{B} 3/1 Insect Assassin. Warp {1}{B}.
         # ETB modal: put 2 +1/+1 counters on self OR put target warped
