@@ -374,6 +374,42 @@ def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
     return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
 
 
+# ``This creature gets +X/+0, where X is the greatest mana value among
+# other artifacts you control.`` — Emissary Escort's printed dynamic-
+# power static. The engine wires the dynamic P/T off the printing-level
+# ``dynamic_pt_formula`` string field (rather than a generic
+# ``StaticAbility`` shape, since the formula evaluation lives in
+# ``game._dynamic_pt`` and reads the controller's battlefield each
+# query). Matched as a literal string — Emissary Escort is the only
+# card in the pool with this exact surface today; "broader grammar
+# deferred until a second example exists" (a future printing whose
+# X-source phrase differs — e.g. ``+X/+0 where X is the number of
+# artifacts you control``, or a different baseline P/T offset — would
+# parameterize this recognizer's X-source capture).
+_EMISSARY_ESCORT_DYNAMIC_PT_LINE = (
+    "This creature gets +X/+0, where X is the greatest mana value "
+    "among other artifacts you control."
+)
+
+
+def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
+    """Return ``"emissary_escort"`` if ``line`` is Emissary Escort's
+    printed dynamic-power static, else ``None``. The returned string is
+    the formula key consumed by ``game._dynamic_pt``; the creature
+    builder forwards it as the ``dynamic_pt_formula`` kwarg on
+    ``make_creature``.
+
+    Distinct from a boolean recognizer because future X-source variants
+    (different formula keys mapping to different in-engine
+    computations) will share this same recognizer slot — each new
+    surface form lands its own line→key entry while the wiring stays
+    centralized.
+    """
+    if line.strip() == _EMISSARY_ESCORT_DYNAMIC_PT_LINE:
+        return "emissary_escort"
+    return None
+
+
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of
 # the five basic-land subtypes. CR 702.29 typecycling — while the card
 # is in the controller's hand, they may pay the cycling cost and discard

@@ -108,6 +108,7 @@ from mtg_bot.cards.parser.cost_reduction import (
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
+    _parse_emissary_escort_dynamic_pt_line,
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
@@ -714,15 +715,6 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
     ``"Artifact"`` appearing in the card's ``type_line``.
     """
     return {
-        # Emissary Escort {1}{U} 0/4 Robot Soldier.
-        # "This creature gets +X/+0, where X is the greatest mana value
-        # among other artifacts you control." — dynamic P/T formula.
-        "Emissary Escort": make_creature(
-            "Emissary Escort", "{1}{U}", 0, 4,
-            artifact=True,
-            subtypes=("Robot", "Soldier"),
-            dynamic_pt_formula="emissary_escort",
-        ),
         # Gene Pollinator {G} 1/2 Robot Insect.
         # Real oracle: "{T}, Tap an untapped permanent you control: Add
         # one mana of any color." — activated mana ability not yet in
@@ -1333,6 +1325,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     replaces_draw_with_extra_when_hand_at_most_one = False
     attack_bypass_if_artifact_entered_this_turn = False
     unblockable_if_two_spells_cast_this_turn = False
+    dynamic_pt_formula: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1494,6 +1487,19 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # once.
             unblockable_if_two_spells_cast_this_turn = True
             continue
+        dpt_key = _parse_emissary_escort_dynamic_pt_line(line)
+        if dpt_key is not None:
+            # ``This creature gets +X/+0, where X is the greatest mana
+            # value among other artifacts you control.`` — Emissary
+            # Escort's printed dynamic-power static. Sets the
+            # ``dynamic_pt_formula`` kwarg below to the formula key
+            # ``"emissary_escort"``; the engine reads the key in
+            # ``game._dynamic_pt`` and applies the +X/+0 over the
+            # printed P/T at every P/T query. A card carries at most
+            # one dynamic-PT clause; a malformed printing with the line
+            # twice keeps the same key (idempotent).
+            dynamic_pt_formula = dpt_key
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1599,4 +1605,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         unblockable_if_two_spells_cast_this_turn=(
             unblockable_if_two_spells_cast_this_turn
         ),
+        dynamic_pt_formula=dynamic_pt_formula,
     )
