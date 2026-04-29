@@ -77,6 +77,7 @@ from mtg_bot.cards.base import (
     make_utility_land,
     parse_mana_cost,
 )
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import YOU, Controlled, Event, IsCreature, IsSelf
 
@@ -310,22 +311,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                     effect=PumpTargetCreatureUntilEOT(
                         power_bonus=1, toughness_bonus=1,
                         target_subtype="Blinkmoth",
-                    ),
-                ),
-            ),
-        ),
-        # Inkmoth Nexus: {T}: Add {C}. {1}: → 1/1 Phyrexian Blinkmoth artifact
-        # creature with flying and infect UEOT.
-        "Inkmoth Nexus": make_utility_land(
-            "Inkmoth Nexus",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"), mana_str="{1}",
-                    ),
-                    effect=BecomeLandCreatureUEOT(
-                        power=1, toughness=1,
-                        granted_keywords=frozenset({"flying", "infect"}),
                     ),
                 ),
             ),
@@ -1424,6 +1409,13 @@ def _paid_effect_become_2_2_all_creature_types() -> Effect:
     return BecomeLandCreatureUEOT(power=2, toughness=2)
 
 
+def _paid_effect_become_inkmoth_nexus() -> Effect:
+    return BecomeLandCreatureUEOT(
+        power=1, toughness=1,
+        granted_keywords=frozenset({"flying", "infect"}),
+    )
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -1450,6 +1442,25 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "This land becomes a 2/2 creature with all creature types "
     "until end of turn. It's still a land":
         _paid_effect_become_2_2_all_creature_types,
+    # Inkmoth Nexus's ``{1}: This land becomes a 1/1 Phyrexian
+    # Blinkmoth artifact creature with flying and infect until end
+    # of turn. It's still a land.`` (with the inline infect
+    # reminder stripped earlier). The static side simplifies the
+    # printed "Phyrexian Blinkmoth artifact" subtype/type tail to a
+    # plain creature animation that keeps only the granted keywords
+    # (flying + infect); the body literal pins that simplification
+    # by mapping the full printed sentence to a fresh
+    # ``BecomeLandCreatureUEOT`` with those two keywords. Currently
+    # the only EoS land matching this body literal is Inkmoth
+    # Nexus; deferred generalization would parameterize the P/T
+    # capture, granted-subtype/type capture, and keyword tail when a
+    # sibling printing of similar shape (Blinkmoth Nexus, on its
+    # own multi-ability shape, doesn't fit this two-line arm)
+    # appears.
+    "This land becomes a 1/1 Phyrexian Blinkmoth artifact "
+    "creature with flying and infect until end of turn. It's "
+    "still a land":
+        _paid_effect_become_inkmoth_nexus,
 }
 
 
@@ -1490,6 +1501,13 @@ def _try_build_paid_effect_utility_land(
     without tapping, so ``tap_self`` is conditionally set on the
     ``ActivationCost`` only when the regex's ``tap`` group matched.
 
+    Per-line reminder text is stripped via ``_strip_reminder_text``
+    before any matching: Inkmoth Nexus's animation line carries an
+    inline ``(It deals damage to creatures in the form of -1/-1
+    counters and to players in the form of poison counters.)``
+    parenthetical that the engine doesn't need to see; stripping it
+    here keeps the body literal in ``_PAID_EFFECT_BODIES`` clean.
+
     The optional rider is a fixed activation-condition phrase (e.g.
     Bonders' Enclave's ``Activate only if you control a creature
     with power 4 or greater``) that maps to an ``ActivationCost``
@@ -1500,9 +1518,10 @@ def _try_build_paid_effect_utility_land(
         return None
     if subtypes:
         return None
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    if len(lines) != 2:
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 2:
         return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
     if lines[0] != _TAP_FOR_C_LINE:
         return None
     paid_match = _PAID_EFFECT_RE.match(lines[1])
