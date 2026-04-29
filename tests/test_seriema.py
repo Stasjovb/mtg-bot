@@ -1,4 +1,15 @@
-"""Tests for The Seriema's 7+ tapped-legendary-indestructible static."""
+"""Tests for The Seriema's tapped-legendary-indestructible static.
+
+The printed oracle text reads ``Other tapped legendary creatures you
+control have indestructible.`` with no tier-gate prefix (no ``N+ |``),
+so the static is always-on the moment Seriema is on the battlefield —
+it does not depend on Seriema being stationed or having any specific
+charge counter count. The previous bespoke factory wired
+``tier_threshold=7`` which was faithfulness drift; the parser-built
+printing drops that synthetic gate and the tests below pin the
+faithful printed behaviour (the static fires regardless of charge
+counters).
+"""
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import SYNTHETIC_CREATURES, TOKEN_PRINTINGS
@@ -33,12 +44,16 @@ def _legendary_bear(state, controller_id):
     )
 
 
-def test_seriema_7plus_tier_grants_indestructible_to_tapped_legendaries():
+def test_seriema_grants_indestructible_to_tapped_legendaries():
+    """The static is always-on (printed without an ``N+ |`` tier
+    prefix). With Seriema on the battlefield, every other tapped
+    legendary creature the controller controls gains indestructible
+    regardless of charge counters."""
     state = _new_state()
     seriema = state.new_object(
         _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
-    seriema.charge_counters = 7  # 7+ tier active
+    seriema.charge_counters = 7
     state.battlefield.append(seriema)
     leg = _legendary_bear(state, 0)
     leg.tapped = True
@@ -47,18 +62,24 @@ def test_seriema_7plus_tier_grants_indestructible_to_tapped_legendaries():
     assert "indestructible" in kws
 
 
-def test_seriema_tier_below_7_no_grant():
+def test_seriema_grants_indestructible_below_station_threshold():
+    """The static fires even before Seriema accumulates enough charge
+    counters to station — the printed text has no tier-gate prefix, so
+    the engine should observe the indestructible grant the moment
+    Seriema is on the battlefield. Pins the faithful interpretation of
+    the printed always-on shape; the previous bespoke factory's
+    ``tier_threshold=7`` was synthetic faithfulness drift."""
     state = _new_state()
     seriema = state.new_object(
         _PRINTINGS["The Seriema"], 0, Zone.BATTLEFIELD,
     )
-    seriema.charge_counters = 6
+    seriema.charge_counters = 0  # un-stationed
     state.battlefield.append(seriema)
     leg = _legendary_bear(state, 0)
     leg.tapped = True
     state.battlefield.append(leg)
     kws = effective_keywords(state, leg)
-    assert "indestructible" not in kws
+    assert "indestructible" in kws
 
 
 def test_seriema_doesnt_grant_to_untapped_legendaries():

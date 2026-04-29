@@ -231,6 +231,16 @@ _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
     # broader ``OTHER_PERMANENTS_YOU_CONTROL`` scope ships, this entry
     # should switch to that scope to recover full faithfulness.
     "other permanents you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    # The Seriema's printed always-on static — narrows the anthem to
+    # legendary creatures the controller controls AND that are tapped,
+    # excluding the source. The engine's ``applies_to`` already
+    # implements this filter (see ``StaticScope.OTHER_TAPPED_
+    # LEGENDARY_CREATURES_YOU_CONTROL`` branch in ``effects/base.py``);
+    # it does not depend on the source being a creature, so the static
+    # fires whether or not the Spacecraft is stationed.
+    "other tapped legendary creatures you control": (
+        StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL
+    ),
 }
 
 # The subject's first letter is capitalized at the start of an oracle
@@ -242,7 +252,8 @@ _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
 _ANTHEM_SUBJECT_RE = (
     r"(?P<subject>[Cc]reatures you control"
     r"|[Oo]ther creatures you control"
-    r"|[Oo]ther permanents you control)"
+    r"|[Oo]ther permanents you control"
+    r"|[Oo]ther tapped legendary creatures you control)"
 )
 _ANTHEM_TURN_RIDER_RE = r"(?P<turn_rider>During your turn, )?"
 

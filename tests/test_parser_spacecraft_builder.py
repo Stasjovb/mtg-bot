@@ -221,6 +221,63 @@ def test_build_spacecraft_printing_skips_etb_with_unparseable_effect():
     assert _build_spacecraft_printing(card) is None
 
 
+def test_build_spacecraft_printing_claims_the_seriema():
+    """The Seriema's printed body parses through the unified clause
+    grammar to a Legendary Spacecraft with:
+    - ETB ``SearchLibraryForCard(filter_name="legendary_creature",
+      may_fail=False)``,
+    - 7+ tier flying (``stationed_keywords={"flying"}``,
+      ``station_threshold=7``),
+    - always-on (``tier_threshold=0``) ``OTHER_TAPPED_LEGENDARY_
+      CREATURES_YOU_CONTROL`` indestructible static.
+
+    The static is intentionally NOT tier-gated — the printed text has
+    no ``N+ |`` prefix, so the static fires whenever Seriema is on the
+    battlefield regardless of charge counters."""
+    from mtg_bot.cards.base import StaticAbility
+    from mtg_bot.effects.base import StaticScope as _Scope
+    from mtg_bot.effects.generic import SearchLibraryForCard
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    card = {
+        "name": "The Seriema",
+        "mana_cost": "{1}{W}{W}",
+        "type_line": "Legendary Artifact — Spacecraft",
+        "power": "5",
+        "toughness": "5",
+        "oracle_text": (
+            "When The Seriema enters, search your library for a "
+            "legendary creature card, reveal it, put it into your "
+            "hand, then shuffle.\n"
+            "Station (Tap another creature you control: Put charge "
+            "counters equal to its power on this Spacecraft. Station "
+            "only as a sorcery. It's an artifact creature at 7+.)\n"
+            "7+ | Flying\n"
+            "Other tapped legendary creatures you control have "
+            "indestructible."
+        ),
+    }
+    printing = _build_spacecraft_printing(card)
+    assert printing is not None
+    assert "Legendary" in printing.supertypes
+    assert printing.station_threshold == 7
+    assert printing.stationed_keywords == frozenset({"flying"})
+    assert len(printing.triggered_abilities) == 1
+    trig = printing.triggered_abilities[0]
+    assert trig.event == Event.ENTERS
+    assert trig.predicate == IsSelf()
+    assert trig.effect == SearchLibraryForCard(
+        filter_name="legendary_creature", may_fail=False,
+    )
+    assert printing.static_abilities == (
+        StaticAbility(
+            scope=_Scope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL,
+            granted_keywords=frozenset({"indestructible"}),
+            tier_threshold=0,
+        ),
+    )
+
+
 def test_build_spacecraft_printing_claims_rescue_skiff():
     """Rescue Skiff's printed ETB body — ``return target creature or
     enchantment card from your graveyard to the battlefield`` — is

@@ -289,7 +289,8 @@ class StaticScope:
     CREATURES_YOU_CONTROL = "creatures_you_control"
     CREATURES_YOU_CONTROL_WITH_COUNTER = "creatures_you_control_with_counter"
     SELF = "self"  # only the source itself
-    # Other tapped legendary creatures you control — The Seriema's 7+.
+    # Other tapped legendary creatures you control — The Seriema's
+    # printed always-on static.
     OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL = (
         "other_tapped_legendary_creatures_you_control"
     )

@@ -212,34 +212,6 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
                 ),
             ),
         ),
-        # The Seriema: Legendary. ETB search library for a legendary creature
-        # card → hand. 7+ tier static — other tapped legendary creatures you
-        # control have indestructible. Station 7+ flying.
-        make_spacecraft(
-            "The Seriema", "{1}{W}{W}", 5, 5,
-            station_threshold=7,
-            stationed_keywords={"flying"},
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SearchLibraryForCard(
-                        filter_name="legendary_creature",
-                        may_fail=False,
-                    ),
-                ),
-            ),
-            static_abilities=(
-                StaticAbility(
-                    scope=(
-                        StaticScope
-                        .OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL
-                    ),
-                    granted_keywords=frozenset({"indestructible"}),
-                    tier_threshold=7,
-                ),
-            ),
-        ),
         # The Eternity Elevator: Legendary Artifact — Spacecraft but has no
         # printed P/T (never animates). The artifact_builder rejects
         # Spacecraft-subtyped cards, so ship it here as a plain artifact
@@ -510,11 +482,38 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             # construction.
             activateds.append(clause.activated)
             continue
+        if clause.static is not None:
+            # Standalone (non-tier-gated) anthem static. The Seriema's
+            # ``Other tapped legendary creatures you control have
+            # indestructible.`` is the EoE printing in this shape: the
+            # static is printed without an ``N+ |`` tier prefix, so it
+            # is always-on (``tier_threshold=0``) — fires as soon as the
+            # source is on the battlefield, regardless of charge
+            # counters. The tier-line static arm above admits a
+            # superset of anthem scopes (``CREATURES_YOU_CONTROL`` /
+            # ``OTHER_CREATURES_YOU_CONTROL``); this non-tier path
+            # additionally admits the narrower
+            # ``OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL`` scope
+            # because (a) the engine's ``applies_to`` already filters
+            # the target permanent without referencing the source's
+            # creature status, and (b) the printed surface contains no
+            # gating clause that would map to a tier threshold. SELF-
+            # scoped statics remain rejected on the same grounds as
+            # the tier-line arm: the engine would require the source
+            # be a creature, which a Spacecraft only is at-or-above
+            # its station threshold — modeling that correctly needs
+            # an engine-side change for tier-gated stationed-keyword
+            # grants and is out of scope.
+            static_ab = clause.static
+            if static_ab.scope == StaticScope.SELF:
+                return None
+            statics.append(static_ab)
+            continue
         if clause.trigger is None:
-            # The clause parsed but as a non-trigger and non-activated
-            # (static keyword, granted-keyword line). This builder
-            # doesn't model those on Spacecraft yet - skip rather than
-            # silently drop the ability.
+            # The clause parsed but as a non-trigger / non-activated /
+            # non-static (e.g. a granted-keyword self-keyword line).
+            # This builder doesn't model those on Spacecraft yet -
+            # skip rather than silently drop the ability.
             return None
         trig = clause.trigger
         if trig.predicate != IsSelf():

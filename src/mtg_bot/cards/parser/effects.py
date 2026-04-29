@@ -624,6 +624,30 @@ _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
     r"^search your library for a basic land card, "
     r"reveal it, put it into your hand, then shuffle$"
 )
+# "Search your library for a legendary creature card, reveal it, put
+# it into your hand, then shuffle." — The Seriema's ETB body (the only
+# EoE/DSK printing of this exact filter today). Maps to
+# ``SearchLibraryForCard(filter_name="legendary_creature",
+# may_fail=False)``. The printed text contains no "you may" rider, so
+# ``may_fail=False`` is the faithful reading: when a legendary creature
+# card exists in the library, the controller MUST take one. This
+# differs from the ``may_fail=True`` semantics the older
+# ``_SEARCH_LIBRARY_FOR_ARTIFACT_CARD`` /
+# ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD`` recognizers ship — those two
+# pre-date the explicit-faithfulness rules and should likely flip to
+# ``may_fail=False`` in a future pass; doing so here would change
+# behaviour pinned by many existing tests, so it's out of scope for
+# this batch. Literal-line recognizer because The Seriema is the only
+# EoE/DSK card printing this exact "legendary creature card" filter
+# in the reveal/hand/shuffle shape today; broader generalization
+# (parameterizing the filter substring across artifact / basic land /
+# legendary creature shapes into one regex) is deferred until the
+# may_fail-faithfulness cleanup above merges the existing two literals
+# at the same time.
+_SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD = re.compile(
+    r"^search your library for a legendary creature card, "
+    r"reveal it, put it into your hand, then shuffle$"
+)
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger
 # (the tapped-onto-battlefield reward form). Same fetch-land payload
@@ -2362,6 +2386,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         # hand, then shuffle`` printing landing here will keep parity.
         return SearchLibraryForCard(
             filter_name="basic_land", may_fail=True,
+        )
+    if _SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD.match(
+        phrase
+    ) is not None:
+        # ``search your library for a legendary creature card, reveal
+        # it, put it into your hand, then shuffle`` — The Seriema's ETB
+        # body. Maps to
+        # ``SearchLibraryForCard(filter_name="legendary_creature",
+        # may_fail=False)``. ``may_fail=False`` reflects the faithful
+        # reading of the printed text (no "you may" rider). See the
+        # regex comment for the deferred unification with the
+        # ``may_fail=True`` artifact / basic-land siblings above.
+        return SearchLibraryForCard(
+            filter_name="legendary_creature", may_fail=False,
         )
     if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD.match(
         phrase
