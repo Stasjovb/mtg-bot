@@ -666,13 +666,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Echoing Deeps: Land — Cave. May enter tapped as copy of any
-        # graveyard land (Cave in addition to its other types).
-        # {T}: Add {C}.
-        "Echoing Deeps": make_utility_land(
-            "Echoing Deeps", subtypes_str="Cave",
-            optional_copy_land_from_graveyard=True,
-        ),
         # Gemstone Caverns: Legendary. Opening-hand replacement effect
         # (not modeled — treated as always having a luck counter).
         # {T}: Add one mana of any color.
@@ -837,6 +830,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if fetch is not None:
         return fetch
+    optional_copy_cave = _try_build_optional_copy_cave_land(
+        card, text, supertypes, subtypes,
+    )
+    if optional_copy_cave is not None:
+        return optional_copy_cave
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -1807,6 +1805,65 @@ def _try_build_low_life_dual_land(
         card["name"],
         produces=frozenset({c1, c2}),
         enters_tapped_unless_any_player_life_at_most=threshold,
+    )
+
+
+# Optional-copy-from-graveyard Cave land. Plain ``Land — Cave`` (no
+# supertypes), exactly two lines:
+#   1. ``You may have this land enter tapped as a copy of any land card
+#      in a graveyard, except it's a Cave in addition to its other
+#      types.``
+#   2. ``{T}: Add {C}.``  (intentionally dropped — the engine's
+#      auto-tap-for-cost generic-mana fallback covers tapping for
+#      ``{C}``; ``make_utility_land`` doesn't add an explicit ability.)
+#
+# The first line maps to ``optional_copy_land_from_graveyard=True`` on
+# the ``CardPrinting``, threading the static-side flag through.
+# Currently the only EoS land matching this exact two-line shape is
+# Echoing Deeps; recognizer is a literal-line match (deferred
+# generalization to a parameterized "<subtype>-in-addition-to-its-
+# other-types" recognizer if a sibling printing appears).
+_OPTIONAL_COPY_CAVE_FIRST_LINE = (
+    "You may have this land enter tapped as a copy of any land card "
+    "in a graveyard, except it's a Cave in addition to its other "
+    "types."
+)
+
+
+def _try_build_optional_copy_cave_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return an optional-copy-from-graveyard Cave ``CardPrinting`` if
+    ``text`` matches the strict two-line Echoing Deeps shape, else
+    ``None``.
+
+    ``Land — Cave`` only (no supertypes, single ``Cave`` subtype). The
+    first line is a literal match against the printed copy-from-
+    graveyard sentence; the second line is the dropped
+    ``{T}: Add {C}.``. The static-side
+    ``optional_copy_land_from_graveyard=True`` flag carries the
+    one-card behavior. Today's only printing matching this shape is
+    Echoing Deeps; deferred generalization to a parameterized
+    ``<subtype>-in-addition-to-its-other-types`` recognizer would
+    happen if a sibling printing appears.
+    """
+    if supertypes:
+        return None
+    if subtypes != ("Cave",):
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _OPTIONAL_COPY_CAVE_FIRST_LINE:
+        return None
+    if lines[1] != _DROPPED_TAP_FOR_C_LINE:
+        return None
+    return make_utility_land(
+        card["name"], subtypes_str="Cave",
+        optional_copy_land_from_graveyard=True,
     )
 
 
