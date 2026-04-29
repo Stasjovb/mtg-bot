@@ -3287,10 +3287,19 @@ class GrantUnblockableUEOT(Effect):
     Pairs with ``attacking_only`` for the ``another target attacking
     creature`` qualifier — without it, the source itself would be a
     legal (but useless, since it's already the trigger source) target.
+
+    ``power_at_most`` filters legal targets to creatures whose
+    effective power is at most ``power_at_most``. ``None`` means "no
+    cap". Models Ragged Playmate's activated ``{1}, {T}: Target
+    creature with power 2 or less can't be blocked this turn.`` —
+    the threshold is encoded once on the engine class so future
+    printings (``power 1 or less``, ``power 3 or less``) can land on
+    the same primitive with a different cap.
     """
 
     attacking_only: bool = False
     exclude_self: bool = False
+    power_at_most: int | None = None
 
     def requires_target(self) -> bool:
         return True
@@ -3314,6 +3323,10 @@ class GrantUnblockableUEOT(Effect):
                 continue
             if source_id is not None and o.id == source_id:
                 continue
+            if self.power_at_most is not None:
+                from mtg_bot.game import effective_power
+                if effective_power(state, o) > self.power_at_most:
+                    continue
             targets.append(("creature", o.id))
         return targets
 
@@ -3343,6 +3356,11 @@ class GrantUnblockableUEOT(Effect):
             )
         if self.attacking_only:
             return "target attacking creature can't be blocked this turn"
+        if self.power_at_most is not None:
+            return (
+                f"target creature with power {self.power_at_most} or less "
+                f"can't be blocked this turn"
+            )
         return "target creature can't be blocked this turn"
 
 

@@ -463,3 +463,62 @@ def test_hand_that_feeds_claimed_by_parser():
     # ``Delirium()`` gate predicate, with the body parsing through the
     # relaxed ``it``-or-``this creature`` self-pump-and-grant grammar.
     assert "Hand That Feeds" in _claimed_names()
+
+
+# ---------- ``GrantUnblockableUEOT`` power_at_most filter ----------
+
+
+def test_grant_unblockable_power_at_most_filters_high_power_targets():
+    # With ``power_at_most=2`` the legal-target pool excludes creatures
+    # whose effective power exceeds the threshold. A 3-power creature
+    # is omitted; a 2-power creature is included.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import GrantUnblockableUEOT, make_creature
+    from mtg_bot.game import GameState, Player, Zone
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    small = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(small)
+    big = state.new_object(
+        make_creature("BigFixture", "{2}{G}", 3, 3),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(big)
+    eff = GrantUnblockableUEOT(power_at_most=2)
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("creature", small.id) in legal
+    assert ("creature", big.id) not in legal
+
+
+def test_grant_unblockable_power_at_most_describe():
+    # The describe output spells out the power threshold so log
+    # messages are readable.
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    eff = GrantUnblockableUEOT(power_at_most=2)
+    assert eff.describe() == (
+        "target creature with power 2 or less can't be blocked this turn"
+    )
+
+
+def test_parse_target_creature_with_power_at_most_unblockable():
+    # End-to-end through the effect-phrase parser. The phrase
+    # ``target creature with power 2 or less can't be blocked this
+    # turn`` parses to ``GrantUnblockableUEOT(power_at_most=2)``.
+    from mtg_bot.cards.base import GrantUnblockableUEOT
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    parsed = _parse_effect_phrase(
+        "target creature with power 2 or less can't be blocked this turn"
+    )
+    assert parsed == GrantUnblockableUEOT(power_at_most=2)
+
+
+def test_ragged_playmate_claimed_by_parser():
+    # Ragged Playmate ``{1}{R}`` 2/2 Artifact Creature — Toy. Single
+    # oracle line: ``{1}, {T}: Target creature with power 2 or less
+    # can't be blocked this turn.`` Claims via the existing
+    # ``{mana}, {T}`` activation-cost grammar plus the new
+    # ``power_at_most`` variant of the unblockable-UEOT primitive.
+    assert "Ragged Playmate" in _claimed_names()

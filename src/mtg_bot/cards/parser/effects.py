@@ -770,6 +770,15 @@ _TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN = re.compile(
 _ANOTHER_TARGET_ATTACKING_CREATURE_CANT_BE_BLOCKED_THIS_TURN = re.compile(
     r"^another target attacking creature can't be blocked this turn$"
 )
+# "Target creature with power N or less can't be blocked this turn." —
+# Ragged Playmate's activated ability body. Same engine class as the
+# bare unblockable-UEOT primitive with the ``power_at_most=N`` filter
+# narrowing the legal-target pool by effective power at selection
+# time. Tried BEFORE the bare ``target creature can't be blocked``
+# regex so the more-specific power-filter form wins.
+_TARGET_CREATURE_WITH_POWER_AT_MOST_CANT_BE_BLOCKED_THIS_TURN = re.compile(
+    r"^target creature with power (\d+) or less can't be blocked this turn$"
+)
 # Controller loses N life. Surface forms ``lose N life`` (post-compound
 # split, where the carried-over subject is implicit — Decode
 # Transmissions, Elegy Acolyte, Voidforged Titan all print
@@ -1600,6 +1609,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return GrantUnblockableUEOT(attacking_only=True, exclude_self=True)
+    # ``target creature with power N or less can't be blocked this
+    # turn`` — Ragged Playmate's activated body. Same engine class
+    # as the bare unblockable-UEOT primitive with the
+    # ``power_at_most=N`` filter narrowing the legal-target pool.
+    # Tried BEFORE the bare regex so the more-specific power-filter
+    # form wins.
+    m = _TARGET_CREATURE_WITH_POWER_AT_MOST_CANT_BE_BLOCKED_THIS_TURN.match(
+        phrase
+    )
+    if m is not None:
+        return GrantUnblockableUEOT(power_at_most=int(m.group(1)))
     # ``target creature can't be blocked this turn`` — bare unblockable
     # grant. Pure UEOT primitive on a creature target; sets
     # ``temp_unblockable=True`` at resolve time. Enter the Enigma is
