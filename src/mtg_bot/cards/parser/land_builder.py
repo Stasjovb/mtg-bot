@@ -323,29 +323,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Grove of the Burnwillows: {T}: Add {C}. {T}: Add {R} or {G}.
-        # Each opponent gains 1 life.
-        "Grove of the Burnwillows": make_utility_land(
-            "Grove of the Burnwillows",
-            produces=frozenset({"C", "R", "G"}),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("C", 1),)),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=Sequence(effects=(
-                        AddNManaOfChosenColor(
-                            amount=1, options=("R", "G"),
-                        ),
-                        GrantLifeToEachOpponent(amount=1),
-                    )),
-                    is_mana_ability=True,
-                ),
-            ),
-        ),
         # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Insect, Rat,
         # Spider, Squirrel, or Snake.
         "Swarmyard": make_utility_land(
@@ -832,6 +809,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if artifact_restricted is not None:
         return artifact_restricted
+    pain_dual = _try_build_pain_dual_color_land(
+        card, text, supertypes, subtypes,
+    )
+    if pain_dual is not None:
+        return pain_dual
     colorless = _try_build_colorless_utility_land(
         card, text, supertypes, subtypes,
     )
@@ -2300,6 +2282,91 @@ def _try_build_chosen_color_cave_land(
                     produces=(("any", 2),),
                     spend_restriction="land_activation",
                 ),
+                is_mana_ability=True,
+            ),
+        ),
+    )
+
+
+# Painful-dual-tap-for-C-plus-dual-color land. Plain ``Land`` (no
+# supertypes, no subtypes), exactly two lines:
+#   1. ``{T}: Add {C}.``
+#   2. ``{T}: Add {<C1>} or {<C2>}. Each opponent gains <N> life.``
+#
+# Two explicit mana abilities are produced:
+# - The colorless tap from line 1 lands as a plain
+#   ``AddManaToPool(produces=(("C", 1),))`` mana ability (NOT dropped to
+#   the auto-tap-for-cost fallback — Grove ships the colorless coin
+#   as an independently-spendable mana ability on the static side).
+# - The dual-color tap from line 2 lands as a ``Sequence`` of
+#   ``AddNManaOfChosenColor(amount=1, options=(<C1>, <C2>))`` followed
+#   by ``GrantLifeToEachOpponent(amount=<N>)``, kept on a single
+#   ``ActivatedAbility`` so the chosen-color coin and the life-gain
+#   resolve as one activation.
+#
+# The two colors and the opponent-life-gain count are captured (so a
+# sibling printing with a different color pair or rider amount fits
+# without code change). The captured ``produces`` set goes on the
+# printing as ``frozenset({"C", <C1>, <C2>})``. Plain ``Land`` only —
+# variants with subtypes, additional lines, or different riders fall
+# through to the silent-skip path.
+_PAIN_DUAL_TAP_FOR_C_LINE = "{T}: Add {C}."
+_PAIN_DUAL_COLOR_RIDER_RE = re.compile(
+    r"^\{T\}: Add \{(?P<c1>[WUBRG])\} or \{(?P<c2>[WUBRG])\}\. "
+    r"Each opponent gains (?P<life>\d+) life\.$"
+)
+
+
+def _try_build_pain_dual_color_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Grove-of-the-Burnwillows-shape ``CardPrinting`` if
+    ``text`` matches the strict two-line ``{T}: Add {C}.`` +
+    ``{T}: Add {<C1>} or {<C2>}. Each opponent gains <N> life.``
+    shape on a plain ``Land`` type line, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The two colors
+    must differ. Both abilities are explicit on the resulting
+    printing's ``activated_abilities``: the line-1 colorless coin and
+    the line-2 dual-color-plus-opponent-life-gain Sequence.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    if lines[0] != _PAIN_DUAL_TAP_FOR_C_LINE:
+        return None
+    m = _PAIN_DUAL_COLOR_RIDER_RE.match(lines[1])
+    if m is None:
+        return None
+    c1 = m.group("c1")
+    c2 = m.group("c2")
+    if c1 == c2:
+        return None
+    life = int(m.group("life"))
+    return make_utility_land(
+        card["name"],
+        produces=frozenset({"C", c1, c2}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=Sequence(effects=(
+                    AddNManaOfChosenColor(
+                        amount=1, options=(c1, c2),
+                    ),
+                    GrantLifeToEachOpponent(amount=life),
+                )),
                 is_mana_ability=True,
             ),
         ),
