@@ -273,8 +273,19 @@ _DRAW_N_CARDS = re.compile(
 # its bare-amount sibling.
 _DRAW_THAT_MANY_CARDS = re.compile(r"^(?:you )?draw that many cards$")
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
+# "Put a +1/+1 counter on target creature" — bare-target counter
+# (Honor-style). The optional ``attacking `` qualifier narrows the
+# legal-target pool to currently-attacking creatures (Hospital
+# Room's ``put a +1/+1 counter on target attacking creature`` door
+# trigger). When present the captured group flips
+# ``attacking_only=True`` on the resulting
+# ``PutPlusOneCounterOnTargetCreature`` — same engine flag the
+# bespoke factory we're replacing wired in. Generalized rather
+# than split into a separate literal regex per the architectural
+# guidance: a single parameterized recognizer covers both the bare
+# Honor surface and Hospital Room's attacking-target form.
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE = re.compile(
-    r"^put a \+1/\+1 counter on target creature$"
+    r"^put a \+1/\+1 counter on target (attacking )?creature$"
 )
 # "Put a +1/+1 counter on target creature you control" — Rayblade
 # Trooper's ETB. Restricted variant: legal targets are creatures the
@@ -733,6 +744,21 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
 # future "raise dead" oracle line).
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature card from your graveyard to the battlefield$"
+)
+# "Return target creature card with mana value N or less from your
+# graveyard to the battlefield" — narrowed-by-MV reanimation. Surgical
+# Suite's door trigger ("with mana value 3 or less") is the EoE/DSK
+# surface form; the captured digit lands as the engine class's
+# ``max_mv`` rider, same flag the bare regex above leaves unset
+# (None = unbounded). Tried BEFORE the bare regex so a phrase
+# carrying the MV qualifier wins; the bare regex's ``$`` anchor on
+# ``battlefield`` would never match the MV tail anyway, but ordering
+# more-specific before more-general is the convention here. Mirrors
+# the ``_RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV`` shape on
+# the to-hand sibling.
+_RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV = re.compile(
+    r"^return target creature card with mana value (\d+) or less "
+    r"from your graveyard to the battlefield$"
 )
 # Multi-sentence Xu-Ifit, Osteoharmonist variant — the printed oracle is
 # ``Return target creature card from your graveyard to the battlefield.
@@ -1724,8 +1750,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return PutPlusOneCounterOnOpponentsCreature(amount=1)
-    if _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase) is not None:
-        return PutPlusOneCounterOnTargetCreature(amount=1)
+    m = _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE.match(phrase)
+    if m is not None:
+        # Group 1 captures the optional ``attacking `` qualifier (None
+        # otherwise). When present, ``attacking_only=True`` narrows the
+        # legal-target pool to currently-attacking creatures — same
+        # engine flag Hospital Room's door-trigger body uses.
+        return PutPlusOneCounterOnTargetCreature(
+            amount=1, attacking_only=m.group(1) is not None,
+        )
     if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutPlusOneCounterOnSelf(amount=1)
     # ``put a +1/+1 counter on each creature you control other than
@@ -2118,6 +2151,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return ReturnCreatureFromYourGraveyardToBattlefield()
+    m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(phrase)
+    if m is not None:
+        # ``return target creature card with mana value N or less from
+        # your graveyard to the battlefield`` — Surgical Suite's door
+        # trigger. The MV cap narrows the legal-target pool to graveyard
+        # creatures whose printed mana value clears the threshold;
+        # ``max_mv=None`` (the default on the bare regex below) keeps
+        # the unbounded behaviour for Xu-Ifit and any other unrestricted
+        # reanimator. Mirrors the to-hand sibling's max_mv rider.
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            max_mv=int(m.group(1)),
+        )
     if _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase
     ) is not None:
