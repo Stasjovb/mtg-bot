@@ -49,6 +49,7 @@ from mtg_bot.effects import (
     DefendingPlayerLosesHalfLifeRoundedUp,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
+    DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,

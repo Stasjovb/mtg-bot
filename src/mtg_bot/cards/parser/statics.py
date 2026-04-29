@@ -275,6 +275,19 @@ _COUNTER_GATED_ANTHEM_LINE = re.compile(
     r"(?P<keyword>[A-Za-z ]+)\.$"
 )
 
+# Player-scope static: ``You have no maximum hand size.`` — Steaming
+# Sauna (DSK Room half) is the only EoE/DSK card in the parser pool
+# today fitting this exact surface (Marina Vendrell's Grimoire
+# combines it with other rules in a multi-line oracle and isn't yet
+# claimed by the parser). Per parser/CLAUDE.md a literal-line
+# recognizer is acceptable when one card in the pool fits AND the
+# docstring notes deferred generalization — when a second printing
+# with this surface lands (or with sibling player-scope statics like
+# "you don't lose the game for having 0 or less life"), the right
+# move is a parameterized player-scope-static regex driving an
+# enum/flag dispatch, replacing this literal.
+_NO_MAX_HAND_SIZE_LINE = re.compile(r"^You have no maximum hand size\.$")
+
 
 def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     """Return a ``StaticAbility`` for an anthem-shape static line, or
@@ -390,7 +403,25 @@ def _parse_static_ability_line(line: str) -> StaticAbility | None:
         anthem = _parse_anthem_static_line(stripped)
         if anthem is not None:
             return anthem
-        return _parse_counter_gated_anthem_line(stripped)
+        counter_gated = _parse_counter_gated_anthem_line(stripped)
+        if counter_gated is not None:
+            return counter_gated
+        # Player-scope statics — no creature target, just a flag on
+        # the source's controller. ``You have no maximum hand size.``
+        # is the only entry today (Steaming Sauna). The produced
+        # ``StaticAbility`` carries no granted keywords / no P/T
+        # bonus; ``run_cleanup_step`` reads ``grants_no_max_hand_size``
+        # directly off the active static abilities of every
+        # battlefield permanent under the active player's control.
+        # Scope is set to ``SELF`` so the existing creature-only
+        # ``applies_to`` walk is a clean no-op for non-creature
+        # source permanents (Steaming Sauna is an Enchantment).
+        if _NO_MAX_HAND_SIZE_LINE.match(stripped) is not None:
+            return StaticAbility(
+                scope=StaticScope.SELF,
+                grants_no_max_hand_size=True,
+            )
+        return None
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:
