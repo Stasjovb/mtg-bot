@@ -219,3 +219,73 @@ def test_come_back_wrong_mana_cost():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Come Back Wrong"]
     assert p.mana_cost_str == "{2}{B}"
+
+
+# ---------- Let's Play a Game ----------
+
+def test_lets_play_a_game_claimed_by_parser():
+    # Let's Play a Game ``{3}{B}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry that simplifies the
+    # printed text (Delirium-gated ``Choose one or more`` upgrade
+    # over a base 3-mode ``Choose one`` modal) to a bare 3-mode
+    # ``ModalChooseOne``.
+    assert "Let's Play a Game" in _claimed_names()
+
+
+def test_lets_play_a_game_engine_class():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the simplified ``ModalChooseOne`` engine class — base 3-mode
+    # shape preserved (the three printed modes), Delirium-gated
+    # ``choose one or more instead`` upgrade dropped per the
+    # parser-is-right precedent set by Get Out / Untimely Malfunction
+    # (claim a well-modeled subset of a multi-mode modal rather than
+    # leaving the spell unclaimed).
+    from mtg_bot.cards.base import (
+        EachOpponentDiscards,
+        EachOpponentLosesLife,
+        GainLife,
+        ModalChooseOne,
+        PumpCreaturesOpponentsControlUntilEOT,
+        Sequence,
+    )
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Let's Play a Game"]
+    assert p.spell_effect == ModalChooseOne(
+        modes=(
+            PumpCreaturesOpponentsControlUntilEOT(
+                power_bonus=-1, toughness_bonus=-1,
+            ),
+            EachOpponentDiscards(count=2),
+            Sequence(
+                effects=(
+                    EachOpponentLosesLife(amount=3),
+                    GainLife(amount=3),
+                ),
+            ),
+        ),
+    )
+
+
+def test_lets_play_a_game_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Let's Play a Game"]
+    assert "Sorcery" in p.card_types
+
+
+def test_lets_play_a_game_mana_cost():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Let's Play a Game"]
+    assert p.mana_cost_str == "{3}{B}"
+
+
+def test_lets_play_a_game_modal_not_or_both():
+    # The simplified modal is bare ``Choose one`` (or_both=False) —
+    # not the ``Choose one or both`` shape used by Scour for Scrap.
+    # The Delirium-gated upgrade to ``choose one or more instead``
+    # would need a new combinator that the parser doesn't have today;
+    # keeping the base ``or_both=False`` matches the printed default
+    # behavior (without the four-card-types graveyard threshold).
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Let's Play a Game"]
+    assert p.spell_effect.or_both is False

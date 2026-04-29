@@ -66,16 +66,19 @@ from mtg_bot.cards.base import (
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
     DrawCards,
+    EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
     ExorciseEffect,
     FocusFireEffect,
+    GainLife,
     LoseLife,
     ManifestDread,
     ModalChooseOne,
     MutinousMassacreEffect,
     OptionalSacArtifactForEffect,
     PreventAllCombatDamageThisTurn,
+    PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
@@ -1414,6 +1417,62 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "your control. Sacrifice it at the beginning of your next "
         "end step."
     ): DestroyTargetCreature(),
+    # Let's Play a Game (Duskmourn) ``{3}{B}`` Sorcery — three-mode
+    # ``Choose one`` modal whose printed header carries a Delirium-
+    # gated expansion ("If there are four or more card types among
+    # cards in your graveyard, choose one or more instead."). The
+    # three modes themselves all parse cleanly as standalone spell-
+    # effect phrases:
+    #   • "Creatures your opponents control get -1/-1 until end of
+    #     turn." → ``PumpCreaturesOpponentsControlUntilEOT(
+    #       power_bonus=-1, toughness_bonus=-1)``
+    #   • "Each opponent discards two cards." →
+    #     ``EachOpponentDiscards(count=2)``
+    #   • "Each opponent loses 3 life and you gain 3 life." →
+    #     ``Sequence(EachOpponentLosesLife(amount=3),
+    #              GainLife(amount=3))``
+    # Whole-spell exact-text dispatch simplifies the modal header
+    # to a plain ``Choose one`` shape — the Delirium-gated "choose
+    # one or more instead" upgrade is dropped because:
+    # (1) the spell-builder has no Delirium-gated conditional
+    #     dispatcher today and the modal-header parser
+    #     ``_parse_modal_choose_one`` only recognizes the bare
+    #     ``Choose one —`` and ``Choose one or both —`` shapes;
+    #     adding a "choose one or more if delirium" header parser
+    #     plus a matching engine combinator would be a one-off for
+    #     this card;
+    # (2) the per-clause grammar can't claim the Delirium header
+    #     line as a standalone spell-effect phrase either —
+    #     ``Delirium — Choose one. If there are four or more card
+    #     types among cards in your graveyard, choose one or more
+    #     instead.`` is a header, not an effect.
+    # Same parser-is-right precedent as Get Out / Untimely
+    # Malfunction (claim a well-modeled subset of a multi-mode
+    # modal rather than leaving the spell unclaimed): keep the
+    # bare three-mode "choose one" shape and drop the Delirium-
+    # gated modal-count upgrade.
+    (
+        "Delirium — Choose one. If there are four or more card "
+        "types among cards in your graveyard, choose one or more "
+        "instead.\n"
+        "• Creatures your opponents control get -1/-1 until end of "
+        "turn.\n"
+        "• Each opponent discards two cards.\n"
+        "• Each opponent loses 3 life and you gain 3 life."
+    ): ModalChooseOne(
+        modes=(
+            PumpCreaturesOpponentsControlUntilEOT(
+                power_bonus=-1, toughness_bonus=-1,
+            ),
+            EachOpponentDiscards(count=2),
+            Sequence(
+                effects=(
+                    EachOpponentLosesLife(amount=3),
+                    GainLife(amount=3),
+                ),
+            ),
+        ),
+    ),
 }
 
 
