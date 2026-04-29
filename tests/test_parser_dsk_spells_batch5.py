@@ -467,3 +467,286 @@ def test_exorcise_is_sorcery():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Exorcise"]
     assert "Sorcery" in p.card_types
+
+
+# ---------- CoordinatedClobberingEffect engine class ----------
+
+def test_coordinated_clobbering_effect_exists():
+    # New bespoke engine class wired in ``mtg_bot.effects.bespoke``
+    # next to ``DiplomaticRelationsEffect``. Imports cleanly and is
+    # exposed via ``mtg_bot.effects``.
+    from mtg_bot.effects import CoordinatedClobberingEffect
+
+    eff = CoordinatedClobberingEffect()
+    assert eff.requires_target() is True
+
+
+def test_coordinated_clobbering_describe():
+    from mtg_bot.effects import CoordinatedClobberingEffect
+
+    desc = CoordinatedClobberingEffect().describe()
+    assert "tap" in desc
+    assert "damage" in desc
+    assert "power" in desc
+
+
+def test_coordinated_clobbering_target_count_range():
+    # Min 2 (one friendly + one opp), max 3 (two friendlies + one
+    # opp). The opp slot is mandatory first; slot 2 is optional.
+    from mtg_bot.effects import CoordinatedClobberingEffect
+
+    eff = CoordinatedClobberingEffect()
+    assert eff.target_count_range() == (2, 3)
+    assert eff.target_slot_kinds() == (
+        "creature", "my_creature", "my_creature"
+    )
+
+
+def test_coordinated_clobbering_legal_targets_filters():
+    # Friendly slot pool: only untapped creatures the caster
+    # controls. Opp slot pool: any creature the opponent controls.
+    # Returned as a single concatenated list (theirs + mine) so the
+    # cast-pipeline slot-kind filter routes each pick to the right
+    # slot.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    my_untapped = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    my_tapped = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    opp_creature = GameObject(
+        id=3, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_untapped, my_tapped, opp_creature],
+    )
+    legal = CoordinatedClobberingEffect().legal_targets(state, 0)
+    assert ("my_creature", my_untapped.id) in legal
+    # Tapped friendly is excluded.
+    assert ("my_creature", my_tapped.id) not in legal
+    assert ("creature", opp_creature.id) in legal
+
+
+def test_coordinated_clobbering_legal_targets_empty_no_friendlies():
+    # If the caster has no untapped friendly creatures, the spell
+    # can't be cast (legal_targets returns []).
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    opp_creature = GameObject(
+        id=1, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[opp_creature],
+    )
+    assert CoordinatedClobberingEffect().legal_targets(state, 0) == []
+
+
+def test_coordinated_clobbering_legal_targets_empty_no_opp_creatures():
+    # If the opponent has no creatures, the spell can't be cast.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    my_bear = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_bear],
+    )
+    assert CoordinatedClobberingEffect().legal_targets(state, 0) == []
+
+
+def test_coordinated_clobbering_resolve_two_attackers():
+    # End-to-end: tap 2 friendly bears (each 2/2), each deals 2
+    # damage to the opp's creature. Total 4 damage marked.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    my_a = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    my_b = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    opp = GameObject(
+        id=3, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_a, my_b, opp],
+    )
+    CoordinatedClobberingEffect().resolve(
+        state, controller_id=0,
+        targets=(
+            ("creature", opp.id),
+            ("my_creature", my_a.id),
+            ("my_creature", my_b.id),
+        ),
+    )
+    assert my_a.tapped is True
+    assert my_b.tapped is True
+    # 2 damage from each attacker → 4 damage total.
+    assert opp.damage == 4
+
+
+def test_coordinated_clobbering_resolve_one_attacker():
+    # Only one friendly target picked (slot 2 declined). The single
+    # attacker taps and deals its power as damage.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=3, toughness=3)
+    my_bear = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    opp = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_bear, opp],
+    )
+    CoordinatedClobberingEffect().resolve(
+        state, controller_id=0,
+        targets=(
+            ("creature", opp.id),
+            ("my_creature", my_bear.id),
+        ),
+    )
+    assert my_bear.tapped is True
+    assert opp.damage == 3
+
+
+def test_coordinated_clobbering_no_target_noop():
+    # Defensive: empty targets resolve without raising.
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    CoordinatedClobberingEffect().resolve(
+        state, controller_id=0, targets=()
+    )
+
+
+def test_coordinated_clobbering_skip_friendly_lost_control():
+    # CR 608.2b: if a friendly target's controller changed between
+    # cast and resolve, the tap is skipped (and that creature deals
+    # no damage). Only surviving friendlies tap and damage the opp.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    # ``my_a`` has switched controller to player 1 between cast and
+    # resolve.
+    my_a = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    my_b = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    opp = GameObject(
+        id=3, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_a, my_b, opp],
+    )
+    CoordinatedClobberingEffect().resolve(
+        state, controller_id=0,
+        targets=(
+            ("creature", opp.id),
+            ("my_creature", my_a.id),
+            ("my_creature", my_b.id),
+        ),
+    )
+    # ``my_a`` is no longer controlled by P0; tap skipped.
+    assert my_a.tapped is False
+    # ``my_b`` taps and deals 2 damage.
+    assert my_b.tapped is True
+    assert opp.damage == 2
+
+
+def test_coordinated_clobbering_skip_opp_lost_control():
+    # If the opp target's controller switched to caster between
+    # cast and resolve, the damage is skipped (the target became
+    # the caster's own creature). Friendlies still tap.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    my_a = GameObject(
+        id=1, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    # ``opp`` switched control back to P0 (the caster).
+    opp = GameObject(
+        id=2, printing=bear_pr, owner_id=1, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[my_a, opp],
+    )
+    CoordinatedClobberingEffect().resolve(
+        state, controller_id=0,
+        targets=(
+            ("creature", opp.id),
+            ("my_creature", my_a.id),
+        ),
+    )
+    assert my_a.tapped is True
+    # No damage applied to the (now-friendly) opp target.
+    assert opp.damage == 0
+
+
+# ---------- Coordinated Clobbering parser claim ----------
+
+def test_coordinated_clobbering_claimed_by_parser():
+    # Coordinated Clobbering ``{G}`` Sorcery — claimed via the new
+    # whole-spell exact-text dispatch entry mapping to the new
+    # ``CoordinatedClobberingEffect`` engine class.
+    assert "Coordinated Clobbering" in _claimed_names()
+
+
+def test_coordinated_clobbering_engine_class():
+    from mtg_bot.effects import CoordinatedClobberingEffect
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Coordinated Clobbering"]
+    assert p.spell_effect == CoordinatedClobberingEffect()
+
+
+def test_coordinated_clobbering_is_sorcery():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Coordinated Clobbering"]
+    assert "Sorcery" in p.card_types

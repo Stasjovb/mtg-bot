@@ -206,6 +206,7 @@ from mtg_bot.effects.bespoke import (
     ChoraleReanimateDefenderGraveCreatureEffect,
     CloseEncounterEffect,
     ConsultTheStarChartsEffect,
+    CoordinatedClobberingEffect,
     CutPropulsionEffect,
     DepressurizeEffect,
     DiplomaticRelationsEffect,

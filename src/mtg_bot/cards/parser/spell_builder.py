@@ -45,6 +45,7 @@ from mtg_bot.cards.base import (
     CloseEncounterEffect,
     ConditionalIfVoid,
     ConsultTheStarChartsEffect,
+    CoordinatedClobberingEffect,
     CostReduction,
     CounterTargetSpell,
     CreateToken,
@@ -1052,6 +1053,25 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Exile target artifact, enchantment, or creature with "
         "power 4 or greater."
     ): ExorciseEffect(),
+    # Coordinated Clobbering (Duskmourn) — two-clause multi-target
+    # spell: tap 1-2 friendly untapped creatures, then each deals
+    # power-as-damage to one target opp creature. The static ships
+    # ``CoordinatedClobberingEffect()`` which uses the cast-pipeline
+    # ``target_count_range=(2, 3)`` + ``target_slot_kinds=("creature",
+    # "my_creature", "my_creature")`` skeleton — opp creature first
+    # (mandatory slot 0), then 1-2 friendlies (slot 1 mandatory,
+    # slot 2 optional via min_t-gate). The whole-spell tier is the
+    # right place because the per-clause grammar has no two-target-
+    # group multi-attacker shape; the existing
+    # ``DiplomaticRelationsEffect`` precedent uses the same
+    # ``my_creature`` slot kind for a fixed 2-slot spell, and
+    # extending the per-clause grammar would over-engineer for one
+    # card.
+    (
+        "Tap one or two target untapped creatures you control. "
+        "They each deal damage equal to their power to target "
+        "creature an opponent controls."
+    ): CoordinatedClobberingEffect(),
 }
 
 

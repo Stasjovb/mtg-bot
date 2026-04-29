@@ -3043,3 +3043,143 @@ class ExorciseEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class CoordinatedClobberingEffect(Effect):
+    """Coordinated Clobbering ``{G}`` (Duskmourn): "Tap one or two
+    target untapped creatures you control. They each deal damage
+    equal to their power to target creature an opponent controls."
+
+    Three slots, two slot kinds:
+
+    - ``("creature", id)`` — the opp's creature taking damage (slot 0,
+      mandatory)
+    - ``("my_creature", id)`` — first friendly attacker (slot 1,
+      mandatory)
+    - ``("my_creature", id)`` — optional second friendly attacker
+      (slot 2, beyond ``min_t``)
+
+    Why opp first: the cast-pipeline target picker iterates slots in
+    order. Putting the mandatory opp's-creature slot first and the
+    optional second-friendly slot LAST lets ``min_t=2`` and
+    ``max_t=3`` cleanly separate "must pick" (slots 0, 1) from
+    "may pick" (slot 2), since the picker honors None-decline only
+    for slot indices ``>= min_t``. The printed reading order ("tap
+    one or two ..." first) is just oracle-text presentation and
+    doesn't constrain MTG's target-picking sequence.
+
+    Both friendly slots filter on currently-untapped (the
+    "Tap [...] untapped creatures you control" gate) — a friendly
+    creature already tapped is not a legal target. The ``my_`` prefix
+    on the slot kind enforces controller==caster at pick time;
+    ``"creature"`` for the opp slot enforces controller!=caster via
+    a separate filter.
+
+    Resolution mechanics:
+    1. Tap each friendly target (idempotent; skips ones bounced /
+       retargeted / already tapped between cast and resolve).
+    2. Each surviving friendly creature deals ``effective_power``
+       damage to the opp's creature target (read fresh per attacker
+       so a dies-trigger between attackers reads post-death state
+       correctly — though the opp creature is the SAME target).
+
+    Mirrors ``DiplomaticRelationsEffect``'s two-slot skeleton with
+    the ``min_t < max_t`` extension for the optional second attacker.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        # min=2 (one friendly + one opp), max=3 (two friendlies +
+        # one opp).
+        return (2, 3)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        # Slot 0: opp's creature taking damage. Slots 1, 2: friendly
+        # untapped creatures dealing damage. Mandatory (slots 0, 1)
+        # before optional (slot 2) per the picker's min_t-gate.
+        return ("creature", "my_creature", "my_creature")
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        mine = [
+            ("my_creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+            and not o.tapped
+        ]
+        theirs = [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id != controller_id
+        ]
+        # Both sides must be satisfiable at minimum ranks (one of mine
+        # untapped, one opp creature) for the spell to be cast at
+        # all — mirrors ``DiplomaticRelationsEffect``'s precedent.
+        if not mine or not theirs:
+            return []
+        # Opp targets first so the slot-kind filter aligns with slot 0.
+        return theirs + mine
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        # Pull one opp target and 1-2 friendly targets out of the
+        # picked list. Order is agent-dependent so we search by kind.
+        opp_target = next(
+            ((k, t) for (k, t) in targets if k == "creature"), None
+        )
+        my_targets = [
+            (k, t) for (k, t) in targets if k == "my_creature"
+        ]
+        # Tap each surviving friendly target. Re-validate per CR 608.2b:
+        # if a friendly creature left the battlefield, was bounced, or
+        # changed control between cast and resolve, that target is
+        # illegal and the tap is skipped.
+        my_objs = []
+        for _, tid in my_targets:
+            obj = next(
+                (o for o in state.battlefield if o.id == tid), None
+            )
+            if obj is None:
+                continue
+            if obj.controller_id != controller_id:
+                continue
+            obj.tapped = True
+            state.log.append(
+                f"{obj.printing.name} taps (Coordinated Clobbering)"
+            )
+            my_objs.append(obj)
+        # Damage component: requires both an opp's-creature target
+        # AND at least one surviving friendly attacker.
+        if opp_target is None or not my_objs:
+            return
+        opp_obj = next(
+            (o for o in state.battlefield if o.id == opp_target[1]),
+            None,
+        )
+        if opp_obj is None or opp_obj.controller_id == controller_id:
+            return
+        for atkr in my_objs:
+            amount = effective_power(state, atkr)
+            state.log.append(
+                f"{atkr.printing.name} deals {amount} damage to "
+                f"{opp_obj.printing.name} (Coordinated Clobbering)"
+            )
+            _apply_damage(state, ("creature", opp_obj.id), amount)
+
+    def describe(self) -> str:
+        return (
+            "tap one or two target untapped creatures you control; "
+            "each deals damage equal to its power to target creature "
+            "an opponent controls"
+        )
+
+
+
