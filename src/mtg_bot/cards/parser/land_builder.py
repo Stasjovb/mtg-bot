@@ -446,23 +446,6 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Nesting Grounds: {T}: Add {C}. {1},{T}: Move a counter from
-        # target permanent you control onto a second target permanent.
-        # Activate only as a sorcery.
-        "Nesting Grounds": make_utility_land(
-            "Nesting Grounds",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                    ),
-                    effect=MovePlusOneCounterBetweenPermanentsYouControl(),
-                    sorcery_speed=True,
-                ),
-            ),
-        ),
         # Endless Sands: {T}: Add {C}. {2},{T}: Exile target creature you
         # control. {4},{T},Sac self: Return each creature card exiled with
         # this land to the battlefield.
@@ -1417,6 +1400,10 @@ def _paid_effect_becomes_copy_of_target_land() -> Effect:
     return BecomesCopyOfTargetLand()
 
 
+def _paid_effect_move_counter_between_permanents() -> Effect:
+    return MovePlusOneCounterBetweenPermanentsYouControl()
+
+
 _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "Untap target land": _paid_effect_untap_target_land,
     "Exile target attacking creature an opponent controls. "
@@ -1436,21 +1423,42 @@ _PAID_EFFECT_BODIES: dict[str, "callable"] = {
     "This land becomes a copy of target land, except it has this "
     "ability":
         _paid_effect_becomes_copy_of_target_land,
+    # Nesting Grounds' ``{1}, {T}: Move a counter from target permanent
+    # you control onto a second target permanent.`` (paired with the
+    # ``Activate only as a sorcery`` rider, which lifts to
+    # ``sorcery_speed=True`` on the ability).
+    "Move a counter from target permanent you control onto a second "
+    "target permanent":
+        _paid_effect_move_counter_between_permanents,
 }
 
 
 # Activation-condition rider phrases. Each entry maps an exact phrase
-# (no trailing period) to a callable that mutates an
-# ``ActivationCost`` keyword-arg dict in place. Riders outside the
+# (no trailing period) to a callable that mutates either the
+# ``ActivationCost`` keyword-arg dict or the ``ActivatedAbility``
+# keyword-arg dict in place (or both). The mutator's signature is
+# ``(cost_kwargs, ability_kwargs)`` — riders that only affect the
+# cost ignore ``ability_kwargs`` and vice versa. Riders outside the
 # table fall through to the silent-skip path; bodies without a rider
 # also pass through — the recognizer treats the rider as optional.
-def _rider_creature_power_four_or_greater(kwargs: dict) -> None:
-    kwargs["requires_own_creature_power_at_least"] = 4
+def _rider_creature_power_four_or_greater(
+    cost_kwargs: dict, ability_kwargs: dict,
+) -> None:
+    cost_kwargs["requires_own_creature_power_at_least"] = 4
+
+
+def _rider_activate_only_as_a_sorcery(
+    cost_kwargs: dict, ability_kwargs: dict,
+) -> None:
+    ability_kwargs["sorcery_speed"] = True
 
 
 _PAID_EFFECT_RIDERS: dict[str, "callable"] = {
     "Activate only if you control a creature with power 4 or greater":
         _rider_creature_power_four_or_greater,
+    # Nesting Grounds — sorcery-speed rider lifts to
+    # ``ActivatedAbility(sorcery_speed=True)``.
+    "Activate only as a sorcery": _rider_activate_only_as_a_sorcery,
 }
 
 
@@ -1473,9 +1481,12 @@ def _try_build_paid_effect_utility_land(
 
     The optional rider is a fixed activation-condition phrase (e.g.
     Bonders' Enclave's ``Activate only if you control a creature
-    with power 4 or greater``) that maps to an ``ActivationCost``
-    flag. Bodies / cost shapes / riders outside their tables fall
-    through silently.
+    with power 4 or greater``, Nesting Grounds' ``Activate only as a
+    sorcery``) that maps to either an ``ActivationCost`` flag or an
+    ``ActivatedAbility`` flag (or both, depending on the rider). The
+    rider mutator receives both kwargs dicts and writes into whichever
+    is appropriate. Bodies / cost shapes / riders outside their tables
+    fall through silently.
     """
     if supertypes:
         return None
@@ -1496,11 +1507,12 @@ def _try_build_paid_effect_utility_land(
     # the front of ``rest`` after trimming the rider).
     body = rest
     cost_extra: dict = {}
+    ability_extra: dict = {}
     for rider, mutator in _PAID_EFFECT_RIDERS.items():
         suffix = ". " + rider
         if rest.endswith(suffix):
             body = rest[: -len(suffix)]
-            mutator(cost_extra)
+            mutator(cost_extra, ability_extra)
             break
     factory = _PAID_EFFECT_BODIES.get(body)
     if factory is None:
@@ -1517,6 +1529,7 @@ def _try_build_paid_effect_utility_land(
                     **cost_extra,
                 ),
                 effect=factory(),
+                **ability_extra,
             ),
         ),
     )
