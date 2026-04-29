@@ -882,22 +882,40 @@ _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
     r"^look at the top two cards of your library\. "
     r"Put one into your hand and the other into your graveyard$"
 )
-# Living Phone's dies trigger body — ``look at the top five cards of
-# your library. You may reveal a creature card with power 2 or less
-# from among them and put it into your hand. Put the rest on the
-# bottom of your library in a random order``. The three-sentence
-# surface form is matched as a single primitive (the compound-effect
-# splitter's all-or-nothing rule keeps the embedded periods from
-# carving the phrase). Captures the power threshold so a future
-# variant with a different cap (``with power 3 or less``, etc.) lands
-# on the same primitive without further regex work. Maps to
-# ``LookAtTopNRevealOrCounter(n=5, filter_name="creature",
-# max_power=N, counter_on_miss=False)``.
-_LOOK_TOP_FIVE_REVEAL_LOW_POWER_CREATURE = re.compile(
-    r"^look at the top five cards of your library\. "
-    r"You may reveal a creature card with power (\d+) or less "
-    r"from among them and put it into your hand\. "
-    r"Put the rest on the bottom of your library in a random order$"
+# ``look at the top N cards of your library. You may reveal a <filter>
+# card from among them and put it into your hand. Put the rest on the
+# bottom of your library in a random order[. If you didn't put a card
+# into your hand this way, put a +1/+1 counter on this creature]`` —
+# parameterized peek-tutor-or-counter shape. Two cards in the EoE/DSK
+# pool currently print this body:
+#
+#   - Living Phone (DSK) — dies trigger; filter "creature card with
+#     power N or less"; no counter-rider tail (no ``If you didn't put
+#     a card into your hand this way`` sentence).
+#   - Pulsar Squadron Ace (EoE) — ETB; filter "Spacecraft card"; the
+#     counter-rider tail IS present.
+#
+# Two filter shapes are captured: a bare type ("Spacecraft") OR
+# "creature card with power N or less". Both land on the existing
+# ``LookAtTopNRevealOrCounter`` engine class — the captured filter
+# token routes to ``filter_name`` ("spacecraft" / "creature"), the
+# optional ``max_power`` capture lands on the engine class's
+# ``max_power=N`` kwarg (only meaningful for the creature filter; the
+# class ignores it for non-creature filters), and the optional
+# counter-rider tail flips ``counter_on_miss=True``. Replaces the two
+# distinct literals (the prior Pulsar-specific bespoke and the prior
+# ``_LOOK_TOP_FIVE_REVEAL_LOW_POWER_CREATURE`` Living Phone literal)
+# with a single parameterized recognizer per the parser CLAUDE.md
+# guidance.
+_LOOK_TOP_N_REVEAL_OR_COUNTER = re.compile(
+    rf"^look at the top (\d+|{_SMALL_CARDINAL_PATTERN}) cards of your "
+    rf"library\. "
+    rf"You may reveal a (Spacecraft|creature) card"
+    rf"(?: with power (\d+) or less)? "
+    rf"from among them and put it into your hand\. "
+    rf"Put the rest on the bottom of your library in a random order"
+    rf"(?P<rider>\. If you didn't put a card into your hand this way, "
+    rf"put a \+1/\+1 counter on this creature)?$"
 )
 # Mill is "mill <amount> cards" where the amount is either a digit or
 # one of the spelled-out small cardinals (Scryfall printing convention).
@@ -2685,21 +2703,32 @@ def _parse_effect(phrase: str) -> Effect | None:
         # single primitive; the agent's ``choose_surveil`` hook
         # decides which card goes to which pile at resolve time.
         return LookAtTopTwoSplitHandGraveyard()
-    m = _LOOK_TOP_FIVE_REVEAL_LOW_POWER_CREATURE.match(phrase)
+    m = _LOOK_TOP_N_REVEAL_OR_COUNTER.match(phrase)
     if m is not None:
-        # ``look at the top five cards of your library. You may reveal
-        # a creature card with power N or less from among them and put
-        # it into your hand. Put the rest on the bottom of your library
-        # in a random order`` — Living Phone's dies trigger body. Maps
-        # to ``LookAtTopNRevealOrCounter(n=5, filter_name="creature",
-        # max_power=N, counter_on_miss=False)`` — the ``creature``
-        # filter narrowed by power, and ``counter_on_miss=False``
-        # because Living Phone's printed text has no ``Otherwise, put
-        # a +1/+1 counter`` clause (distinct from Pulsar Squadron Ace's
-        # bespoke entry which carries the counter rider).
+        # Parameterized peek-tutor-or-counter recognizer covering both
+        # Living Phone's dies trigger body (creature/power-capped, no
+        # rider) and Pulsar Squadron Ace's ETB body (Spacecraft, with
+        # the ``If you didn't put a card into your hand this way, put
+        # a +1/+1 counter on this creature`` rider). Captures:
+        #   group(1) — N (digit or spelled-out cardinal)
+        #   group(2) — filter token ("Spacecraft" or "creature")
+        #   group(3) — optional max-power cap (only on the creature
+        #              filter form)
+        #   group("rider") — present iff the +1/+1 counter rider is
+        #              printed
+        # The engine class's ``max_power`` is ignored for non-creature
+        # filters, so passing ``int(group(3) or 0)`` is safe for the
+        # Spacecraft path.
+        filter_token = m.group(2)
+        filter_name = (
+            "spacecraft" if filter_token == "Spacecraft" else "creature"
+        )
+        max_power = int(m.group(3)) if m.group(3) else 0
         return LookAtTopNRevealOrCounter(
-            n=5, filter_name="creature",
-            max_power=int(m.group(1)), counter_on_miss=False,
+            n=_parse_amount(m.group(1)),
+            filter_name=filter_name,
+            max_power=max_power,
+            counter_on_miss=m.group("rider") is not None,
         )
     m = _MILL_N_CARDS.match(phrase)
     if m is not None:

@@ -64,7 +64,6 @@ from mtg_bot.cards.base import (
     HouseCartographerSurvivalEffect,
     IfGainedLifeThisTurnUntapSelf,
     KavaronHarrierAttackEffect,
-    LookAtTopNRevealOrCounter,
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -335,21 +334,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Robot"],
                         count=1,
-                    ),
-                ),
-            ),
-        ),
-        # Pulsar Squadron Ace {1}{W} 1/2 Human Pilot.
-        # ETB: look at top 5, may reveal Spacecraft → hand; if not,
-        # put a +1/+1 counter on this creature.
-        "Pulsar Squadron Ace": make_creature(
-            "Pulsar Squadron Ace", "{1}{W}", 1, 2,
-            subtypes=("Human", "Pilot"),
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=LookAtTopNRevealOrCounter(
-                        n=5, filter_name="spacecraft",
                     ),
                 ),
             ),
