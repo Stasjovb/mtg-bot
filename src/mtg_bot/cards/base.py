@@ -723,6 +723,14 @@ class CardPrinting:
     # interleaves correctly with Scuttlemutt-style set_colors per
     # CR 613 layer-5 timestamp rules.
     paints_all_objects_chosen_color_at_etb: bool = False
+    # Found Footage (Duskmourn): "You may look at face-down creatures
+    # your opponents control any time." Today the engine doesn't model
+    # hidden information for face-down permanents (the controller can
+    # already inspect any face-down GameObject in the battlefield list),
+    # so this flag is informational only — it carries the printed
+    # static for fidelity but has no engine consequence. Reserved for
+    # future hidden-information modeling.
+    looks_at_opponents_face_down_creatures: bool = False
     # Humility (Tempest): "All creatures lose all abilities and have
     # base power and toughness 1/1." Decomposed into two flags so a
     # future card with only one half (just the wipe, just the 1/1)
@@ -1188,10 +1196,30 @@ def make_artifact(
     keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     cost_reductions: tuple[CostReduction, ...] = (),
     paints_all_objects_chosen_color_at_etb: bool = False,
+    subtype: str | None = None,
+    looks_at_opponents_face_down_creatures: bool = False,
 ) -> CardPrinting:
-    """Build a non-creature, non-Spacecraft Artifact permanent."""
+    """Build a non-creature, non-Spacecraft Artifact permanent.
+
+    ``subtype`` (e.g. ``"Clue"``, ``"Food"``) appends an ``- <subtype>``
+    suffix to the type line and lands on the printing's ``subtypes``
+    tuple. Defaults to None (no subtype). DSK Found Footage is the
+    first Clue subtype in the engine pool.
+
+    ``looks_at_opponents_face_down_creatures`` mirrors the Duskmourn
+    Found Footage static ``You may look at face-down creatures your
+    opponents control any time.`` The flag is informational today —
+    the engine doesn't model hidden information for face-down
+    permanents (a controller can already inspect any face-down
+    permanent), so this flag has no engine consequence beyond fidelity
+    of the printing's static ability list. Reserved for future hidden-
+    information modeling.
+    """
     prefix = "Legendary " if legendary else ""
-    type_line = f"{prefix}Artifact"
+    if subtype is not None:
+        type_line = f"{prefix}Artifact — {subtype}"
+    else:
+        type_line = f"{prefix}Artifact"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -1208,6 +1236,9 @@ def make_artifact(
         cost_reductions=tuple(cost_reductions),
         paints_all_objects_chosen_color_at_etb=(
             paints_all_objects_chosen_color_at_etb
+        ),
+        looks_at_opponents_face_down_creatures=(
+            looks_at_opponents_face_down_creatures
         ),
     )
 

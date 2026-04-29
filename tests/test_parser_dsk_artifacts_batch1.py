@@ -421,3 +421,118 @@ def test_tap_up_to_one_target_creature_invalid_target_is_noop():
     TapUpToOneTargetCreature().resolve(
         state, controller_id=0, targets=(("creature", 999),),
     )
+
+
+# ---------- Found Footage: Clue artifact bespoke factory ----------
+
+def test_found_footage_claimed_by_parser():
+    # Found Footage ``{1}`` Artifact - Clue - claimed via a name-keyed
+    # bespoke factory in ``artifact_builder``. The static
+    # ``You may look at face-down creatures your opponents control any
+    # time.`` is informational (no engine consequence today); the
+    # activated body uses the unified-grammar Sequence(Surveil(2),
+    # DrawCards(1)) materialized directly so the bespoke factory shape
+    # matches a parser round-trip exactly.
+    assert "Found Footage" in _claimed_names()
+
+
+def test_found_footage_carries_clue_subtype():
+    # Belt-and-suspenders that the produced ``CardPrinting`` carries
+    # the Clue subtype on its type line via the new ``subtype`` kwarg
+    # on ``make_artifact``.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Found Footage"]
+    assert "Clue" in p.subtypes
+    assert "Artifact" in p.card_types
+
+
+def test_found_footage_carries_face_down_static_flag():
+    # The static ``You may look at face-down creatures your opponents
+    # control any time.`` lifts to a printing flag. Engine-wise the
+    # flag is informational today (no hidden-information modeling),
+    # but it carries the printed static for fidelity.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Found Footage"]
+    assert p.looks_at_opponents_face_down_creatures is True
+
+
+def test_found_footage_carries_sac_surveil_draw_activation():
+    # The activated ``{2}, Sacrifice this artifact: Surveil 2, then
+    # draw a card.`` lands as a single ActivatedAbility with the
+    # standard mana+sac-self cost shape and a Sequence effect body
+    # matching the unified-grammar parser output for the same line.
+    from mtg_bot.effects import Surveil
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic import DrawCards
+
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Found Footage"]
+    assert len(p.activated_abilities) == 1
+    a = p.activated_abilities[0]
+    assert a.cost.mana_str == "{2}"
+    assert a.cost.sacrifice_self is True
+    assert isinstance(a.effect, Sequence)
+    assert len(a.effect.effects) == 2
+    assert isinstance(a.effect.effects[0], Surveil)
+    assert a.effect.effects[0].amount == 2
+    assert isinstance(a.effect.effects[1], DrawCards)
+    assert a.effect.effects[1].amount == 1
+
+
+# ---------- make_artifact subtype kwarg ----------
+
+def test_make_artifact_subtype_kwarg_lands_on_subtypes():
+    # New ``subtype`` kwarg on ``make_artifact`` extends the type line
+    # with the ``- <subtype>`` suffix and lands the subtype on the
+    # printing's ``subtypes`` tuple.
+    from mtg_bot.cards.base import make_artifact
+
+    art = make_artifact("Test Clue", "{1}", subtype="Clue")
+    assert "Clue" in art.subtypes
+    assert "Artifact" in art.card_types
+    assert "Clue" in art.type_line
+
+
+def test_make_artifact_subtype_default_none():
+    # Backward-compat sanity: omitting ``subtype=`` produces a plain
+    # ``Artifact`` type line with no subtype.
+    from mtg_bot.cards.base import make_artifact
+
+    art = make_artifact("Plain Art", "{1}")
+    assert art.subtypes == ()
+    assert art.type_line == "Artifact"
+
+
+def test_make_artifact_legendary_with_subtype():
+    # Legendary + subtype composes the prefix and suffix correctly.
+    from mtg_bot.cards.base import make_artifact
+
+    art = make_artifact(
+        "Legend Clue", "{1}", legendary=True, subtype="Clue",
+    )
+    assert "Legendary" in art.supertypes
+    assert "Clue" in art.subtypes
+    assert "Legendary Artifact" in art.type_line
+
+
+# ---------- looks_at_opponents_face_down_creatures field ----------
+
+def test_make_artifact_face_down_kwarg_lands_on_field():
+    # New ``looks_at_opponents_face_down_creatures`` kwarg on
+    # ``make_artifact`` lands on the same-named field on the printing.
+    from mtg_bot.cards.base import make_artifact
+
+    art = make_artifact(
+        "Test", "{1}",
+        looks_at_opponents_face_down_creatures=True,
+    )
+    assert art.looks_at_opponents_face_down_creatures is True
+
+
+def test_make_artifact_face_down_default_false():
+    # Backward-compat sanity: the kwarg defaults to False, so existing
+    # call sites that don't pass it keep their previous behavior.
+    from mtg_bot.cards.base import make_artifact
+
+    art = make_artifact("Plain", "{1}")
+    assert art.looks_at_opponents_face_down_creatures is False

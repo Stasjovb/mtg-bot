@@ -133,7 +133,8 @@ from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.generic import CreateToken
+from mtg_bot.effects.combinators import Sequence
+from mtg_bot.effects.generic import CreateToken, Surveil
 from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
 
@@ -333,6 +334,41 @@ _LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
 }
 
 
+def _build_found_footage() -> CardPrinting:
+    """Found Footage: ``{1}`` Artifact - Clue with the printed
+    informational static ``You may look at face-down creatures your
+    opponents control any time.`` plus the activated ability
+    ``{2}, Sacrifice this artifact: Surveil 2, then draw a card.``
+
+    The static is surface-only fidelity — the engine doesn't model
+    hidden information for face-down permanents, so the
+    ``looks_at_opponents_face_down_creatures`` flag is informational
+    today (no engine consequence). The activated body is the unified-
+    grammar Sequence(Surveil(2), DrawCards(1)) the activated parser
+    already produces, materialized directly here so the bespoke factory
+    matches the static-registry shape exactly without a parser round-
+    trip. ``subtype="Clue"`` lands the Clue subtype on the printing's
+    type line — first Clue in the engine pool.
+    """
+    return make_artifact(
+        "Found Footage", "{1}",
+        subtype="Clue",
+        looks_at_opponents_face_down_creatures=True,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"),
+                    mana_str="{2}",
+                    sacrifice_self=True,
+                ),
+                effect=Sequence(
+                    effects=(Surveil(amount=2), DrawCards(amount=1)),
+                ),
+            ),
+        ),
+    )
+
+
 def _build_thrumming_hivepool() -> CardPrinting:
     """Thrumming Hivepool: Affinity for Slivers cost reduction, double
     strike + haste anthem for Slivers you control, and an upkeep trigger
@@ -369,6 +405,7 @@ def _build_thrumming_hivepool() -> CardPrinting:
 # the corresponding ``make_artifact`` call in ``eoe_spells.py`` exactly.
 _BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Thrumming Hivepool": _build_thrumming_hivepool,
+    "Found Footage": _build_found_footage,
 }
 
 
