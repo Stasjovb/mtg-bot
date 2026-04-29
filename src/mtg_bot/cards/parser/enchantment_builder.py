@@ -33,6 +33,8 @@ Aura enchantments (EoE):
 - Pain for All ``{2}{R}``
 
 Aura enchantments (DSK):
+- Cracked Skull ``{2}{B}`` (ETB look-at-target-opp-hand may-discard
+  + DEALT_DAMAGE-destroys-enchanted)
 - Duskmourn's Domination ``{4}{U}{U}``
 - Frantic Strength ``{1}{R}`` (Flash + +2/+2 + trample)
 - Shardmage's Rescue ``{W}`` (Flash + Enchant-creature-you-control +
@@ -67,6 +69,7 @@ from mtg_bot.effects import (
     SacrificeSelfUnlessVoidActive,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
+    TargetOpponentLookHandMayDiscard,
     TractorBeamETBEffect,
     WeftwalkingETBEffect,
 )
@@ -441,6 +444,45 @@ def _build_sheltered_by_ghosts() -> CardPrinting:
     )
 
 
+def _build_cracked_skull() -> CardPrinting:
+    """Cracked Skull ``{2}{B}``: Enchantment — Aura.
+
+    Oracle text:
+        Enchant creature
+        When this Aura enters, look at target player's hand. You may
+        choose a nonland card from it. That player discards that card.
+        When enchanted creature is dealt damage, destroy it.
+
+    Composes two existing engine pieces against the new
+    ``TargetOpponentLookHandMayDiscard`` ETB:
+
+    - ``TargetOpponentLookHandMayDiscard()`` ETB — the new generic
+      effect that honours the printed ``You may`` gate via
+      ``Agent.choose_yes_no``. Opponent-only legality is the standard
+      EoE / DSK ``target player`` simplification (the same convention
+      ``TargetOpponentDiscardsCasterChoice`` already rides). Self-
+      targeting is never strategically correct for the controller, so
+      narrowing legality doesn't affect rational play.
+    - ``DestroyEnchantedPermanent()`` on ``Event.DEALT_DAMAGE & IsHost()``
+      — same Cryoshatter-style trigger that fires when the enchanted
+      creature is dealt any damage and destroys it via the
+      destroys-the-host primitive.
+    """
+    return make_aura(
+        "Cracked Skull", "{2}{B}",
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS, predicate=IsSelf(),
+                effect=TargetOpponentLookHandMayDiscard(),
+            ),
+            TriggeredAbility(
+                event=Event.DEALT_DAMAGE, predicate=IsHost(),
+                effect=DestroyEnchantedPermanent(),
+            ),
+        ),
+    )
+
+
 def _build_shardmages_rescue() -> CardPrinting:
     """Shardmage's Rescue ``{W}``: Enchantment — Aura.
 
@@ -534,6 +576,7 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Hardlight Containment": _build_hardlight_containment,
     "Pain for All": _build_pain_for_all,
     # Duskmourn (DSK) Auras
+    "Cracked Skull": _build_cracked_skull,
     "Duskmourn's Domination": _build_duskmourns_domination,
     "Frantic Strength": _build_frantic_strength,
     "Shardmage's Rescue": _build_shardmages_rescue,

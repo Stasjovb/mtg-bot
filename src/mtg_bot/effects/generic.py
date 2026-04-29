@@ -7991,6 +7991,104 @@ class TargetOpponentDiscardsCasterChoice(Effect):
 
 
 @dataclass(frozen=True)
+class TargetOpponentLookHandMayDiscard(Effect):
+    """"Look at target opponent's hand. You may choose a nonland card
+    from it. That player discards that card."
+
+    Variant of ``TargetOpponentDiscardsCasterChoice`` that honors the
+    printed ``You may`` gate via ``Agent.choose_yes_no`` — the caster
+    is OFFERED the directed discard rather than forced into it. Used
+    by Cracked Skull's ETB. The reveal scope is ``look at`` (caster-
+    only) rather than the public ``reveals their hand``, but the
+    state-tracking primitive is the same: every card in the hand
+    becomes ``publicly_known_to`` the caster (one-way reveal).
+
+    Simplification vs. the printed ``target player`` scope on Cracked
+    Skull: targets are restricted to opponents only (the same
+    convention the original ``TargetOpponentDiscardsCasterChoice``
+    rides). Self-targeting is never strategically correct for the
+    controller, so the legality narrowing doesn't affect rational
+    play; documented as the standard EoE / DSK target-player
+    simplification.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "player":
+            return
+        target = state.player_by_id(target_id)
+        if target.has_lost:
+            return
+        # ``Look at`` step: caster sees every card in target's hand and
+        # remembers it. Same one-way reveal primitive
+        # ``TargetOpponentDiscardsCasterChoice`` uses for its public
+        # ``reveals their hand`` step — engine-equivalent for the
+        # discard-direction phase that follows.
+        for c in target.hand:
+            reveal_to(c, controller_id)
+        # Nonland options for the may-discard.
+        options = [c for c in target.hand if not c.printing.is_land]
+        if not options:
+            state.log.append(
+                f"P{target_id} has no nonland cards — directed discard "
+                f"declines silently"
+            )
+            return
+        caster = state.player_by_id(controller_id)
+        # The "may" gate. Default-decline if the caster has no agent;
+        # otherwise the agent's ``choose_yes_no`` answers the prompt.
+        if caster.agent is None:
+            return
+        if not caster.agent.choose_yes_no(
+            state, controller_id,
+            f"Force P{target_id} to discard a nonland card?",
+        ):
+            state.log.append(
+                f"P{controller_id} declines the may-discard against "
+                f"P{target_id}"
+            )
+            return
+        chosen_id = caster.agent.choose_card_from_opponent_hand(
+            state, controller_id, [c.id for c in options]
+        )
+        chosen = next(
+            (c for c in options if c.id == chosen_id), options[0]
+        )
+        target.hand.remove(chosen)
+        chosen.zone = Zone.GRAVEYARD
+        target.graveyard.append(chosen)
+        state.log.append(
+            f"P{controller_id} chooses P{target_id}'s "
+            f"{chosen.printing.name} for the may-discard"
+        )
+
+    def describe(self) -> str:
+        return (
+            "look at target opponent's hand; you may choose a nonland "
+            "card from it and they discard it"
+        )
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentDiscards(Effect):
     """Target opponent discards ``count`` cards.
 

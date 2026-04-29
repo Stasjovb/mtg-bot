@@ -172,6 +172,7 @@ from mtg_bot.effects.generic import (
     TapUpToOneTargetCreature,
     TargetOpponentDiscards,
     TargetOpponentDiscardsCasterChoice,
+    TargetOpponentLookHandMayDiscard,
     TargetOpponentLosesLife,
     TargetOpponentLosesNYouGainN,
     TargetPlayerLosesLife,
