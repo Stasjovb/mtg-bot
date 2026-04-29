@@ -467,7 +467,10 @@ _TRIGGER_PHRASES: dict[str, str] = {}
 # permanent is excluded from the firing pool — the engine no longer
 # needs special-case "exclude the entering object" logic at the
 # fire site for these.
-_PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
+_PREDICATE_TRIGGER_PHRASES: dict[
+    str,
+    tuple[Event, Predicate] | tuple[Event, Predicate, bool],
+] = {
     # ``Whenever this creature enters`` — the source's own ETB.
     "this creature enters": (Event.ENTERS, IsSelf()),
     # Land-enters ("landfall"). The ``Landfall —`` ability-word label,
@@ -652,16 +655,36 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # subject="source")`` gates "a creature you control" on the
     # damage dealer; ``IsPlayer(subject="target")`` gates "to a
     # player" vs "to a creature". Mirrors the static registry's
-    # Starwinder predicate exactly. The aggregated "one or more
-    # creatures you control" variant (Elegy Acolyte) is intentionally
-    # NOT mapped here — it has different fire semantics (once per
-    # combat regardless of how many sources connect) that don't fit
-    # the per-event predicate model.
+    # Starwinder predicate exactly.
     "a creature you control deals combat damage to a player": (
         Event.DEALS_COMBAT_DAMAGE,
         IsCreature(subject="source")
         & Controlled(YOU, subject="source")
         & IsPlayer(subject="target"),
+    ),
+    # ``Whenever one or more creatures you control deal combat damage
+    # to a player`` (Locker Room — DSK Room half). Same per-event
+    # predicate as the ``a creature you control deals combat damage
+    # to a player`` Starwinder entry above, but the printed
+    # "one or more" wording carries an implicit aggregated semantic:
+    # one fire per combat regardless of how many of the controller's
+    # creatures connect. Modeled by the existing
+    # ``TriggeredAbility.once_per_turn=True`` flag — the per-source
+    # ``DEALS_COMBAT_DAMAGE`` event still dispatches once per
+    # connecting attacker, but the ledger caps Locker Room's draw
+    # at a single fire per turn (which lines up 1:1 with one fire
+    # per combat in our single-combat-per-turn model). The 3-tuple
+    # value form threads ``once_per_turn=True`` through to the
+    # produced ``TriggeredAbility`` — the dispatcher OR-combines this
+    # phrase-level flag with the trailing-rider
+    # ``This ability triggers only once each turn.`` flag so future
+    # printings carrying both wordings stay correct.
+    "one or more creatures you control deal combat damage to a player": (
+        Event.DEALS_COMBAT_DAMAGE,
+        IsCreature(subject="source")
+        & Controlled(YOU, subject="source")
+        & IsPlayer(subject="target"),
+        True,
     ),
     # ``Whenever a nontoken creature you control with a +1/+1
     # counter on it dies`` (Rayblade Trooper). Batch 9. Stricter
@@ -1043,7 +1066,45 @@ def _parse_trigger_phrase(phrase: str) -> str | None:
 def _parse_predicate_trigger_phrase(
     phrase: str,
 ) -> tuple[Event, Predicate] | None:
-    return _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+    """Look up ``phrase`` in the predicate-trigger phrasebook.
+
+    Returns ``(Event, Predicate)`` for a recognized phrase or ``None``
+    otherwise. Some entries' value form is a 3-tuple
+    ``(Event, Predicate, once_per_turn)`` carrying an implicit
+    aggregated semantic (Locker Room's "one or more creatures you
+    control deal combat damage to a player" is the canonical example,
+    one fire per combat regardless of how many sources connect). The
+    once-per-turn flag is consulted via the sibling
+    ``_predicate_trigger_phrase_is_once_per_turn`` helper so this
+    primary lookup keeps its long-standing ``(Event, Predicate)`` shape
+    for direct test consumers — the public surface stays stable while
+    the dispatcher gains the new flag through the parallel helper.
+    """
+    raw = _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+    if raw is None:
+        return None
+    return raw[0], raw[1]
+
+
+def _predicate_trigger_phrase_is_once_per_turn(phrase: str) -> bool:
+    """Return whether the predicate-trigger phrasebook entry for
+    ``phrase`` carries an implicit ``once_per_turn=True`` rider.
+
+    Returns ``False`` if the phrase isn't in the phrasebook OR if the
+    value form is the legacy 2-tuple ``(Event, Predicate)``. Returns
+    ``True`` only for entries whose value is a 3-tuple
+    ``(Event, Predicate, True)`` — the printed-wording-aggregated
+    surfaces (Locker Room's "one or more creatures you control deal
+    combat damage to a player" is the only such entry today). The
+    dispatcher OR-combines this flag with the trailing-rider
+    ``This ability triggers only once each turn.`` flag stripped
+    earlier — both are honest sources of ``once_per_turn=True`` and
+    either alone is sufficient for the final ``TriggeredAbility``.
+    """
+    raw = _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+    if raw is None or len(raw) < 3:
+        return False
+    return bool(raw[2])
 
 
 def _substitute_self_name(line: str, name: str) -> str:
@@ -1344,11 +1405,12 @@ def _parse_triggered_ability_line(
         if pred_match is None:
             return None
         event, base_predicate = pred_match
+        phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
         return TriggeredAbility(
             event=event,
             predicate=base_predicate & gate_pred,
             effect=effect,
-            once_per_turn=once_per_turn,
+            once_per_turn=once_per_turn or phrase_once,
         )
     # Intervening-``while`` shape: ``When/Whenever <condition> while
     # <gate>, <effect>.`` Same trigger-time gate semantics as the
@@ -1374,11 +1436,12 @@ def _parse_triggered_ability_line(
         if pred_match is None:
             return None
         event, base_predicate = pred_match
+        phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
         return TriggeredAbility(
             event=event,
             predicate=base_predicate & gate_pred,
             effect=effect,
-            once_per_turn=once_per_turn,
+            once_per_turn=once_per_turn or phrase_once,
         )
     # Trailing-if shape: ``When/Whenever <condition>, <effect> if
     # <gate>.`` Mechanically equivalent to the middle-clause
@@ -1404,11 +1467,14 @@ def _parse_triggered_ability_line(
             if pred_match is None:
                 return None
             event, base_predicate = pred_match
+            phrase_once = _predicate_trigger_phrase_is_once_per_turn(
+                condition,
+            )
             return TriggeredAbility(
                 event=event,
                 predicate=base_predicate & gate_pred,
                 effect=effect,
-                once_per_turn=once_per_turn,
+                once_per_turn=once_per_turn or phrase_once,
             )
         # The trailing-if regex over-matches: any trigger line whose
         # effect contains a sub-clause beginning `` if `` (e.g. an ``if
@@ -1469,11 +1535,12 @@ def _parse_triggered_ability_line(
     pred_match = _parse_predicate_trigger_phrase(condition)
     if pred_match is not None:
         event, predicate = pred_match
+        phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
         return TriggeredAbility(
             event=event,
             predicate=predicate,
             effect=effect,
-            once_per_turn=once_per_turn,
+            once_per_turn=once_per_turn or phrase_once,
         )
     trigger = _parse_trigger_phrase(condition)
     if trigger is None:

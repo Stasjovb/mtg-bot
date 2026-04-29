@@ -58,19 +58,13 @@ from mtg_bot.effects import (
     ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
-    ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
-    ReturnTargetCreatureToOwnersHand,
-    SearchLibraryForBasicLandTapped,
     Sequence,
-    TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
     YOU,
     Controlled,
     Event,
-    IsCreature,
-    IsPlayer,
     IsSelf,
     LoneAttackerForYou,
 )
@@ -92,93 +86,6 @@ def _half(
         mana_cost_str=mana_cost,
         mana_cost=parse_mana_cost(mana_cost),
         triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-def _build_meat_locker_drowned_diner() -> CardPrinting:
-    """Meat Locker // Drowned Diner ``{2}{U}`` // ``{3}{U}{U}``.
-
-    Meat Locker oracle:
-        When you unlock this door, tap up to one target creature and
-        put two stun counters on it.
-
-    Drowned Diner oracle:
-        When you unlock this door, draw three cards, then discard a
-        card.
-
-    Both halves are pure door triggers. Meat Locker uses the new
-    ``TapAndStunUpToOneTargetCreature(stun_amount=2)`` primitive
-    (any creature, friend or foe; "up to one" means the door fires
-    even with no legal target). Drowned Diner threads
-    ``Sequence(DrawCards(3), DiscardSelf(1))`` through the resolve
-    pipeline — the existing primitives compose directly without a
-    new effect class.
-    """
-    return make_room(
-        _half(
-            "Meat Locker", "{2}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=TapAndStunUpToOneTargetCreature(stun_amount=2),
-                ),
-            ),
-        ),
-        _half(
-            "Drowned Diner", "{3}{U}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(
-                        effects=(
-                            DrawCards(amount=3),
-                            DiscardSelf(amount=1),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_moldering_gym_weight_room() -> CardPrinting:
-    """Moldering Gym // Weight Room ``{2}{G}`` // ``{5}{G}``.
-
-    Moldering Gym oracle:
-        When you unlock this door, search your library for a basic
-        land card, put it onto the battlefield tapped, then shuffle.
-
-    Weight Room oracle:
-        When you unlock this door, manifest dread, then put three
-        +1/+1 counters on that creature.
-
-    Both halves are pure door triggers. Moldering Gym uses the
-    existing ``SearchLibraryForBasicLandTapped`` primitive (the same
-    one Lander tokens activate); Weight Room reuses
-    ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3)`` from
-    Slimy Aquarium with the bigger counter payload.
-    """
-    return make_room(
-        _half(
-            "Moldering Gym", "{2}{G}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SearchLibraryForBasicLandTapped(),
-                ),
-            ),
-        ),
-        _half(
-            "Weight Room", "{5}{G}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
-                        counter_amount=3,
-                    ),
-                ),
-            ),
-        ),
     )
 
 
@@ -315,62 +222,6 @@ def _build_unholy_annex_ritual_chamber() -> CardPrinting:
                     effect=CreateToken(
                         token_printing=TOKEN_PRINTINGS["Demon"], count=1,
                     ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_bottomless_pool_locker_room() -> CardPrinting:
-    """Bottomless Pool // Locker Room ``{U}`` // ``{4}{U}``.
-
-    Bottomless Pool oracle:
-        When you unlock this door, return up to one target creature to
-        its owner's hand.
-
-    Locker Room oracle:
-        Whenever one or more creatures you control deal combat damage
-        to a player, draw a card.
-
-    Bottomless Pool is a pure door trigger reusing the existing
-    ``ReturnTargetCreatureToOwnersHand(optional=True)`` primitive (the
-    same flag added for the half — "up to one" admits a zero-target
-    no-op).
-
-    Locker Room hooks ``Event.DEALS_COMBAT_DAMAGE`` with a predicate
-    composed of ``IsCreature(subject="source") & Controlled(YOU,
-    subject="source") & IsPlayer(subject="target")`` — same shape
-    Starwinder uses for "a creature you control deals combat damage
-    to a player". The "one or more" aggregated semantics is captured
-    via ``once_per_turn=True``: the per-source DEALS_COMBAT_DAMAGE
-    event fires once per attacker that connects, but the
-    once-per-turn ledger caps Locker Room's draw at a single fire
-    per turn — matches the printed "one or more creatures … draw a
-    card" intent (one trigger regardless of how many of your
-    creatures hit).
-    """
-    return make_room(
-        _half(
-            "Bottomless Pool", "{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ReturnTargetCreatureToOwnersHand(optional=True),
-                ),
-            ),
-        ),
-        _half(
-            "Locker Room", "{4}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DEALS_COMBAT_DAMAGE,
-                    predicate=(
-                        IsCreature(subject="source")
-                        & Controlled(YOU, subject="source")
-                        & IsPlayer(subject="target")
-                    ),
-                    effect=DrawCards(amount=1),
-                    once_per_turn=True,
                 ),
             ),
         ),
@@ -577,11 +428,8 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
-    "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
-    "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
     "Roaring Furnace // Steaming Sauna":
         _build_roaring_furnace_steaming_sauna,
     "Restricted Office // Lecture Hall":
@@ -601,9 +449,12 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 # the unified path the set and the bespoke table both drop to zero
 # and the gate goes away with them.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
+    "Bottomless Pool // Locker Room",
     "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
+    "Meat Locker // Drowned Diner",
+    "Moldering Gym // Weight Room",
     "Surgical Suite // Hospital Room",
     "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",

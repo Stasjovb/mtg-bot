@@ -91,12 +91,15 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNTargetCreaturesToOwnersHands,
+    SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SelfMill,
     Sequence,
     Surveil,
+    TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
@@ -595,6 +598,28 @@ _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
     r"^search your library for a basic land card, "
     r"reveal it, put it into your hand, then shuffle$"
 )
+# "Search your library for a basic land card, put it onto the
+# battlefield tapped, then shuffle." — Moldering Gym's door trigger
+# (the tapped-onto-battlefield reward form). Same fetch-land payload
+# as the Lander token's activated ability and the
+# ``_FETCH_LAND_BODIES`` table in ``land_builder``; landing the
+# surface here lets unified-grammar Room halves (and any future
+# triggered/activated-ability surface that prints this exact
+# sentence) claim through a single recognizer. Maps to
+# ``SearchLibraryForBasicLandTapped()``. Distinct from the
+# put-into-your-hand sibling above on the reward tail (battlefield-
+# tapped vs hand-with-reveal); the two surfaces are mutually
+# exclusive at the regex level so ordering between them doesn't
+# matter. Literal-line recognizer with a single capture-less surface
+# — Moldering Gym is the only printing in the EoE/DSK pool whose
+# triggered-ability body prints this exact sentence today; broader
+# grammar (parameterizing the count, ``land`` vs ``basic land``, or
+# the tapped-vs-untapped tail) is deferred until a second example
+# with a varying piece exists.
+_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD = re.compile(
+    r"^search your library for a basic land card, "
+    r"put it onto the battlefield tapped, then shuffle$"
+)
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
 #
@@ -805,6 +830,28 @@ _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
 _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
     r"^return up to one other target permanent you control "
     r"to its owner's hand$"
+)
+# "Return up to one target creature to its owner's hand." — Bottomless
+# Pool's door trigger. Optional-target bounce against any creature
+# (friend or foe). Maps to
+# ``ReturnTargetCreatureToOwnersHand(optional=True)`` — same engine
+# class the spell-builder dispatch uses for the mandatory shape, here
+# with the ``optional=True`` flag flipped so a no-target resolution
+# is a clean no-op fizzle (engine-side
+# ``target_count_range = (0, 1)``). Distinct from the ``up to one
+# OTHER target permanent you control`` Exosuit Savior shape above on
+# both target type (creature only vs any permanent) and controller
+# qualifier (any controller vs you-control); the two are mutually
+# exclusive at the regex level. Literal-line recognizer with no
+# capture groups — Bottomless Pool is the only printing in the
+# EoE/DSK pool whose triggered- or activated-ability body prints this
+# exact sentence; broader grammar (parameterizing ``up to one`` vs
+# bare ``target``, or fold into a single creature-bounce family with
+# the existing ``ReturnTargetCreatureToOwnersHand`` paths in
+# ``spell_builder``) is deferred until a second example with a
+# varying piece exists.
+_RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
+    r"^return up to one target creature to its owner's hand$"
 )
 # "Return up to N target non-Spacecraft creatures to their owners'
 # hands" — Specimen Freighter's ETB body. Maps to
@@ -1333,6 +1380,31 @@ _TAP_TARGET_OPPONENT_PERMANENT_AND_STUN_IT = re.compile(
 # (the ``up to one`` optionality fizzles cleanly if the pool is empty).
 _PUT_STUN_COUNTER_UP_TO_ONE_TAPPED = re.compile(
     r"^put a stun counter on up to one target tapped creature$"
+)
+# "Tap up to one target creature and put N stun counters on it." —
+# Meat Locker's door trigger (``put two stun counters``). Same
+# tap-and-stun-the-same-target shape as
+# ``_TAP_TARGET_OPPONENT_PERMANENT_AND_STUN_IT`` (Mechanozoa) — both
+# halves apply to the SAME chosen target, with the ``and`` an
+# intra-effect conjunction rather than a compound joiner. Differs
+# from the Mechanozoa shape on three axes: target qualifier
+# (``up to one`` vs ``target … an opponent controls``), target
+# type pool (any creature vs artifact-or-creature opponent-controlled),
+# and stun-counter count (parameterized digit/cardinal vs the
+# Mechanozoa fixed singular). The captured count tail accepts the
+# article ``a`` for the singular form (forward-looking — no current
+# card prints ``a stun counter on it`` on this exact surface; that
+# shape today only appears with the singular Mechanozoa wording),
+# bare digits, and spelled-out small cardinals (``two`` is what Meat
+# Locker prints). ``a`` collapses to amount=1 in the handler.
+# Maps to ``TapAndStunUpToOneTargetCreature(stun_amount=N)``. The
+# compound-effect splitter does try ``and`` first and produces two
+# pieces, but neither piece is a recognized standalone effect, so
+# the splitter rejects and we fall through to this single-effect
+# regex.
+_TAP_UP_TO_ONE_TARGET_CREATURE_AND_STUN = re.compile(
+    rf"^tap up to one target creature and put "
+    rf"(a|\d+|{_SMALL_CARDINAL_PATTERN}) stun counters? on it$"
 )
 # "Discard a card" / "you discard a card" / "you discard N cards" —
 # controller-discards. The bare ``discard a card`` surface is what
@@ -2146,6 +2218,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         return SearchLibraryForCard(
             filter_name="basic_land", may_fail=True,
         )
+    if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``search your library for a basic land card, put it onto the
+        # battlefield tapped, then shuffle`` — Moldering Gym's door
+        # trigger. Same payload the Lander token's activated ability
+        # uses (``SearchLibraryForBasicLandTapped()``); the duplicate
+        # string-keyed entry in ``land_builder``'s
+        # ``_FETCH_LAND_BODIES`` is the fetch-land surface for cycling-
+        # land bodies and stays narrow to that builder's
+        # tap-and-sacrifice activation shape.
+        return SearchLibraryForBasicLandTapped()
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
@@ -2292,6 +2376,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         # apply to the same chosen target — the ``and`` is an
         # intra-effect conjunction, not a compound joiner.
         return TapTargetOpponentPermanentAndStunIt()
+    m = _TAP_UP_TO_ONE_TARGET_CREATURE_AND_STUN.match(phrase)
+    if m is not None:
+        # ``tap up to one target creature and put N stun counters on
+        # it`` — Meat Locker's door trigger. Both clauses apply to
+        # the same chosen target (the ``and`` is intra-effect, not a
+        # compound joiner). The captured count tail collapses ``a``
+        # to 1 and routes digits / spelled-out small cardinals
+        # through ``_parse_amount`` — same shape as
+        # ``_DISCARD_N_CARDS`` and the other count-tail primitives.
+        # ``up to one`` resolves as a no-op when no target is chosen
+        # (engine-side ``target_count_range = (0, 1)``).
+        token = m.group(1)
+        amount = 1 if token == "a" else _parse_amount(token)
+        return TapAndStunUpToOneTargetCreature(stun_amount=amount)
     if _PUT_STUN_COUNTER_UP_TO_ONE_TAPPED.match(phrase) is not None:
         # ``put a stun counter on up to one target tapped creature`` —
         # Cryogen Relic's activated payload. ``up to one`` resolves as
@@ -2387,6 +2485,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
         )
+    if _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(
+        phrase
+    ) is not None:
+        # ``return up to one target creature to its owner's hand`` —
+        # Bottomless Pool's door trigger. ``up to one`` →
+        # ``optional=True`` (resolves as a no-op fizzle if no target
+        # chosen); no controller restriction (any creature, friend or
+        # foe, is a legal target).
+        return ReturnTargetCreatureToOwnersHand(optional=True)
     m = _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS.match(
         phrase
     )

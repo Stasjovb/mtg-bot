@@ -79,6 +79,7 @@ from mtg_bot.effects import (
     RequiemMonolithActivatedEffect,
     RovingActuatorETBEffect,
     PutStunCounterOnTappedCreature,
+    TapAndStunUpToOneTargetCreature,
     TapTargetOpponentPermanentAndStunIt,
     ExileTargetCreatureUntilSourceLeaves,
     SeedshipImpactEffect,
