@@ -91,6 +91,7 @@ from mtg_bot.cards.base import (
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNTargetCreaturesToOwnersHands,
+    SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SelfMill,
     Sequence,
@@ -557,6 +558,28 @@ _SEARCH_LIBRARY_FOR_ARTIFACT_CARD = re.compile(
 _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
     r"^search your library for a basic land card, "
     r"reveal it, put it into your hand, then shuffle$"
+)
+# "Search your library for a basic land card, put it onto the
+# battlefield tapped, then shuffle." — Moldering Gym's door trigger
+# (the tapped-onto-battlefield reward form). Same fetch-land payload
+# as the Lander token's activated ability and the
+# ``_FETCH_LAND_BODIES`` table in ``land_builder``; landing the
+# surface here lets unified-grammar Room halves (and any future
+# triggered/activated-ability surface that prints this exact
+# sentence) claim through a single recognizer. Maps to
+# ``SearchLibraryForBasicLandTapped()``. Distinct from the
+# put-into-your-hand sibling above on the reward tail (battlefield-
+# tapped vs hand-with-reveal); the two surfaces are mutually
+# exclusive at the regex level so ordering between them doesn't
+# matter. Literal-line recognizer with a single capture-less surface
+# — Moldering Gym is the only printing in the EoE/DSK pool whose
+# triggered-ability body prints this exact sentence today; broader
+# grammar (parameterizing the count, ``land`` vs ``basic land``, or
+# the tapped-vs-untapped tail) is deferred until a second example
+# with a varying piece exists.
+_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD = re.compile(
+    r"^search your library for a basic land card, "
+    r"put it onto the battlefield tapped, then shuffle$"
 )
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
@@ -2103,6 +2126,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         return SearchLibraryForCard(
             filter_name="basic_land", may_fail=True,
         )
+    if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``search your library for a basic land card, put it onto the
+        # battlefield tapped, then shuffle`` — Moldering Gym's door
+        # trigger. Same payload the Lander token's activated ability
+        # uses (``SearchLibraryForBasicLandTapped()``); the duplicate
+        # string-keyed entry in ``land_builder``'s
+        # ``_FETCH_LAND_BODIES`` is the fetch-land surface for cycling-
+        # land bodies and stays narrow to that builder's
+        # tap-and-sacrifice activation shape.
+        return SearchLibraryForBasicLandTapped()
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))

@@ -58,10 +58,8 @@ from mtg_bot.effects import (
     ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
-    ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
     ReturnTargetCreatureToOwnersHand,
-    SearchLibraryForBasicLandTapped,
     Sequence,
 )
 from mtg_bot.effects.predicates import (
@@ -91,47 +89,6 @@ def _half(
         mana_cost_str=mana_cost,
         mana_cost=parse_mana_cost(mana_cost),
         triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-def _build_moldering_gym_weight_room() -> CardPrinting:
-    """Moldering Gym // Weight Room ``{2}{G}`` // ``{5}{G}``.
-
-    Moldering Gym oracle:
-        When you unlock this door, search your library for a basic
-        land card, put it onto the battlefield tapped, then shuffle.
-
-    Weight Room oracle:
-        When you unlock this door, manifest dread, then put three
-        +1/+1 counters on that creature.
-
-    Both halves are pure door triggers. Moldering Gym uses the
-    existing ``SearchLibraryForBasicLandTapped`` primitive (the same
-    one Lander tokens activate); Weight Room reuses
-    ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3)`` from
-    Slimy Aquarium with the bigger counter payload.
-    """
-    return make_room(
-        _half(
-            "Moldering Gym", "{2}{G}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SearchLibraryForBasicLandTapped(),
-                ),
-            ),
-        ),
-        _half(
-            "Weight Room", "{5}{G}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
-                        counter_amount=3,
-                    ),
-                ),
-            ),
-        ),
     )
 
 
@@ -530,7 +487,6 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
@@ -557,6 +513,7 @@ _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
     "Meat Locker // Drowned Diner",
+    "Moldering Gym // Weight Room",
     "Surgical Suite // Hospital Room",
     "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
