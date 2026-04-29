@@ -22,6 +22,7 @@ from mtg_bot.cards.base import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DealDamageEqualToSourcePowerAnyTarget,
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
@@ -137,6 +138,18 @@ _MANIFEST_DREAD = re.compile(
 
 _DEAL_DAMAGE_ANY_TARGET = re.compile(
     r"^deals (\d+) damage to any target$"
+)
+# "<source> deals damage equal to its power to any target" — Infernal
+# Phantom's dies trigger body in DSK (after the ``it `` source-subject
+# strip in ``_normalize_creature_effect_phrase``). Maps to
+# ``DealDamageEqualToSourcePowerAnyTarget`` whose resolve reads the
+# source's effective power at fire time and routes through
+# ``_apply_damage`` against the chosen target. Distinct from the bare
+# ``deals N damage to any target`` shape above (which carries a literal
+# integer amount); this primitive uses the source's power as a dynamic
+# integer. Same legal-target pool either way.
+_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET = re.compile(
+    r"^deals damage equal to its power to any target$"
 )
 _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     # Optional ``it `` prefix accepts the activated-ability surface
@@ -1547,6 +1560,16 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _DEAL_DAMAGE_ANY_TARGET.match(phrase)
     if m is not None:
         return DealDamageAnyTarget(amount=int(m.group(1)))
+    # ``deals damage equal to its power to any target`` — Infernal
+    # Phantom's dies trigger body in DSK. Mirrors the legal-target pool
+    # of the bare ``deals N damage to any target`` shape but reads the
+    # damage amount from the source's effective power at fire time
+    # rather than a printed integer. Tried right after the bare shape
+    # so a future ``deals damage equal to its power to target creature``
+    # variant (no DSK printing today) can land its own primitive in the
+    # same dispatch neighborhood.
+    if _DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET.match(phrase) is not None:
+        return DealDamageEqualToSourcePowerAnyTarget()
     # ``deals N damage to target creature an opponent controls`` — Nova
     # Hellkite's ETB. Tried BEFORE the bare ``deals N damage to target
     # creature`` regex because the bare regex's ``$`` anchor would not

@@ -45,6 +45,7 @@ from mtg_bot.effects import (
     CreateToken,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DealDamageEqualToSourcePowerAnyTarget,
     DefendingPlayerLosesHalfLifeRoundedUp,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,

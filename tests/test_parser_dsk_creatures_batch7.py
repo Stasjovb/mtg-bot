@@ -194,3 +194,148 @@ def test_fanatic_etb_describe():
         "each player discards a card; if you discarded a card this "
         "way, draw a card"
     )
+
+
+# ---------- Infernal Phantom (+ DealDamageEqualToSourcePowerAnyTarget) ----------
+
+
+def test_infernal_phantom_claimed_by_parser():
+    # Infernal Phantom ``{3}{R}`` 2/3 Spirit. Two oracle lines:
+    # ``Eerie — Whenever an enchantment you control enters and
+    # whenever you fully unlock a Room, this creature gets +2/+0
+    # until end of turn.`` and ``When this creature dies, it deals
+    # damage equal to its power to any target.`` Claims via the
+    # existing Eerie ability-word trigger plumbing for the first line
+    # plus the new ``DealDamageEqualToSourcePowerAnyTarget`` generic
+    # primitive for the second.
+    assert "Infernal Phantom" in _claimed_names()
+
+
+def test_infernal_phantom_carries_dies_damage_effect():
+    # The claimed printing must wire the
+    # ``DealDamageEqualToSourcePowerAnyTarget`` effect on a DIES
+    # trigger. The Eerie pair (ENTERS + ROOM_FULLY_UNLOCKED) plus the
+    # DIES trigger gives 3 total triggered abilities on the printing.
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    from mtg_bot.effects.predicates import Event
+    src = OracleParserCardSource()
+    ip = src.get_printings()["Infernal Phantom"]
+    dies_triggers = [
+        t for t in ip.triggered_abilities if t.event == Event.DIES
+    ]
+    assert len(dies_triggers) == 1
+    assert dies_triggers[0].effect == (
+        DealDamageEqualToSourcePowerAnyTarget()
+    )
+
+
+def test_deal_damage_equal_source_power_legal_targets_includes_creatures_and_players():
+    # Legal-target pool for the new primitive is creatures on the
+    # battlefield (gated through ``is_creature_now`` so impending
+    # Overlords aren't valid creature targets) plus non-eliminated
+    # players. Mirrors ``DealDamageAnyTarget`` exactly.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    eff = DealDamageEqualToSourcePowerAnyTarget()
+    legal = eff.legal_targets(state, controller_id=0)
+    assert ("creature", bear.id) in legal
+    assert ("player", 0) in legal
+    assert ("player", 1) in legal
+
+
+def test_deal_damage_equal_source_power_resolves_to_source_power():
+    # At resolve time the primitive reads ``state.resolving_source``'s
+    # effective power and routes that integer through ``_apply_damage``
+    # against the chosen target. We seed the resolving source with a
+    # printed power of 3 and verify a target creature takes 3 damage.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    src = state.new_object(
+        make_creature("Source", "{2}{R}", 3, 3),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = src
+    eff = DealDamageEqualToSourcePowerAnyTarget()
+    try:
+        eff.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    finally:
+        state.resolving_source = None
+    assert bear.damage == 3
+
+
+def test_deal_damage_equal_source_power_zero_power_no_op():
+    # CR 119.5: when the amount of damage that would be dealt is 0 or
+    # less, no damage is dealt. A source with effective power 0 fires
+    # the trigger but the damage routing is skipped.
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    src = state.new_object(
+        make_creature("Source", "{R}", 0, 1),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(src)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = src
+    eff = DealDamageEqualToSourcePowerAnyTarget()
+    try:
+        eff.resolve(state, controller_id=0, targets=(("creature", bear.id),))
+    finally:
+        state.resolving_source = None
+    assert bear.damage == 0
+
+
+def test_deal_damage_equal_source_power_describe():
+    # The describe output names the source-power dependency so log
+    # messages distinguish this primitive from the literal-amount
+    # ``DealDamageAnyTarget`` sibling.
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    eff = DealDamageEqualToSourcePowerAnyTarget()
+    assert eff.describe() == (
+        "deals damage equal to this creature's power to any target"
+    )
+
+
+def test_parse_deal_damage_equal_source_power_phrase():
+    # End-to-end through the effect-phrase parser. The body
+    # ``it deals damage equal to its power to any target`` round-trips
+    # through ``_normalize_creature_effect_phrase`` (which strips the
+    # ``it `` source-subject prefix) and matches the new
+    # ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET`` regex.
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects import DealDamageEqualToSourcePowerAnyTarget
+    parsed = _parse_effect_phrase(
+        "it deals damage equal to its power to any target"
+    )
+    assert parsed == DealDamageEqualToSourcePowerAnyTarget()

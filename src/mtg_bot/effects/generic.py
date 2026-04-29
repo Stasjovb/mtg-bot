@@ -7488,6 +7488,64 @@ class PutPlusOneCounterOnCreatureYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageEqualToSourcePowerAnyTarget(Effect):
+    """Source deals damage equal to its (effective) power to any target
+    (creature or player).
+
+    Matches "this creature deals damage equal to its power to any
+    target" — Infernal Phantom's dies trigger in DSK. The amount is
+    snapshot from ``state.resolving_source.effective_power`` at resolve
+    time. For a dies-trigger source the GameObject is already in the
+    graveyard but ``state.resolving_source`` still references the
+    pre-death object so its layer-7 power can be read; if the power is
+    nonpositive the damage is a no-op (CR 119.5: "if the amount of
+    damage that would be dealt is 0 or less, no damage is dealt").
+
+    Same legal-target pool as ``DealDamageAnyTarget`` (creatures + non-
+    eliminated players); the cast-time pool is computed at trigger-
+    enters-stack time so a between-cast-and-resolve change to the
+    source's power doesn't change the legal targets.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+        targets: list[Target] = []
+        for o in state.battlefield:
+            if is_creature_now(o):
+                targets.append(("creature", o.id))
+        for p in state.players:
+            if not p.has_lost:
+                targets.append(("player", p.id))
+        return targets
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+        if not targets:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        amount = effective_power(state, source)
+        if amount <= 0:
+            return
+        _apply_damage(state, targets[0], amount)
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to this creature's power to any target"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageAnyTarget(Effect):
     """Deal ``amount`` damage to any target (creature or player).
 

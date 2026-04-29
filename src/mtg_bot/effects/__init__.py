@@ -46,6 +46,7 @@ from mtg_bot.effects.generic import (
     CytoshapeBecomeCopyUEOT,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DealDamageEqualToSourcePowerAnyTarget,
     DealDamageToControllerAndAddMana,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
