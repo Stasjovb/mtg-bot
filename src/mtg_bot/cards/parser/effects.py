@@ -1144,6 +1144,17 @@ _PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER = re.compile(
     r"^another target creature you control gets \+X/\+X until end of "
     r"turn, where X is this creature's power$"
 )
+# "Put a +1/+1 counter on each creature you control" — Atmospheric
+# Greenhouse's ETB trigger body. Mass +1/+1-counter spread on every
+# creature the controller controls (the Spacecraft is itself an
+# artifact, not a creature, when the ETB fires, so ``exclude_source``
+# isn't needed here — the source is naturally outside the firing
+# pool). Maps to ``PutPlusOneCounterOnEachCreatureYouControl(amount=1)``.
+# Distinct from the ``other than this creature`` variant below, which
+# carries an explicit source-exclusion tail.
+_PUT_PLUS_ONE_COUNTER_ON_EACH_CREATURE_YOU_CONTROL = re.compile(
+    r"^put a \+1/\+1 counter on each creature you control$"
+)
 # "Put a +1/+1 counter on each creature you control other than this
 # creature" — Dawnstrike Vanguard's tapped-creatures-gated end-step
 # trigger body. Mass +1/+1-counter spread on each creature the
@@ -1152,10 +1163,8 @@ _PUMP_OTHER_TARGET_CREATURE_BY_X_OVER_X_SOURCE_POWER = re.compile(
 # exclude_source=True)`` — the ``exclude_source=True`` flag reads
 # ``state.resolving_source`` at resolve time to skip the source from
 # the firing pool. Distinct from the bare ``put a +1/+1 counter on
-# each creature you control`` shape (Atmospheric Greenhouse) which
-# would be a separate primitive without the ``other than`` tail; no
-# EoE creature today prints the bare form, so only the ``other than
-# this creature`` variant is wired here.
+# each creature you control`` shape (Atmospheric Greenhouse) above,
+# which omits the source-exclusion tail.
 _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL = re.compile(
     r"^put a \+1/\+1 counter on each creature you control other than "
     r"this creature$"
@@ -1689,13 +1698,27 @@ def _parse_effect(phrase: str) -> Effect | None:
     # here. Maps to ``PutPlusOneCounterOnEachCreatureYouControl(
     # amount=1, exclude_source=True)`` — mirrors the static-registry
     # layout exactly (the ``other than this creature`` tail is what
-    # sets the engine class's ``exclude_source`` flag).
+    # sets the engine class's ``exclude_source`` flag). Tried BEFORE
+    # the bare ``each creature you control`` regex so the more-specific
+    # ``other than this creature`` shape wins on phrases that carry it.
     if _PUT_PLUS_ONE_COUNTER_ON_EACH_OTHER_CREATURE_YOU_CONTROL.match(
         phrase
     ) is not None:
         return PutPlusOneCounterOnEachCreatureYouControl(
             amount=1, exclude_source=True,
         )
+    # ``put a +1/+1 counter on each creature you control`` —
+    # Atmospheric Greenhouse's ETB trigger body. Mass +1/+1-counter
+    # spread on every creature the controller controls. Tried AFTER
+    # the ``other than this creature`` shape above (more-specific
+    # before more-general). Maps to
+    # ``PutPlusOneCounterOnEachCreatureYouControl(amount=1)`` — the
+    # default ``exclude_source=False`` matches the bespoke factory's
+    # output for Atmospheric Greenhouse exactly.
+    if _PUT_PLUS_ONE_COUNTER_ON_EACH_CREATURE_YOU_CONTROL.match(
+        phrase
+    ) is not None:
+        return PutPlusOneCounterOnEachCreatureYouControl(amount=1)
     # ``destroy target creature or Spacecraft`` — Embrace Oblivion.
     # Tried BEFORE the bare ``destroy target creature`` regex so the
     # Spacecraft-tail variant wins. Both produce the same engine class

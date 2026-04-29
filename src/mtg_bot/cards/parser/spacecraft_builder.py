@@ -122,7 +122,6 @@ from mtg_bot.effects.generic import (
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     PumpSelfUntilEOT,
-    PutPlusOneCounterOnEachCreatureYouControl,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnUpToNTargetCreaturesToOwnersHands,
@@ -148,19 +147,6 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Atmospheric Greenhouse: ETB puts a +1/+1 counter on each creature
-        # you control, 8+ flying + trample.
-        make_spacecraft(
-            "Atmospheric Greenhouse", "{4}{G}", 5, 4,
-            station_threshold=8,
-            stationed_keywords={"flying", "trample"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=PutPlusOneCounterOnEachCreatureYouControl(amount=1),
-                ),
-            ),
-        ),
         # Pinnacle Kill-Ship: ETB deals 10 damage to up to one target creature,
         # 7+ flying.
         make_spacecraft(
