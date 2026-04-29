@@ -20,9 +20,11 @@ Currently supports three land kinds:
   auto-tap-for-cost generic-mana fallback.
 - **EoS bespoke lands** — complex multi-ability EoS reprints claimed
   by name in ``_BESPOKE_EOS_LANDS`` before any generic grammar arm.
-- **EoE bespoke lands** — Planet lands (``Land — Planet`` subtype)
-  and Command Bridge (EoE Land with sac-self-unless-tap ETB) claimed
-  by name in ``_BESPOKE_EOE_LANDS``.
+- **Planet lands** (``Land — Planet`` subtype, EoE) — claimed by the
+  parameterized ``_try_build_planet_land`` recognizer that captures
+  the produced color and drops Station + tier-gated abilities.
+- **EoE bespoke lands** — Command Bridge (EoE Land with
+  sac-self-unless-tap ETB) claimed by name in ``_BESPOKE_EOE_LANDS``.
 """
 
 from __future__ import annotations
@@ -629,34 +631,19 @@ _BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
 # ---------------------------------------------------------------------------
 # Bespoke EoE (Edge of Eternities) land dispatch table.
 #
-# EoE-specific non-basic lands that require either the Planet subtype,
-# sac-self-unless-tap ETB triggers, or any-color mana abilities that the
-# generic grammar arms don't cover.  Keyed by name; dispatcher in
-# ``_build_land_printing`` gates on ``card.get("set") == "eoe"``.
+# EoE-specific non-basic lands that require sac-self-unless-tap ETB
+# triggers or any-color mana abilities that the generic grammar arms
+# don't cover.  Keyed by name; dispatcher in ``_build_land_printing``
+# gates on ``card.get("set") == "eoe"``.
 #
-# Each entry must exactly match the corresponding ``make_planet_land`` or
-# ``make_utility_land`` call in ``src/mtg_bot/cards/lands.py``.
+# Planet lands (``Land — Planet`` subtype) are no longer here — they
+# are claimed by the parameterized ``_try_build_planet_land`` arm.
+#
+# Each entry must exactly match the corresponding ``make_utility_land``
+# call in ``src/mtg_bot/cards/lands.py``.
 # ---------------------------------------------------------------------------
 def _make_bespoke_eoe_lands() -> dict[str, CardPrinting]:
     return {
-        # Planet lands: enters tapped, tap for single color.
-        # Station mechanic and tiered abilities are dropped — the
-        # static make_planet_land simplification.
-        "Adagia, Windswept Bastion": make_planet_land(
-            "Adagia, Windswept Bastion", "W",
-        ),
-        "Uthros, Titanic Godcore": make_planet_land(
-            "Uthros, Titanic Godcore", "U",
-        ),
-        "Susur Secundi, Void Altar": make_planet_land(
-            "Susur Secundi, Void Altar", "B",
-        ),
-        "Kavaron, Memorial World": make_planet_land(
-            "Kavaron, Memorial World", "R",
-        ),
-        "Evendo, Waking Haven": make_planet_land(
-            "Evendo, Waking Haven", "G",
-        ),
         # Command Bridge: enters tapped, ETB sac-unless-tap-permanent,
         # {T}: Add one mana of any color.
         "Command Bridge": make_utility_land(
@@ -680,6 +667,71 @@ def _make_bespoke_eoe_lands() -> dict[str, CardPrinting]:
 
 
 _BESPOKE_EOE_LANDS: dict[str, CardPrinting] = _make_bespoke_eoe_lands()
+
+
+# Planet lands (EoE).
+#
+# ``Land — Planet`` cards (no supertypes, single ``Planet`` subtype)
+# whose oracle text is the strict four-line shape:
+#   1. ``This land enters tapped.``
+#   2. ``{T}: Add {<C>}.``
+#   3. ``Station (Tap another creature you control: ...)`` — keyword
+#      line with reminder text. Stripped to the bare keyword
+#      ``Station``; the Station mechanic itself isn't modeled.
+#   4. ``12+ | <ABILITY>``  — tier-gated ability dropped per the
+#      static-side ``make_planet_land`` simplification (Planets with
+#      Station are functionally non-creature Spacecraft, not modeled
+#      for Planets).
+#
+# The captured color in line 2 feeds ``make_planet_land``; lines 3
+# and 4 are intentionally dropped to match the static side. Adding
+# more Planets with the same shape is zero code: this recognizer
+# already claims any ``Land — Planet`` card with the four-line layout
+# and a single basic-color tap line. Variants (e.g. multi-color
+# Planets) would need the regex relaxed; today's printed cycle is
+# all single-color.
+_PLANET_TAPPED_LINE = "This land enters tapped."
+_PLANET_TAP_FOR_COLOR_RE = re.compile(r"^\{T\}: Add \{([WUBRG])\}\.$")
+_PLANET_STATION_KEYWORD_LINE = "Station"
+_PLANET_TIERED_ABILITY_RE = re.compile(r"^\d+\+ \| .+$")
+
+
+def _try_build_planet_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Planet ``CardPrinting`` if ``text`` matches the strict
+    four-line ``This land enters tapped.`` + ``{T}: Add {<C>}.`` +
+    ``Station (...)`` + ``<N>+ | <ABILITY>`` shape and the type line
+    is ``Land — Planet``, else ``None``.
+
+    The Station reminder is stripped per-line; the bare ``Station``
+    keyword and the tiered ability line are intentionally dropped to
+    match the static-side ``make_planet_land`` simplification (Planet
+    Station mechanic and tier-gated abilities are not modeled). The
+    captured color produces a single-color tapped land via
+    ``make_planet_land``.
+    """
+    if supertypes:
+        return None
+    if subtypes != ("Planet",):
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 4:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _PLANET_TAPPED_LINE:
+        return None
+    tap_match = _PLANET_TAP_FOR_COLOR_RE.match(lines[1])
+    if tap_match is None:
+        return None
+    if lines[2] != _PLANET_STATION_KEYWORD_LINE:
+        return None
+    if _PLANET_TIERED_ABILITY_RE.match(lines[3]) is None:
+        return None
+    return make_planet_land(card["name"], tap_match.group(1))
 
 
 def _build_land_printing(card: dict) -> CardPrinting | None:
@@ -707,13 +759,18 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
         bespoke = _BESPOKE_EOS_LANDS.get(card["name"])
         if bespoke is not None:
             return bespoke
-    # Bespoke EoE lands: Planet lands and Command Bridge. Checked after the
-    # EoS table so reprints with the same name don't get claimed here.
+    # Bespoke EoE lands: Command Bridge. Checked after the EoS table so
+    # reprints with the same name don't get claimed here. Planet lands
+    # used to live in this table; they now claim through the
+    # parameterized ``_try_build_planet_land`` arm below.
     if card.get("set") == "eoe":
         bespoke_eoe = _BESPOKE_EOE_LANDS.get(card["name"])
         if bespoke_eoe is not None:
             return bespoke_eoe
     # Non-basic land shapes follow.
+    planet = _try_build_planet_land(card, text, supertypes, subtypes)
+    if planet is not None:
+        return planet
     shock = _try_build_shock_land(card, text, subtypes)
     if shock is not None:
         return shock
