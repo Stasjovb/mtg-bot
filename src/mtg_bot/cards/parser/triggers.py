@@ -740,6 +740,20 @@ _PREDICATE_TRIGGER_PHRASES: dict[str, tuple[Event, Predicate]] = {
         Event.ENTERS,
         IsCreature() & Controlled(YOU) & HasPowerAtMost(n=2) & ~IsSelf(),
     ),
+    # ``When you unlock this door`` — Duskmourn Room door triggers. The
+    # canonical static-side wiring uses ``Event.ENTERS`` + ``IsSelf()``
+    # routed through the Room's per-half ``unlocked_halves`` gate (see
+    # ``_unlock_room_half`` / ``_fire_unlock_door_triggers`` in
+    # ``actions.py``) — same predicate shape as ``"this creature
+    # enters"``. The room builder threads each half's flattened
+    # ``TriggeredAbility`` onto the parent printing with ``room_half``
+    # tagged so the engine fires the door trigger only when its half
+    # is unlocked (cast-time for the cast half, ``UnlockRoomHalf`` for
+    # the other). This phrasebook entry is the unified-grammar entry
+    # point — every Room half whose body reads ``"When you unlock this
+    # door, <effect>"`` flows through the same parser path the rest of
+    # the trigger grammar uses.
+    "you unlock this door": (Event.ENTERS, IsSelf()),
 }
 
 

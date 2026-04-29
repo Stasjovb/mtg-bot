@@ -225,6 +225,7 @@ from mtg_bot.effects import (
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
     ManifestDread,
+    ManifestDreadThenPutPlusOneCountersOnIt,
     MutinousMassacreEffect,
     OsseousSticktwisterEndStepEffect,
     Surveil,

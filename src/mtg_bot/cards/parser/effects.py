@@ -59,6 +59,7 @@ from mtg_bot.cards.base import (
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     ManifestDread,
+    ManifestDreadThenPutPlusOneCountersOnIt,
     MillTargetPlayer,
     MoveSelfCountersToTargetCreatureYouControl,
     OptionalDiscardCardThenDrawN,
@@ -157,6 +158,29 @@ _PREVENT_ALL_COMBAT_DAMAGE_THIS_TURN = re.compile(
 )
 
 
+# ``manifest dread, then put a +1/+1 counter on that creature`` (and the
+# spelled-out / digit ``N +1/+1 counters`` plural variant) — a single
+# coupled primitive in the engine (``ManifestDreadThenPutPlusOneCounters
+# OnIt``) where ``that creature`` refers to the just-manifested face-
+# down 2/2 (NOT a chosen target). The two halves can't be parsed as a
+# compound ``Sequence`` because the second half's ``that creature``
+# pronoun is anaphoric to the manifest's output, which the splitter
+# can't reconstruct from per-piece parses; instead the whole phrase
+# matches as one regex and lands on the dedicated engine class. Slimy
+# Aquarium (``a +1/+1 counter`` → counter_amount=1) and Weight Room
+# (``three +1/+1 counters`` → counter_amount=3) are the EoE/Duskmourn
+# Room printings that ship this surface; the singular/plural arms are
+# a single regex via ``a |N `` alternation so a future printing with
+# a different counter amount lands on the same primitive without
+# further grammar work.
+_MANIFEST_DREAD_THEN_PUT_PLUS_ONE_COUNTERS_ON_THAT_CREATURE = re.compile(
+    rf"^manifest dread, then put "
+    rf"(?:a \+1/\+1 counter|"
+    rf"(\d+|{_SMALL_CARDINAL_PATTERN}) \+1/\+1 counters)"
+    rf" on that creature$"
+)
+
+
 _DEAL_DAMAGE_ANY_TARGET = re.compile(
     r"^deals (\d+) damage to any target$"
 )
@@ -208,8 +232,18 @@ _DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE = re.compile(
 # which has a ``$`` anchor — phrases that end at ``creature`` with no
 # qualifier match the bare form, while phrases with the ``an opponent
 # controls`` tail land here.
+#
+# The optional ``this Room `` prefix accepts the surface where a
+# Duskmourn Room half names itself as the damage source — Glassworks'
+# door trigger prints ``this Room deals 4 damage to target creature an
+# opponent controls`` (the ``this Room`` self-reference is the Room
+# equivalent of the ``this creature`` self-reference on creature-source
+# triggers). Same legal-target pool either way; the source identity
+# check happens through the trigger's ``IsSelf()`` predicate, not the
+# effect body.
 _DEAL_DAMAGE_TARGET_OPPONENT_CREATURE = re.compile(
-    r"^deals (\d+) damage to target creature an opponent controls$"
+    r"^(?:this Room )?deals (\d+) damage to target creature "
+    r"an opponent controls$"
 )
 # "<source> deals N damage to target opponent" — Biotech Specialist's
 # sacrifice-an-artifact trigger body. Damage targets a player rather
@@ -458,8 +492,14 @@ _EXILE_EACH_OPPONENTS_GRAVEYARD = re.compile(
 # creature deals 2 damage to target opponent``) — same justification:
 # the normalizer only consumes the ``it `` pronoun, not the longer
 # ``this creature`` self-object reference.
+#
+# The ``this Room `` prefix is the Duskmourn Room equivalent — Shattered
+# Yard's end-step trigger prints ``this Room deals 1 damage to each
+# opponent`` (the Room is the damage source; ``this Room`` reads the
+# same way ``this creature`` does on a creature-source trigger). Same
+# legal-target pool either way.
 _DEAL_N_DAMAGE_EACH_OPPONENT = re.compile(
-    r"^(?:this creature )?deals (\d+) damage to each opponent$"
+    r"^(?:this creature |this Room )?deals (\d+) damage to each opponent$"
 )
 # "<source> deals N damage to each creature." — untargeted board-wipe
 # burn (Pyroclasm in Duskmourn; the same primitive surfaces inside
@@ -2582,6 +2622,30 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _LOSE_N_LIFE.match(phrase)
     if m is not None:
         return LoseLife(amount=int(m.group(1)))
+    # ``manifest dread, then put a +1/+1 counter on that creature`` /
+    # ``manifest dread, then put N +1/+1 counters on that creature`` —
+    # Slimy Aquarium / Weight Room door triggers. Coupled primitive in
+    # the engine (``ManifestDreadThenPutPlusOneCountersOnIt``) where
+    # ``that creature`` is anaphoric to the just-manifested face-down
+    # 2/2 (NOT a chosen target). Tried BEFORE the bare ``_MANIFEST_DREAD``
+    # regex below so the more-specific compound-with-counter shape
+    # wins; the bare regex's ``$`` anchor on the count tail wouldn't
+    # match this surface anyway, but ordering more-specific before
+    # more-general keeps the dispatch narrative readable.
+    m = _MANIFEST_DREAD_THEN_PUT_PLUS_ONE_COUNTERS_ON_THAT_CREATURE.match(
+        phrase
+    )
+    if m is not None:
+        # Group 1 is the plural counter amount (digit or spelled-out
+        # cardinal); ``None`` means the singular ``a +1/+1 counter``
+        # arm matched, which collapses to amount=1.
+        amount_token = m.group(1)
+        counter_amount = (
+            1 if amount_token is None else _parse_amount(amount_token)
+        )
+        return ManifestDreadThenPutPlusOneCountersOnIt(
+            counter_amount=counter_amount,
+        )
     # ``manifest dread`` (count=1) or ``manifest dread <amount> times`` /
     # ``manifest dread twice`` / ``manifest dread three times`` /
     # ``manifest dread X times``. Maps to

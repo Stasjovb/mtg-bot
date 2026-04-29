@@ -1,4 +1,4 @@
-"""Whole-card name-keyed dispatch for Duskmourn Rooms.
+"""Duskmourn Room ``CardPrinting`` builder.
 
 CR 207.2g + 715: a Room is an enchantment with two halves; each half
 has its own name, mana cost, and rules text. When a Room spell is
@@ -14,18 +14,24 @@ builder splits the two faces, parses each into a ``RoomHalf``
 (name + mana cost + per-half abilities), and glues them together
 via ``make_room`` into the parent ``CardPrinting``.
 
-Each Room is wired via a small per-card factory keyed by the
-combined card name (``"Half A // Half B"``). The factory builds
-each half's abilities directly from typed effect classes — same
-pattern the rest of the parser uses (no oracle-text grammar walk;
-it's an exact name-keyed dispatch).
+Two claim paths run in order:
 
-This file currently claims the subset of DSK Rooms whose two halves
-are expressible with engine primitives that exist today. As more
-mechanics come online (manifest dread, leaves-graveyard observers,
-combat-damage-to-player aggregated triggers, mass mill-then-return
-shapes, ability granting on lands) more Rooms can be added without
-engine changes.
+1. **Oracle-text-driven** (``_build_room_printing_from_faces``):
+   each face's oracle text walks through the unified per-line
+   grammar (``_parse_clause`` + ``_parse_triggered_ability_line``).
+   Door triggers (``"When you unlock this door, …"``) flow through
+   the predicate-trigger-phrasebook entry ``"you unlock this door"``
+   which maps to ``(Event.ENTERS, IsSelf())`` — the same shape the
+   per-half static-side wiring uses, gated through the Room's
+   per-half ``unlocked_halves`` set by ``make_room`` tagging the
+   flattened ability with ``room_half=<half-name>``.
+
+2. **Name-keyed bespoke fallback** (``_ROOM_BUILDERS``): a small
+   shrinking dispatch table for Rooms whose two halves still carry
+   shapes outside the unified grammar (e.g. trigger-doubling
+   statics, alt-cost permissions, leaves-graveyard observers,
+   custom continuous effects). As more shapes land in the unified
+   grammar each entry migrates out of this table.
 """
 
 from __future__ import annotations
@@ -37,13 +43,13 @@ from mtg_bot.cards.base import (
     make_room,
     parse_mana_cost,
 )
+from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
     ConditionalIfYouControlSubtype,
     CreateToken,
     CreateTokenCopyOfTargetCreatureYouControl,
-    DealDamageEachOpponent,
-    DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByCardsInHand,
     DestroyAllCreatures,
     DiscardSelf,
@@ -55,14 +61,12 @@ from mtg_bot.effects import (
     ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PumpTargetCreatureUntilEOT,
-    PutPlusOneCounterOnEachOfUpToNTargetCreatures,
     PutPlusOneCounterOnTargetCreature,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
-    Surveil,
     TapAndStunUpToOneTargetCreature,
 )
 from mtg_bot.effects.predicates import (
@@ -144,93 +148,6 @@ def _build_funeral_room_awakening_hall() -> CardPrinting:
     )
 
 
-def _build_glassworks_shattered_yard() -> CardPrinting:
-    """Glassworks // Shattered Yard ``{2}{R}`` // ``{4}{R}``.
-
-    Glassworks oracle:
-        When you unlock this door, this Room deals 4 damage to
-        target creature an opponent controls.
-
-    Shattered Yard oracle:
-        At the beginning of your end step, this Room deals 1 damage
-        to each opponent.
-
-    Glassworks is an ENTERS-event self-trigger gated on the
-    Glassworks half being unlocked. Shattered Yard is a
-    BEGINNING_OF_END_STEP trigger gated on ``Controlled(YOU)``
-    (your end step). Both halves use existing damage effects
-    (``DealDamageToOpponentCreature``, ``DealDamageEachOpponent``).
-    """
-    return make_room(
-        _half(
-            "Glassworks", "{2}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageToOpponentCreature(amount=4),
-                ),
-            ),
-        ),
-        _half(
-            "Shattered Yard", "{4}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_END_STEP,
-                    predicate=Controlled(YOU),
-                    effect=DealDamageEachOpponent(amount=1),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_grand_entryway_elegant_rotunda() -> CardPrinting:
-    """Grand Entryway // Elegant Rotunda ``{1}{W}`` // ``{2}{W}``.
-
-    Grand Entryway oracle:
-        When you unlock this door, create a 1/1 white Glimmer
-        enchantment creature token.
-
-    Elegant Rotunda oracle:
-        When you unlock this door, put a +1/+1 counter on each of up
-        to two target creatures.
-
-    Both halves are pure "When you unlock this door" triggers — the
-    same ``Event.ENTERS`` + ``IsSelf()`` shape that Glassworks uses,
-    routed through the ``unlocked_halves`` gate so each fires once
-    when its half becomes unlocked (cast-time or via UnlockRoomHalf).
-    Grand Entryway uses the existing ``"Glimmer"`` token in
-    ``TOKEN_PRINTINGS`` (the 1/1 white Glimmer enchantment-creature
-    token already wired for Tunnel Surveyor); Elegant Rotunda uses
-    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)``,
-    matching the same effect shape Weftblade Enhancer uses.
-    """
-    return make_room(
-        _half(
-            "Grand Entryway", "{1}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Glimmer"], count=1,
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Elegant Rotunda", "{2}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=PutPlusOneCounterOnEachOfUpToNTargetCreatures(
-                        max_n=2,
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
 def _build_meat_locker_drowned_diner() -> CardPrinting:
     """Meat Locker // Drowned Diner ``{2}{U}`` // ``{3}{U}{U}``.
 
@@ -270,46 +187,6 @@ def _build_meat_locker_drowned_diner() -> CardPrinting:
                             DrawCards(amount=3),
                             DiscardSelf(amount=1),
                         ),
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _build_underwater_tunnel_slimy_aquarium() -> CardPrinting:
-    """Underwater Tunnel // Slimy Aquarium ``{U}`` // ``{3}{U}``.
-
-    Underwater Tunnel oracle:
-        When you unlock this door, surveil 2.
-
-    Slimy Aquarium oracle:
-        When you unlock this door, manifest dread, then put a +1/+1
-        counter on that creature.
-
-    Both halves are pure door triggers. Underwater Tunnel uses the
-    existing ``Surveil(amount=2)`` primitive; Slimy Aquarium uses the
-    new ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=1)``
-    primitive — manifest dread then drop the counter on the just-
-    manifested face-down 2/2.
-    """
-    return make_room(
-        _half(
-            "Underwater Tunnel", "{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Surveil(amount=2),
-                ),
-            ),
-        ),
-        _half(
-            "Slimy Aquarium", "{3}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ManifestDreadThenPutPlusOneCountersOnIt(
-                        counter_amount=1,
                     ),
                 ),
             ),
@@ -852,11 +729,7 @@ def _build_restricted_office_lecture_hall() -> CardPrinting:
 
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Funeral Room // Awakening Hall": _build_funeral_room_awakening_hall,
-    "Glassworks // Shattered Yard": _build_glassworks_shattered_yard,
-    "Grand Entryway // Elegant Rotunda": _build_grand_entryway_elegant_rotunda,
     "Meat Locker // Drowned Diner": _build_meat_locker_drowned_diner,
-    "Underwater Tunnel // Slimy Aquarium":
-        _build_underwater_tunnel_slimy_aquarium,
     "Moldering Gym // Weight Room": _build_moldering_gym_weight_room,
     "Surgical Suite // Hospital Room": _build_surgical_suite_hospital_room,
     "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
@@ -872,13 +745,95 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 }
 
 
-def _build_room_printing(card: dict) -> CardPrinting | None:
-    """Claim a DSK Room card via name-keyed dispatch.
+# Combined-card names that the unified-grammar path is allowed to
+# claim. Restricting the oracle-text path to an explicit allowlist
+# keeps the migration incremental — a Room whose oracle text happens
+# to match the per-line grammar today but whose engine semantics
+# weren't yet validated against the parser path stays on the bespoke
+# dispatch until it's been audited and added here. As entries leave
+# ``_ROOM_BUILDERS`` they land in this set; once every Room is in
+# the unified path the set and the bespoke table both drop to zero
+# and the gate goes away with them.
+_UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
+    "Glassworks // Shattered Yard",
+    "Grand Entryway // Elegant Rotunda",
+    "Underwater Tunnel // Slimy Aquarium",
+})
 
-    Returns the canonical ``CardPrinting`` if the card's type line
-    contains ``"Room"`` and the card's name appears in
-    ``_ROOM_BUILDERS``. Returns ``None`` otherwise so the builder
-    chain continues.
+
+def _build_half_from_face(face: dict) -> RoomHalf | None:
+    """Parse one Scryfall face dict (``name``, ``mana_cost``,
+    ``oracle_text``) into a ``RoomHalf``.
+
+    Walks the face's oracle text line-by-line, strips reminder text,
+    and dispatches each non-empty line through ``_parse_clause``. The
+    half's name is threaded through to the trigger parser so a future
+    "When you unlock <Half-Name>" surface (the parser's
+    ``_substitute_self_name`` rewrite) lines up with the canonical
+    ``"this creature"`` form — today every Room prints
+    ``"this door"`` so the substitution is a no-op.
+
+    Returns ``None`` if any non-empty line fails to parse, so an
+    unrecognized line surfaces as a parser miss for the whole face
+    rather than a silently-dropped clause.
+
+    Activated abilities, static abilities, and keywords on a half
+    are not yet exercised by any unified-path Room — the helper
+    surfaces them as a parse failure (``None``) for now, so the
+    bespoke dispatch keeps owning halves with shapes outside the
+    triggered-ability grammar.
+    """
+    name = face.get("name", "")
+    mana_cost_str = face.get("mana_cost", "")
+    triggers: list[TriggeredAbility] = []
+    for raw_line in face.get("oracle_text", "").split("\n"):
+        line = _strip_reminder_text(raw_line)
+        if not line:
+            continue
+        clause = _parse_clause(line, name=name)
+        if clause is None:
+            return None
+        if clause.triggers:
+            triggers.extend(clause.triggers)
+            continue
+        # Keywords / activated / static on a Room half aren't claimed
+        # by the unified path yet — surface as a miss so the bespoke
+        # dispatch can keep owning these shapes.
+        return None
+    return RoomHalf(
+        name=name,
+        mana_cost_str=mana_cost_str,
+        mana_cost=parse_mana_cost(mana_cost_str),
+        triggered_abilities=tuple(triggers),
+    )
+
+
+def _build_room_printing_from_faces(card: dict) -> CardPrinting | None:
+    """Build a ``CardPrinting`` for a Room card via per-face oracle-text
+    parsing.
+
+    Returns ``None`` if the card has fewer than two faces or any face
+    fails to parse — the caller falls through to the bespoke dispatch.
+    """
+    faces = card.get("card_faces", [])
+    if len(faces) != 2:
+        return None
+    half_a = _build_half_from_face(faces[0])
+    if half_a is None:
+        return None
+    half_b = _build_half_from_face(faces[1])
+    if half_b is None:
+        return None
+    return make_room(half_a, half_b)
+
+
+def _build_room_printing(card: dict) -> CardPrinting | None:
+    """Claim a DSK Room card.
+
+    Tries the unified per-line grammar path first for Rooms in
+    ``_UNIFIED_ROOM_NAMES``; falls back to the name-keyed bespoke
+    dispatch (``_ROOM_BUILDERS``) for the remaining shapes. Returns
+    ``None`` if the card isn't a Room or no path claims it.
 
     Type-line gate: Scryfall's combined Room type_line is
     ``"Enchantment — Room // Enchantment — Room"``. We accept any
@@ -888,7 +843,18 @@ def _build_room_printing(card: dict) -> CardPrinting | None:
     type_line = card.get("type_line", "")
     if "Room" not in type_line:
         return None
-    factory = _ROOM_BUILDERS.get(card.get("name", ""))
+    name = card.get("name", "")
+    if name in _UNIFIED_ROOM_NAMES:
+        built = _build_room_printing_from_faces(card)
+        if built is not None:
+            return built
+        # The allowlist promises the unified path claims the card. A
+        # miss here is a parser bug, not a license to fall through to
+        # the bespoke dispatch (which we just removed the entry from)
+        # — surface as a parser miss so the surrounding test suite
+        # catches the regression.
+        return None
+    factory = _ROOM_BUILDERS.get(name)
     if factory is None:
         return None
     return factory()
