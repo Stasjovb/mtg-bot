@@ -55,6 +55,7 @@ from mtg_bot.effects import (
     PutPlusOneCounterOnTargetCreature,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnTargetCreatureToOwnersHand,
     SearchLibraryForBasicLandTapped,
     Sequence,
     Surveil,
@@ -65,6 +66,7 @@ from mtg_bot.effects.predicates import (
     Controlled,
     Event,
     IsCreature,
+    IsPlayer,
     IsSelf,
     LoneAttackerForYou,
 )
@@ -589,6 +591,62 @@ def _build_unholy_annex_ritual_chamber() -> CardPrinting:
     )
 
 
+def _build_bottomless_pool_locker_room() -> CardPrinting:
+    """Bottomless Pool // Locker Room ``{U}`` // ``{4}{U}``.
+
+    Bottomless Pool oracle:
+        When you unlock this door, return up to one target creature to
+        its owner's hand.
+
+    Locker Room oracle:
+        Whenever one or more creatures you control deal combat damage
+        to a player, draw a card.
+
+    Bottomless Pool is a pure door trigger reusing the existing
+    ``ReturnTargetCreatureToOwnersHand(optional=True)`` primitive (the
+    same flag added for the half — "up to one" admits a zero-target
+    no-op).
+
+    Locker Room hooks ``Event.DEALS_COMBAT_DAMAGE`` with a predicate
+    composed of ``IsCreature(subject="source") & Controlled(YOU,
+    subject="source") & IsPlayer(subject="target")`` — same shape
+    Starwinder uses for "a creature you control deals combat damage
+    to a player". The "one or more" aggregated semantics is captured
+    via ``once_per_turn=True``: the per-source DEALS_COMBAT_DAMAGE
+    event fires once per attacker that connects, but the
+    once-per-turn ledger caps Locker Room's draw at a single fire
+    per turn — matches the printed "one or more creatures … draw a
+    card" intent (one trigger regardless of how many of your
+    creatures hit).
+    """
+    return make_room(
+        _half(
+            "Bottomless Pool", "{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=ReturnTargetCreatureToOwnersHand(optional=True),
+                ),
+            ),
+        ),
+        _half(
+            "Locker Room", "{4}{U}",
+            triggered_abilities=(
+                TriggeredAbility(
+                    event=Event.DEALS_COMBAT_DAMAGE,
+                    predicate=(
+                        IsCreature(subject="source")
+                        & Controlled(YOU, subject="source")
+                        & IsPlayer(subject="target")
+                    ),
+                    effect=DrawCards(amount=1),
+                    once_per_turn=True,
+                ),
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -605,6 +663,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Ticket Booth // Tunnel of Hate": _build_ticket_booth_tunnel_of_hate,
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
+    "Bottomless Pool // Locker Room": _build_bottomless_pool_locker_room,
 }
 
 

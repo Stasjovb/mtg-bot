@@ -1585,3 +1585,180 @@ def test_conditional_subtype_describe_strings_compose():
     assert "Demon" in desc2
     assert "Otherwise" not in desc2
 
+
+# ---------------------------------------------------------------------------
+# Parser claims: Bottomless Pool // Locker Room
+# ---------------------------------------------------------------------------
+
+
+def test_parser_claims_bottomless_pool_locker_room():
+    name = "Bottomless Pool // Locker Room"
+    assert name in _PARSER_PRINTINGS
+    p = _PARSER_PRINTINGS[name]
+    assert p.is_room
+    halves = {h.name for h in p.room_halves}
+    assert halves == {"Bottomless Pool", "Locker Room"}
+    by_name = {h.name: h for h in p.room_halves}
+    assert by_name["Bottomless Pool"].mana_cost_str == "{U}"
+    assert by_name["Locker Room"].mana_cost_str == "{4}{U}"
+    by_half = sorted(a.room_half for a in p.triggered_abilities)
+    assert by_half == ["Bottomless Pool", "Locker Room"]
+
+
+def test_bottomless_pool_bounces_target_creature_on_unlock():
+    """Casting Bottomless Pool unlocks it; the door trigger returns the
+    chosen creature to its owner's hand."""
+    state = _new_state()
+    enemy = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=1,
+    )
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Bottomless Pool // Locker Room"],
+        owner_id=0,
+    )
+    pre_opp_hand = len(state.players[1].hand)
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Bottomless Pool"),
+    )
+    drain_stack(state)
+    # Enemy bear left the battlefield and is now in opponent's hand.
+    assert enemy not in state.battlefield
+    assert len(state.players[1].hand) == pre_opp_hand + 1
+
+
+def test_bottomless_pool_no_target_is_noop():
+    """With no creatures on the battlefield the door trigger resolves
+    harmlessly (up-to-one optional target)."""
+    state = _new_state()
+    _put_battlefield(state, BASIC_LANDS["Island"], controller_id=0)
+    room_card = _put_hand(
+        state,
+        _PARSER_PRINTINGS["Bottomless Pool // Locker Room"],
+        owner_id=0,
+    )
+    apply_action(
+        state, 0,
+        CastSpell(room_card.id, cast_room_half="Bottomless Pool"),
+    )
+    drain_stack(state)
+    bf_room = next(o for o in state.battlefield if o.id == room_card.id)
+    assert bf_room.unlocked_halves == frozenset({"Bottomless Pool"})
+
+
+def test_locker_room_draws_when_your_creature_hits_player():
+    """Locker Room's "one or more creatures you control deal combat
+    damage to a player" trigger draws a card. Modeled via
+    ``Event.DEALS_COMBAT_DAMAGE`` + once_per_turn=True so a multi-
+    attacker hit fires the draw exactly once."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import (
+        clear_combat_state,
+        declare_attackers,
+        resolve_combat_damage,
+    )
+
+    state = _new_state()
+    state.players[1].life = 20  # ensure not lethal
+    # Stock library so DrawCards has cards.
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Bottomless Pool // Locker Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Locker Room"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    pre_hand = len(state.players[0].hand)
+    resolve_combat_damage(state, defending_player_id=1)
+    _drain(state)
+    # Drew exactly one card.
+    assert len(state.players[0].hand) == pre_hand + 1
+    clear_combat_state(state)
+
+
+def test_locker_room_draws_only_once_per_turn():
+    """Two attackers connecting in the same combat fire the trigger
+    only once (once_per_turn ledger captures the "one or more"
+    aggregated semantics)."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import (
+        clear_combat_state,
+        declare_attackers,
+        resolve_combat_damage,
+    )
+
+    state = _new_state()
+    state.players[1].life = 20
+    for _ in range(5):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Bottomless Pool // Locker Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Locker Room"})
+    bear_a = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    bear_b = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear_a.id, bear_b.id])
+    pre_hand = len(state.players[0].hand)
+    resolve_combat_damage(state, defending_player_id=1)
+    _drain(state)
+    # Both bears connect, but only ONE card drawn.
+    assert len(state.players[0].hand) == pre_hand + 1
+    clear_combat_state(state)
+
+
+def test_locker_room_locked_does_not_fire():
+    """If only Bottomless Pool is unlocked, Locker Room's combat-damage
+    trigger doesn't fire — no card drawn."""
+    from mtg_bot.actions import drain_stack as _drain
+    from mtg_bot.combat import (
+        clear_combat_state,
+        declare_attackers,
+        resolve_combat_damage,
+    )
+
+    state = _new_state()
+    state.players[1].life = 20
+    for _ in range(3):
+        state.players[0].library.append(
+            state.new_object(
+                SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY,
+            )
+        )
+    room = _put_battlefield(
+        state,
+        _PARSER_PRINTINGS["Bottomless Pool // Locker Room"],
+        controller_id=0,
+    )
+    room.unlocked_halves = frozenset({"Bottomless Pool"})
+    bear = _put_battlefield(
+        state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0,
+    )
+    declare_attackers(state, [bear.id])
+    pre_hand = len(state.players[0].hand)
+    resolve_combat_damage(state, defending_player_id=1)
+    _drain(state)
+    # No draw — the half is locked.
+    assert len(state.players[0].hand) == pre_hand
+    clear_combat_state(state)
+
