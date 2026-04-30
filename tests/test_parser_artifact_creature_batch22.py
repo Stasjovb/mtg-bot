@@ -1,9 +1,11 @@
 """Parity tests for artifact-creature-batch22 bespoke dispatch additions.
 
 Each test asserts that the oracle parser produces a ``CardPrinting``
-identical to the static registry for one of the 13 non-legendary
-Artifact Creatures claimed via ``_BESPOKE_ARTIFACT_CREATURES`` in
-``creature_builder.py``.
+for one of the 13 non-legendary Artifact Creatures originally in the
+bespoke table. Pinnacle Emissary was migrated OUT of
+``_BESPOKE_ARTIFACT_CREATURES`` when hybrid-mana support landed — it
+is now claimed by the grammar directly (warp cost ``{U/R}`` parses
+correctly). The remaining 12 cards are still bespoke.
 
 Covered cards:
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
@@ -12,7 +14,7 @@ Covered cards:
   4. Kavaron Harrier — attack trigger (KavaronHarrierAttackEffect)
   5. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
   6. Monoist Circuit-Feeder — flying + ETB (MonoistCircuitFeederETBEffect)
-  7. Pinnacle Emissary — artifact-cast trigger + Warp {U}{R} (hybrid mana simplified)
+  7. Pinnacle Emissary — grammar-claimed; warp cost {U/R} (hybrid)
   8. Roving Actuator — void ETB (RovingActuatorETBEffect) + Warp {1}{R}
   9. Rust Harvester — menace only (simplified vanilla)
  10. Selfcraft Mechan — ETB (SelfcraftMechanETBEffect)
