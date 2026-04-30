@@ -168,6 +168,7 @@ from mtg_bot.effects.generic import (
     SetLifeToHalfStartingRoundedUp,
     Surveil,
     Pump,
+    PutPlusOneCounters,
     SwitchSourcePowerToughnessUEOT,
     Tap,
     TapAndStunUpToOneTargetCreature,
