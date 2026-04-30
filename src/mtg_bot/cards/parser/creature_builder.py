@@ -116,6 +116,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_enters_with_plus_one_counter_if_creature_died_line,
     _parse_enters_with_x_counters_line,
     _parse_extra_etb_trigger_line,
+    _parse_impending_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
@@ -321,6 +322,11 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         # on creature-ness. The ATTACKS arm only fires once the
         # permanent has become a creature (combat eligibility checks
         # ``is_creature_now``), which is the correct CR behavior.
+        # TODO(engine-impending): All three Overlords are now claimed
+        # by the grammar (``_parse_impending_line`` + enchantment
+        # type-line detection + ``"this permanent enters or attacks"``
+        # compound trigger phrase). Remove from bespoke in the next
+        # commit (bespoke: migrate Overlord cycle).
         # Overlord of the Mistmoors {5}{W}{W} 6/6 Avatar Horror.
         # Impending 4 — {2}{W}{W}. ETB/attack: create two 2/1 white
         # Insect creature tokens with flying. (Color isn't tracked
@@ -1125,6 +1131,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward_discard_chosen = False
     ward_discard_random = False
     devour: int = 0
+    impending: str | None = None
+    impending_count: int = 0
+    enchantment: bool = "Enchantment" in card_types
     enters_tapped = False
     must_be_blocked_if_able = False
     nonbasic_lands_are_mountains = False
@@ -1236,6 +1245,19 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             devour = devour_n
+            continue
+        impending_result = _parse_impending_line(line)
+        if impending_result is not None:
+            # ``Impending N—{cost}`` — Duskmourn Overlord cycle alt-cost.
+            # When cast for the impending cost the permanent enters with N
+            # time counters and ``impending_active=True``, suppressing its
+            # printed creature type (``is_creature_now`` returns False)
+            # until the last counter is removed at the active player's end
+            # step (``run_impending_decrement_turn_based_action``). A card
+            # carries at most one Impending clause; if a malformed printing
+            # somehow had two we keep the last — parity against the static
+            # registry will catch drift.
+            impending_count, impending = impending_result
             continue
         if _parse_enters_tapped_line(line):
             # ``This creature enters tapped.`` — printing-level static
@@ -1498,6 +1520,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         subtypes=subtypes,
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
+        enchantment=enchantment,
         warp=warp,
         warp_additional_life_cost=warp_additional_life_cost,
         warp_castable_from_graveyard=warp_castable_from_graveyard,
@@ -1505,6 +1528,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
         devour_land_multiplier=devour,
+        impending=impending,
+        impending_count=impending_count,
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
         landcycling=landcycling,

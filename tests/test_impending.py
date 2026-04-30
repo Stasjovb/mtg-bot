@@ -24,6 +24,8 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.parser.printing_keywords import _parse_impending_line
+from mtg_bot.cards.parser.triggers import _parse_compound_predicate_trigger_phrase
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.game import GameState, Player, Zone, is_creature_now
 from mtg_bot.turn import (
     Step, run_impending_decrement_turn_based_action,
@@ -431,3 +433,31 @@ def test_impending_full_lifecycle_via_end_step_action():
     assert overlord.impending_active is False
     # Last tick flipped it to a creature.
     assert is_creature_now(overlord) is True
+
+
+# -----------------------
+# Trigger-phrase: "this permanent enters or attacks"
+# -----------------------
+
+
+def test_compound_trigger_phrase_this_permanent_enters_or_attacks():
+    """``_parse_compound_predicate_trigger_phrase`` recognizes the
+    ``"this permanent enters or attacks"`` surface and returns two
+    ``(Event, Predicate)`` pairs — one ENTERS+IsSelf and one
+    ATTACKS+IsSelf.
+
+    This covers the Duskmourn Overlord cycle oracle text
+    ``"Whenever this permanent enters or attacks, …"`` where the
+    permanent isn't always a creature (impending-suppressed state).
+    """
+    result = _parse_compound_predicate_trigger_phrase(
+        "this permanent enters or attacks"
+    )
+    assert result is not None
+    assert len(result) == 2
+    events = {event for event, _ in result}
+    assert Event.ENTERS in events
+    assert Event.ATTACKS in events
+    # Both arms use IsSelf() — predicate identity check.
+    for _, pred in result:
+        assert isinstance(pred, IsSelf)

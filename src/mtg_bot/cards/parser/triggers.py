@@ -939,6 +939,24 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
         (Event.ENTERS, IsSelf()),
         (Event.ATTACKS, IsSelf()),
     ),
+    # ``Whenever this permanent enters or attacks`` — fires once on
+    # entry and once on each attack. The ``"this permanent"`` surface
+    # form appears on the Duskmourn Overlord cycle (Enchantment
+    # Creatures with the Impending alt-cost) whose oracle text reads
+    # ``"Whenever this permanent enters or attacks, …"`` rather than
+    # ``"this creature"`` because the permanent isn't always a creature
+    # (while impending-suppressed it has time counters and its printed
+    # creature type is suspended). The predicate is identical to the
+    # ``"this creature enters or attacks"`` entry above — ``IsSelf()``
+    # is type-blind and only checks object identity — so the two
+    # entries share the same (ENTERS, IsSelf) / (ATTACKS, IsSelf) pair.
+    # Mirroring the static-registry's two-``TriggeredAbility`` layout
+    # for the Overlord cycle: one ENTERS entry and one ATTACKS entry
+    # per printing, both with ``IsSelf()``.
+    "this permanent enters or attacks": (
+        (Event.ENTERS, IsSelf()),
+        (Event.ATTACKS, IsSelf()),
+    ),
     # ``When this artifact enters or leaves the battlefield`` (Cryogen
     # Relic) — fires once on entry and once on leave. Mirrors the
     # static-registry layout for Cryogen Relic, which carries two
