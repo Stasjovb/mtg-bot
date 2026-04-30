@@ -55,7 +55,11 @@ from mtg_bot.cards.parser.spell_builder import (
     _DELIRIUM_EFFECT_RIDER_RE,
     _DELIRIUM_MODAL_HEADER_RE,
     _is_delirium_drop_clause,
+    _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
+    _is_unimplemented_secondary_rider,
+    _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE,
     _WHOLE_SPELL_EXACT_TEXT,
+    _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE,
 )
 
 
@@ -82,8 +86,11 @@ def test_bespoke_table_count():
     #   + Decode Transmissions (Void "instead" rider recognizer)
     #   + Archenemy's Charm (exile-or-planeswalker + graveyard-return +
     #     counter-grant recognizers)
-    # 50 - 14 = 36 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 36
+    #   + Unwanted Remake (controller-manifest rider dropper)
+    #   + Under the Skin (optional-graveyard-return rider dropper)
+    #   + Turn Inside Out (death-trigger-manifest rider dropper)
+    # 50 - 17 = 33 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 33
 
 
 # ------------------------------------------------------------------ #
@@ -400,3 +407,121 @@ def test_search_library_for_card_demon_filter_matches():
     non_demon_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
     assert eff._matches(demon_pr) is True
     assert eff._matches(non_demon_pr) is False
+
+
+# ------------------------------------------------------------------ #
+# _is_unimplemented_secondary_rider                                   #
+# ------------------------------------------------------------------ #
+
+def test_its_controller_manifests_dread_is_dropped():
+    # ``Its controller manifests dread.`` — controller-manifest rider
+    assert _is_unimplemented_secondary_rider("Its controller manifests dread.")
+
+
+def test_when_it_dies_this_turn_manifest_dread_is_dropped():
+    # ``When it dies this turn, manifest dread.`` — death-trigger rider
+    assert _is_unimplemented_secondary_rider(
+        "When it dies this turn, manifest dread."
+    )
+
+
+def test_you_may_return_permanent_card_from_gy_to_hand_is_dropped():
+    # ``You may return a permanent card from your graveyard to your
+    # hand.`` — optional graveyard-return rider
+    assert _is_unimplemented_secondary_rider(
+        "You may return a permanent card from your graveyard to your hand."
+    )
+
+
+def test_non_rider_clauses_not_dropped():
+    # Belt-and-suspenders: ordinary spell clauses must NOT match.
+    assert not _is_unimplemented_secondary_rider("Destroy target creature.")
+    assert not _is_unimplemented_secondary_rider("Manifest dread.")
+    assert not _is_unimplemented_secondary_rider(
+        "Delirium — If there are four or more card types among "
+        "cards in your graveyard, exile the top card of your library."
+    )
+
+
+def test_its_controller_manifests_dread_re_matches():
+    assert _ITS_CONTROLLER_MANIFESTS_DREAD_RE.match(
+        "Its controller manifests dread."
+    ) is not None
+
+
+def test_when_it_dies_this_turn_manifest_dread_re_matches():
+    assert _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE.match(
+        "When it dies this turn, manifest dread."
+    ) is not None
+
+
+def test_you_may_return_permanent_card_from_gy_to_hand_re_matches():
+    assert _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE.match(
+        "You may return a permanent card from your graveyard to your hand."
+    ) is not None
+
+
+# ------------------------------------------------------------------ #
+# Unwanted Remake / Under the Skin / Turn Inside Out                  #
+# (per-clause grammar claims via unimplemented-rider dropper)         #
+# ------------------------------------------------------------------ #
+
+def test_unwanted_remake_no_bespoke_entry():
+    # Migrated to per-clause grammar; the whole-spell dispatcher no
+    # longer has a key for this text.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Destroy target creature. Its controller manifests dread."
+    ) is None
+
+
+def test_under_the_skin_no_bespoke_entry():
+    # Migrated to per-clause grammar; the whole-spell dispatcher no
+    # longer has a key for this text.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Manifest dread.\n"
+        "You may return a permanent card from your graveyard to your hand."
+    ) is None
+
+
+def test_turn_inside_out_no_bespoke_entry():
+    # Migrated to per-clause grammar; the whole-spell dispatcher no
+    # longer has a key for this text.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Target creature gets +3/+0 until end of turn. "
+        "When it dies this turn, manifest dread."
+    ) is None
+
+
+def test_unwanted_remake_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import DestroyTargetCreature
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Destroy target creature. Its controller manifests dread.",
+        "Unwanted Remake",
+    )
+    assert eff == DestroyTargetCreature()
+
+
+def test_under_the_skin_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import ManifestDread
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Manifest dread.\n"
+        "You may return a permanent card from your graveyard to your hand.",
+        "Under the Skin",
+    )
+    assert eff == ManifestDread(count=1)
+
+
+def test_turn_inside_out_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import PumpTargetCreatureUntilEOT
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Target creature gets +3/+0 until end of turn. "
+        "When it dies this turn, manifest dread.",
+        "Turn Inside Out",
+    )
+    assert eff == PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0)

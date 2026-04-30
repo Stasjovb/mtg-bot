@@ -244,6 +244,73 @@ def _is_delirium_drop_clause(clause: str) -> bool:
     )
 
 
+# Unimplemented secondary-rider regexes — recognizers for clauses that
+# the parser drops because the engine lacks the plumbing to model them.
+# Unlike the Delirium multi-clause dropper (which strips an entire line
+# from the clause stream before any parsing starts), these patterns
+# match the SECOND sentence of a two-clause spell body.  When the
+# FIRST sentence parses cleanly as a standalone effect and the second
+# matches one of these patterns, the two-clause path returns just the
+# first-sentence effect (same simplification the bespoke entries make).
+#
+# Three shapes exist in the EoE/DSK pool:
+#
+#   1. **Controller-manifest rider** — ``Its controller manifests
+#      dread.``  (entry: "Destroy target creature. Its controller
+#      manifests dread." → DestroyTargetCreature()).  The engine's
+#      ManifestDread primitive resolves for the *casting* controller;
+#      adding a ``for_controller_of_target=True`` path would require
+#      non-trivial wiring through the targeting/resolution pipeline.
+#
+#   2. **Death-trigger manifest rider** — ``When it dies this turn,
+#      manifest dread.``  (entry: "Target creature gets +3/+0 until
+#      end of turn. When it dies this turn, manifest dread." →
+#      PumpTargetCreatureUntilEOT(3, 0)).  The engine has no UEOT-
+#      scoped per-target death-trigger registry; adding one for a
+#      single card's rider would be a non-trivial widening.
+#
+#   3. **Optional-graveyard-return rider** — ``You may return a
+#      permanent card from your graveyard to your hand.``  (entry:
+#      "Manifest dread.\n You may return a permanent card from your
+#      graveyard to your hand." → ManifestDread()).  Every existing
+#      ``Return*FromGraveyardToHand`` primitive is creature-typed;
+#      widening to "any permanent card" with optionality for a single
+#      card's rider is a non-trivial engine change.
+_ITS_CONTROLLER_MANIFESTS_DREAD_RE = re.compile(
+    r"^Its controller manifests dread\.$"
+)
+_WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE = re.compile(
+    r"^When it dies this turn, manifest dread\.$"
+)
+_YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE = re.compile(
+    r"^You may return a permanent card from your graveyard to your hand\.$"
+)
+
+
+def _is_unimplemented_secondary_rider(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a second-sentence rider that the
+    parser drops because the engine lacks the plumbing to model it.
+
+    Three shapes are recognized:
+      - ``Its controller manifests dread.`` (controller-manifest rider)
+      - ``When it dies this turn, manifest dread.`` (death-trigger
+        manifest rider)
+      - ``You may return a permanent card from your graveyard to your
+        hand.`` (optional graveyard-return rider)
+
+    When the FIRST sentence of a two-clause spell parses cleanly and
+    the second sentence matches one of these, the two-clause path in
+    ``_parse_spell_oracle_text`` returns just the first-sentence effect
+    (mirroring the simplification the bespoke entries already make).
+    """
+    c = clause.strip()
+    return (
+        _ITS_CONTROLLER_MANIFESTS_DREAD_RE.match(c) is not None
+        or _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE.match(c) is not None
+        or _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE.match(c) is not None
+    )
+
+
 # Sentence-boundary splitter for multi-sentence oracle-text lines.
 # Some EoE printings pack two effect sentences onto a single oracle
 # line separated by ``. `` rather than ``\n`` (e.g. Radiant Strike's
@@ -930,24 +997,14 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "planeswalker. If that creature or planeswalker would die "
         "this turn, exile it instead."
     ): DealDamageToTargetCreature(amount=3),
-    # Unwanted Remake (Duskmourn) — bare destroy-target-creature plus
-    # an "Its controller manifests dread" rider. The static side
-    # simplifies to bare ``DestroyTargetCreature()`` because the
-    # engine's ``ManifestDread`` primitive resolves at the
-    # caster's hand (the controller_id passed into resolve), not at
-    # the destroyed creature's CONTROLLER's hand. Adding "manifest by
-    # the destroyed permanent's controller" would require a new
-    # back-reference plumbing through ``ManifestDread`` to read off a
-    # different player than the resolving controller — a non-trivial
-    # widening that would also need engine-side wiring beyond the
-    # parser. Same parser-is-right simplification as Unravel / Divert
-    # Disaster: claim the bare base mechanic (creature destroy) and
-    # drop the rider that requires unmodeled engine plumbing.
-    # Reminder text inside the parenthetical is stripped before
-    # dispatch.
-    (
-        "Destroy target creature. Its controller manifests dread."
-    ): DestroyTargetCreature(),
+    # Unwanted Remake (Duskmourn) — "Destroy target creature. Its
+    # controller manifests dread." — migrated to per-clause grammar:
+    # ``DestroyTargetCreature()`` claims the first sentence and the
+    # ``_is_unimplemented_secondary_rider`` dropper silently discards
+    # the ``Its controller manifests dread.`` rider (the engine's
+    # ``ManifestDread`` primitive resolves for the CASTER's hand, not
+    # the destroyed permanent's controller's hand; the back-reference
+    # plumbing required is a non-trivial engine widening).
     # Jump Scare (Duskmourn) — pump-target-creature plus a type-
     # change rider ("becomes a Horror enchantment creature in
     # addition to its other types"). The static side simplifies to
@@ -1041,30 +1098,15 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "deals 5 damage to that creature, and the other can't block "
         "this turn."
     ): DealDamageToTargetCreature(amount=5),
-    # Under the Skin (Duskmourn) ``{2}{G}`` Sorcery — two-clause spell:
-    # ``Manifest dread.`` followed by ``You may return a permanent
-    # card from your graveyard to your hand.``. The static side
-    # simplifies to bare ``ManifestDread(count=1)`` (the trailing
-    # parenthesized reminder text on the first clause is stripped
-    # before dispatch, but the SECOND clause is the rider being
-    # dropped here). The optional graveyard-return rider has no
-    # standalone primitive: the per-clause spell-effect grammar has
-    # no "may return a permanent card from your graveyard to your
-    # hand" parse — every existing ``Return*FromGraveyardToHand``
-    # primitive is creature-typed (single-target or up-to-N), and
-    # widening one to "any nonland permanent card" with optionality
-    # would be a non-trivial primitive change for a single card's
-    # rider. Same parser-is-right precedent as Unwanted Remake /
-    # Vengeful Possession — claim the bare base mechanic (manifest
-    # dread) and drop the optional secondary rider. Multi-line key
-    # carries the literal newline between the manifest clause and
-    # the optional return clause; reminder text inside the manifest
-    # clause's parenthetical is stripped before dispatch.
-    (
-        "Manifest dread.\n"
-        "You may return a permanent card from your graveyard to your "
-        "hand."
-    ): ManifestDread(count=1),
+    # Under the Skin (Duskmourn) — "Manifest dread.\nYou may return a
+    # permanent card from your graveyard to your hand." — migrated to
+    # per-clause grammar: ``ManifestDread()`` claims the first
+    # sentence and the ``_is_unimplemented_secondary_rider`` dropper
+    # silently discards the ``You may return a permanent card from
+    # your graveyard to your hand.`` optional rider (every existing
+    # ``Return*FromGraveyardToHand`` primitive is creature-typed;
+    # widening to "any permanent card" with optionality for a single
+    # card's rider is a non-trivial engine change).
     # Midnight Mayhem (Duskmourn) ``{2}{R}{W}`` Sorcery — three-Gremlin
     # token creation plus a UEOT keyword grant ("Gremlins you control
     # gain menace, lifelink, and haste until end of turn"). The static
@@ -1205,36 +1247,15 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "into your hand and the rest into your graveyard. You gain 3 "
         "life."
     ): CommuneWithEvilEffect(),
-    # Turn Inside Out (Duskmourn) ``{R}`` Instant — pump-target-creature
-    # +3/+0 UEOT plus a "When it dies this turn, manifest dread."
-    # death-triggered rider on the targeted creature. The static side
-    # simplifies to bare
-    # ``PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0)``
-    # because:
-    # (1) the engine has no UEOT-scoped death-trigger plumbing for
-    #     attaching a one-shot trigger to a targeted creature for the
-    #     remainder of the turn — the closest mechanism is the
-    #     creature-side ``triggered_abilities`` field on a printing,
-    #     which fires on every match against the printing (not on a
-    #     single targeted instance), and adding a per-resolve
-    #     ``state.dies_this_turn_manifest_dread_for_target`` registry
-    #     would be a non-trivial widening for a single card's rider;
-    # (2) the per-clause grammar can't claim the spell either — the
-    #     second sentence ``When it dies this turn, manifest dread.``
-    #     doesn't parse as a standalone spell-effect phrase (it's a
-    #     trigger fragment, not a self-contained effect).
-    # Same parser-is-right precedent as Jump Scare / Scorching
-    # Dragonfire — claim the bare base mechanic (the +3/+0 pump UEOT)
-    # and drop the death-trigger rider rather than leaving the spell
-    # unclaimed for an unmodeled rider. Reminder text inside the
-    # manifest parenthetical is stripped before dispatch.
-    (
-        "Target creature gets +3/+0 until end of turn. When it dies "
-        "this turn, manifest dread."
-    ): PumpTargetCreatureUntilEOT(
-        power_bonus=3,
-        toughness_bonus=0,
-    ),
+    # Turn Inside Out (Duskmourn) — "Target creature gets +3/+0 until
+    # end of turn. When it dies this turn, manifest dread." — migrated
+    # to per-clause grammar: ``PumpTargetCreatureUntilEOT(3, 0)``
+    # claims the first sentence and the
+    # ``_is_unimplemented_secondary_rider`` dropper silently discards
+    # the ``When it dies this turn, manifest dread.`` death-trigger
+    # rider (the engine has no UEOT-scoped per-target death-trigger
+    # registry; adding one for a single card's rider is a non-trivial
+    # engine widening).
     # Come Back Wrong (Duskmourn) ``{2}{B}`` Sorcery — destroy
     # target creature with a conditional reanimate-then-sac-next-
     # end-step rider ("If a creature card is put into a graveyard
@@ -1480,6 +1501,14 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             )
             if instead_eff is not None:
                 return instead_eff
+            # Unimplemented secondary-rider drop: when the first clause
+            # parses cleanly and the second clause is a known-
+            # unimplemented rider (controller-manifest, death-trigger-
+            # manifest, optional-graveyard-return), return just the
+            # first-clause effect — mirroring the simplification the
+            # bespoke entries already make (entries 23, 28, 34).
+            if _is_unimplemented_secondary_rider(clauses[1]):
+                return first
     # Modal shape: ``Choose one —`` / ``Choose one or both —`` header
     # line + ≥2 bullet mode lines. Tried before the Sequence fallback
     # because Sequence would uselessly attempt to parse the modal
