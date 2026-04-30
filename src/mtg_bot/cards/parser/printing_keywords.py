@@ -41,6 +41,54 @@ def _parse_warp_line(line: str) -> str | None:
     return m.group(1)
 
 
+# ``Warp—{cost}, Pay N life.`` — em-dash Warp variant with an
+# additional life cost (Timeline Culler's printed surface form).
+# The reminder text is stripped by ``_strip_reminder_text`` before this
+# lookup runs. Only Timeline Culler carries this surface today; "broader
+# grammar deferred until a second example exists" (a future card with a
+# different life cost or colored warp cost would parameterize the N
+# capture, but the shape is already parameterized — adding a new card
+# with this surface is a zero-code change).
+_WARP_WITH_LIFE_COST_LINE = re.compile(
+    r"^Warp—(\{[^}]+\}(?:\{[^}]+\})*), Pay (\d+) life\.$"
+)
+
+
+def _parse_warp_with_life_cost_line(
+    line: str,
+) -> tuple[str, int] | None:
+    """Return ``(cost_str, life_cost)`` if ``line`` is an em-dash Warp
+    clause with an additional life cost (``Warp—{cost}, Pay N life.``),
+    else ``None``. The creature builder wires ``cost_str`` to the
+    ``warp`` kwarg and ``life_cost`` to ``warp_additional_life_cost``
+    on ``make_creature``.
+    """
+    m = _WARP_WITH_LIFE_COST_LINE.match(line.strip())
+    if m is None:
+        return None
+    return m.group(1), int(m.group(2))
+
+
+# ``You may cast this card from your graveyard using its warp ability.``
+# — Timeline Culler's printed graveyard-castability rider. The engine
+# field ``warp_castable_from_graveyard: bool`` is consumed by the warp-
+# cast pipeline; when True, the warp zone pool includes the graveyard
+# as well as exile. Matched as a literal string — Timeline Culler is
+# the only card in the pool with this exact surface today; deferred
+# until a second example exists.
+_WARP_CASTABLE_FROM_GRAVEYARD_LINE = (
+    "You may cast this card from your graveyard using its warp ability."
+)
+
+
+def _parse_warp_castable_from_graveyard_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printed graveyard-castability
+    rider for warp, else ``False``. Flips
+    ``warp_castable_from_graveyard=True`` on ``make_creature``.
+    """
+    return line.strip() == _WARP_CASTABLE_FROM_GRAVEYARD_LINE
+
+
 _WARD_LINE = re.compile(
     r"^Ward (\{[^}]+\}(?:\{[^}]+\})*)(?: \([^)]*\))?$"
 )

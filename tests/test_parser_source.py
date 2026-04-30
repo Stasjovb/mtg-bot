@@ -1181,10 +1181,11 @@ def test_build_creature_printing_handles_warp_with_keyword():
     assert "Artifact" in printing.card_types
 
 
-def test_build_creature_printing_skips_warp_with_pay_life_rider():
-    """A creature whose Warp clause has a rider (additional life cost)
-    falls through and the whole card must be skipped, not silently
-    parsed as plain Warp."""
+def test_build_creature_printing_claims_warp_with_pay_life_rider():
+    """A creature whose Warp clause has an em-dash life-cost rider
+    (``Warp—{cost}, Pay N life.``) is now claimed by the grammar via
+    ``_parse_warp_with_life_cost_line``; the warp cost and additional
+    life cost are both set on the resulting printing."""
     card = {
         "name": "Test Rider",
         "mana_cost": "{B}",
@@ -1196,7 +1197,10 @@ def test_build_creature_printing_skips_warp_with_pay_life_rider():
             "your hand or graveyard for its warp cost.)"
         ),
     }
-    assert _build_creature_printing(card) is None
+    result = _build_creature_printing(card)
+    assert result is not None
+    assert result.warp_cost is not None
+    assert result.warp_additional_life_cost == 2
 
 
 def test_source_claims_red_tiger_mechan():

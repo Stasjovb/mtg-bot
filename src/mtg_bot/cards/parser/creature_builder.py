@@ -121,7 +121,9 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
+    _parse_warp_castable_from_graveyard_line,
     _parse_warp_line,
+    _parse_warp_with_life_cost_line,
 )
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
@@ -199,15 +201,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                     )),
                 ),
             ),
-        ),
-        # Timeline Culler {B}{B} 2/2 Haste. Warp—{B}, Pay 2 life.
-        # Castable from graveyard via warp ability.
-        "Timeline Culler": make_creature(
-            "Timeline Culler", "{B}{B}", 2, 2,
-            keywords={"haste"},
-            warp="{B}",
-            warp_additional_life_cost=2,
-            warp_castable_from_graveyard=True,
         ),
         # ── Batch 22a ──────────────────────────────────────────────────
         # Starfield Shepherd {3}{W}{W} 3/2 Angel — flying, warp {1}{W}.
@@ -1147,6 +1140,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     cost_reductions: list[CostReduction] = []
     external_cost_reductions: list[ExternalCostReduction] = []
     warp: str | None = None
+    warp_additional_life_cost: int = 0
+    warp_castable_from_graveyard: bool = False
     ward: str | None = None
     ward_discard_chosen = False
     ward_discard_random = False
@@ -1174,12 +1169,25 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         line = _strip_reminder_text(raw_line)
         if not line:
             continue
+        warp_life_result = _parse_warp_with_life_cost_line(line)
+        if warp_life_result is not None:
+            # ``Warp—{cost}, Pay N life.`` — em-dash warp with an
+            # additional life cost (Timeline Culler). Sets both the
+            # ``warp`` cost and ``warp_additional_life_cost``.
+            warp, warp_additional_life_cost = warp_life_result
+            continue
         warp_cost = _parse_warp_line(line)
         if warp_cost is not None:
             # A card should only have one Warp clause; if a malformed
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             warp = warp_cost
+            continue
+        if _parse_warp_castable_from_graveyard_line(line):
+            # ``You may cast this card from your graveyard using its warp
+            # ability.`` — Timeline Culler's graveyard-castability rider.
+            # Flips the ``warp_castable_from_graveyard`` kwarg below.
+            warp_castable_from_graveyard = True
             continue
         ward_cost = _parse_ward_line(line)
         if ward_cost is not None:
@@ -1442,6 +1450,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         legendary="Legendary" in supertypes,
         artifact="Artifact" in card_types,
         warp=warp,
+        warp_additional_life_cost=warp_additional_life_cost,
+        warp_castable_from_graveyard=warp_castable_from_graveyard,
         ward=ward,
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
