@@ -323,30 +323,25 @@ def test_dispatch_returns_none_for_depressurize_with_typo():
     ) is None
 
 
-# ---------- Sequence-shaped whole-spell entries (Cerebral Download,
+# ---------- Sequence-shaped spells (Cerebral Download,
 #            Decode Transmissions, Hymn of the Faller) ----------
 #
-# These three spells share the property that the static side ships
-# them as a multi-effect ``Sequence(...)`` whose internal sentences
-# don't all parse as standalone effects. Cerebral Download's first
-# sentence is a variable surveil (``Surveil X, where X is the number
-# of artifacts you control``) — no per-clause primitive captures the
-# X-formula. Decode Transmissions has a Void rider that REPLACES
-# the lose-life half of a compound base (the existing void-rider
-# helpers swap whole effects, not half-effects). Hymn of the Faller
-# has a Void rider that ADDS a draw on top of the base (the existing
-# helpers swap, not add).
+# Decode Transmissions and Hymn of the Faller have a Void rider that
+# REPLACES / ADDS to the base; both migrated to the per-clause grammar
+# in bespoke-spells1.
 #
-# All three are cleanly modeled by the static engine classes; the
-# whole-spell exact-text dispatcher is the natural fit because each
-# spell's surface text is a fixed verbatim block. Multi-line keys
-# carry the literal newline between header and rider; reminder text
-# is stripped per-clause before lookup.
+# Cerebral Download ("Surveil X, where X is the number of artifacts you
+# control. Then draw three cards.") migrated to the per-clause grammar in
+# bespoke-spells2: the new ``_SURVEIL_X_ARTIFACT_COUNT`` recognizer in
+# ``effects.py`` claims the first sentence as
+# ``Surveil(amount=1, use_artifact_count=True)`` and ``_DRAW_N_CARDS``
+# claims the second sentence after ``_split_effect_sentences`` strips the
+# leading "then "; the Sequence combinator assembles the pair.
 
 def test_cerebral_download_claimed_by_parser():
     # Cerebral Download ``{4}{U}`` Instant — variable surveil + draw
-    # 3. The static models the surveil with ``Surveil(use_artifact_
-    # count=True)``; the X-formula is computed at resolve time.
+    # 3. Now claimed by the per-clause grammar via the new
+    # ``_SURVEIL_X_ARTIFACT_COUNT`` recognizer.
     assert "Cerebral Download" in _claimed_names()
 
 
@@ -366,14 +361,27 @@ def test_hymn_of_the_faller_claimed_by_parser():
     assert "Hymn of the Faller" in _claimed_names()
 
 
-def test_dispatch_cerebral_download_returns_sequence():
-    # The dispatcher returns the static-side Sequence directly. The
-    # ``amount=1`` on Surveil is the dataclass default and matches
-    # the static initializer (which omits the kwarg, falling back to
-    # the same default).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_cerebral_download_no_bespoke_entry():
+    # Cerebral Download migrated to per-clause grammar; the whole-spell
+    # exact-text dispatcher no longer has a key for this text.
+    assert _try_whole_spell_exact_text(
         "Surveil X, where X is the number of artifacts you control. "
         "Then draw three cards."
+    ) is None
+
+
+def test_cerebral_download_parses_via_per_clause_grammar():
+    # The per-clause grammar produces Sequence(Surveil(...), DrawCards(3))
+    # for Cerebral Download's printed oracle text — the same structure the
+    # static side ships. The ``_SURVEIL_X_ARTIFACT_COUNT`` recognizer
+    # claims the first sentence; ``_split_effect_sentences`` strips the
+    # "then " prefix from the second sentence so ``_DRAW_N_CARDS`` can
+    # match "draw three cards".
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Surveil X, where X is the number of artifacts you control. "
+        "Then draw three cards.",
+        "Cerebral Download",
     )
     assert eff == Sequence(effects=(
         Surveil(amount=1, use_artifact_count=True),

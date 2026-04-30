@@ -126,7 +126,9 @@ from mtg_bot.cards.base import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
+    SearchLibraryForGreenCreatureWithMVAtMostX,
     SeedshipImpactEffect,
+    TakeExtraTurnAfterThisOne,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
     SelfMill,
@@ -861,6 +863,47 @@ _DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
     r"^(?:this creature |this Spacecraft )?"
     r"deals (\d+) damage to each creature$"
 )
+# "Take an extra turn after this one." — Nexus of Fate's main effect.
+# Maps to the parameterless ``TakeExtraTurnAfterThisOne`` engine class
+# which schedules an additional turn for the resolving controller. The
+# accompanying self-shuffle rider ("If Nexus of Fate would be put into a
+# graveyard from anywhere, reveal Nexus of Fate and shuffle it into its
+# owner's library instead.") is detected separately by
+# ``_detect_shuffle_self_flags`` in ``spell_builder`` and wired via the
+# ``shuffles_into_library_instead_of_graveyard`` printing flag; the
+# self-shuffle clause is dropped from the effect-clause stream by
+# ``_is_self_shuffle_clause`` before the Sequence combinator runs, so
+# this single-sentence recognizer claims the whole spell.
+# Currently only Nexus of Fate in the EoE/DSK pool prints this exact
+# surface today; the recognizer is a parameterless literal per parser
+# CLAUDE.md (one card, no second example yet with a varying piece).
+_TAKE_EXTRA_TURN_AFTER_THIS_ONE = re.compile(
+    r"^take an extra turn after this one$"
+)
+# "Search your library for a green creature card with mana value X or
+# less, put it onto the battlefield, then shuffle." — Green Sun's Zenith's
+# main tutor clause. Maps to the parameterless
+# ``SearchLibraryForGreenCreatureWithMVAtMostX`` engine class which reads
+# ``state.resolving_x_value`` at resolve time to derive the mana-value cap
+# and puts the found creature directly onto the battlefield. The
+# accompanying GSZ self-shuffle rider ("Shuffle Green Sun's Zenith into
+# its owner's library.") is detected separately by
+# ``_detect_shuffle_self_flags`` and wired via
+# ``shuffles_into_library_instead_of_graveyard``; the self-shuffle clause
+# is dropped from the effect-clause stream by ``_is_self_shuffle_clause``
+# before the Sequence combinator runs, so this single-sentence recognizer
+# claims the whole spell.
+# Currently only Green Sun's Zenith in the EoE pool prints this exact
+# X-cost battlefield-tutor surface today; the recognizer is a
+# parameterless literal per parser CLAUDE.md (one card, no second example
+# yet). A future "search your library for a [color] creature card with
+# mana value X or less, put it onto the battlefield, then shuffle" card
+# would call for a parameterized regex capturing the color word and
+# dispatching to the matching engine class.
+_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD = re.compile(
+    r"^search your library for a green creature card with mana value X "
+    r"or less, put it onto the battlefield, then shuffle$"
+)
 # "Search your library for a(n) <filter-phrase> card, reveal it, put it
 # into your hand, then shuffle." — parameterized tutor-to-hand shape.
 # Captures the article (``a`` / ``an``) and the filter phrase so a
@@ -1083,6 +1126,23 @@ _CREATE_TAPPED_ROBOT_TOKEN_PER_MULTICOLORED_LINE = re.compile(
 # took.
 _DRAW_CARD_PER_MULTICOLORED_PERMANENT_LINE = re.compile(
     r"^draw a card for each multicolored permanent you control$"
+)
+# "Surveil X, where X is the number of artifacts you control" —
+# Cerebral Download's variable-surveil clause. Maps to
+# ``Surveil(use_artifact_count=True)`` whose ``resolve`` reads
+# ``len([o for o in state.battlefield if ... is_artifact])`` at fire
+# time and surveys that many cards. The ``use_artifact_count`` flag
+# substitutes the controller's live artifact count for the printed
+# ``X``, so no numeric capture is needed — the surface form is a
+# literal match with no varying piece. Currently only Cerebral
+# Download in the EoE pool prints this exact shape today; the
+# recognizer is a parameterless literal per the CLAUDE.md guidance
+# (one card, no second example yet). A future card whose surveil
+# count is driven by a different count-source (e.g. ``where X is
+# the number of creatures you control``) would land its own sibling
+# recognizer and engine-class flag rather than parameterizing this one.
+_SURVEIL_X_ARTIFACT_COUNT = re.compile(
+    r"^surveil X, where X is the number of artifacts you control$"
 )
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 # "Look at the top two cards of your library. Put one into your hand
@@ -3410,6 +3470,33 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
     if m is not None:
         return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))
+    # ``take an extra turn after this one`` — Nexus of Fate's single-
+    # sentence main effect. Maps to the parameterless
+    # ``TakeExtraTurnAfterThisOne`` engine class. The accompanying self-
+    # shuffle rider is handled separately by ``_detect_shuffle_self_flags``
+    # and dropped from the effect stream by ``_is_self_shuffle_clause`` in
+    # ``spell_builder``; this single-sentence recognizer therefore claims
+    # the full spell once the rider is stripped. Tried in the
+    # single-effect dispatcher (not as a literal in the compound
+    # dispatcher) because the rider is dropped at the clause level rather
+    # than being joined to this sentence by a compound joiner.
+    if _TAKE_EXTRA_TURN_AFTER_THIS_ONE.match(phrase) is not None:
+        return TakeExtraTurnAfterThisOne()
+    # ``search your library for a green creature card with mana value X
+    # or less, put it onto the battlefield, then shuffle`` — Green Sun's
+    # Zenith's single-sentence tutor clause. Maps to the parameterless
+    # ``SearchLibraryForGreenCreatureWithMVAtMostX`` engine class which
+    # reads ``state.resolving_x_value`` at resolve time to derive the MV
+    # cap and puts the found creature directly onto the battlefield. The
+    # accompanying GSZ self-shuffle rider is handled separately (see the
+    # regex comment for details). Tried BEFORE the hand-tutor family below
+    # because the surface form overlaps on the ``search your library for``
+    # prefix; the ``put it onto the battlefield`` reward tail is the
+    # distinguishing discriminator and the hand-tutor regex's ``reveal it,
+    # put it into your hand`` tail wouldn't match this form anyway, but
+    # ordering more-specific before more-general is the convention here.
+    if _SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD.match(phrase) is not None:
+        return SearchLibraryForGreenCreatureWithMVAtMostX()
     m = _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE.match(phrase)
     if m is not None:
         # ``search your library for a(n) <filter-phrase> card, reveal
@@ -3585,6 +3672,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     token_eff = _parse_create_token_effect(phrase)
     if token_eff is not None:
         return token_eff
+    # ``surveil X, where X is the number of artifacts you control`` —
+    # Cerebral Download's variable-surveil clause. Tried BEFORE the bare
+    # ``surveil N`` regex so the artifact-count form wins on phrases that
+    # carry the ``where X is the number of artifacts`` rider; the bare
+    # regex's ``$`` anchor wouldn't match this longer form anyway, but
+    # ordering more-specific before more-general is the convention here.
+    # See the regex comment for the deferred-generalization plan.
+    if _SURVEIL_X_ARTIFACT_COUNT.match(phrase) is not None:
+        return Surveil(amount=1, use_artifact_count=True)
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))

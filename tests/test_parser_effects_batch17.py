@@ -1,38 +1,30 @@
 """Tests for batch-17 whole-spell exact-text dispatch additions plus
 the self-shuffle printing-flag detector.
 
-Batch 17 extends the ``_WHOLE_SPELL_EXACT_TEXT`` dispatcher in
-``parser.spell_builder`` with three entries (Darkness, Nexus of Fate,
-Green Sun's Zenith) and adds a name-aware self-shuffle rider detector
-(``_detect_shuffle_self_flags``) that threads the
-``shuffles_into_library_instead_of_graveyard`` printing flag onto
-spells whose oracle text carries either of the two recognized
-shuffle-self riders.
+Batch 17 originally extended the ``_WHOLE_SPELL_EXACT_TEXT`` dispatcher
+with three entries (Darkness, Nexus of Fate, Green Sun's Zenith) and
+added a name-aware self-shuffle rider detector (``_detect_shuffle_self_flags``).
 
-Newly claimed spells:
+In bespoke-spells2, **Nexus of Fate** and **Green Sun's Zenith** were
+further migrated OUT of ``_WHOLE_SPELL_EXACT_TEXT`` to the per-clause
+grammar:
+  - Nexus of Fate: the new ``_TAKE_EXTRA_TURN_AFTER_THIS_ONE`` recognizer
+    in ``effects.py`` claims "Take an extra turn after this one." as
+    ``TakeExtraTurnAfterThisOne()``; the Nexus self-shuffle rider
+    (second oracle line) is dropped by ``_is_self_shuffle_clause``.
+  - Green Sun's Zenith: the new ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD``
+    recognizer claims the tutor sentence as
+    ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the GSZ self-shuffle
+    rider (second sentence on the same line) is split off by
+    ``_split_sentences`` and dropped by ``_is_self_shuffle_clause``.
 
-* **Darkness** ``{B}`` Instant — prevent all combat damage that
-  would be dealt this turn. Maps to
-  ``PreventAllCombatDamageThisTurn()``.
-* **Nexus of Fate** ``{5}{U}{U}`` Instant — take an extra turn after
-  this one, plus a shuffle-instead-of-graveyard rider. Effect maps
-  to ``TakeExtraTurnAfterThisOne()``; the rider sets the
-  ``shuffles_into_library_instead_of_graveyard`` printing flag.
-* **Green Sun's Zenith** ``{X}{G}`` Sorcery — variable-X tutor for a
-  green creature, plus a self-shuffle rider on the same line. Effect
-  maps to ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the
-  rider sets the printing flag.
+Darkness remains in the whole-spell dispatcher (its
+``PreventAllCombatDamageThisTurn`` primitive lives in the per-clause
+grammar, not the whole-spell tier — Darkness is claimed there).
 
-Each spell is exercised by:
-  - A claim test confirming the parser's ``claimed_names`` includes
-    it.
-  - A dispatch test confirming
-    ``_try_whole_spell_exact_text`` returns the same engine-class
-    instance the static side ships.
-  - The shared parametrized parity test in
-    ``tests/test_parser_parity.py`` enforces that the produced
-    ``CardPrinting`` matches the static one (no separate per-card
-    parity assert needed here).
+The dispatch tests for Nexus and GSZ are updated to assert that the
+whole-spell tier falls through (returns ``None``) while the per-clause
+grammar claims them correctly.
 """
 
 from __future__ import annotations
@@ -81,17 +73,20 @@ def test_darkness_claimed_by_parser():
 
 def test_nexus_of_fate_claimed_by_parser():
     # Nexus of Fate ``{5}{U}{U}`` Instant — take-extra-turn plus a
-    # shuffle-instead-of-graveyard rider. Whole-spell exact-text
-    # dispatch returns the take-extra-turn engine class; the rider
-    # threads the printing flag via ``_detect_shuffle_self_flags``.
+    # shuffle-instead-of-graveyard rider. Migrated to per-clause grammar
+    # in bespoke-spells2; the new ``_TAKE_EXTRA_TURN_AFTER_THIS_ONE``
+    # recognizer claims the main clause and ``_is_self_shuffle_clause``
+    # drops the Nexus rider.
     assert "Nexus of Fate" in _claimed_names()
 
 
 def test_green_suns_zenith_claimed_by_parser():
     # Green Sun's Zenith ``{X}{G}`` Sorcery — variable-X tutor for a
-    # green creature plus a self-shuffle rider. Whole-spell exact-text
-    # dispatch returns the search-engine instance; the rider threads
-    # the printing flag via ``_detect_shuffle_self_flags``.
+    # green creature plus a self-shuffle rider. Migrated to per-clause
+    # grammar in bespoke-spells2; the new
+    # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD`` recognizer
+    # claims the tutor clause and ``_is_self_shuffle_clause`` drops the
+    # GSZ rider.
     assert "Green Sun's Zenith" in _claimed_names()
 
 
@@ -112,25 +107,59 @@ def test_dispatch_darkness_returns_engine_class():
     assert darkness.spell_effect == PreventAllCombatDamageThisTurn()
 
 
-def test_dispatch_nexus_of_fate_returns_engine_class():
-    # The dispatch key carries the literal newline between the take-
-    # extra-turn line and the shuffle-instead-of-graveyard rider.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_nexus_of_fate_no_bespoke_entry():
+    # Nexus of Fate migrated to per-clause grammar in bespoke-spells2;
+    # the whole-spell exact-text dispatcher no longer has a key for
+    # this text.
+    assert _try_whole_spell_exact_text(
         "Take an extra turn after this one.\n"
         "If Nexus of Fate would be put into a graveyard from anywhere, "
         "reveal Nexus of Fate and shuffle it into its owner's library "
         "instead."
+    ) is None
+
+
+def test_nexus_of_fate_parses_via_per_clause_grammar():
+    # The per-clause grammar produces TakeExtraTurnAfterThisOne() for
+    # Nexus of Fate's printed oracle text — the same effect the static
+    # side ships.  The Nexus self-shuffle rider (second oracle line) is
+    # dropped by ``_is_self_shuffle_clause``; the first clause is claimed
+    # by ``_TAKE_EXTRA_TURN_AFTER_THIS_ONE``.
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Take an extra turn after this one.\n"
+        "If Nexus of Fate would be put into a graveyard from anywhere, "
+        "reveal Nexus of Fate and shuffle it into its owner's library "
+        "instead.",
+        "Nexus of Fate",
     )
     assert eff == TakeExtraTurnAfterThisOne()
 
 
-def test_dispatch_green_suns_zenith_returns_engine_class():
-    # GSZ's two sentences sit on a single line in the printed text;
-    # the dispatch key joins them with a single space.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_green_suns_zenith_no_bespoke_entry():
+    # Green Sun's Zenith migrated to per-clause grammar in bespoke-
+    # spells2; the whole-spell exact-text dispatcher no longer has a
+    # key for this text.
+    assert _try_whole_spell_exact_text(
         "Search your library for a green creature card with mana "
         "value X or less, put it onto the battlefield, then shuffle. "
         "Shuffle Green Sun's Zenith into its owner's library."
+    ) is None
+
+
+def test_green_suns_zenith_parses_via_per_clause_grammar():
+    # The per-clause grammar produces SearchLibraryForGreenCreatureWithMVAtMostX()
+    # for Green Sun's Zenith's printed oracle text.  The GSZ self-shuffle
+    # rider (second sentence on the same line, split off by
+    # ``_split_sentences``) is dropped by ``_is_self_shuffle_clause``; the
+    # first sentence is claimed by
+    # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD``.
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Search your library for a green creature card with mana "
+        "value X or less, put it onto the battlefield, then shuffle. "
+        "Shuffle Green Sun's Zenith into its owner's library.",
+        "Green Sun's Zenith",
     )
     assert eff == SearchLibraryForGreenCreatureWithMVAtMostX()
 

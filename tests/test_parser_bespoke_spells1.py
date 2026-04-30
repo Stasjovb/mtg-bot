@@ -78,7 +78,7 @@ def _claimed_names() -> frozenset[str]:
 # ------------------------------------------------------------------ #
 
 def test_bespoke_table_count():
-    # Removals in this branch:
+    # Removals in bespoke-spells1 branch (23 total, 27 remaining):
     #   5 Delirium-bearing (Impossible Inferno, Violent Urge,
     #     Drag to the Roots, Let's Play a Game, Demonic Counsel)
     #   + Temporal Intervention (directed-discard recognizer)
@@ -104,8 +104,13 @@ def test_bespoke_table_count():
     #   + Don't Make a Sound (same Mana-Leak + consequent dropper)
     #   + Come Back Wrong (conditional-reanimate + delayed-sac droppers,
     #     N-clause general rider-drop path)
-    # 50 - 23 = 27 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 27
+    # Additional removals in bespoke-spells2 branch (3 more, 24 remaining):
+    #   + Nexus of Fate (take-extra-turn primitive + self-shuffle dropper)
+    #   + Green Sun's Zenith (GSZ battlefield-tutor primitive +
+    #     self-shuffle dropper)
+    #   + Cerebral Download (surveil-X-artifact-count primitive)
+    # 50 - 26 = 24 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 24
 
 
 # ------------------------------------------------------------------ #

@@ -75,11 +75,8 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
-    SearchLibraryForGreenCreatureWithMVAtMostX,
     Sequence,
-    Surveil,
     SystemsOverrideEffect,
-    TakeExtraTurnAfterThisOne,
     VengefulPossessionEffect,
     ZeroPointBalladEffect,
     make_instant,
@@ -422,6 +419,67 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         or _IF_THEY_DO_RIDER_RE.match(c) is not None
         or _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE.match(c) is not None
         or _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE.match(c) is not None
+    )
+
+
+# Self-shuffle rider clauses — recognizers for the two Scryfall-printed
+# self-shuffle surface forms that a spell's oracle text may carry as a
+# trailing sentence or a separate oracle line. Both are already handled by
+# the ``shuffles_into_library_instead_of_graveyard`` printing flag (wired
+# via ``_detect_shuffle_self_flags``), so they contribute no ``Effect``
+# and must be dropped from the effect-clause stream before the
+# combinator dispatch runs.
+#
+# Two shapes exist in the EoE pool:
+#
+#   1. **GSZ form** — ``Shuffle <Name> into its owner's library.``
+#      (Green Sun's Zenith). Appears as the trailing sentence on the
+#      spell's single oracle line, split off by ``_split_sentences``.
+#
+#   2. **Nexus form** — ``If <Name> would be put into a graveyard from
+#      anywhere, reveal <Name> and shuffle it into its owner's library
+#      instead.`` (Nexus of Fate). Appears as the spell's second oracle
+#      line (a separate ``\n``-separated clause).
+#
+# Both shapes are matched with generic regexes that accept any card name
+# (an arbitrary non-empty word sequence between the anchors), so a future
+# card with the same self-shuffle mechanic claims automatically without
+# adding a new literal key. The ``_detect_shuffle_self_flags`` helper uses
+# a name-interpolated ``re.search`` against the FULL oracle text, which
+# fires correctly regardless of whether the self-shuffle line is dropped
+# here — the dropping only affects the effect-clause stream, not the flag
+# detection.
+_SELF_SHUFFLE_GSZ_RE = re.compile(
+    r"^Shuffle .+ into its owner's library\.$"
+)
+_SELF_SHUFFLE_NEXUS_RE = re.compile(
+    r"^If .+ would be put into a graveyard from anywhere, "
+    r"reveal .+ and shuffle it into its owner's library instead\.$"
+)
+
+
+def _is_self_shuffle_clause(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a recognized self-shuffle rider
+    that the parser drops from the effect-clause stream.
+
+    Two shapes are recognized (after reminder-text stripping):
+      - ``Shuffle <Name> into its owner's library.`` (GSZ form)
+      - ``If <Name> would be put into a graveyard from anywhere, reveal
+        <Name> and shuffle it into its owner's library instead.``
+        (Nexus of Fate form)
+
+    Both shapes are already modeled by the
+    ``shuffles_into_library_instead_of_graveyard`` printing flag (wired
+    via ``_detect_shuffle_self_flags``), so they contribute no ``Effect``
+    and should be excluded from the effect-clause stream. Dropping here
+    lets the remaining clause(s) parse through the unified per-clause
+    grammar rather than failing the whole spell because the self-shuffle
+    rider can't parse as a standalone ``Effect``.
+    """
+    c = clause.strip()
+    return (
+        _SELF_SHUFFLE_GSZ_RE.match(c) is not None
+        or _SELF_SHUFFLE_NEXUS_RE.match(c) is not None
     )
 
 
@@ -839,21 +897,13 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "It gains reach, trample, and indestructible until end of "
         "turn. Untap it."
     ): BiosynthicBurstEffect(),
-    # Cerebral Download: variable surveil ("Surveil X, where X is the
-    # number of artifacts you control") + flat draw three. The Surveil
-    # primitive's ``use_artifact_count=True`` flag substitutes the
-    # controller's artifact count for the bare ``amount`` field at
-    # resolve time, so the static-side ``Surveil(use_artifact_count=
-    # True)`` initializer (no ``amount`` kwarg) fires the same code
-    # path as the explicit ``Surveil(amount=1, use_artifact_count=
-    # True)`` form here. The dataclass default for ``amount`` is 1.
-    (
-        "Surveil X, where X is the number of artifacts you control. "
-        "Then draw three cards."
-    ): Sequence(effects=(
-        Surveil(amount=1, use_artifact_count=True),
-        DrawCards(amount=3),
-    )),
+    # Cerebral Download — "Surveil X, where X is the number of artifacts
+    # you control. Then draw three cards." — migrated to per-clause
+    # grammar: the new ``_SURVEIL_X_ARTIFACT_COUNT`` recognizer in
+    # ``effects.py`` claims the first sentence as
+    # ``Surveil(amount=1, use_artifact_count=True)`` and ``_DRAW_N_CARDS``
+    # claims "draw three cards" (after ``_split_effect_sentences`` strips
+    # the leading "then "); the Sequence combinator assembles the pair.
     # Desculpting Blast: bounce-target-permanent + a Drone-token
     # rider for the attacking-permanent branch. The bespoke engine
     # class folds the rider into one resolve step.
@@ -904,33 +954,26 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "of turn. Sacrifice them at the beginning of the next end "
         "step."
     ): CreateXTokensOfTargetPermanentWithHasteEndStepSac(),
-    # Nexus of Fate: take-extra-turn instant + shuffle-instead-of-
-    # graveyard rider. The rider is wired separately via the
-    # ``shuffles_into_library_instead_of_graveyard`` printing flag
-    # (see ``_detect_shuffle_self_flags``); the dispatcher returns
-    # only the spell-effect engine class for the first clause. The
-    # full multi-line key is required here because the per-clause
-    # parser can't stand up the take-extra-turn primitive on its
-    # own (no other card shares it). Multi-line key carries the
-    # literal newline between effect line and rider line.
-    (
-        "Take an extra turn after this one.\n"
-        "If Nexus of Fate would be put into a graveyard from anywhere, "
-        "reveal Nexus of Fate and shuffle it into its owner's library "
-        "instead."
-    ): TakeExtraTurnAfterThisOne(),
-    # Green Sun's Zenith: variable-X tutor for a green creature plus
-    # a self-shuffle rider on the same line. The ``X`` in the search
-    # primitive is read from ``state.resolving_x_value`` at resolve
-    # time. The shuffle rider is wired separately via the
-    # ``shuffles_into_library_instead_of_graveyard`` printing flag
-    # (see ``_detect_shuffle_self_flags``); the dispatcher returns
-    # only the search-engine instance.
-    (
-        "Search your library for a green creature card with mana "
-        "value X or less, put it onto the battlefield, then shuffle. "
-        "Shuffle Green Sun's Zenith into its owner's library."
-    ): SearchLibraryForGreenCreatureWithMVAtMostX(),
+    # Nexus of Fate — "Take an extra turn after this one.\nIf Nexus of
+    # Fate would be put into a graveyard from anywhere, reveal Nexus of
+    # Fate and shuffle it into its owner's library instead." — migrated
+    # to per-clause grammar: the new ``_TAKE_EXTRA_TURN_AFTER_THIS_ONE``
+    # recognizer in ``effects.py`` claims the first clause as
+    # ``TakeExtraTurnAfterThisOne()``; the Nexus self-shuffle rider (second
+    # line) is dropped by the new ``_is_self_shuffle_clause`` dropper, and
+    # the ``shuffles_into_library_instead_of_graveyard`` printing flag is
+    # wired separately by ``_detect_shuffle_self_flags``.
+    # Green Sun's Zenith — "Search your library for a green creature
+    # card with mana value X or less, put it onto the battlefield, then
+    # shuffle. Shuffle Green Sun's Zenith into its owner's library." —
+    # migrated to per-clause grammar: the new
+    # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD`` recognizer in
+    # ``effects.py`` claims the first sentence as
+    # ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the GSZ self-shuffle
+    # rider (second sentence on the same oracle line, split off by
+    # ``_split_sentences``) is dropped by ``_is_self_shuffle_clause``, and
+    # the ``shuffles_into_library_instead_of_graveyard`` printing flag is
+    # wired separately by ``_detect_shuffle_self_flags``.
     # Consult the Star Charts: variable-X library look + kicker-gated
     # extra card kept. The static ships ``ConsultTheStarChartsEffect()``
     # (no parameters; the bespoke class handles the X-formula and the
@@ -1474,6 +1517,23 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         else:
             new_clauses.extend(_split_sentences(c))
     clauses = new_clauses
+    # Drop recognized self-shuffle rider clauses — they contribute no
+    # ``Effect`` (the engine consumes them via the
+    # ``shuffles_into_library_instead_of_graveyard`` printing flag wired
+    # by ``_detect_shuffle_self_flags``). Two shapes are recognized:
+    #   - ``Shuffle <Name> into its owner's library.`` (Green Sun's Zenith)
+    #   - ``If <Name> would be put into a graveyard from anywhere, reveal
+    #     <Name> and shuffle it into its owner's library instead.``
+    #     (Nexus of Fate)
+    # Dropping happens AFTER the sentence-splitting pass so a single-oracle-
+    # line spell like Green Sun's Zenith (whose GSZ self-shuffle sentence
+    # was split off by ``_split_sentences``) has its rider clause visible
+    # here for dropping. Must also happen BEFORE the ``len(clauses) == 1``
+    # short-circuit so spells whose only surviving clause after dropping is
+    # the main effect (Nexus of Fate: take-extra-turn) return that effect
+    # cleanly via the single-clause path rather than trying to Sequence it
+    # with an empty clause list.
+    clauses = [c for c in clauses if not _is_self_shuffle_clause(c)]
     if not clauses:
         return None
     if len(clauses) == 1:
