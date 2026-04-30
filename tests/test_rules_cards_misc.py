@@ -5372,7 +5372,7 @@ def test_starfield_shepherd_tutors_small_creature():
 
     class PickCreatureMode(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
-            return 0  # creature_small mode
+            return 1  # creature_small mode (oracle order: Plains=0, creature=1)
 
     state = _arena()
     state.players[0].agent = PickCreatureMode(rng=random.Random(0))
@@ -5407,16 +5407,16 @@ def test_starfield_shepherd_tutors_small_creature():
 
 
 def test_starfield_shepherd_tutors_basic_plains():
-    """Mode 1: controller picks the basic-Plains alternative — the
-    Plains card moves from library to hand; the eligible creature
-    stays put."""
+    """Mode 0: controller picks the basic-Plains alternative (oracle
+    order: Plains first, creature second) — the Plains card moves from
+    library to hand; the eligible creature stays put."""
     from mtg_bot.agents import RandomAgent
     import random
     from mtg_bot.cards import BASIC_LANDS
 
     class PickPlainsMode(RandomAgent):
         def choose_mode(self, state, player_id, mode_descriptions):
-            return 1  # basic_plains mode
+            return 0  # basic_plains mode (oracle order: Plains=0, creature=1)
 
     state = _arena()
     state.players[0].agent = PickPlainsMode(rng=random.Random(0))

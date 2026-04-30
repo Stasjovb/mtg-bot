@@ -74,6 +74,7 @@ from mtg_bot.cards.base import (
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
     ManifestDread,
+    ModalChooseOne,
     ManifestDreadThenPutPlusOneCountersOnIt,
     MillTargetPlayer,
     MoveSelfCountersToTargetCreatureYouControl,
@@ -2432,6 +2433,24 @@ def _parse_effect(phrase: str) -> Effect | None:
         "nonland card. You may cast that card this turn"
     ):
         return TerritorialBruntarLandfallEffect()
+    # Starfield Shepherd's ETB body (only EoE card with the
+    # "search for basic Plains OR creature MV≤1" shape; broader grammar
+    # deferred until a second example exists). The "or" clause is a
+    # player-choice OR-tutor modeled as ModalChooseOne so the player
+    # decides which kind of card to search for. ``may_fail=False``
+    # reflects the mandatory wording (no "you may" rider). The guard
+    # prevents the phrase from matching "search ... may reveal ..."
+    # or other "search...or..." shapes whose "or" connects something
+    # other than two top-level search targets.
+    if phrase == (
+        "search your library for a basic Plains card or a creature card "
+        "with mana value 1 or less, reveal it, put it into your hand, "
+        "then shuffle"
+    ):
+        return ModalChooseOne(modes=(
+            SearchLibraryForCard(filter_name="basic_plains", may_fail=False),
+            SearchLibraryForCard(filter_name="creature_small", max_mv=1, may_fail=False),
+        ))
     # Fanatic of the Harrowing's ETB body (only DSK card with the
     # "each player discards + reflexive draw if you did" shape; broader
     # grammar deferred until a second example exists). The reflexive

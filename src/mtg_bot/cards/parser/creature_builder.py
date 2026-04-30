@@ -284,29 +284,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             keywords={"trample", "haste"},
         ),
         # ── Batch 22a ──────────────────────────────────────────────────
-        # Starfield Shepherd {3}{W}{W} 3/2 Angel — flying, warp {1}{W}.
-        # ETB modal: tutor a creature with MV ≤ 1 OR a basic Plains.
-        "Starfield Shepherd": make_creature(
-            "Starfield Shepherd", "{3}{W}{W}", 3, 2,
-            keywords={"flying"},
-            warp="{1}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ModalChooseOne(modes=(
-                        SearchLibraryForCard(
-                            filter_name="creature_small",
-                            max_mv=1,
-                            may_fail=False,
-                        ),
-                        SearchLibraryForCard(
-                            filter_name="basic_plains",
-                            may_fail=False,
-                        ),
-                    )),
-                ),
-            ),
-        ),
         # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
         # ETB: another creature you control gets +2/+0 and gains
         # "when this creature dies, return it to bf tapped".
