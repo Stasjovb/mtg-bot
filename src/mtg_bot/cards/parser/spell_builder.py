@@ -301,6 +301,16 @@ def _is_delirium_drop_clause(clause: str) -> bool:
 #      UEOT-scoped "exile-instead-of-die" replacement-effect registry
 #      for targeted permanents; adding one for a single card's rider
 #      is a non-trivial engine widening.
+#
+#   7. **"If they do" pay-or-counter consequent** — ``If they do,
+#      <effect>.``  (entries: Divert Disaster, Don't Make a Sound).
+#      The ``Unless its controller pays {N}`` escape clause in the
+#      first sentence is recognized as ``CounterTargetSpell()`` via
+#      the new ``_COUNTER_TARGET_SPELL_UNLESS_PAYS`` recognizer; the
+#      resulting second clause ``If they do, you create a Lander
+#      token.`` / ``If they do, surveil 2.`` has no standalone
+#      primitive because the engine doesn't model the pay-cost-or-
+#      counter branching that determines whether "they do" applies.
 _ITS_CONTROLLER_MANIFESTS_DREAD_RE = re.compile(
     r"^Its controller manifests dread\.$"
 )
@@ -334,13 +344,20 @@ _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE = re.compile(
     r"^If that creature(?: or planeswalker)? would die this turn, "
     r"exile it instead\.$"
 )
+# Pay-or-counter consequent rider — ``If they do, <effect>.``
+# (Divert Disaster, Don't Make a Sound).  The ``unless controller
+# pays {N}`` first sentence is recognized as ``CounterTargetSpell()``
+# via ``_COUNTER_TARGET_SPELL_UNLESS_PAYS``, but the consequent
+# "if they do" clause has no standalone primitive because the engine
+# doesn't model which pay-cost-or-counter branch fires.
+_IF_THEY_DO_RIDER_RE = re.compile(r"^If they do, .+\.$")
 
 
 def _is_unimplemented_secondary_rider(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a second-sentence rider that the
     parser drops because the engine lacks the plumbing to model it.
 
-    Six shapes are recognized:
+    Seven shapes are recognized:
       - ``Its controller manifests dread.`` (controller-manifest rider)
       - ``When it dies this turn, manifest dread.`` (death-trigger
         manifest rider)
@@ -352,6 +369,8 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         (subtype-filtered UEOT keyword grant)
       - ``If that creature or planeswalker would die this turn, exile it
         instead.`` (exile-on-death rider)
+      - ``If they do, <effect>.`` (pay-or-counter consequent; the first
+        sentence must be a ``unless controller pays {N}`` counterspell)
 
     When the FIRST sentence of a two-clause spell parses cleanly and
     the second sentence matches one of these, the two-clause path in
@@ -366,6 +385,7 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         or _MANA_SPENT_CONDITIONAL_DRAW_RE.match(c) is not None
         or _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(c) is not None
         or _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE.match(c) is not None
+        or _IF_THEY_DO_RIDER_RE.match(c) is not None
     )
 
 
@@ -940,30 +960,16 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # the ``If the amount of mana spent…`` mana-spent-conditional
     # draw rider (the engine doesn't track per-spell cast-time mana
     # accounting).
-    # Divert Disaster: ``unless its controller pays {2}`` mana-pump
-    # counterspell + ``If they do, you create a Lander token.`` rider.
-    # The static ships the bare ``CounterTargetSpell()`` (no pay-cost
-    # branching, no Lander creation) — the engine doesn't yet model
-    # the pay-cost-or-counter Mana Leak shape. Matching here mirrors
-    # that simplification. The trailing parenthesized Lander reminder
-    # text is stripped before dispatch.
-    (
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, you create a Lander token."
-    ): CounterTargetSpell(),
-    # Don't Make a Sound: ``unless its controller pays {2}`` mana-pump
-    # counterspell + ``If they do, surveil 2.`` rider. Mirrors Divert
-    # Disaster's simplification: the static ships the bare
-    # ``CounterTargetSpell()`` because the engine doesn't yet model the
-    # pay-cost-or-counter Mana Leak shape. The base mechanic — a
-    # counterspell — survives the rider drop, so claiming the spell
-    # here matches the parser-is-right boundary (same precedent as
-    # Divert Disaster, Unravel). The trailing parenthesized surveil
-    # reminder text is stripped before dispatch.
-    (
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, surveil 2."
-    ): CounterTargetSpell(),
+    # Divert Disaster — "Counter target spell unless its controller
+    # pays {2}. If they do, you create a Lander token." — migrated to
+    # per-clause grammar: the new ``_COUNTER_TARGET_SPELL_UNLESS_PAYS``
+    # recognizer claims the first sentence as ``CounterTargetSpell()``
+    # (dropping the pay-or-counter branching) and the
+    # ``_is_unimplemented_secondary_rider`` dropper silently discards
+    # the ``If they do, …`` consequent.
+    # Don't Make a Sound — "Counter target spell unless its controller
+    # pays {2}. If they do, surveil 2." — same migration as Divert
+    # Disaster.
     # Scrounge for Eternity: additional-cost-sacrifice preamble plus a
     # graveyard-return-to-battlefield base + Lander-rider tail. The
     # static ships the bare ``ReturnCreatureFromYourGraveyardToBattle

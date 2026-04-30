@@ -142,30 +142,27 @@ def test_dont_make_a_sound_claimed_by_parser():
     assert "Don't Make a Sound" in _claimed_names()
 
 
-def test_dispatch_dont_make_a_sound_returns_engine_class():
-    # The dispatch key carries the post-reminder-strip oracle text (the
-    # parenthesized surveil reminder tail has been stripped before
-    # lookup). The dispatcher hits BEFORE the per-clause grammar would
-    # try to carve the line at the sentence boundary and fail on the
-    # ``If they do, surveil 2.`` rider tail that has no matching
-    # primitive.
-    eff = _try_whole_spell_exact_text(
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, surveil 2."
-    )
-    assert eff == CounterTargetSpell()
-
-
-def test_dispatch_dont_make_a_sound_unrelated_text_returns_none():
-    # Belt-and-suspenders that the new entry doesn't accidentally widen
-    # the dispatcher's match surface — a spell with a similar but not
-    # identical body should NOT match. Different rider tail (e.g.
-    # ``draw a card`` instead of ``surveil 2``) misses the exact-text
-    # key.
+def test_dispatch_dont_make_a_sound_no_bespoke_entry():
+    # After migration, the whole-spell dispatcher no longer has an
+    # entry for Don't Make a Sound; the per-clause grammar claims it
+    # via CounterTargetSpell() (_COUNTER_TARGET_SPELL_UNLESS_PAYS) +
+    # _is_unimplemented_secondary_rider dropper for "If they do,…".
     assert _try_whole_spell_exact_text(
         "Counter target spell unless its controller pays {2}. "
-        "If they do, draw a card."
+        "If they do, surveil 2."
     ) is None
+
+
+def test_dont_make_a_sound_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: per-clause grammar now claims "unless pays"
+    # counterspells with "If they do," consequents.
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, surveil 2.",
+        "Don't Make a Sound",
+    )
+    assert eff == CounterTargetSpell()
 
 
 # ---------- enchantment dispatch (Duskmourn's Domination) ----------

@@ -117,13 +117,23 @@ def test_unravel_parses_via_per_clause_grammar():
     assert eff == CounterTargetSpell()
 
 
-def test_dispatch_divert_disaster_returns_engine_class():
-    # Divert Disaster's printed text has a parenthesized Lander
-    # reminder tail; the dispatch key matches the post-reminder-strip
-    # form (just the two effect sentences).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_divert_disaster_no_bespoke_entry():
+    # After migration, the whole-spell dispatcher no longer has an
+    # entry for Divert Disaster; the per-clause grammar claims it via
+    # CounterTargetSpell() (_COUNTER_TARGET_SPELL_UNLESS_PAYS) +
+    # _is_unimplemented_secondary_rider dropper for "If they do,…".
+    assert _try_whole_spell_exact_text(
         "Counter target spell unless its controller pays {2}. "
         "If they do, you create a Lander token."
+    ) is None
+
+
+def test_divert_disaster_parses_via_per_clause_grammar():
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, you create a Lander token.",
+        "Divert Disaster",
     )
     assert eff == CounterTargetSpell()
 

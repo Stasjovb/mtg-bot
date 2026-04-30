@@ -592,6 +592,20 @@ _DESTROY_TARGET_CREATURE_OR_ENCHANTMENT = re.compile(
     r"^destroy target creature or enchantment$"
 )
 _COUNTER_TARGET_SPELL = re.compile(r"^counter target spell$")
+# "Counter target spell unless its controller pays {N}." — Mana-Leak
+# shape (Divert Disaster, Don't Make a Sound).  The engine doesn't yet
+# model the pay-cost-or-counter branching; the ``unless its controller
+# pays {N}`` clause is dropped, mapping to bare ``CounterTargetSpell()``.
+# Same parser-is-right simplification the static registry already makes
+# (both Divert Disaster and Don't Make a Sound ship ``CounterTargetSpell()``
+# in the bespoke tier). Tried BEFORE the bare counter-spell regex so
+# the more-specific ``unless … pays`` tail matches first; the bare
+# regex's ``$`` anchor wouldn't match this longer form anyway.
+# The ``If they do,`` consequent sentence is a separate clause dropped
+# by ``_is_unimplemented_secondary_rider`` (``_IF_THEY_DO_RIDER_RE``).
+_COUNTER_TARGET_SPELL_UNLESS_PAYS = re.compile(
+    r"^counter target spell unless its controller pays \{[^}]+\}$"
+)
 # "Counter target sorcery spell." — Warping Wail's mode 2. Same engine
 # class as the bare counterspell, with ``filter_types=frozenset({"Sorcery"})``
 # to gate which stack items are legal targets. Tried BEFORE the bare
@@ -3121,6 +3135,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return CounterTargetSpell(
             filter_types=frozenset({"Artifact", "Enchantment"})
         )
+    # ``counter target spell unless its controller pays {N}`` — Mana
+    # Leak shape (Divert Disaster, Don't Make a Sound). Tried BEFORE
+    # the bare ``counter target spell`` regex so this more-specific
+    # surface wins. The ``unless … pays`` escape clause is dropped
+    # (engine doesn't model pay-cost-or-counter branching today).
+    # Maps to bare ``CounterTargetSpell()`` — same simplification the
+    # static registry already ships for these two cards.
+    if _COUNTER_TARGET_SPELL_UNLESS_PAYS.match(phrase) is not None:
+        return CounterTargetSpell()
     if _COUNTER_TARGET_SPELL.match(phrase) is not None:
         return CounterTargetSpell()
     # ETB exile-until-source-leaves shapes (Oblivion Ring / Banishing

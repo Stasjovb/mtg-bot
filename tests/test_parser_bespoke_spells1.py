@@ -55,6 +55,7 @@ from mtg_bot.cards.parser.spell_builder import (
     _DELIRIUM_EFFECT_RIDER_RE,
     _DELIRIUM_MODAL_HEADER_RE,
     _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE,
+    _IF_THEY_DO_RIDER_RE,
     _is_delirium_drop_clause,
     _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
     _is_unimplemented_secondary_rider,
@@ -96,8 +97,11 @@ def test_bespoke_table_count():
     #   + Midnight Mayhem (subtype-filtered UEOT keyword-grant dropper)
     #   + Scorching Dragonfire (exile-on-death rider dropper +
     #     optional-planeswalker scope in damage recognizer)
-    # 50 - 20 = 30 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 30
+    #   + Divert Disaster (Mana-Leak counterspell recognizer +
+    #     "If they do" consequent dropper)
+    #   + Don't Make a Sound (same Mana-Leak + consequent dropper)
+    # 50 - 22 = 28 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 28
 
 
 # ------------------------------------------------------------------ #
@@ -668,3 +672,74 @@ def test_deal_damage_target_creature_or_planeswalker_parses():
         "Scorching Dragonfire",
     )
     assert eff == DealDamageToTargetCreature(amount=3)
+
+
+# ------------------------------------------------------------------ #
+# Divert Disaster / Don't Make a Sound                                #
+# (per-clause grammar: Mana-Leak counterspell + "If they do" dropper) #
+# ------------------------------------------------------------------ #
+
+def test_if_they_do_rider_re_matches():
+    assert _IF_THEY_DO_RIDER_RE.match(
+        "If they do, you create a Lander token."
+    ) is not None
+    assert _IF_THEY_DO_RIDER_RE.match(
+        "If they do, surveil 2."
+    ) is not None
+
+
+def test_if_they_do_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "If they do, you create a Lander token."
+    )
+    assert _is_unimplemented_secondary_rider(
+        "If they do, surveil 2."
+    )
+
+
+def test_counter_target_spell_unless_pays_parses():
+    from mtg_bot.cards.base import CounterTargetSpell
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    eff = _parse_spell_effect_phrase(
+        "Counter target spell unless its controller pays {2}.",
+        "Test",
+    )
+    assert eff == CounterTargetSpell()
+
+
+def test_divert_disaster_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, you create a Lander token."
+    ) is None
+
+
+def test_dont_make_a_sound_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, surveil 2."
+    ) is None
+
+
+def test_divert_disaster_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import CounterTargetSpell
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, you create a Lander token.",
+        "Divert Disaster",
+    )
+    assert eff == CounterTargetSpell()
+
+
+def test_dont_make_a_sound_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import CounterTargetSpell
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell unless its controller pays {2}. "
+        "If they do, surveil 2.",
+        "Don't Make a Sound",
+    )
+    assert eff == CounterTargetSpell()
