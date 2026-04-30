@@ -171,9 +171,12 @@ def test_blade_of_the_swarm_enters_with_two_plus_one_counters():
     assert blade.plus_one_counters == 2
 
 
-def test_blade_of_the_swarm_has_warp():
+def test_blade_of_the_swarm_has_no_warp():
+    # The printed oracle text for Blade of the Swarm has no Warp line;
+    # the old bespoke entry had a spurious warp cost that was dropped
+    # when the card migrated to the oracle parser (wave 6).
     b = _PRINTINGS["Blade of the Swarm"]
-    assert b.warp_cost_str == "{1}{B}"
+    assert b.warp_cost_str == ""
 
 
 # -----------------------

@@ -80,6 +80,7 @@ from mtg_bot.cards.base import (
     OptionalSacAnotherForPumpSelfUEOT,
     OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
@@ -479,8 +480,18 @@ _PUT_PLUS_ONE_COUNTER_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
 _PUT_PLUS_ONE_COUNTER_ON_TARGET_OPPONENT_CREATURE = re.compile(
     r"^put a \+1/\+1 counter on target creature an opponent controls$"
 )
+# Parameterized to handle both "put a +1/+1 counter on this creature"
+# (amount=1) and "put N +1/+1 counters on this creature" (amount=N).
+# The amount capture accepts ``a`` (= 1, singular "counter" tail),
+# spelled-out small cardinals (``two``, ``three``, etc., plural
+# "counters" tail), and bare digits (plural "counters" tail). The
+# singular/plural tail distinction is enforced by alternation so a
+# grammatically ill-formed phrase like "put two +1/+1 counter on this
+# creature" (missing the 's') doesn't match. Used by Blade of the
+# Swarm (two), Terrapact Intimidator (two), Silent Hallcreeper (two),
+# and Possessed Goat (three via activated ability).
 _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE = re.compile(
-    r"^put a \+1/\+1 counter on this creature$"
+    rf"^put (a|\d+|{_SMALL_CARDINAL_PATTERN}) \+1/\+1 counters? on this creature$"
 )
 # Tezzeret, Cruel Captain's artifact-enters trigger body. The phrase
 # routes through the same name-substitution pass as the +1/+1 counter
@@ -2578,8 +2589,9 @@ def _parse_effect(phrase: str) -> Effect | None:
         return PutPlusOneCounterOnTargetCreature(
             amount=1, attacking_only=m.group(1) is not None,
         )
-    if _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
-        return PutPlusOneCounterOnSelf(amount=1)
+    m = _PUT_PLUS_ONE_COUNTER_ON_THIS_CREATURE.match(phrase)
+    if m is not None:
+        return PutPlusOneCounterOnSelf(amount=_parse_amount(m.group(1)) if m.group(1) != "a" else 1)
     if _PUT_LOYALTY_COUNTER_ON_THIS_CREATURE.match(phrase) is not None:
         return PutLoyaltyCounterOnSelf(amount=1)
     # ``put a +1/+1 counter on each creature you control other than
@@ -3289,6 +3301,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return PutCardFromGraveyardOnBottomOfLibrary()
+    # ``put target exiled card with warp on the bottom of its owner's
+    # library`` — Blade of the Swarm's ETB modal mode 2. The target pool
+    # is restricted to exiled cards that have a warp cost (cards the
+    # engine tracks in ``state.warped_exile``); the chosen card moves
+    # to the bottom of its owner's library. Literal recognizer (only
+    # card in the current pool with this surface; broader "put target
+    # exiled card on bottom of library" grammar deferred until a second
+    # example exists). Maps to the existing
+    # ``OwnerPutsTargetWarpedExileCardOnBottomOfLibrary`` engine class.
+    if phrase == (
+        "put target exiled card with warp on the bottom of its owner's library"
+    ):
+        return OwnerPutsTargetWarpedExileCardOnBottomOfLibrary()
     # ``exile target card from a graveyard`` — Ghost Vacuum's bare
     # tap activation. Sibling to the bottom-of-library shape above;
     # same target-kind pool but the chosen card moves to its owner's

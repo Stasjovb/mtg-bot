@@ -34,6 +34,7 @@ permanents.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from mtg_bot.cards.base import (
@@ -98,6 +99,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.cost_reduction import (
     _parse_cost_reduction_line,
     _parse_external_cost_reduction_line,
@@ -126,6 +128,11 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_warp_with_life_cost_line,
 )
 from mtg_bot.cards.parser.text import _strip_reminder_text
+from mtg_bot.cards.parser.triggers import (
+    _parse_predicate_trigger_phrase,
+    _substitute_self_name,
+    _strip_ability_word_prefix,
+)
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.object_predicates import (
@@ -160,6 +167,102 @@ from mtg_bot.effects.predicates import (
 )
 
 
+# ── Modal creature trigger support ────────────────────────────────────────
+#
+# A modal triggered ability on a creature prints as:
+#   ``When/Whenever <condition>, choose one —``       ← trigger header
+#   ``• <mode 1 sentence>.``                           ← mode line(s)
+#   ``• <mode 2 sentence>.``
+#
+# The header line ends with ``, choose one —`` (em-dash U+2014);
+# each mode line begins with ``• `` (bullet U+2022 + space).
+# The creature-builder loop processes lines one at a time, so modal
+# blocks are pre-grouped before the main dispatch runs.
+#
+# Modal mode bodies use spell-style normalization (strip trailing period,
+# lowercase first letter) because each mode is a full printed sentence
+# rather than the ``it deals …`` creature-trigger form.
+_MODAL_CHOOSE_ONE_SUFFIX = ", choose one —"
+_MODAL_MODE_PREFIX = "• "
+
+# Trigger-header shape for a modal triggered ability. The leading
+# ``When``/``Whenever`` and the trailing ``, choose one —`` are fixed;
+# the condition body (group 1) is captured non-greedily.
+_MODAL_TRIGGER_HEADER_RE = re.compile(
+    r"^(?:When|Whenever) (.+?), choose one —$"
+)
+
+
+def _parse_modal_mode_phrase(raw_mode: str) -> "Effect | None":
+    """Parse a modal mode line body into an ``Effect``.
+
+    ``raw_mode`` is the stripped line after the ``• `` prefix — a full
+    sentence with trailing period and uppercase initial letter (e.g.
+    ``"Create two 1/1 white Human Soldier creature tokens."``). Applies
+    spell-style normalization (strip period, lowercase first letter)
+    before dispatching through the unified effect grammar.
+    """
+    phrase = raw_mode.strip()
+    if phrase.endswith("."):
+        phrase = phrase[:-1]
+    if phrase and phrase[0].isupper():
+        phrase = phrase[0].lower() + phrase[1:]
+    return _parse_effect(phrase)
+
+
+def _parse_modal_trigger_block(
+    header: str,
+    mode_lines: list[str],
+    *,
+    name: str | None = None,
+) -> "TriggeredAbility | None":
+    """Parse a modal trigger block (header + mode lines) into a single
+    ``TriggeredAbility`` with a ``ModalChooseOne`` effect.
+
+    ``header`` is the trigger-header line after stripping reminder text
+    (e.g. ``"Whenever you cast your second spell each turn, choose one —"``).
+    ``mode_lines`` are the subsequent ``• <mode>`` lines, also stripped.
+    ``name`` is the card's own printed name (forwarded to trigger-phrase
+    normalization, same as the regular trigger parser).
+
+    Returns ``None`` if any piece fails to parse — the whole modal block
+    is rejected rather than silently losing modes. Rejection propagates
+    as a parse failure for the oracle clause, keeping the card unclaimed.
+    """
+    # Substitute self-name references and strip ability-word prefixes
+    # on the header before matching the trigger condition — mirrors the
+    # flow in ``_parse_triggered_ability_line`` for regular triggers.
+    h = header
+    if name is not None:
+        h = _substitute_self_name(h, name)
+    h = _strip_ability_word_prefix(h)
+    m = _MODAL_TRIGGER_HEADER_RE.match(h)
+    if m is None:
+        return None
+    condition = m.group(1)
+    pred_match = _parse_predicate_trigger_phrase(condition)
+    if pred_match is None:
+        return None
+    event, predicate = pred_match
+    # Parse each mode body. At least two modes are required.
+    if len(mode_lines) < 2:
+        return None
+    parsed_modes: list["Effect"] = []
+    for raw in mode_lines:
+        if not raw.startswith(_MODAL_MODE_PREFIX):
+            return None
+        body = raw[len(_MODAL_MODE_PREFIX):]
+        eff = _parse_modal_mode_phrase(body)
+        if eff is None:
+            return None
+        parsed_modes.append(eff)
+    return TriggeredAbility(
+        event=event,
+        predicate=predicate,
+        effect=ModalChooseOne(modes=tuple(parsed_modes)),
+    )
+
+
 def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     """Build the name-keyed bespoke creature table at import time.
 
@@ -179,28 +282,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         "Frenzied Baloth": make_creature(
             "Frenzied Baloth", "{G}{G}", 3, 2,
             keywords={"trample", "haste"},
-        ),
-        # Cosmogrand Zenith {2}{W} 2/4.
-        # Trigger: second spell each turn → modal: two Human Soldier tokens
-        # OR +1/+1 counter on each creature you control.
-        "Cosmogrand Zenith": make_creature(
-            "Cosmogrand Zenith", "{2}{W}", 2, 4,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.IS_CAST,
-                    predicate=(
-                        Controlled(YOU, subject="controller")
-                        & StateBound(SpellsCastThisTurn(n=2))
-                    ),
-                    effect=ModalChooseOne(modes=(
-                        CreateToken(
-                            token_printing=TOKEN_PRINTINGS["Human Soldier"],
-                            count=2,
-                        ),
-                        PutPlusOneCounterOnEachCreatureYouControl(amount=1),
-                    )),
-                ),
-            ),
         ),
         # ── Batch 22a ──────────────────────────────────────────────────
         # Starfield Shepherd {3}{W}{W} 3/2 Angel — flying, warp {1}{W}.
@@ -292,22 +373,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         "Lightstall Inquisitor": make_creature(
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
-        ),
-        # Blade of the Swarm {3}{B} 3/1 Insect Assassin. Warp {1}{B}.
-        # ETB modal: put 2 +1/+1 counters on self OR put target warped
-        # exiled card on bottom of its owner's library.
-        "Blade of the Swarm": make_creature(
-            "Blade of the Swarm", "{3}{B}", 3, 1,
-            warp="{1}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=ModalChooseOne(modes=(
-                        PutPlusOneCounterOnSelf(amount=2),
-                        OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(),
-                    )),
-                ),
-            ),
         ),
         # Genemorph Imago {G}{U} 1/3 Insect Druid — flying.
         # Simplified: drops Landfall base P/T 3/3 or 6/6 rider.
@@ -1160,13 +1225,52 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     grants_additional_land_per_turn = 0
     grants_play_lands_from_graveyard = False
     text = card.get("oracle_text", "")
-    for raw_line in text.split("\n"):
-        # Strip parenthesized reminder text per-line before any clause
-        # dispatch — the keyword/triggered/activated/static grammars
-        # don't need to know about flavor parentheticals. ``_strip_
-        # reminder_text`` also calls ``.strip()``, so we don't need a
-        # separate strip on ``raw_line`` first.
-        line = _strip_reminder_text(raw_line)
+    # Pre-process oracle lines into groups. Most lines become a 1-element
+    # group ``(stripped_line,)``. A modal trigger block (header ending
+    # with ``, choose one —`` followed by ``• <mode>`` lines) becomes a
+    # 2-element group ``(header_line, [mode_line, ...])``. Pre-grouping
+    # lets the main loop stay a simple ``for group in groups`` dispatch
+    # without look-ahead, and modal groups are rejected as a unit if any
+    # piece fails to parse (no partial progress).
+    _raw_lines = [
+        _strip_reminder_text(l)
+        for l in text.split("\n")
+        if _strip_reminder_text(l)
+    ]
+    _groups: list[tuple] = []
+    _i = 0
+    while _i < len(_raw_lines):
+        _ln = _raw_lines[_i]
+        if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX):
+            # Modal trigger header — collect subsequent bullet mode lines.
+            _modes: list[str] = []
+            _j = _i + 1
+            while _j < len(_raw_lines) and _raw_lines[_j].startswith(_MODAL_MODE_PREFIX):
+                _modes.append(_raw_lines[_j])
+                _j += 1
+            if _modes:
+                _groups.append((_ln, _modes))
+                _i = _j
+                continue
+        _groups.append((_ln,))
+        _i += 1
+    for _group in _groups:
+        # Unpack the group: single-element groups are normal lines;
+        # two-element groups are modal trigger blocks.
+        if len(_group) == 2:
+            # Modal trigger block: ``(header, [mode_line, ...])``.
+            # Delegate to ``_parse_modal_trigger_block``; append the
+            # resulting ``TriggeredAbility`` to ``triggers``, or
+            # return None if the block fails to parse.
+            _header, _mode_lines = _group
+            _modal_ta = _parse_modal_trigger_block(
+                _header, _mode_lines, name=card["name"],
+            )
+            if _modal_ta is None:
+                return None
+            triggers.append(_modal_ta)
+            continue
+        line = _group[0]
         if not line:
             continue
         warp_life_result = _parse_warp_with_life_cost_line(line)

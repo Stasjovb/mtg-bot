@@ -8,7 +8,7 @@ claimed via the ``_BESPOKE_CREATURES`` name-keyed dispatch table in
 Covered creatures:
   1.  Lightstall Inquisitor — vigilance only (simplified)
   2.  Biomechan Engineer — ETB Lander token + activated {8}: draw2 + Robot
-  3.  Blade of the Swarm — warp {1}{B}, ETB modal PutPlusOneCounterOnSelf / OwnerPutsTargetWarpedExileCardOnBottomOfLibrary
+  3.  Blade of the Swarm — ETB modal PutPlusOneCounterOnSelf / OwnerPutsTargetWarpedExileCardOnBottomOfLibrary (no warp)
   4.  Seedship Broodtender — ETB SelfMill(3) + activated sorcery reanimate
   5.  Genemorph Imago — flying only (simplified)
   6.  Broodguard Elite — Insect Knight, warp {X}{G}, enters_with_counters_from_x, leaves trigger
