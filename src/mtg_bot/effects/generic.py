@@ -211,6 +211,60 @@ def _describe_filter(target_filter) -> str:
 
 
 @dataclass(frozen=True)
+class Tap(Effect):
+    """Unified tap primitive driven by ``targets``.
+
+    Sibling of :class:`Destroy` / :class:`Exile` for the tap family.
+    The unified resolve walks each slot's chosen target, re-verifies
+    legality at resolution per CR 608.2b, and taps whichever survive
+    the recheck via ``turn.tap_permanent`` (no-op if already tapped).
+
+    Variants that carry extra rider effects (stun counters, "and
+    stun it" clauses) override ``resolve`` rather than reusing this
+    base — the bare ``Tap.resolve`` covers the simple "tap target X"
+    oracle shape.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.turn import tap_permanent
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="tap")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                tap_permanent(state, obj)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"tap {_describe_targets(self.targets)}"
+
+
+@dataclass(frozen=True)
 class Exile(Effect):
     """Unified exile primitive driven by ``targets``.
 
@@ -6543,44 +6597,22 @@ class TapAndStunUpToOneTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
-class TapAnotherTargetCreature(Effect):
-    """Tap another target creature — target must not be the source.
+class TapAnotherTargetCreature(Tap):
+    """``Tap`` constructor sugar for "tap another target creature"
+    (Starport Security's activated ability).
 
-    Matches Starport Security's activated "Tap another target creature"
-    ability. Reads ``state.resolving_source`` to exclude self.
+    Filter is ``IsCreature() & ~IsSource()`` — the ``~IsSource()``
+    arm excludes the resolving source from its own legal-target pool
+    so "another" reads CR-correct.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        source = state.resolving_source
-        source_id = source.id if source is not None else -1
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.id != source_id
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import tap_permanent
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature, IsSource
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & ~IsSource()),),
         )
-        if obj is None:
-            return
-        tap_permanent(state, obj)
 
     def describe(self) -> str:
         return "tap another target creature"
@@ -6588,55 +6620,23 @@ class TapAnotherTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
-class TapUpToOneTargetCreature(Effect):
-    """Tap up to one target creature.
+class TapUpToOneTargetCreature(Tap):
+    """``Tap`` constructor sugar for "tap up to one target creature"
+    (Baseball Bat's equipped-attack rider).
 
-    Matches Baseball Bat's "Whenever equipped creature attacks, tap up
-    to one target creature." printed surface form. The target slot is
-    optional (``target_count_range = (0, 1)``); a 0-target resolution
-    is a silent no-op (the controller chose not to target any
-    creature). With 1 target, the chosen creature is tapped via
-    ``turn.tap_permanent`` (no-op if already tapped).
-
-    Sibling to ``TapTargetArtifactOrCreature`` (Mental Modulation —
-    strict 1-target, broader filter) and ``TapAnotherTargetCreature``
-    (Starport Security — strict 1-target, source-excluded). Each lives
-    on its own engine class because the legal-target pool and the
-    optional/required dichotomy differ.
+    Filter is :class:`IsCreature` with ``count_min=0`` so the
+    targeting pipeline treats the slot as optional — a 0-target
+    resolution is a silent no-op (the controller chose not to
+    target).
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, 1)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import tap_permanent
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature(), count_min=0, count_max=1),),
         )
-        if obj is None:
-            return
-        tap_permanent(state, obj)
 
     def describe(self) -> str:
         return "tap up to one target creature"
@@ -6644,40 +6644,21 @@ class TapUpToOneTargetCreature(Effect):
 
 
 @dataclass(frozen=True)
-class TapTargetArtifactOrCreature(Effect):
-    """Tap target artifact or creature. Matches Mental Modulation's middle
-    clause. No-op if the target is already tapped.
+class TapTargetArtifactOrCreature(Tap):
+    """``Tap`` constructor sugar for "tap target artifact or creature"
+    (Mental Modulation's middle clause).
+
+    Filter is ``IsArtifact() | IsCreature()``. Already-tapped targets
+    are no-ops via the underlying ``turn.tap_permanent``.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if o.printing.is_artifact or o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import tap_permanent
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsArtifact() | IsCreature()),),
         )
-        if obj is None:
-            return
-        tap_permanent(state, obj)
 
     def describe(self) -> str:
         return "tap target artifact or creature"

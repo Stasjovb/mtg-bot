@@ -167,6 +167,7 @@ from mtg_bot.effects.generic import (
     SetLifeToHalfStartingRoundedUp,
     Surveil,
     SwitchSourcePowerToughnessUEOT,
+    Tap,
     TapAndStunUpToOneTargetCreature,
     TapAnotherTargetCreature,
     TapEnchantedPermanent,
