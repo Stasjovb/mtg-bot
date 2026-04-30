@@ -283,28 +283,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             "Frenzied Baloth", "{G}{G}", 3, 2,
             keywords={"trample", "haste"},
         ),
-        # ── Batch 22a ──────────────────────────────────────────────────
-        # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
-        # ETB: another creature you control gets +2/+0 and gains
-        # "when this creature dies, return it to bf tapped".
-        "Perigee Beckoner": make_creature(
-            "Perigee Beckoner", "{4}{B}", 4, 5,
-            warp="{1}{B}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=PumpTargetCreatureUntilEOT(
-                        power_bonus=2, toughness_bonus=0,
-                        you_control_only=True,
-                        exclude_self=True,
-                        granted_triggered_ability=TriggeredAbility(
-                            event=Event.DIES, predicate=IsSelf(),
-                            effect=PerigeeBeckonerDiesReturnTappedEffect(),
-                        ),
-                    ),
-                ),
-            ),
-        ),
         # ── Batch 22b ──────────────────────────────────────────────────
         # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
         # Simplified: drops ETB "each opponent exiles a card" clause.

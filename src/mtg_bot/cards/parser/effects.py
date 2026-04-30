@@ -87,6 +87,7 @@ from mtg_bot.cards.base import (
     OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    PerigeeBeckonerDiesReturnTappedEffect,
     PossibilityTechnicianETBEffect,
     TerrapactIntimidatorETBEffect,
     PreventAllCombatDamageThisTurn,
@@ -119,6 +120,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForEquipmentToBattlefield,
     SeedshipImpactEffect,
     TerritorialBruntarLandfallEffect,
+    TriggeredAbility,
     SelfMill,
     Sequence,
     SingularityRuptureEffect,
@@ -132,6 +134,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 # Spelled-out small-cardinal lookup for oracle phrasings like
@@ -2434,6 +2437,29 @@ def _parse_effect(phrase: str) -> Effect | None:
         "nonland card. You may cast that card this turn"
     ):
         return TerritorialBruntarLandfallEffect()
+    # Perigee Beckoner's ETB body (only EoE card with the "pump another
+    # target creature you control + grant dies-return-tapped trigger"
+    # shape; broader grammar deferred until a second example exists).
+    # The quoted granted trigger ("When this creature dies, return it to
+    # the battlefield tapped under its owner's control") is an anaphoric
+    # sub-clause the inline keyword-grant grammar can't model without a
+    # full nested trigger parser. The literal maps directly to the
+    # bespoke's PumpTargetCreatureUntilEOT(granted_triggered_ability=...)
+    # composition.
+    if phrase == (
+        "until end of turn, another target creature you control gets "
+        "+2/+0 and gains \"When this creature dies, return it to the "
+        "battlefield tapped under its owner's control"
+    ):
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=2, toughness_bonus=0,
+            you_control_only=True,
+            exclude_self=True,
+            granted_triggered_ability=TriggeredAbility(
+                event=Event.DIES, predicate=IsSelf(),
+                effect=PerigeeBeckonerDiesReturnTappedEffect(),
+            ),
+        )
     # Possibility Technician's ENTERS body (only EoE card with the
     # "exile top card + may play it while controlling a Kavu" shape;
     # broader grammar deferred until a second example exists). The
