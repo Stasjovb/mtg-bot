@@ -1,11 +1,20 @@
 """Tests for the Duskmourn artifacts / Equipment batch-3 parser
 additions.
 
-Each commit in this batch lands one Toy artifact creature via name-keyed
-bespoke dispatch on ``creature_builder``. Each card claims a single
-bespoke effect class in ``mtg_bot.effects.bespoke``; no parser grammar
-is extended (the DSK Toy family's printed shapes are too card-specific
-to share a primitive).
+This batch originally landed three DSK artifact creatures via name-keyed
+bespoke dispatch on ``_BESPOKE_ARTIFACT_CREATURES``. They have since been
+migrated (bespoke-delirium) to the literal trigger-line dispatch in
+``_BESPOKE_TRIGGER_LINES`` — their complex trigger bodies remain bespoke
+effect classes, but all other oracle lines (keywords, P/T, subtypes,
+mana cost, artifact type) now route through the unified grammar.
+
+Additionally, the bespoke-delirium branch wires Delirium-gate support for
+``Delirium — At the beginning of <when>`` trigger shapes in
+``triggers._parse_at_the_beginning_of_line`` via the new ``_DELIRIUM_PREFIX``
+/ ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` constants — enabling any future
+card whose Delirium-gated end-step (or upkeep, or combat) body is
+expressible by the unified effect grammar to claim end-to-end with zero
+new code.
 """
 
 from __future__ import annotations
@@ -345,8 +354,10 @@ def test_arabella_effect_no_op_when_x_is_zero():
 # ---------- Attack-in-the-Box ----------
 
 def test_attack_in_the_box_claimed_by_parser():
-    # Attack-in-the-Box lands via name-keyed bespoke dispatch in
-    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    # Attack-in-the-Box now claims via the oracle-text parser: all lines
+    # except the attack trigger route through the unified grammar; the
+    # attack trigger is caught by ``_BESPOKE_TRIGGER_LINES`` in
+    # ``creature_builder`` and wires ``AttackInTheBoxAttackEffect``.
     assert "Attack-in-the-Box" in _claimed_names()
 
 
@@ -463,8 +474,10 @@ def test_attack_in_the_box_effect_no_op_without_resolving_source():
 # ---------- Wickerfolk Thresher ----------
 
 def test_wickerfolk_thresher_claimed_by_parser():
-    # Wickerfolk Thresher lands via name-keyed bespoke dispatch in
-    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    # Wickerfolk Thresher now claims via the oracle-text parser: all
+    # lines route through the unified grammar; the Delirium attack
+    # trigger is caught by ``_BESPOKE_TRIGGER_LINES`` and wires
+    # ``WickerfolkThresherAttackEffect``.
     assert "Wickerfolk Thresher" in _claimed_names()
 
 
@@ -653,8 +666,10 @@ def test_wickerfolk_thresher_no_op_on_empty_library():
 # ---------- Osseous Sticktwister ----------
 
 def test_osseous_sticktwister_claimed_by_parser():
-    # Osseous Sticktwister lands via name-keyed bespoke dispatch in
-    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    # Osseous Sticktwister now claims via the oracle-text parser:
+    # ``Lifelink`` routes through the keyword grammar; the Delirium
+    # end-step trigger is caught by ``_BESPOKE_TRIGGER_LINES`` and
+    # wires ``OsseousSticktwisterEndStepEffect``.
     assert "Osseous Sticktwister" in _claimed_names()
 
 

@@ -21,6 +21,18 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     ``OptionalSacArtifactForEffect`` updated to forward ``requires_target``
     / ``legal_targets`` / ``targets`` from the inner effect.
     Migrated in bespoke-artifact-misc.
+  - Attack-in-the-Box — literal trigger-line dispatch in
+    ``_BESPOKE_TRIGGER_LINES`` routes the attack trigger to
+    ``AttackInTheBoxAttackEffect``; all other oracle lines parse via the
+    unified grammar. Migrated in bespoke-delirium.
+  - Osseous Sticktwister — literal trigger-line dispatch in
+    ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
+    ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
+    via the standard keyword line. Migrated in bespoke-delirium.
+  - Wickerfolk Thresher — literal trigger-line dispatch in
+    ``_BESPOKE_TRIGGER_LINES`` routes the Delirium attack trigger to
+    ``WickerfolkThresherAttackEffect``; all other oracle lines parse
+    via the unified grammar. Migrated in bespoke-delirium.
 
 Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
@@ -32,9 +44,6 @@ Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   6. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
   7. Survey Mechan — flying only (simplified; large activated body dropped)
   8. Splitskin Doll — draw + source-relative conditional discard (DSK)
-  9. Attack-in-the-Box — optional pump + delayed end-step sac (DSK)
- 10. Osseous Sticktwister — Delirium end-step per-opponent choice (DSK)
- 11. Wickerfolk Thresher — Delirium attack peek-top-then-branch (DSK)
 """
 
 from __future__ import annotations
