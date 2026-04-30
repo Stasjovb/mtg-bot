@@ -74,8 +74,9 @@ def test_bespoke_table_count():
     #   + Temporal Intervention (directed-discard recognizer)
     #   + Dual-Sun Technique (keyword-grant-with-draw recognizer)
     #   + Full Bore (warp-conditional keyword-rider recognizer)
-    # 50 - 8 = 42 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 42
+    #   + Zealous Display (anthem-untap-if-not-your-turn recognizer)
+    # 50 - 9 = 41 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 41
 
 
 # ------------------------------------------------------------------ #

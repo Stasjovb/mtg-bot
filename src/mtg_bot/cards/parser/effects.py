@@ -1468,6 +1468,25 @@ _PUMP_YOUR_CREATURES_UEOT = re.compile(
     r"^(other )?creatures you control get ([+-]\d+)/([+-]\d+)"
     r"(?: and gain (.+))? until end of turn$"
 )
+# "Creatures you control get +N/+M until end of turn. If it's not your
+# turn, untap those creatures." — anthem-style mass pump with a flash-
+# untap rider that fires when cast on an opponent's turn (Zealous
+# Display ``{2}{W}`` Instant). Two-sentence recognizer: the second
+# sentence's ``those creatures`` is anaphoric to the pumped set, so
+# the two sentences must be kept together.
+#
+# Two capture groups: pump power (group 1) and pump toughness (group 2).
+# Maps to ``PumpCreaturesYouControlUntilEOT(power_bonus=N,
+# toughness_bonus=M, also_untap_if_not_your_turn=True)``.
+#
+# Currently only Zealous Display in the pool fits this shape; the
+# regex captures the amounts as parameters so a future printing with
+# different pump values (e.g. "+1/+1 UEOT + untap if not your turn")
+# lands on the same primitive without further grammar work.
+_PUMP_YOUR_CREATURES_UEOT_UNTAP_IF_NOT_YOUR_TURN = re.compile(
+    r"^creatures you control get ([+-]\d+)/([+-]\d+) until end of turn\. "
+    r"If it's not your turn, untap those creatures$"
+)
 # "Target creature you control gets +N/+M until end of turn" —
 # you-control-only single-target pump (Zookeeper Mechan's ``{6}{R}``
 # sorcery-speed activated ability). Maps to
@@ -3719,6 +3738,27 @@ def _parse_effect(phrase: str) -> Effect | None:
     # (returns ``None`` so the caller can fall through) — mirrors the
     # ``_PUMP_AND_GAIN_KEYWORDS_UEOT`` precedent: a missing grant is
     # never silently dropped.
+    #
+    # Tried BEFORE the bare ``creatures you control get …`` regex so
+    # the more-specific 2-sentence body (including the untap-if-not-
+    # your-turn rider) wins on phrases that carry it; the bare
+    # regex's ``$`` anchor wouldn't match the rider tail anyway, but
+    # ordering more-specific before more-general is the convention.
+    m = _PUMP_YOUR_CREATURES_UEOT_UNTAP_IF_NOT_YOUR_TURN.match(phrase)
+    if m is not None:
+        # ``creatures you control get +N/+M until end of turn. If
+        # it's not your turn, untap those creatures`` — Zealous
+        # Display's 2-sentence body. The second sentence's ``those
+        # creatures`` is anaphoric to the pumped set; kept together
+        # so the sentence splitter doesn't carve the rider into an
+        # unparseable piece. ``also_untap_if_not_your_turn=True``
+        # fires the untap step only when the spell resolves on an
+        # opponent's turn.
+        return PumpCreaturesYouControlUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            also_untap_if_not_your_turn=True,
+        )
     m = _PUMP_YOUR_CREATURES_UEOT.match(phrase)
     if m is not None:
         granted_body = m.group(4)

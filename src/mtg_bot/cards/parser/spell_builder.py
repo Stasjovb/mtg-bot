@@ -576,18 +576,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "It gains reach, trample, and indestructible until end of "
         "turn. Untap it."
     ): BiosynthicBurstEffect(),
-    # Zealous Display: anthem + opp-turn-untap rider. The
-    # ``also_untap_if_not_your_turn`` flag on the engine class fires
-    # only when the spell resolves on an opponent's turn, untapping
-    # every creature that received the pump.
-    (
-        "Creatures you control get +2/+0 until end of turn. "
-        "If it's not your turn, untap those creatures."
-    ): PumpCreaturesYouControlUntilEOT(
-        power_bonus=2,
-        toughness_bonus=0,
-        also_untap_if_not_your_turn=True,
-    ),
     # Cerebral Download: variable surveil ("Surveil X, where X is the
     # number of artifacts you control") + flat draw three. The Surveil
     # primitive's ``use_artifact_count=True`` flag substitutes the

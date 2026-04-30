@@ -126,9 +126,10 @@ def test_biosynthic_burst_claimed_by_parser():
 
 def test_zealous_display_claimed_by_parser():
     # Zealous Display ``{2}{W}`` Instant — anthem with the
-    # ``If it's not your turn, untap those creatures.`` rider. The
-    # rider doesn't parse as a standalone effect, so the spell is
-    # claimed via the whole-spell exact-text dispatcher.
+    # ``If it's not your turn, untap those creatures.`` rider.
+    # Migrated from the whole-spell exact-text tier to the per-clause
+    # grammar (effects.py's
+    # ``_PUMP_YOUR_CREATURES_UEOT_UNTAP_IF_NOT_YOUR_TURN``).
     assert "Zealous Display" in _claimed_names()
 
 
@@ -200,14 +201,24 @@ def test_dispatch_biosynthic_burst_returns_engine_class():
     assert eff == BiosynthicBurstEffect()
 
 
-def test_dispatch_zealous_display_returns_engine_class():
-    # ``also_untap_if_not_your_turn=True`` flips the engine class
-    # into the opp-turn untap branch when the spell resolves on
-    # an opponent's turn. The base anthem is +2/+0 UEOT.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_zealous_display_no_bespoke_entry():
+    # Zealous Display migrated to the per-clause grammar; whole-spell
+    # dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Creatures you control get +2/+0 until end of turn. "
+        "If it's not your turn, untap those creatures."
+    ) is None
+
+
+def test_zealous_display_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar claims the 2-sentence
+    # body with the untap-if-not-your-turn rider.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Creatures you control get +2/+0 until end of turn. "
         "If it's not your turn, untap those creatures."
     )
+    eff = _parse_spell_effect_phrase(body, "Zealous Display")
     assert eff == PumpCreaturesYouControlUntilEOT(
         power_bonus=2,
         toughness_bonus=0,
