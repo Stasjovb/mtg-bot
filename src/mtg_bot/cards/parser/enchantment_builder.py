@@ -708,23 +708,12 @@ def _build_duskmourns_domination() -> CardPrinting:
 _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     # Non-Aura cards remaining on the bespoke path:
     #
-    # Sothera, the Supervoid — bespoke DIES trigger (SotheraExileOpponent
-    # CreatureEffect) and bespoke end-step trigger (SotheraEndStepReanimate
-    # Effect); deferred until those effects land as grammar-level phrases.
-    "Sothera, the Supervoid": _build_sothera_the_supervoid,
-    # Terrasymbiosis — COUNTERS_ADDED trigger with "you may draw that many
-    # cards" (DrawCardsEqualToResolvingCounterAmount, bespoke). The trigger
-    # phrase and the "Do this only once each turn." rider both need grammar
-    # work; deferred to the next batch.
-    "Terrasymbiosis": _build_terrasymbiosis,
-    # Aura remaining on the bespoke path:
-    #
-    # Chorale of the Void — the attacks trigger body is
-    # ChoraleReanimateDefenderGraveCreatureEffect (no parseable effect
-    # phrase) and the Void end-step rider uses SacrificeSelfUnlessVoid
-    # Active (no parseable "sacrifice this Aura unless" form). Deferred
-    # until those effects land as grammar-level phrases.
-    "Chorale of the Void": _build_chorale_of_the_void,
+    # (Sothera, the Supervoid migrated to oracle-text path via
+    # _NONAURA_LITERAL_TRIGGER_LINES.)
+    # (Terrasymbiosis migrated to oracle-text path via _NONAURA_LITERAL_
+    # TRIGGER_LINES — see _UNIFIED_ENCHANTMENT_NAMES.)
+    # (Chorale of the Void migrated to oracle-text path via _UNIFIED_AURA_NAMES
+    # + _AURA_LITERAL_TRIGGER_LINES.)
 }
 
 
@@ -1066,6 +1055,43 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
     ),
     # ---------------------------------------------------------------
+    # Chorale of the Void — attacks trigger (bespoke reanimate effect).
+    # "Whenever enchanted creature attacks, put target creature card
+    # from defending player's graveyard onto the battlefield under your
+    # control tapped and attacking." → ChoraleReanimateDefenderGrave
+    # CreatureEffect. Only Chorale in the pool has this "reanimate-from-
+    # defending-player's-graveyard-tapped-and-attacking" Aura-attacks
+    # trigger; generalization deferred until a second example exists.
+    # ---------------------------------------------------------------
+    (
+        "Whenever enchanted creature attacks, put target creature card "
+        "from defending player's graveyard onto the battlefield under "
+        "your control tapped and attacking."
+    ): TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsHost(subject="attacker"),
+        effect=ChoraleReanimateDefenderGraveCreatureEffect(),
+    ),
+    # ---------------------------------------------------------------
+    # Chorale of the Void — Void end-step trigger (bespoke sac-unless-
+    # void effect). "Void — At the beginning of your end step, sacrifice
+    # this Aura unless a nonland permanent left the battlefield this turn
+    # or a spell was warped this turn." → SacrificeSelfUnlessVoidActive.
+    # The "Void — " prefix is the oracle ability-word; the rest maps to
+    # the existing Void-rider mechanic. Only Chorale in the pool ships
+    # this exact "sacrifice this Aura unless" Void end-step form;
+    # generalization deferred until a second Aura with a Void rider lands.
+    # ---------------------------------------------------------------
+    (
+        "Void — At the beginning of your end step, sacrifice this Aura "
+        "unless a nonland permanent left the battlefield this turn or a "
+        "spell was warped this turn."
+    ): TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU),
+        effect=SacrificeSelfUnlessVoidActive(),
+    ),
+    # ---------------------------------------------------------------
     # Cracked Skull / Sporogenic Infection — DEALT_DAMAGE trigger.
     # "When enchanted creature is dealt damage, destroy it."
     # → DestroyEnchantedPermanent on DEALT_DAMAGE + IsHost().
@@ -1103,11 +1129,10 @@ _UNIFIED_AURA_NAMES: frozenset[str] = frozenset({
     # EoE Auras — medium priority
     "Moonlit Meditation",  # Enchant artifact or creature you control + token-replace
     "Tractor Beam",        # Enchant creature or Spacecraft + ETB tap + control + doesn't-untap
-    # Chorale of the Void deferred — the attacks trigger body
-    # (ChoraleReanimateDefenderGraveCreatureEffect) and the Void end-step
-    # rider (SacrificeSelfUnlessVoidActive) are bespoke effects not yet
-    # in the general grammar. Will migrate after those effects land as
-    # parseable effect phrases. Remains in _ENCHANTMENT_BUILDERS below.
+    # Chorale of the Void — attacks trigger (bespoke reanimate effect,
+    # literal in _AURA_LITERAL_TRIGGER_LINES) + Void end-step rider
+    # (bespoke SacrificeSelfUnlessVoidActive, also literal).
+    "Chorale of the Void",
 })
 
 
@@ -1448,6 +1473,61 @@ _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         predicate=IsSelf(),
         effect=WeftwalkingETBEffect(),
     ),
+    # Sothera, the Supervoid — DIES trigger
+    # "Whenever a creature you control dies, each opponent chooses a
+    # creature they control and exiles it." → SotheraExileOpponentCreature
+    # Effect. Only Sothera in the pool has this "each opponent exiles
+    # their choice of creature" Aura trigger shape; generalization deferred.
+    (
+        "Whenever a creature you control dies, each opponent chooses a "
+        "creature they control and exiles it."
+    ): TriggeredAbility(
+        event=Event.DIES,
+        predicate=Subject(None, IsCreature()) & Controlled(YOU),
+        effect=SotheraExileOpponentCreatureEffect(),
+    ),
+    # Sothera, the Supervoid — end-step trigger
+    # "At the beginning of your end step, if a player controls no
+    # creatures, sacrifice Sothera, then put a creature card exiled with
+    # it onto the battlefield under your control with two additional
+    # +1/+1 counters on it." → SotheraEndStepReanimateEffect. The
+    # "if a player controls no creatures" intervening-if gate is honored
+    # by SotheraEndStepReanimateEffect's resolve method. Only Sothera
+    # in the pool has this "sac-then-reanimate-from-exile" end-step shape.
+    (
+        "At the beginning of your end step, if a player controls no "
+        "creatures, sacrifice Sothera, then put a creature card exiled "
+        "with it onto the battlefield under your control with two "
+        "additional +1/+1 counters on it."
+    ): TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU),
+        effect=SotheraEndStepReanimateEffect(),
+    ),
+    # Terrasymbiosis COUNTERS_ADDED trigger — "Whenever you put one or
+    # more +1/+1 counters on a creature you control, you may draw that
+    # many cards. Do this only once each turn."
+    # The effect "draw that many cards" is ``DrawCardsEqualToResolving
+    # CounterAmount`` which reads the COUNTERS_ADDED event's counter
+    # amount at resolve time. The general effects grammar maps
+    # "draw that many cards" to ``DrawCardsEqualToResolvingCombatDamage``
+    # (a different engine class for combat damage), so we use a literal
+    # here to route to the correct counter-amount class. The
+    # ``once_per_turn=True`` flag mirrors the printed
+    # "Do this only once each turn." rider (distinct from the standard
+    # "This ability triggers only once each turn." wording, so the
+    # standard rider-strip doesn't fire; the literal carries the flag
+    # directly). Only Terrasymbiosis in the pool has this surface.
+    (
+        "Whenever you put one or more +1/+1 counters on a creature you "
+        "control, you may draw that many cards. Do this only once each "
+        "turn."
+    ): TriggeredAbility(
+        event=Event.COUNTERS_ADDED,
+        predicate=Subject(None, IsCreature()) & Controlled(YOU),
+        effect=DrawCardsEqualToResolvingCounterAmount(),
+        once_per_turn=True,
+    ),
 }
 
 
@@ -1480,9 +1560,15 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # The printing sits inert, same shape as the bespoke factory.
     "Leyline of Mutation",
     # Weftwalking — grants_first_spell_each_turn_free static (literal)
-    # + ETB trigger deferred as honest no-op (WeftwalkingETBEffect not
-    # yet in the grammar).
+    # + ETB trigger via _NONAURA_LITERAL_TRIGGER_LINES.
     "Weftwalking",
+    # Terrasymbiosis — COUNTERS_ADDED trigger via literal recognizer
+    # (DrawCardsEqualToResolvingCounterAmount with once_per_turn=True).
+    "Terrasymbiosis",
+    # Sothera, the Supervoid — two literal trigger lines:
+    # DIES (SotheraExileOpponentCreatureEffect) + end-step
+    # (SotheraEndStepReanimateEffect).
+    "Sothera, the Supervoid",
 })
 
 
