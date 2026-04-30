@@ -796,17 +796,35 @@ def _parse_modal_choose_one(
       ...
 
     Each mode line is parsed by ``_parse_spell_effect_phrase`` after
-    stripping the leading ``• `` (bullet + space). If any mode fails
-    to parse, the whole shape is rejected (returns ``None``) — partial
-    modal effects would silently change a spell's playable behavior.
+    stripping the leading ``• `` (bullet + space).
+
+    **All-or-nothing rule (normal path):** if all modes parse, returns
+    ``ModalChooseOne(modes=(...), or_both=or_both)`` so the engine routes
+    mode-pick through the agent's ``choose_modes`` hook.
+
+    **Exactly-one-parseable fallback (parser-is-right):** if the mode
+    lines are all well-formed bullets but EXACTLY ONE mode parses (the
+    rest return ``None``), the parser returns that one mode's effect
+    directly rather than ``ModalChooseOne``. This matches the same
+    "parser-is-right" simplification the whole-spell exact-text table
+    already ships for Get Out (mode 1 = counter creature/enchantment;
+    mode 2 unrecognized) and Untimely Malfunction (mode 1 = destroy
+    artifact; modes 2–3 unrecognized). The engine can only model the
+    parseable mode anyway, so presenting the spell as a non-modal spell
+    with that fixed effect is the most faithful available representation
+    given the current grammar.
+
+    If TWO OR MORE modes parse but not all, the function returns ``None``
+    (the spell stays unclaimed) — a multi-mode partial parse can't be
+    simplified to a single fixed effect without ambiguity about WHICH
+    parseable mode to use.
 
     A header by itself (zero mode lines) or a header with exactly one
     mode line is rejected — printed modal spells always have at least
-    two modes, and a single-mode "modal" spell would be indistinguishable
-    from a non-modal effect. ``Choose two`` and other variants don't
-    match either header regex and fall through. The ``or both`` shape
-    constructs ``ModalChooseOne(or_both=True)`` so the engine routes
-    mode-pick through the agent's ``choose_modes`` (plural) hook.
+    two modes. ``Choose two`` and other variants don't match either
+    header regex and fall through. The ``or both`` shape constructs
+    ``ModalChooseOne(or_both=True)`` so the engine routes mode-pick
+    through the agent's ``choose_modes`` (plural) hook.
     """
     if not clauses:
         return None
@@ -829,16 +847,40 @@ def _parse_modal_choose_one(
     mode_lines = clauses[1:]
     if len(mode_lines) < 2:
         return None
+    # Try to parse every mode. Collect (index, effect) pairs for the
+    # modes that parse cleanly; track which are malformed bullets.
     parsed_modes: list[Effect] = []
+    malformed = False
     for line in mode_lines:
         m = _MODAL_MODE_LINE_RE.match(line)
         if m is None:
-            return None
+            # Bullet not recognized → whole modal shape is unclaimed
+            # (a non-bullet line inside a modal body is unexpected and
+            # may indicate a multi-line mode, which we don't support).
+            malformed = True
+            break
         eff = _parse_spell_effect_phrase(m.group(1), name)
-        if eff is None:
-            return None
-        parsed_modes.append(eff)
-    return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
+        if eff is not None:
+            parsed_modes.append(eff)
+        # else: append None placeholder? No — we only collect parseable modes.
+    if malformed:
+        return None
+    if len(parsed_modes) == len(mode_lines):
+        # All modes parse → full ModalChooseOne.
+        return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
+    if len(parsed_modes) == 1 and not or_both:
+        # Exactly one mode parseable (and this is a "Choose one —" spell,
+        # not "Choose one or both —") → parser-is-right: return that mode's
+        # effect directly. Same simplification as Get Out (mode 1 = counter
+        # creature/enchantment spell; mode 2 unrecognized) and Untimely
+        # Malfunction (mode 1 = destroy artifact; modes 2–3 unrecognized).
+        # The "or both" guard ensures "Choose one or both —" spells stay
+        # unclaimed when not all modes parse — losing the or_both semantics
+        # would silently misbehave if the parseable mode is returned alone.
+        return parsed_modes[0]
+    # Zero parseable, or 2+ parseable but not all, or or_both with any
+    # unrecognized mode → unclaimed.
+    return None
 
 
 # Whole-spell exact-text dispatch table. Each key is the full oracle
@@ -1206,67 +1248,19 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # creatures; a subtype-filtered variant is a non-trivial engine
     # change for a single card's rider). The trailing parenthesized
     # menace reminder text is stripped before dispatch.
-    # Get Out (Duskmourn) ``{U}{U}`` Instant — two-mode modal: ``•
-    # Counter target creature or enchantment spell.`` and ``• Return
-    # one or two target creatures and/or enchantments you own to your
-    # hand.``. The static side simplifies to bare
-    # ``CounterTargetSpell(filter_types=frozenset({"Creature",
-    # "Enchantment"}))`` because:
-    # (1) the per-mode parser (``_parse_modal_choose_one``) can't
-    #     claim this spell — mode 2's ``return one or two target
-    #     creatures and/or enchantments you own to your hand`` shape
-    #     has no per-mode primitive (the existing
-    #     ``ReturnUpToNCreaturesFromYourGraveyardToHand`` /
-    #     ``ReturnUpToNTargetCreaturesToOwnersHands`` are
-    #     creature-typed, and widening to "creatures and/or
-    #     enchantments you own" plus the multi-target ``one or two``
-    #     framing on the BATTLEFIELD-to-hand bounce path would need a
-    #     new primitive for one card's mode);
-    # (2) mode 1 is a faithful, well-modeled counter — the existing
-    #     ``CounterTargetSpell(filter_types=frozenset({"Creature",
-    #     "Enchantment"}))`` exactly captures the printed scope (same
-    #     filter shape Warping Wail's mode 2 ``filter_types=frozenset
-    #     ({"Sorcery"})`` uses).
-    # Same parser-is-right precedent as Archenemy's Charm — claim a
-    # well-modeled mode of a multi-mode modal spell rather than
-    # leaving the spell unclaimed; the engine's mode-selection plumbing
-    # would normally route through ``ModalChooseOne`` but the
-    # whole-spell tier yields a single fixed effect when only one of
-    # the modes is modelable.
-    (
-        "Choose one —\n"
-        "• Counter target creature or enchantment spell.\n"
-        "• Return one or two target creatures and/or enchantments "
-        "you own to your hand."
-    ): CounterTargetSpell(
-        filter_types=frozenset({"Creature", "Enchantment"}),
-    ),
-    # Untimely Malfunction (Duskmourn) ``{1}{R}`` Instant — three-mode
-    # modal: ``• Destroy target artifact.``, ``• Change the target of
-    # target spell or ability with a single target.``, and ``• One or
-    # two target creatures can't block this turn.``. The static side
-    # simplifies to bare ``DestroyTargetArtifact()`` (mode 1) because:
-    # (1) the per-mode parser (``_parse_modal_choose_one``) can't
-    #     claim this spell — modes 2 and 3 don't parse as standalone
-    #     spell-effect phrases (the engine has no
-    #     ``ChangeTargetOfSpellOrAbility`` redirect primitive, and no
-    #     per-creature ``cant_block_this_turn`` flag — same gap as
-    #     Trial of Agony's can't-block rider);
-    # (2) mode 1 is a faithful, well-modeled artifact destruction —
-    #     ``DestroyTargetArtifact()`` exactly captures the printed
-    #     scope, the same primitive Untimely Malfunction's mode 1
-    #     exact-text would land on.
-    # Same parser-is-right precedent as Get Out — claim a well-modeled
-    # mode of a multi-mode modal rather than leaving the spell
-    # unclaimed; modes 2 and 3 are dropped because they have no
-    # per-mode primitive.
-    (
-        "Choose one —\n"
-        "• Destroy target artifact.\n"
-        "• Change the target of target spell or ability with a "
-        "single target.\n"
-        "• One or two target creatures can't block this turn."
-    ): DestroyTargetArtifact(),
+    # Get Out (Duskmourn) ``{U}{U}`` Instant — migrated to per-clause
+    # grammar in bespoke-spells3: the new "exactly-one-parseable-mode"
+    # fallback in ``_parse_modal_choose_one`` returns the first parseable
+    # mode's effect directly when exactly ONE mode parses and the rest
+    # are unrecognized. Mode 1 "Counter target creature or enchantment
+    # spell." parses as ``CounterTargetSpell(filter_types=frozenset(
+    # {"Creature","Enchantment"}))``. Mode 2 "Return one or two target
+    # creatures and/or enchantments you own to your hand." has no
+    # per-mode primitive, so the exactly-one fallback fires and returns
+    # mode 1's effect. Same parser-is-right simplification as before.
+    # Untimely Malfunction (Duskmourn) ``{1}{R}`` Instant — same fallback:
+    # mode 1 "Destroy target artifact." → ``DestroyTargetArtifact()``;
+    # modes 2+3 unrecognized → exactly-one fallback returns mode 1.
     # Unnerving Grasp (Duskmourn) ``{2}{U}`` Sorcery — migrated to
     # per-clause grammar in bespoke-spells3: two new grammar extensions
     # enable the migration:

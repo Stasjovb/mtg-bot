@@ -111,7 +111,7 @@ def test_bespoke_table_count():
     #   + Cerebral Download (surveil-X-artifact-count primitive)
     #   + Jump Scare (leading-UEOT + keywords + becomes-type-change dropper)
     #   + Depressurize (debuff-then-conditional-destroy multi-sentence literal)
-    # Additional removals in bespoke-spells3 branch (5 more, 17 remaining):
+    # Additional removals in bespoke-spells3 branch (7 more, 15 remaining):
     #   + Lithobraking (optional-sac-artifact-when-you-do compound)
     #   + Scrounge for Eternity (creature-or-Spacecraft+MV GY reanimate +
     #     Then-create-Lander rider)
@@ -121,8 +121,10 @@ def test_bespoke_table_count():
     #     three-sentence recognizer)
     #   + Unnerving Grasp (return-up-to-one-nonland-permanent optional bounce
     #     + Sequence.target_count_range() fix)
-    # 50 - 33 = 17 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 17
+    #   + Get Out (modal exactly-one-parseable fallback, mode 1)
+    #   + Untimely Malfunction (modal exactly-one-parseable fallback, mode 1)
+    # 50 - 35 = 15 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 15
 
 
 # ------------------------------------------------------------------ #

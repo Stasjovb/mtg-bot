@@ -93,9 +93,10 @@ def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more (Nexus of Fate, Green Sun's Zenith,
     # Cerebral Download, Jump Scare, Depressurize) → 22 remaining.
-    # bespoke-spells3 removes 5 more (Lithobraking, Scrounge for Eternity,
-    # Pull Through the Weft, Commune with Evil, Unnerving Grasp) → 17 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 17
+    # bespoke-spells3 removes 7 more (Lithobraking, Scrounge for Eternity,
+    # Pull Through the Weft, Commune with Evil, Unnerving Grasp, Get Out,
+    # Untimely Malfunction) → 15 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 15
 
 
 # ------------------------------------------------------------------ #

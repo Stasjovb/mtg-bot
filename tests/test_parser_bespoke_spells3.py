@@ -1,7 +1,7 @@
 """Tests for the bespoke-spells3 migration batch.
 
-This batch migrates five entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
-``parser.spell_builder`` by introducing seven grammar extensions:
+This batch migrates seven entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
+``parser.spell_builder`` by introducing nine grammar extensions:
 
 1. **``_SENTENCE_BOUNDARY_RE`` lookahead extension** — the negative
    lookahead in ``spell_builder._split_sentences`` is widened from
@@ -62,8 +62,23 @@ This batch migrates five entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    (dropping both the "up to two" count AND the nonland-permanent widening).
    Migrates: **Pull Through the Weft**.
 
-Total migration: 4 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
-Table shrinks from 22 to 18.
+6. **``_COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL`` recognizer**
+   (``effects.py``) — regex matching "counter target creature or enchantment
+   spell" → ``CounterTargetSpell(filter_types=frozenset({"Creature",
+   "Enchantment"}))``. Sibling to the existing artifact-or-enchantment
+   literal; enables Get Out's mode 1 to parse via the unified grammar.
+
+7. **``_parse_modal_choose_one`` exactly-one-parseable fallback**
+   (``spell_builder.py``) — when exactly ONE mode of a "Choose one —"
+   modal spell parses (and all others are unrecognized), the parser returns
+   that one mode's effect directly rather than ``ModalChooseOne``. Same
+   "parser-is-right" simplification the whole-spell table previously
+   hard-coded for Get Out and Untimely Malfunction. Only applies to
+   "Choose one —", NOT "Choose one or both —".
+   Migrates: **Get Out** (mode 1), **Untimely Malfunction** (mode 1).
+
+Total migration: 7 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 22 to 15.
 """
 
 from __future__ import annotations
@@ -71,18 +86,22 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.base import (
+    CounterTargetSpell,
     CreateToken,
     DealNDamageToEachCreature,
+    DestroyTargetArtifact,
     GainLife,
     LookTopNPutOneInHandRestToGraveyard,
+    ManifestDread,
     OptionalSacArtifactForEffect,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnTargetCreatureToOwnersHand,
     ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     Sequence,
 )
-from mtg_bot.cards.base import ManifestDread, ReturnTargetCreatureToOwnersHand
 from mtg_bot.cards.parser.effects import (
     _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO,
+    _COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL,
     _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE,
     _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV,
     _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED,
@@ -113,9 +132,10 @@ def _claimed_names() -> frozenset[str]:
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more → 22 remaining;
-    # bespoke-spells3 removes 5 more (Lithobraking, Scrounge for Eternity,
-    # Pull Through the Weft, Commune with Evil, Unnerving Grasp) → 17 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 17
+    # bespoke-spells3 removes 7 more (Lithobraking, Scrounge for Eternity,
+    # Pull Through the Weft, Commune with Evil, Unnerving Grasp, Get Out,
+    # Untimely Malfunction) → 15 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 15
 
 
 # ------------------------------------------------------------------ #
@@ -723,3 +743,105 @@ def test_unnerving_grasp_parses_via_per_clause_grammar():
         ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True, optional=True),
         ManifestDread(count=1),
     ))
+
+
+# ------------------------------------------------------------------ #
+# _COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL regex                #
+# ------------------------------------------------------------------ #
+
+def test_counter_creature_or_enchantment_regex_matches():
+    m = _COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL.match(
+        "counter target creature or enchantment spell"
+    )
+    assert m is not None
+
+
+def test_counter_creature_or_enchantment_parses_as_effect():
+    eff = _parse_effect("counter target creature or enchantment spell")
+    assert eff == CounterTargetSpell(
+        filter_types=frozenset({"Creature", "Enchantment"})
+    )
+
+
+def test_counter_creature_or_enchantment_does_not_match_bare_counter():
+    from mtg_bot.cards.parser.effects import _COUNTER_TARGET_SPELL
+    # The bare regex must not match the filter form (different anchoring).
+    # (This test just verifies the specific regex doesn't over-match.)
+    m = _COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL.match("counter target spell")
+    assert m is None
+
+
+# ------------------------------------------------------------------ #
+# Modal exactly-one-parseable fallback                               #
+# ------------------------------------------------------------------ #
+
+def test_modal_exactly_one_parseable_returns_that_mode():
+    # The exactly-one fallback returns the parseable mode's effect.
+    eff = _parse_spell_oracle_text(
+        "Choose one —\n"
+        "• Counter target creature or enchantment spell.\n"
+        "• Return one or two target creatures and/or enchantments you own to your hand.",
+        "Get Out",
+    )
+    assert eff == CounterTargetSpell(
+        filter_types=frozenset({"Creature", "Enchantment"})
+    )
+
+
+def test_modal_or_both_with_unrecognized_mode_returns_none():
+    # "Choose one or both —" with an unrecognized mode must NOT fall
+    # back — the or_both semantics would be lost.
+    eff = _parse_spell_oracle_text(
+        "Choose one or both —\n"
+        "• Counter target creature or enchantment spell.\n"
+        "• Return one or two target creatures and/or enchantments you own to your hand.",
+        "Bogus Or Both",
+    )
+    assert eff is None
+
+
+# ------------------------------------------------------------------ #
+# Get Out migration                                                   #
+# ------------------------------------------------------------------ #
+
+def test_get_out_claimed_by_parser():
+    assert "Get Out" in _claimed_names()
+
+
+def test_get_out_no_bespoke_entry():
+    assert _try_whole_spell_exact_text(
+        "Choose one —\n"
+        "• Counter target creature or enchantment spell.\n"
+        "• Return one or two target creatures and/or enchantments you own to your hand."
+    ) is None
+
+
+def test_get_out_engine_class():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Get Out"]
+    assert p.spell_effect == CounterTargetSpell(
+        filter_types=frozenset({"Creature", "Enchantment"})
+    )
+
+
+# ------------------------------------------------------------------ #
+# Untimely Malfunction migration                                      #
+# ------------------------------------------------------------------ #
+
+def test_untimely_malfunction_claimed_by_parser():
+    assert "Untimely Malfunction" in _claimed_names()
+
+
+def test_untimely_malfunction_no_bespoke_entry():
+    assert _try_whole_spell_exact_text(
+        "Choose one —\n"
+        "• Destroy target artifact.\n"
+        "• Change the target of target spell or ability with a single target.\n"
+        "• One or two target creatures can't block this turn."
+    ) is None
+
+
+def test_untimely_malfunction_engine_class():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Untimely Malfunction"]
+    assert p.spell_effect == DestroyTargetArtifact()

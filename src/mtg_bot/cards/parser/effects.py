@@ -692,6 +692,19 @@ _COUNTER_TARGET_SORCERY_SPELL = re.compile(r"^counter target sorcery spell$")
 _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
+# "Counter target creature or enchantment spell." — Get Out's mode 1
+# (Duskmourn). Same engine class as the bare counterspell, with a
+# ``filter_types=frozenset({"Creature", "Enchantment"})`` gate. Tried
+# BEFORE the bare ``counter target spell`` regex so the more-specific
+# filter shape wins. Both shapes return the same engine class, just
+# with different ``filter_types`` frozensets. Sibling to the
+# ``artifact or enchantment`` literal above; a future "counter target
+# instant spell" or "counter target planeswalker spell" would land as
+# additional sibling literals (per the deferred-generalization comment
+# on ``_COUNTER_TARGET_SORCERY_SPELL``).
+_COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL = re.compile(
+    r"^counter target creature or enchantment spell$"
+)
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
 # "Exile target creature or planeswalker." — Archenemy's Charm mode 1.
 # Planeswalkers aren't fully modeled in the EoE pool today; maps to the
@@ -3752,6 +3765,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     ) is not None:
         return CounterTargetSpell(
             filter_types=frozenset({"Artifact", "Enchantment"})
+        )
+    # ``counter target creature or enchantment spell`` — Get Out's mode 1
+    # (Duskmourn). Sibling to the artifact-or-enchantment literal above;
+    # tried BEFORE the bare ``counter target spell`` regex so the filter
+    # shape wins. Same engine class, different filter_types frozenset.
+    if _COUNTER_TARGET_CREATURE_OR_ENCHANTMENT_SPELL.match(phrase) is not None:
+        return CounterTargetSpell(
+            filter_types=frozenset({"Creature", "Enchantment"})
         )
     # ``counter target spell unless its controller pays {N}`` — Mana
     # Leak shape (Divert Disaster, Don't Make a Sound). Tried BEFORE

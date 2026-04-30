@@ -204,20 +204,18 @@ def test_midnight_mayhem_mana_cost():
 # ---------- Get Out ----------
 
 def test_get_out_claimed_by_parser():
-    # Get Out ``{U}{U}`` Instant — claimed via the new whole-spell
-    # exact-text dispatch entry that simplifies the printed text
-    # (modal: counter creature/enchantment spell OR return
-    # creatures/enchantments to hand) to mode 1's
-    # ``CounterTargetSpell(filter_types=frozenset({"Creature",
-    # "Enchantment"}))``.
+    # Get Out ``{U}{U}`` Instant — now claimed via the per-clause modal
+    # grammar (migrated from the whole-spell exact-text table in
+    # bespoke-spells3). The new "exactly-one-parseable-mode" fallback
+    # in ``_parse_modal_choose_one`` returns mode 1's effect when mode 2
+    # is unrecognized.
     assert "Get Out" in _claimed_names()
 
 
 def test_get_out_engine_class():
-    # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the simplified ``CounterTargetSpell`` engine class with the
-    # creature-or-enchantment filter — base mechanic preserved
-    # (filtered counter), bounce mode dropped per parser-is-right.
+    # Mode 1 "Counter target creature or enchantment spell." parses as
+    # ``CounterTargetSpell(filter_types=frozenset({"Creature",
+    # "Enchantment"}))``. Mode 2 unrecognized → exactly-one fallback.
     from mtg_bot.cards.base import CounterTargetSpell
 
     parser = OracleParserCardSource()
@@ -245,18 +243,16 @@ def test_get_out_mana_cost():
 # ---------- Untimely Malfunction ----------
 
 def test_untimely_malfunction_claimed_by_parser():
-    # Untimely Malfunction ``{1}{R}`` Instant — claimed via the new
-    # whole-spell exact-text dispatch entry that simplifies the
-    # printed text (3-mode modal: destroy artifact / redirect spell /
-    # creatures can't block) to mode 1's ``DestroyTargetArtifact()``.
+    # Untimely Malfunction ``{1}{R}`` Instant — now claimed via the per-
+    # clause modal grammar (migrated from whole-spell exact-text in
+    # bespoke-spells3). The "exactly-one-parseable-mode" fallback returns
+    # mode 1's effect when modes 2 and 3 are unrecognized.
     assert "Untimely Malfunction" in _claimed_names()
 
 
 def test_untimely_malfunction_engine_class():
-    # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the simplified ``DestroyTargetArtifact()`` engine class — base
-    # mechanic preserved (artifact destruction), modes 2 and 3
-    # dropped per parser-is-right.
+    # Mode 1 "Destroy target artifact." parses as ``DestroyTargetArtifact()``.
+    # Modes 2 and 3 unrecognized → exactly-one fallback returns mode 1.
     from mtg_bot.cards.base import DestroyTargetArtifact
 
     parser = OracleParserCardSource()
