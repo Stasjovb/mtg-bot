@@ -55,7 +55,11 @@ def test_reroute_systems_mode_0_grants_indestructible_to_creature():
     state.battlefield.append(bear)
 
     spell = _PRINTINGS["Reroute Systems"]
-    spell.spell_effect.resolve(state, 0, (("permanent", bear.id),))
+    # ``Effect._enumerate_for_filter`` tags creatures as ``"creature"``
+    # under the unified Pump migration; a ``"permanent"`` tag for a
+    # creature would no longer appear in the chosen mode's legal-
+    # targets and the modal layer would silently fizzle it.
+    spell.spell_effect.resolve(state, 0, (("creature", bear.id),))
 
     assert "indestructible" in effective_keywords(state, bear)
 
@@ -96,9 +100,9 @@ def test_reroute_systems_mode_0_can_target_opponents_permanent():
 
     spell = _PRINTINGS["Reroute Systems"]
     legal = spell.spell_effect.legal_targets(state, 0)
-    assert ("permanent", opp_bear.id) in legal
+    assert ("creature", opp_bear.id) in legal
 
-    spell.spell_effect.resolve(state, 0, (("permanent", opp_bear.id),))
+    spell.spell_effect.resolve(state, 0, (("creature", opp_bear.id),))
     assert "indestructible" in effective_keywords(state, opp_bear)
 
 
@@ -220,7 +224,10 @@ def test_pump_artifact_or_creature_legal_targets_filters_lands():
         granted_keywords=frozenset({"indestructible"}),
     )
     legal = effect.legal_targets(state, 0)
-    assert ("permanent", bear.id) in legal
+    # Under the unified ``Pump`` migration, creatures get the
+    # ``"creature"`` engine kind tag (Wild Bear) while non-creature
+    # artifacts get ``"permanent"`` (Lander token).
+    assert ("creature", bear.id) in legal
     assert ("permanent", lander.id) in legal
     assert len(legal) == 2
 
