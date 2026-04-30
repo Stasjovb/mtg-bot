@@ -270,6 +270,31 @@ class Agent:
         """
         return legend_object_ids[0]
 
+    def choose_replacement_order(
+        self,
+        candidates: list,
+        state: "GameState",
+        affected_player_id: int,
+    ) -> tuple[int, ...]:
+        """CR 616.1 — when multiple replacement effects apply to the
+        same event, the affected player chooses the order. ``candidates``
+        is the ordered list of :class:`mtg_bot.effects.modifiers
+        .ReplacementEffect` instances (the dispatcher pre-collected
+        them); return a tuple of indices specifying the application
+        order.
+
+        Default: identity ordering — apply in the order the
+        dispatcher collected them (which is itself sorted by source
+        object id for determinism). Concrete agents override when a
+        smarter ordering matters (e.g., apply Prevent first to short-
+        circuit subsequent Multiply transforms when that's beneficial
+        to the affected player). Implementations must return a tuple
+        of indices in ``range(len(candidates))``; missing or out-of-
+        range entries are filled in by the dispatcher's sanitisation
+        pass.
+        """
+        return tuple(range(len(candidates)))
+
 
 @dataclass
 class RandomAgent(Agent):
