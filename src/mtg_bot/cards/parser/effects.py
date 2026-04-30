@@ -35,6 +35,7 @@ from mtg_bot.cards.base import (
     DealDamageToTargetOpponent,
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
+    DefendingPlayerLosesHalfLifeRoundedUp,
     DestroyAllCreatures,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
@@ -1706,6 +1707,19 @@ _EACH_OPPONENT_DISCARDS = re.compile(
 _EACH_OPPONENT_SACRIFICES_CREATURE = re.compile(
     r"^each opponent sacrifices a nontoken creature of their choice$"
 )
+# "Defending player loses half their life, rounded up." —
+# Alpharael, Stonechosen's Void attack trigger effect (after the
+# ability-word prefix and intervening-if gate are stripped by the
+# trigger parser). The engine simplifies "defending player" to
+# "each opponent" via ``DefendingPlayerLosesHalfLifeRoundedUp``
+# — correct in 2-player, documented approximation in multiplayer
+# (per the engine class docstring). Literal-line recognizer:
+# Alpharael, Stonechosen is the only card in the pool with this
+# exact surface today; broader generalization deferred until a
+# second card with a "half life" effect shape ships.
+_DEFENDING_PLAYER_LOSES_HALF_LIFE_ROUNDED_UP = re.compile(
+    r"^defending player loses half their life, rounded up$"
+)
 # "Defending player mills N cards" — Specimen Freighter's attack
 # trigger body. The defending-player surface is the multiplayer-aware
 # wording for an attack-trigger mill; the engine simplifies this to
@@ -3053,6 +3067,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``choose_sacrifice`` (skipping opponents with no legal
         # nontoken creature).
         return EachOpponentSacrificesCreature()
+    if _DEFENDING_PLAYER_LOSES_HALF_LIFE_ROUNDED_UP.match(phrase) is not None:
+        # ``defending player loses half their life, rounded up`` —
+        # Alpharael, Stonechosen's Void attack trigger. The engine
+        # simplifies "defending player" to "each opponent" in
+        # ``DefendingPlayerLosesHalfLifeRoundedUp`` — correct in
+        # 2-player, documented approximation in multiplayer. See
+        # the regex comment for the deferred-generalization plan.
+        return DefendingPlayerLosesHalfLifeRoundedUp()
     m = _DEFENDING_PLAYER_MILLS_N_CARDS.match(phrase)
     if m is not None:
         # ``defending player mills N cards`` — Specimen Freighter's

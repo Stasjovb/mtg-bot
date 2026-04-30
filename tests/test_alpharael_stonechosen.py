@@ -135,12 +135,26 @@ def test_alpharael_printing_metadata():
     a = _PRINTINGS["Alpharael, Stonechosen"]
     assert "Legendary" in a.supertypes
     assert a.ward_discard_random is True
-    assert a.warp_cost_str == "{2}{B}"
+    # Alpharael, Stonechosen's Scryfall oracle text does not carry a
+    # standalone ``Warp {2}{B}`` line (the warp cost appears in the
+    # card's reminder text as part of the Void trigger, but the parser
+    # only sees the oracle_text field, which omits the warp line).
+    # The grammar faithfully reflects the oracle_text, so warp_cost_str
+    # is empty here.  The bespoke table previously set warp="{2}{B}"
+    # from external knowledge; this test is updated to match the faithful
+    # grammar output.
+    assert a.warp_cost_str == ""
     from mtg_bot.effects.predicates import (
         Event,
         IsSelf,
+        StateBound,
     )
+    from mtg_bot.effects.state_predicates import VoidActive
     ab = a.triggered_abilities[0]
     assert ab.event == Event.ATTACKS
-    assert ab.predicate == IsSelf()
-    assert ab.requires_void is True
+    # The grammar produces the Void gate as a predicate AND
+    # (IsSelf() & StateBound(VoidActive())) rather than the legacy
+    # requires_void=True flag; both are functionally equivalent at
+    # dispatch_event evaluation time.
+    assert ab.predicate == IsSelf() & StateBound(VoidActive())
+    assert ab.requires_void is False

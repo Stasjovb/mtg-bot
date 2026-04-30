@@ -67,7 +67,9 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ConditionalIfYouGainedLifeAtLeast,
     ConditionalOnTappedCreatures,
+    DrawCards,
     Effect,
     PutPlusOneCounterOnSelf,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
@@ -331,6 +333,32 @@ _VOID_PREFIX = "Void — "
 _VOID_GATE_PREFIX = (
     "if a nonland permanent left the battlefield this turn or "
     "a spell was warped this turn, "
+)
+
+
+# Trailing "if you've gained N or more life this turn" suffix on the
+# body of an ``At the beginning of <when>, <inner-effect> if
+# you've gained N or more life this turn.`` line. When the body
+# ends with this phrase (after the inner effect), the inner effect
+# is wrapped in ``ConditionalIfYouGainedLifeAtLeast(threshold=N,
+# inner=...)`` and the trigger predicate is left at whatever the
+# time-condition phrasebook yielded (typically ``Controlled(YOU)``).
+#
+# This mirrors the static-registry shape for Haliya, Guided by Light
+# exactly: the static wraps ``DrawCards(1)`` in
+# ``ConditionalIfYouGainedLifeAtLeast(threshold=3, inner=...)``. The
+# gate sits AFTER the effect text, so the standard middle-clause
+# intervening-if regex can't pick it up — detecting it here as a
+# suffix keeps the body parser local. The threshold N is captured;
+# the inner effect is the prefix before ``" if you've gained "``.
+#
+# Currently only the ``draw a card`` inner-effect form ships in the
+# EoE/DSK pool (Haliya, Guided by Light). The parser recursively
+# calls ``_parse_effect_phrase`` on the inner piece so any effect
+# the grammar supports can serve as the inner body; the grammar
+# extension is free.
+_GAINED_LIFE_TRAILING_IF_SUFFIX = re.compile(
+    r"^(.+) if you've gained (\d+) or more life this turn$"
 )
 
 
@@ -956,6 +984,20 @@ _COLLAPSED_PREDICATE_TRIGGER_PHRASES: dict[
     # explicitly includes self. The bespoke modeled this as two separate
     # ``TriggeredAbility`` entries with identical effects; the collapsed
     # form produces one, firing once per entering Kavu you control.
+    # ``Whenever this creature or another creature or artifact you
+    # control enters`` (Haliya, Guided by Light). The two arms
+    # (``this creature`` + ``another creature or artifact you
+    # control``) collapse to a single ``Controlled(YOU) & (creature
+    # OR artifact)`` predicate — no ``~IsSelf()`` because the oracle
+    # text's leading "Haliya" arm explicitly includes the source itself.
+    # The bespoke table used ``~IsSelf()`` (incorrectly excluding self-
+    # entry); the faithful reading includes it, matching the printed
+    # oracle: "Whenever Haliya or another creature or artifact you
+    # control enters".
+    "this creature or another creature or artifact you control enters": (
+        Event.ENTERS,
+        Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU),
+    ),
 }
 
 
@@ -1291,6 +1333,30 @@ def _parse_at_the_beginning_of_line(
             event=event, predicate=predicate,
             effect=ConditionalOnTappedCreatures(
                 effect=inner, min_count=2,
+            ),
+        )
+    # Trailing-if-gained-life variant: ``<inner-effect> if you've
+    # gained N or more life this turn``. Detect the suffix, parse the
+    # inner effect through the unified grammar, and wrap in
+    # ``ConditionalIfYouGainedLifeAtLeast(threshold=N, inner=...)``.
+    # Tried BEFORE the bare body parse so the more-specific shape wins.
+    # Mirrors the static-registry layout for Haliya, Guided by Light
+    # exactly: the gate sits AFTER the effect text and is an effect
+    # wrapper (not a predicate AND on the trigger event). The inner
+    # effect parses via ``_parse_effect_phrase`` so any supported effect
+    # can serve as the body; ``draw a card`` is the only EoE consumer
+    # today but the grammar extension is free.
+    gained_m = _GAINED_LIFE_TRAILING_IF_SUFFIX.match(body)
+    if gained_m is not None:
+        inner_phrase = gained_m.group(1)
+        threshold = int(gained_m.group(2))
+        inner = _parse_effect_phrase(inner_phrase)
+        if inner is None:
+            return None
+        return TriggeredAbility(
+            event=event, predicate=predicate,
+            effect=ConditionalIfYouGainedLifeAtLeast(
+                threshold=threshold, inner=inner,
             ),
         )
     effect = _parse_effect_phrase(body)
