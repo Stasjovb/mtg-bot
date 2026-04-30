@@ -249,6 +249,74 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
 
 
 @dataclass(frozen=True)
+class PutPlusOneCounters(Effect):
+    """Unified put-+1/+1-counters primitive driven by ``targets``.
+
+    Sibling of :class:`Destroy` / :class:`Exile` / :class:`Tap` /
+    :class:`Pump` / :class:`Bounce` for the +1/+1 counter family.
+    The unified resolve walks each slot, re-verifies legality at
+    resolution per CR 608.2b, and adds ``amount`` +1/+1 counters to
+    each surviving target via ``add_plus_one_counters`` — the
+    counter-doubling replacement effect on the recipient's
+    controller is honored inside the helper, not here.
+
+    Variants with extra rider effects (granted keywords UEOT,
+    multi-slot up-to-N, sweeps, bespoke amount) override ``resolve``
+    or stay on the old-shape ``Effect`` path.
+    """
+
+    amount: int = 1
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.game import add_plus_one_counters
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(
+                            state, chosen, action="counter placement",
+                        )
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                add_plus_one_counters(state, obj, self.amount)
+                state.log.append(
+                    f"{obj.printing.name} gets {self.amount} +1/+1 "
+                    f"counter(s) (now {obj.plus_one_counters})"
+                )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        if self.amount == 1:
+            return f"put a +1/+1 counter on {_describe_targets(self.targets)}"
+        return (
+            f"put {self.amount} +1/+1 counters on "
+            f"{_describe_targets(self.targets)}"
+        )
+
+
+@dataclass(frozen=True)
 class Bounce(Effect):
     """Unified return-to-owner's-hand primitive driven by ``targets``.
 
@@ -7412,58 +7480,27 @@ class DestroyTargetNonlandPermanentWithLanderForController(Effect):
 
 
 @dataclass(frozen=True)
-class PutPlusOneCounterOnTargetCreature(Effect):
-    """Put ``amount`` +1/+1 counter(s) on any target creature (yours or theirs).
+class PutPlusOneCounterOnTargetCreature(PutPlusOneCounters):
+    """``PutPlusOneCounters`` constructor sugar for "put N +1/+1
+    counter(s) on target creature" (Honor's bare form).
 
-    Matches oracle text like "put a +1/+1 counter on target creature" (Honor).
-    Unrestricted version of PutPlusOneCounterOnCreatureYouControl.
-
-    ``attacking_only=True`` restricts the legal-target pool to currently-
-    attacking creatures (Hospital Room half — "put a +1/+1 counter on
-    target attacking creature").
+    Filter is :class:`IsCreature` (& :class:`IsAttacking` when
+    ``attacking_only`` is True — Hospital Room half).
     """
 
-    amount: int = 1
     attacking_only: bool = False
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-            and (not self.attacking_only or o.attacking)
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None:
-            return
-        from mtg_bot.game import add_plus_one_counters
-        add_plus_one_counters(state, obj, self.amount)
-        state.log.append(
-            f"{obj.printing.name} gets a +1/+1 counter "
-            f"(now {obj.plus_one_counters})"
-        )
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsAttacking, IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        f = IsCreature() & IsAttacking() if self.attacking_only else IsCreature()
+        object.__setattr__(self, "targets", (TargetSpec(f),))
 
     def describe(self) -> str:
+        scope = "target attacking creature" if self.attacking_only else "target creature"
         if self.amount == 1:
-            return "put a +1/+1 counter on target creature"
-        return f"put {self.amount} +1/+1 counters on target creature"
+            return f"put a +1/+1 counter on {scope}"
+        return f"put {self.amount} +1/+1 counters on {scope}"
 
 
 
@@ -7615,48 +7652,27 @@ class PutPlusOneCounterOnSelf(Effect):
 
 
 @dataclass(frozen=True)
-class PutPlusOneCounterOnOpponentsCreature(Effect):
-    """Put a +1/+1 counter on a creature an opponent controls. Matches
-    Sunset Saboteur's attacks trigger — unusual flavor (buffing an
-    opponent's creature in exchange for the trigger's other effects).
+class PutPlusOneCounterOnOpponentsCreature(PutPlusOneCounters):
+    """``PutPlusOneCounters`` constructor sugar for "put a +1/+1 counter
+    on target creature an opponent controls" (Sunset Saboteur's
+    attacks trigger).
+
+    Filter is ``IsCreature() & ControlledByOpponent()``. The counter-
+    doubling replacement (Loading Zone-style) is gated on the
+    recipient's controller per the ``add_plus_one_counters`` helper —
+    a doubler controlled by the spell's caster (the opponent of the
+    target's controller) doesn't fire because doublers check the
+    receiving creature's controller.
     """
 
-    amount: int = 1
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.controller_id != controller_id
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent, IsCreature,
         )
-        if obj is None or obj.controller_id == controller_id:
-            return
-        # No doubling here: the counter goes onto an OPPONENT's
-        # creature; Loading Zone belongs to the caster, not the
-        # opponent. Doublers check the recipient's controller.
-        from mtg_bot.game import add_plus_one_counters
-        add_plus_one_counters(state, obj, self.amount)
-        state.log.append(
-            f"{obj.printing.name} gets a +1/+1 counter "
-            f"(now {obj.plus_one_counters})"
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & ControlledByOpponent()),),
         )
 
     def describe(self) -> str:
@@ -7665,47 +7681,21 @@ class PutPlusOneCounterOnOpponentsCreature(Effect):
 
 
 @dataclass(frozen=True)
-class PutPlusOneCounterOnCreatureYouControl(Effect):
-    """Put N +1/+1 counter(s) on target creature you control.
+class PutPlusOneCounterOnCreatureYouControl(PutPlusOneCounters):
+    """``PutPlusOneCounters`` constructor sugar for "put N +1/+1
+    counter(s) on target creature you control" (Rayblade Trooper).
 
-    Matches oracle text like "put a +1/+1 counter on target creature you
-    control" (Rayblade Trooper). Legal targets are every creature the
-    ability's controller controls.
+    Filter is ``IsCreature() & ControlledByYou()``.
     """
 
-    amount: int = 1
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.controller_id == controller_id
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByYou, IsCreature,
         )
-        if obj is None:
-            return
-        from mtg_bot.game import add_plus_one_counters
-        add_plus_one_counters(state, obj, self.amount)
-        state.log.append(
-            f"{obj.printing.name} gets a +1/+1 counter "
-            f"(now {obj.plus_one_counters})"
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & ControlledByYou()),),
         )
 
     def describe(self) -> str:
