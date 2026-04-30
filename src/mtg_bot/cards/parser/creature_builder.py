@@ -333,19 +333,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Anticausal Vestige {6} 7/5 Eldrazi — warp {4}.
-        # When it leaves the battlefield: draw + may put permanent to bf.
-        "Anticausal Vestige": make_creature(
-            "Anticausal Vestige", "{6}", 7, 5,
-            subtypes=("Eldrazi",),
-            warp="{4}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
-                    effect=AnticausalVestigeLeavesEffect(),
-                ),
-            ),
-        ),
         # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
         # ETB: another creature you control gets +2/+0 and gains
         # "when this creature dies, return it to bf tapped".
@@ -398,18 +385,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                         Subject(None, HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()
                     ),
                     effect=PossibilityTechnicianETBEffect(),
-                ),
-            ),
-        ),
-        # Terrapact Intimidator {1}{R} 2/1 Kavu Scout.
-        # ETB: opponent may have you create 2 Landers; if not, put
-        # 2 +1/+1 counters on this creature.
-        "Terrapact Intimidator": make_creature(
-            "Terrapact Intimidator", "{1}{R}", 2, 1,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=TerrapactIntimidatorETBEffect(),
                 ),
             ),
         ),

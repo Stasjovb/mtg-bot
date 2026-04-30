@@ -17,6 +17,7 @@ import re
 
 from mtg_bot.cards.base import (
     AddManaToPool,
+    AnticausalVestigeLeavesEffect,
     CounterTargetSpell,
     CreateLanderAndScheduleSacrifice,
     CreateToken,
@@ -84,6 +85,7 @@ from mtg_bot.cards.base import (
     OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    TerrapactIntimidatorETBEffect,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
@@ -2394,6 +2396,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         "in a random order"
     ):
         return HouseCartographerSurvivalEffect()
+    # Anticausal Vestige's LTB body (only EoE card with the
+    # "draw + may put permanent MV ≤ lands from hand onto BF tapped"
+    # shape; broader grammar deferred until a second example exists).
+    # The MV gate is dynamic (evaluated at resolve time against the
+    # controller's current land count), which the single-effect grammar
+    # can't express as a parameterized recognizer today.
+    if phrase == (
+        "draw a card, then you may put a permanent card with mana value "
+        "less than or equal to the number of lands you control from your "
+        "hand onto the battlefield tapped"
+    ):
+        return AnticausalVestigeLeavesEffect()
     # Fanatic of the Harrowing's ETB body (only DSK card with the
     # "each player discards + reflexive draw if you did" shape; broader
     # grammar deferred until a second example exists). The reflexive
@@ -2416,6 +2430,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         "When you do, this creature deals 2 damage to any target"
     ):
         return BoilerbilgesRipperETBEffect()
+    # Terrapact Intimidator's ETB body (only EoE card with the
+    # "opponent may have you create tokens; if not, self-counters"
+    # shape; broader grammar deferred until a second example exists).
+    # The "If they don't" reflexive gate is an anaphoric reference to
+    # the opponent's choice that the sentence-splitting grammar can't
+    # model as a standalone clause.
+    if phrase == (
+        "target opponent may have you create two Lander tokens. "
+        "If they don't, put two +1/+1 counters on this creature"
+    ):
+        return TerrapactIntimidatorETBEffect()
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
