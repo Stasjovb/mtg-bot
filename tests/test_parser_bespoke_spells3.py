@@ -1,0 +1,435 @@
+"""Tests for the bespoke-spells3 migration batch.
+
+This batch migrates two entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
+``parser.spell_builder`` by introducing four grammar extensions:
+
+1. **``_SENTENCE_BOUNDARY_RE`` lookahead extension** — the negative
+   lookahead in ``spell_builder._split_sentences`` is widened from
+   ``(?!If you do,)`` to ``(?!(?:If|When) you do,)`` so the splitter
+   does NOT break the ``You may sacrifice an artifact. When you do, …``
+   compound primitive at the embedded ". W" boundary (same reason
+   ``If you do,`` was already guarded — Lithobraking prints
+   "Then you may sacrifice an artifact. When you do, …").
+
+2. **``Then`` prefix stripping in ``_normalize_spell_effect_phrase``**
+   (``effects.py``) — a leading "Then " / "then " connective is
+   stripped from each phrase before it reaches ``_parse_effect``.
+   This handles split sentences produced by ``_split_sentences`` that
+   begin with the sequencing connector (e.g. Scrounge for Eternity's
+   "Then create a Lander token." after the sentence splitter carves
+   the preceding clause off).  Also strips ``<Name> `` from the
+   consequent clause ``". When/If you do, <Name> <effect>."`` so
+   multi-sentence compound primitives whose inner consequence names
+   the card as the grammatical subject (Lithobraking's "When you do,
+   Lithobraking deals 2 damage to each creature") reach ``_parse_effect``
+   in normalized form.
+
+3. **``_YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO`` recognizer** (``effects.py``)
+   — regex ``^(?:then )?you may sacrifice an artifact\\. When you do,
+   (.+)$`` mapping to
+   ``OptionalSacArtifactForEffect(inner_effect=parsed_inner)``.
+   The inner tail is parsed recursively by ``_parse_effect``; if it
+   fails the whole recognizer rejects (no silent drop).
+   Migrates: **Lithobraking** (second clause of the two-clause Sequence;
+   the first clause "Create a Lander token." parses via the existing
+   ``_CREATE_BARE_NAME_TOKEN``).
+
+4. **``_RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV``
+   recognizer** (``effects.py``) — regex matching "return target creature
+   or Spacecraft card with mana value N or less from your graveyard to
+   the battlefield" → ``ReturnCreatureFromYourGraveyardToBattlefield(
+   or_spacecraft=True, max_mv=N)``.  Combines the existing
+   ``or_spacecraft`` and ``max_mv`` flags that previously only appeared
+   independently.
+   Migrates: **Scrounge for Eternity** (first clause of the two-clause
+   Sequence; the second clause "Then create a Lander token." is claimed
+   by extension #2 + ``_CREATE_BARE_NAME_TOKEN``). Note: the new
+   per-clause parse is MORE faithful than the previous whole-spell
+   simplification (which dropped the ``or Spacecraft`` widening, the
+   ``max_mv=5`` cap, and the Lander rider entirely, returning only the
+   bare ``ReturnCreatureFromYourGraveyardToBattlefield()``).
+
+Total migration: 2 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 22 to 20.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from mtg_bot.cards.base import (
+    CreateToken,
+    DealNDamageToEachCreature,
+    OptionalSacArtifactForEffect,
+    ReturnCreatureFromYourGraveyardToBattlefield,
+    Sequence,
+)
+from mtg_bot.cards.parser.effects import (
+    _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO,
+    _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV,
+    _normalize_spell_effect_phrase,
+    _parse_effect,
+    _parse_spell_effect_phrase,
+)
+from mtg_bot.cards.parser.source import OracleParserCardSource
+from mtg_bot.cards.parser.spell_builder import (
+    _SENTENCE_BOUNDARY_RE,
+    _split_sentences,
+    _try_whole_spell_exact_text,
+    _WHOLE_SPELL_EXACT_TEXT,
+    _parse_spell_oracle_text,
+)
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+
+
+def _claimed_names() -> frozenset[str]:
+    return frozenset(OracleParserCardSource().claimed_names)
+
+
+# ------------------------------------------------------------------ #
+# Table-size regression                                               #
+# ------------------------------------------------------------------ #
+
+def test_bespoke_table_count():
+    # bespoke-spells1 removed 23 entries (27 remaining);
+    # bespoke-spells2 removes 5 more → 22 remaining;
+    # bespoke-spells3 removes 2 more (Lithobraking, Scrounge for Eternity)
+    # → 20 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 20
+
+
+# ------------------------------------------------------------------ #
+# _SENTENCE_BOUNDARY_RE — "When you do," guard                       #
+# ------------------------------------------------------------------ #
+
+def test_sentence_boundary_does_not_split_before_when_you_do():
+    # "Then you may sacrifice an artifact. When you do, …" must NOT be
+    # split at the ". W" boundary — the "When you do," guard in the
+    # negative lookahead prevents it.
+    line = (
+        "Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature."
+    )
+    pieces = _SENTENCE_BOUNDARY_RE.split(line)
+    assert len(pieces) == 1
+
+
+def test_sentence_boundary_does_not_split_before_if_you_do():
+    # Legacy guard — "If you do," must still not be split (regression).
+    line = "You may discard a card. If you do, draw a card."
+    pieces = _SENTENCE_BOUNDARY_RE.split(line)
+    assert len(pieces) == 1
+
+
+def test_sentence_boundary_splits_normal_boundaries():
+    # A normal two-sentence line (no If/When-you-do) still splits.
+    line = "Create a Lander token. Then you gain 1 life."
+    # "Then you gain …" starts with "Then" — not guarded → splits.
+    pieces = _SENTENCE_BOUNDARY_RE.split(line)
+    assert len(pieces) == 2
+
+
+def test_split_sentences_keeps_when_you_do_compound_whole():
+    # End-to-end: the multi-sentence Lithobraking body splits at
+    # "Create a Lander token. / Then you may …" but NOT at
+    # "Then you may … / When you do, …".
+    oracle = (
+        "Create a Lander token. "
+        "Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature."
+    )
+    sentences = _split_sentences(oracle)
+    assert sentences == [
+        "Create a Lander token.",
+        "Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature.",
+    ]
+
+
+# ------------------------------------------------------------------ #
+# _normalize_spell_effect_phrase — "Then" prefix stripping           #
+# ------------------------------------------------------------------ #
+
+def test_normalize_strips_then_prefix_capital():
+    # "Then create a Lander token." → "create a Lander token"
+    normalized = _normalize_spell_effect_phrase(
+        "Then create a Lander token.", "Scrounge for Eternity"
+    )
+    assert normalized == "create a Lander token"
+
+
+def test_normalize_strips_then_prefix_lower():
+    # "then create a Lander token." → "create a Lander token"
+    normalized = _normalize_spell_effect_phrase(
+        "then create a Lander token.", "SomeCard"
+    )
+    assert normalized == "create a Lander token"
+
+
+def test_normalize_strips_name_from_when_you_do_consequent():
+    # "Then you may sacrifice an artifact. When you do, Lithobraking
+    # deals 2 damage to each creature." → inner name stripped from
+    # the consequent clause.
+    normalized = _normalize_spell_effect_phrase(
+        "Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature.",
+        "Lithobraking",
+    )
+    assert normalized == (
+        "you may sacrifice an artifact. "
+        "When you do, deals 2 damage to each creature"
+    )
+
+
+def test_normalize_does_not_strip_then_from_middle():
+    # "Then" in the middle of a phrase (not at the start) must NOT
+    # be stripped — only a leading "Then " connective is removed.
+    normalized = _normalize_spell_effect_phrase(
+        "Draw a card, then discard a card.",
+        "SomeCard",
+    )
+    # Strip trailing period only; inner "then" is untouched.
+    assert normalized == "draw a card, then discard a card"
+
+
+# ------------------------------------------------------------------ #
+# _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO regex                            #
+# ------------------------------------------------------------------ #
+
+def test_you_may_sac_artifact_when_you_do_matches_lithobraking():
+    m = _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO.match(
+        "you may sacrifice an artifact. When you do, "
+        "deals 2 damage to each creature"
+    )
+    assert m is not None
+    assert m.group(1) == "deals 2 damage to each creature"
+
+
+def test_you_may_sac_artifact_when_you_do_matches_with_then_prefix():
+    # Optional leading "then " accepted.
+    m = _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO.match(
+        "then you may sacrifice an artifact. When you do, "
+        "deals 2 damage to each creature"
+    )
+    assert m is not None
+
+
+def test_you_may_sac_artifact_when_you_do_no_match_no_when():
+    # Without "When you do," the pattern must not match.
+    m = _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO.match(
+        "you may sacrifice an artifact"
+    )
+    assert m is None
+
+
+def test_you_may_sac_artifact_when_you_do_parses_as_effect():
+    # End-to-end via _parse_effect.
+    eff = _parse_effect(
+        "you may sacrifice an artifact. When you do, "
+        "deals 2 damage to each creature"
+    )
+    assert eff == OptionalSacArtifactForEffect(
+        inner_effect=DealNDamageToEachCreature(amount=2)
+    )
+
+
+def test_you_may_sac_artifact_when_you_do_rejects_unknown_inner():
+    # If the inner effect doesn't parse, the whole pattern rejects
+    # rather than returning a partial or None-inner result.
+    eff = _parse_effect(
+        "you may sacrifice an artifact. When you do, "
+        "cast a spell for free"  # Not a recognized effect.
+    )
+    assert eff is None
+
+
+# ------------------------------------------------------------------ #
+# _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV
+# ------------------------------------------------------------------ #
+
+def test_return_creature_or_spacecraft_with_mv_regex_matches():
+    m = _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(
+        "return target creature or Spacecraft card with mana value 5 or less "
+        "from your graveyard to the battlefield"
+    )
+    assert m is not None
+    assert m.group(1) == "5"
+
+
+def test_return_creature_or_spacecraft_with_mv_regex_parameterized():
+    # A different MV cap should also match — verifying the recognizer
+    # is parameterized, not a fixed-value literal.
+    m = _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(
+        "return target creature or Spacecraft card with mana value 3 or less "
+        "from your graveyard to the battlefield"
+    )
+    assert m is not None
+    assert m.group(1) == "3"
+
+
+def test_return_creature_or_spacecraft_with_mv_parses_as_effect():
+    eff = _parse_effect(
+        "return target creature or Spacecraft card with mana value 5 or less "
+        "from your graveyard to the battlefield"
+    )
+    assert eff == ReturnCreatureFromYourGraveyardToBattlefield(
+        or_spacecraft=True, max_mv=5
+    )
+
+
+def test_return_creature_or_spacecraft_with_mv_does_not_match_no_spacecraft():
+    # Without "or Spacecraft" the bare MV regex should match, not this one.
+    m = _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(
+        "return target creature card with mana value 5 or less "
+        "from your graveyard to the battlefield"
+    )
+    assert m is None
+
+
+def test_return_creature_or_spacecraft_with_mv_does_not_match_no_mv():
+    # Without the MV cap the bare ``or Spacecraft`` regex should match.
+    m = _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(
+        "return target creature or Spacecraft card from your graveyard "
+        "to the battlefield"
+    )
+    assert m is None
+
+
+# ------------------------------------------------------------------ #
+# Lithobraking migration                                              #
+# ------------------------------------------------------------------ #
+
+def test_lithobraking_claimed_by_parser():
+    assert "Lithobraking" in _claimed_names()
+
+
+def test_lithobraking_no_bespoke_entry():
+    # After migration, the whole-spell table no longer has a key for
+    # Lithobraking's oracle text.
+    assert _try_whole_spell_exact_text(
+        "Create a Lander token. Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature."
+    ) is None
+
+
+def test_lithobraking_engine_class():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Lithobraking"]
+    assert p.spell_effect == Sequence(effects=(
+        CreateToken(token_printing=TOKEN_PRINTINGS["Lander"], count=1),
+        OptionalSacArtifactForEffect(
+            inner_effect=DealNDamageToEachCreature(amount=2)
+        ),
+    ))
+
+
+def test_lithobraking_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Create a Lander token. Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature.",
+        "Lithobraking",
+    )
+    assert eff == Sequence(effects=(
+        CreateToken(token_printing=TOKEN_PRINTINGS["Lander"], count=1),
+        OptionalSacArtifactForEffect(
+            inner_effect=DealNDamageToEachCreature(amount=2)
+        ),
+    ))
+
+
+# ------------------------------------------------------------------ #
+# Scrounge for Eternity migration                                     #
+# ------------------------------------------------------------------ #
+
+def test_scrounge_for_eternity_claimed_by_parser():
+    assert "Scrounge for Eternity" in _claimed_names()
+
+
+def test_scrounge_for_eternity_no_bespoke_entry():
+    # After migration, the whole-spell table no longer has a key for
+    # Scrounge for Eternity's text.
+    assert _try_whole_spell_exact_text(
+        "As an additional cost to cast this spell, sacrifice an "
+        "artifact or creature.\n"
+        "Return target creature or Spacecraft card with mana value 5 "
+        "or less from your graveyard to the battlefield. "
+        "Then create a Lander token."
+    ) is None
+
+
+def test_scrounge_for_eternity_engine_class_more_faithful():
+    # The per-clause parse is MORE faithful than the old simplification:
+    # it preserves ``or_spacecraft=True`` and ``max_mv=5`` (which the
+    # bespoke table dropped) AND includes the Lander token creation.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Scrounge for Eternity"]
+    assert isinstance(p.spell_effect, Sequence)
+    assert len(p.spell_effect.effects) == 2
+    assert p.spell_effect.effects[0] == ReturnCreatureFromYourGraveyardToBattlefield(
+        or_spacecraft=True, max_mv=5
+    )
+    assert p.spell_effect.effects[1] == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Lander"], count=1,
+    )
+
+
+def test_scrounge_for_eternity_additional_cost_flag():
+    # The additional-cost flag is wired separately via
+    # ``_detect_additional_cost_flags`` and must still be set.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Scrounge for Eternity"]
+    assert p.additional_cost_sacrifice_creature_or_artifact is True
+
+
+def test_scrounge_for_eternity_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "As an additional cost to cast this spell, sacrifice an "
+        "artifact or creature.\n"
+        "Return target creature or Spacecraft card with mana value 5 "
+        "or less from your graveyard to the battlefield. "
+        "Then create a Lander token.",
+        "Scrounge for Eternity",
+    )
+    assert isinstance(eff, Sequence)
+    assert eff.effects[0] == ReturnCreatureFromYourGraveyardToBattlefield(
+        or_spacecraft=True, max_mv=5
+    )
+    assert eff.effects[1] == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Lander"], count=1,
+    )
+
+
+# ------------------------------------------------------------------ #
+# Non-regression: previously passing spells not broken               #
+# ------------------------------------------------------------------ #
+
+def test_optional_discard_then_draw_still_parses():
+    # "You may discard a card. If you do, draw a card." — must still
+    # be recognized by ``_OPTIONAL_DISCARD_THEN_DRAW`` after our changes
+    # (regression for the ``If you do,`` boundary guard).
+    from mtg_bot.cards.base import OptionalDiscardCardThenDrawN
+    eff = _parse_effect("you may discard a card. If you do, draw a card")
+    assert eff == OptionalDiscardCardThenDrawN(amount=1)
+
+
+def test_you_may_pay_then_effect_still_parses():
+    # "You may pay {1}. If you do, draw a card." — must still parse
+    # via ``_YOU_MAY_PAY_THEN_EFFECT`` (regression).
+    from mtg_bot.cards.base import DrawCards, OptionalManaCostThenEffect
+    eff = _parse_effect("you may pay {1}. If you do, draw a card")
+    assert eff == OptionalManaCostThenEffect(
+        cost_str="{1}", inner_effect=DrawCards(amount=1)
+    )
+
+
+def test_create_lander_token_still_parses():
+    # "Create a Lander token." alone must still parse as before — the
+    # ``Then`` prefix strip in ``_normalize_spell_effect_phrase`` must
+    # not strip the word from the middle of effect phrases.
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    eff = _parse_spell_effect_phrase(
+        "Create a Lander token.", "SomeCard"
+    )
+    assert eff == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Lander"], count=1
+    )

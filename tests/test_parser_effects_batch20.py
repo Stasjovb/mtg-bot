@@ -48,8 +48,10 @@ assertions.
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    CreateToken,
     DoubleTargetCreaturesPowerUEOT,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    Sequence,
     TriggeredAbility,
 )
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
@@ -111,27 +113,28 @@ def test_mightform_harmonizer_claimed_by_parser():
     assert "Mightform Harmonizer" in _claimed_names()
 
 
-# ---------- whole-spell exact-text dispatch (Scrounge for Eternity) ----------
+# ---------- per-clause grammar migration (Scrounge for Eternity) ----------
+# Scrounge for Eternity was migrated from the whole-spell exact-text
+# table to the per-clause grammar in bespoke-spells3. The new
+# ``_RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV``
+# recognizer in ``effects.py`` claims the reanimation clause (returning
+# ``ReturnCreatureFromYourGraveyardToBattlefield(or_spacecraft=True,
+# max_mv=5)``); the ``Then`` prefix stripping in
+# ``_normalize_spell_effect_phrase`` lets "Then create a Lander token."
+# parse via ``_CREATE_BARE_NAME_TOKEN``; the Sequence combinator assembles
+# both. This is MORE faithful than the previous simplification (which
+# returned bare ``ReturnCreatureFromYourGraveyardToBattlefield()``
+# dropping the ``or Spacecraft``, ``max_mv=5``, and Lander rider).
 
 def test_scrounge_for_eternity_claimed_by_parser():
-    # Scrounge for Eternity ``{2}{B}`` Sorcery — additional-cost
-    # sacrifice preamble + ``Return target creature or Spacecraft card
-    # with mana value 5 or less from your graveyard to the battlefield.
-    # Then create a Lander token.``. Whole-spell exact-text dispatch
-    # returns the bare ``ReturnCreatureFromYourGraveyardToBattlefield()``
-    # engine class the static side ships (the target widening, mana-
-    # value cap, and Lander rider are dropped — the base mechanic, a
-    # graveyard return, survives the simplification per the
-    # parser-is-right rule).
+    # Scrounge for Eternity ``{2}{B}`` Sorcery — now claimed via the
+    # per-clause grammar.
     assert "Scrounge for Eternity" in _claimed_names()
 
 
-def test_dispatch_scrounge_for_eternity_returns_engine_class():
-    # The dispatch key carries the additional-cost preamble line plus
-    # the post-reminder-strip second line (the parenthesized Lander
-    # reminder tail has been stripped before lookup). The dispatcher
-    # hits BEFORE the per-clause additional-cost preamble-stripping
-    # pass, so the key includes the verbatim preamble line.
+def test_scrounge_for_eternity_no_bespoke_entry():
+    # After migration, the whole-spell exact-text table no longer has
+    # a key for Scrounge for Eternity's text.
     eff = _try_whole_spell_exact_text(
         "As an additional cost to cast this spell, sacrifice an "
         "artifact or creature.\n"
@@ -139,33 +142,38 @@ def test_dispatch_scrounge_for_eternity_returns_engine_class():
         "or less from your graveyard to the battlefield. "
         "Then create a Lander token."
     )
-    assert eff == ReturnCreatureFromYourGraveyardToBattlefield()
+    assert eff is None
+
+
+def test_scrounge_for_eternity_parses_via_per_clause_grammar():
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    from mtg_bot.cards.base import ReturnCreatureFromYourGraveyardToBattlefield
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    eff = _parse_spell_oracle_text(
+        "As an additional cost to cast this spell, sacrifice an "
+        "artifact or creature.\n"
+        "Return target creature or Spacecraft card with mana value 5 "
+        "or less from your graveyard to the battlefield. "
+        "Then create a Lander token.",
+        "Scrounge for Eternity",
+    )
+    assert isinstance(eff, Sequence)
+    assert len(eff.effects) == 2
+    assert eff.effects[0] == ReturnCreatureFromYourGraveyardToBattlefield(
+        or_spacecraft=True, max_mv=5
+    )
+    assert eff.effects[1] == CreateToken(
+        token_printing=TOKEN_PRINTINGS["Lander"], count=1,
+    )
 
 
 def test_scrounge_for_eternity_carries_additional_cost_flag():
     # The additional-cost flag is wired separately via
-    # ``_detect_additional_cost_flags`` — the whole-spell dispatcher
-    # only returns the spell-effect engine class. End-to-end the
-    # produced ``CardPrinting`` carries
+    # ``_detect_additional_cost_flags`` — the per-clause grammar
+    # returns only the spell-effect. End-to-end the produced
+    # ``CardPrinting`` carries
     # ``additional_cost_sacrifice_creature_or_artifact=True`` so the
-    # engine prompts the caster for the cost at cast time. Belt-
-    # and-suspenders that the dispatcher entry doesn't accidentally
-    # bypass the flag-detection pass.
+    # engine prompts the caster for the cost at cast time.
     parser = OracleParserCardSource()
     p = parser.get_printings()["Scrounge for Eternity"]
     assert p.additional_cost_sacrifice_creature_or_artifact is True
-
-
-def test_dispatch_scrounge_unrelated_text_returns_none():
-    # A spell text that strips the additional-cost preamble or differs
-    # in any meaningful way should NOT match the dispatcher entry —
-    # the table is exact-match by design. Belt-and-suspenders that the
-    # new entry doesn't accidentally widen the dispatcher's match
-    # surface (e.g. a future printing with a different graveyard-return
-    # body shouldn't accidentally pick up the simplification).
-    assert _try_whole_spell_exact_text(
-        # Same body, but missing the preamble — should miss.
-        "Return target creature or Spacecraft card with mana value 5 "
-        "or less from your graveyard to the battlefield. "
-        "Then create a Lander token."
-    ) is None

@@ -230,20 +230,30 @@ def test_detect_shuffle_self_flags_wrong_name():
 
 def test_lithobraking_claimed_by_parser():
     # Lithobraking ``{2}{R}`` Instant — create-Lander + reflexive-
-    # trigger optional sac. The static ships ``Sequence(CreateToken,
-    # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``;
-    # the per-clause grammar can't carve up the reflexive trigger
-    # (``Then you may sacrifice an artifact. When you do, ...``)
-    # because no standalone primitive captures the rider's "When you
-    # do" follow-on, so the spell is claimed via the whole-spell
-    # exact-text dispatcher.
+    # trigger optional sac. Migrated to per-clause grammar in
+    # bespoke-spells3: the new ``_YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO``
+    # recognizer claims "Then you may sacrifice an artifact. When you
+    # do, …" as ``OptionalSacArtifactForEffect``; the Sequence
+    # combinator assembles it with ``CreateToken(Lander)``.
     assert "Lithobraking" in _claimed_names()
 
 
-def test_dispatch_lithobraking_returns_sequence():
+def test_lithobraking_no_bespoke_entry():
+    # After migration, the whole-spell exact-text table no longer has
+    # a key for Lithobraking's text.
     eff = _try_whole_spell_exact_text(
         "Create a Lander token. Then you may sacrifice an artifact. "
         "When you do, Lithobraking deals 2 damage to each creature."
+    )
+    assert eff is None
+
+
+def test_lithobraking_parses_via_per_clause_grammar():
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Create a Lander token. Then you may sacrifice an artifact. "
+        "When you do, Lithobraking deals 2 damage to each creature.",
+        "Lithobraking",
     )
     assert eff == Sequence(effects=(
         CreateToken(

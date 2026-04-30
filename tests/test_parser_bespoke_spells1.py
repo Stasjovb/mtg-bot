@@ -111,8 +111,12 @@ def test_bespoke_table_count():
     #   + Cerebral Download (surveil-X-artifact-count primitive)
     #   + Jump Scare (leading-UEOT + keywords + becomes-type-change dropper)
     #   + Depressurize (debuff-then-conditional-destroy multi-sentence literal)
-    # 50 - 28 = 22 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 22
+    # Additional removals in bespoke-spells3 branch (2 more, 20 remaining):
+    #   + Lithobraking (optional-sac-artifact-when-you-do compound)
+    #   + Scrounge for Eternity (creature-or-Spacecraft+MV GY reanimate +
+    #     Then-create-Lander rider)
+    # 50 - 30 = 20 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 20
 
 
 # ------------------------------------------------------------------ #

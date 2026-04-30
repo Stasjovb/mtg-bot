@@ -489,19 +489,27 @@ def _is_self_shuffle_clause(clause: str) -> bool:
 # We carve the line at the period-then-uppercase boundary so each
 # sentence flows through the per-clause parser independently.
 #
-# The negative lookahead for ``If you do,`` keeps the splitter from
-# breaking the ``You may pay/sacrifice/discard {COST}. If you do,
-# <inner-effect>.`` family of compound primitives — those are matched
-# as a single phrase by ``_YOU_MAY_PAY_THEN_EFFECT`` /
-# ``_OPTIONAL_DISCARD_THEN_DRAW`` / ``_OPTIONAL_SAC_ANOTHER_FOR_*``
-# down in ``effects``, and the embedded sentence boundary inside
-# those phrases is required (the regexes match a literal ``\. ``
-# between the cost and the consequence).
+# The negative lookahead keeps the splitter from breaking the
+# ``You may pay/sacrifice/discard {COST}. If you do, <inner-effect>.``
+# and ``You may sacrifice an artifact. When you do, <inner-effect>.``
+# families of compound primitives — those are matched as a single
+# phrase by ``_YOU_MAY_PAY_THEN_EFFECT`` /
+# ``_OPTIONAL_DISCARD_THEN_DRAW`` / ``_OPTIONAL_SAC_ANOTHER_FOR_*`` /
+# ``_YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO`` down in ``effects``, and the
+# embedded sentence boundary inside those phrases is required (the
+# regexes match a literal ``\. `` between the cost and the consequence).
+#
+# Both "If you do," and "When you do," are guarded because Lithobraking
+# prints "Then you may sacrifice an artifact. When you do, …" — without
+# the "When you do," guard the splitter would separate the two-sentence
+# compound and the per-clause grammar would fail on the second piece.
 #
 # Decimal numbers and abbreviations don't appear in MTG oracle text,
 # so a simple ``period + whitespace + uppercase`` boundary suffices —
 # no need for a fuller sentence tokenizer.
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=\.)\s+(?=[A-Z])(?!If you do,)")
+_SENTENCE_BOUNDARY_RE = re.compile(
+    r"(?<=\.)\s+(?=[A-Z])(?!(?:If|When) you do,)"
+)
 
 
 def _split_sentences(line: str) -> list[str]:
@@ -514,8 +522,9 @@ def _split_sentences(line: str) -> list[str]:
     inject blank clauses.
 
     The boundary is ``period + whitespace + uppercase letter``, with
-    a negative lookahead for ``If you do,`` so the
-    ``You may pay/sacrifice/discard {COST}. If you do, …`` compound
+    a negative lookahead for ``If you do,`` and ``When you do,`` so the
+    ``You may pay/sacrifice/discard {COST}. If you do, …`` and
+    ``You may sacrifice an artifact. When you do, …`` compound
     primitives don't get split — those are matched as a single phrase
     by the effect grammar and the embedded sentence boundary inside
     them is load-bearing.
@@ -1008,27 +1017,18 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Close Encounter deals damage equal to the power of the "
         "chosen creature or card to target creature."
     ): CloseEncounterEffect(),
-    # Lithobraking: create-Lander + reflexive-trigger optional sac.
-    # The static ships ``Sequence(CreateToken(Lander),
-    # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``.
-    # The "Then you may sacrifice an artifact. When you do, ... "
-    # compound is a fixed surface form that the per-clause grammar
-    # doesn't carve up (the reflexive trigger inside the optional sac
-    # has no standalone primitive); the whole-spell tier matches the
-    # verbatim text and returns the static-side composite. The
-    # trailing parenthesized Lander reminder text is stripped before
-    # dispatch.
-    (
-        "Create a Lander token. Then you may sacrifice an artifact. "
-        "When you do, Lithobraking deals 2 damage to each creature."
-    ): Sequence(effects=(
-        CreateToken(
-            token_printing=TOKEN_PRINTINGS["Lander"], count=1,
-        ),
-        OptionalSacArtifactForEffect(
-            inner_effect=DealNDamageToEachCreature(amount=2),
-        ),
-    )),
+    # Lithobraking — "Create a Lander token. Then you may sacrifice an
+    # artifact. When you do, Lithobraking deals 2 damage to each
+    # creature." — migrated to per-clause grammar: the new
+    # ``_SENTENCE_BOUNDARY_RE`` fix (extending the "don't split before
+    # 'If/When you do,'" negative lookahead to also cover "When you do,")
+    # keeps "Then you may sacrifice an artifact. When you do, …" as a
+    # single unsplit clause; the new ``_YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO``
+    # recognizer in ``effects.py`` claims it as
+    # ``OptionalSacArtifactForEffect(DealNDamageToEachCreature(2))``.
+    # The ``Then`` prefix stripping in ``_normalize_spell_effect_phrase``
+    # lets the first clause "Create a Lander token." parse via the bare
+    # token-creation path; the two clauses combine as a Sequence.
     # Unravel — "Counter target spell. If the amount of mana spent to
     # cast that spell was less than its mana value, you draw a card."
     # — migrated to per-clause grammar: ``CounterTargetSpell()``
@@ -1047,40 +1047,22 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # Don't Make a Sound — "Counter target spell unless its controller
     # pays {2}. If they do, surveil 2." — same migration as Divert
     # Disaster.
-    # Scrounge for Eternity: additional-cost-sacrifice preamble plus a
-    # graveyard-return-to-battlefield base + Lander-rider tail. The
-    # static ships the bare ``ReturnCreatureFromYourGraveyardToBattle
-    # field()`` engine class, dropping the ``or Spacecraft`` target
-    # widening, the ``with mana value 5 or less`` cap, and the
-    # ``Then create a Lander token`` rider. The base mechanic (a
-    # graveyard return) survives the simplification, so claiming the
-    # spell here matches the batch-19 parser-is-right boundary —
-    # Unravel and Divert Disaster drop similar riders while preserving
-    # the printed effect's intent.
-    #
-    # The dispatch key carries the full additional-cost preamble line —
-    # the dispatcher hits BEFORE the per-clause preamble-stripping pass
-    # in ``_parse_spell_oracle_text``. The
-    # ``additional_cost_sacrifice_creature_or_artifact=True`` flag is
-    # wired separately via ``_detect_additional_cost_flags`` (called
-    # from ``_build_spell_printing``); the dispatcher returns only the
-    # spell-effect engine class. The trailing parenthesized Lander
-    # reminder text is stripped before dispatch.
-    #
-    # The per-clause grammar can't claim this spell because the second
-    # clause's ``Return target creature or Spacecraft card with mana
-    # value 5 or less ... Then create a Lander token.`` doesn't parse
-    # as a standalone effect (no primitive widens to ``or Spacecraft``
-    # / mana-value cap, and the trailing ``Then create a Lander token``
-    # rider has no per-sentence shape). The whole-spell tier mirrors
-    # the static-side simplification verbatim.
-    (
-        "As an additional cost to cast this spell, sacrifice an "
-        "artifact or creature.\n"
-        "Return target creature or Spacecraft card with mana value 5 "
-        "or less from your graveyard to the battlefield. "
-        "Then create a Lander token."
-    ): ReturnCreatureFromYourGraveyardToBattlefield(),
+    # Scrounge for Eternity — "As an additional cost to cast this spell,
+    # sacrifice an artifact or creature.\nReturn target creature or
+    # Spacecraft card with mana value 5 or less from your graveyard to
+    # the battlefield. Then create a Lander token." — migrated to per-
+    # clause grammar: the additional-cost preamble is recognized by
+    # ``_is_additional_cost_preamble`` and stripped; the second clause
+    # ("Return … Then create a Lander token.") is split by
+    # ``_split_sentences`` into "Return target creature or Spacecraft
+    # card with mana value 5 or less from your graveyard to the
+    # battlefield." (new ``_RETURN_TARGET_CREATURE_OR_SPACECRAFT_
+    # GRAVEYARD_TO_BATTLEFIELD_WITH_MV`` recognizer →
+    # ``ReturnCreatureFromYourGraveyardToBattlefield(or_spacecraft=True,
+    # max_mv=5)``) and "Then create a Lander token." (``Then`` prefix
+    # stripped by ``_normalize_spell_effect_phrase``, then parsed via
+    # ``_CREATE_BARE_NAME_TOKEN`` → ``CreateToken(Lander, 1)``).
+    # The two clauses combine as a Sequence.
     # Terminal Velocity: put-card-from-hand onto battlefield + haste +
     # death-trigger + end-step-sac. Complex triple-rider oracle text
     # that the per-clause grammar can't parse; the static ships a

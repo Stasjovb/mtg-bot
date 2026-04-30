@@ -92,9 +92,10 @@ def _claimed_names() -> frozenset[str]:
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more (Nexus of Fate, Green Sun's Zenith,
-    # Cerebral Download, Jump Scare, Depressurize).
-    # 50 - 28 = 22 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 22
+    # Cerebral Download, Jump Scare, Depressurize) → 22 remaining.
+    # bespoke-spells3 removes 2 more (Lithobraking, Scrounge for Eternity)
+    # → 20 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 20
 
 
 # ------------------------------------------------------------------ #

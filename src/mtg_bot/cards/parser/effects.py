@@ -1648,6 +1648,27 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV = re.compile(
     r"^return target creature card with mana value (\d+) or less "
     r"from your graveyard to the battlefield$"
 )
+# "Return target creature or Spacecraft card with mana value N or less
+# from your graveyard to the battlefield" — combines the ``or_spacecraft``
+# widening (Scrounge for Eternity; "with mana value 5 or less") with the
+# ``max_mv`` cap (same flag as the bare MV variant above). Tried BEFORE
+# both the bare MV variant (which anchors on ``creature card``) and the
+# bare ``or Spacecraft`` variant (which anchors on ``battlefield`` with no
+# MV qualifier) so the more-specific combined form wins on phrases that
+# carry both. The engine class is
+# ``ReturnCreatureFromYourGraveyardToBattlefield(or_spacecraft=True,
+# max_mv=N)``.
+#
+# Currently only Scrounge for Eternity in the EoE pool carries both the
+# ``or Spacecraft`` widening and the mana-value cap on the to-battlefield
+# path; the regex captures the integer bound as a parameter so a future
+# printing with a different MV cap (e.g. ``3 or less``) lands on the
+# same primitive without further grammar work — the parameterized-
+# recognizer-preferred form per parser CLAUDE.md.
+_RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV = re.compile(
+    r"^return target creature or Spacecraft card with mana value (\d+) or less "
+    r"from your graveyard to the battlefield$",
+)
 # Multi-sentence Xu-Ifit, Osteoharmonist variant — the printed oracle is
 # ``Return target creature card from your graveyard to the battlefield.
 # It's a Skeleton in addition to its other types and has no abilities.``
@@ -1946,6 +1967,32 @@ _LOSE_N_LIFE = re.compile(r"^(?:you )?lose (\d+) life$")
 # match here.
 _YOU_MAY_PAY_THEN_EFFECT = re.compile(
     r"^you may pay (\{[^}]+(?:\}\{[^}]+)*\})\. If you do, (.+)$"
+)
+# "You may sacrifice an artifact. When you do, <inner-effect>." —
+# the ``OptionalSacArtifactForEffect(inner_effect=<inner>)`` compound.
+# Scryfall prints the consent clause and the consequence as TWO
+# sentences joined by ``When you do,``; the ``_SENTENCE_BOUNDARY_RE``
+# negative lookahead in ``spell_builder._split_sentences`` prevents
+# splitting at that boundary so the entire two-sentence phrase reaches
+# this recognizer unsplit.  A leading ``then `` (which Lithobraking
+# prints as the second token after a ``Create a Lander token.`` first
+# sentence) is accepted via the optional group so the recognizer claims
+# the Lithobraking surface after the ``_split_sentences`` carves the
+# first sentence off.
+#
+# The inner-effect tail (``group(1)``) is parsed recursively by
+# ``_parse_effect``; the capturing group ends at ``$`` so it must span
+# to the end of the (already period-stripped) phrase.  If the inner
+# effect fails to parse, the whole recognizer rejects cleanly and the
+# spell stays unclaimed (mirrors ``_YOU_MAY_PAY_THEN_EFFECT``'s
+# behavior on inner-parse failure).
+#
+# Note the embedded period: oracle text always prints
+# ``You may sacrifice an artifact. When you do, …`` as two sentences;
+# the inner period matches literally here (same convention as
+# ``_YOU_MAY_PAY_THEN_EFFECT``).
+_YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO = re.compile(
+    r"^(?:then )?you may sacrifice an artifact\. When you do, (.+)$"
 )
 # "Target creature gets +N/+M and gains <kw>[ and <kw2>...] until end of
 # turn." — pump + grant-keywords compound. The granted-keywords body
@@ -4363,6 +4410,25 @@ def _parse_effect(phrase: str) -> Effect | None:
         phrase
     ) is not None:
         return ReturnAllCreaturesFromYourGraveyardToBattlefield()
+    m = _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(
+        phrase
+    )
+    if m is not None:
+        # ``return target creature or Spacecraft card with mana value N
+        # or less from your graveyard to the battlefield`` — Scrounge
+        # for Eternity's reanimation clause. Combines the
+        # ``or_spacecraft=True`` widening (legal targets include
+        # Spacecraft cards in the graveyard) with the ``max_mv=N`` cap
+        # (targets whose printed mana value exceeds N are excluded).
+        # Tried BEFORE the bare ``or Spacecraft`` and the bare ``with
+        # mana value N`` variants below so the more-specific combined
+        # form wins; both sibling regexes' ``$`` anchors don't match
+        # this longer surface anyway, but more-specific-first is the
+        # convention here.
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            or_spacecraft=True,
+            max_mv=int(m.group(1)),
+        )
     m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD_WITH_MV.match(phrase)
     if m is not None:
         # ``return target creature card with mana value N or less from
@@ -4940,6 +5006,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         return OptionalManaCostThenEffect(
             cost_str=m.group(1), inner_effect=inner,
         )
+    m = _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO.match(phrase)
+    if m is not None:
+        # ``(?:then )?you may sacrifice an artifact. When you do,
+        # <inner-effect>`` — the ``OptionalSacArtifactForEffect``
+        # compound. Mirrors ``_YOU_MAY_PAY_THEN_EFFECT``: parse the
+        # inner tail recursively; reject the whole phrase if it doesn't
+        # parse (no silent drop). Tried after ``_YOU_MAY_PAY_THEN_EFFECT``
+        # because the ``when you do`` consequent is disjoint from the
+        # ``if you do`` form above — the two regexes don't overlap.
+        inner = _parse_effect(m.group(1))
+        if inner is None:
+            return None
+        return OptionalSacArtifactForEffect(inner_effect=inner)
     m = _OPTIONAL_DISCARD_THEN_DRAW.match(phrase)
     if m is not None:
         # ``draw a card`` / ``draw N cards`` / ``draw <word> cards`` —
@@ -5025,14 +5104,53 @@ def _normalize_creature_effect_phrase(phrase: str) -> str:
 
 def _normalize_spell_effect_phrase(phrase: str, name: str) -> str:
     """Strip the ``<Name>`` source-subject prefix (if present), trailing
-    period, and lowercase the first letter — leaving the normalized
-    phrase ready for ``_parse_effect``."""
+    period, leading ``Then `` connective, and lowercase the first letter
+    — leaving the normalized phrase ready for ``_parse_effect``.
+
+    The leading ``Then `` strip handles split sentences produced by
+    ``_split_sentences`` in ``spell_builder`` — Scryfall sometimes
+    packs two effect sentences on one oracle line separated by
+    ``". Then <next-effect>."`` (e.g. Scrounge for Eternity's
+    ``"… to the battlefield. Then create a Lander token."``).
+    After ``_split_sentences`` carves the boundary, the second piece
+    begins with ``"Then "`` which is pure sequencing noise; stripping
+    it lets the remaining phrase reach the unified grammar unchanged.
+
+    The ``When you do, <Name> `` internal name-stripping handles
+    multi-sentence compound primitives like Lithobraking's
+    ``"Then you may sacrifice an artifact. When you do, Lithobraking
+    deals 2 damage to each creature."`` — after the ``Then `` outer
+    strip, the normalized phrase is
+    ``"you may sacrifice an artifact. When you do, Lithobraking deals
+    …"``; the name occurs as the SUBJECT of the consequent clause, not
+    at the start of the whole phrase. Stripping ``<Name> `` after
+    ``"When you do, "`` ensures the inner effect tail
+    (``"deals 2 damage to each creature"``) reaches ``_parse_effect``
+    in its normalized form.
+    """
     phrase = phrase.strip()
     if phrase.endswith("."):
         phrase = phrase[:-1]
+    # Strip leading ``Then `` / ``then `` connective — sequencing marker
+    # that carries no effect semantics (Scrounge for Eternity's second
+    # sentence ``"Then create a Lander token."`` after sentence split).
+    if phrase.startswith("Then "):
+        phrase = phrase[len("Then "):]
+    elif phrase.startswith("then "):
+        phrase = phrase[len("then "):]
     prefix = name + " "
     if phrase.startswith(prefix):
         phrase = phrase[len(prefix):]
+    # Strip ``<Name> `` when it appears as the subject after a
+    # ``". When you do, "`` or ``". If you do, "`` consequent marker.
+    # This handles multi-sentence compound primitives (e.g. Lithobraking)
+    # where the card name is the grammatical subject of the second
+    # sentence's consequent but carries no semantic information that
+    # ``_parse_effect`` needs (the source is always the resolving spell).
+    for consequent_prefix in (". When you do, ", ". If you do, "):
+        marker = consequent_prefix + prefix
+        replacement = consequent_prefix
+        phrase = phrase.replace(marker, replacement)
     if phrase and phrase[0].isupper():
         phrase = phrase[0].lower() + phrase[1:]
     return phrase
