@@ -76,8 +76,9 @@ def test_bespoke_table_count():
     #   + Full Bore (warp-conditional keyword-rider recognizer)
     #   + Zealous Display (anthem-untap-if-not-your-turn recognizer)
     #   + Emergency Eject (destroy + Lander-for-controller recognizer)
-    # 50 - 10 = 40 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 40
+    #   + Hymn of the Faller (Void adds-draw rider recognizer)
+    # 50 - 11 = 39 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 39
 
 
 # ------------------------------------------------------------------ #

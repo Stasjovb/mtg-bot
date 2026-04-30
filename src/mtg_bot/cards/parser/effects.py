@@ -426,7 +426,7 @@ _DEAL_DAMAGE_TARGET_OPPONENT = re.compile(
 # on the other half of the canonical pair) — the ``you`` is purely
 # surface noise because the controller is already implicit in every
 # effect's resolve signature.
-_DRAW_A_CARD = re.compile(r"^(?:you )?draw a card$")
+_DRAW_A_CARD = re.compile(r"^(?:you )?draw (?:a|another) card$")
 # ``draw N cards`` — bare-amount draw effect. The ``N`` accepts either
 # a digit or a spelled-out small cardinal (Glimmerburst's printed
 # ``Draw two cards.`` is what introduced the cardinal-word form to

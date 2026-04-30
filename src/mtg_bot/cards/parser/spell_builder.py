@@ -136,6 +136,20 @@ _SPELL_VOID_PUMP_REPLACEMENT = re.compile(
 )
 
 
+# Hymn-of-the-Faller-shaped Void "adds-a-draw" rider: a second clause
+# of the form "Void — If a nonland permanent left the battlefield this
+# turn or a spell was warped this turn, draw another card."
+# Pairs with ANY base-clause Sequence to append a
+# ``ConditionalIfVoid(then=DrawCards(1), else=None)`` to the Sequence.
+# Unlike the replacement helpers above (which swap one effect for
+# another), this rider ADDS an extra draw on top of the base effects
+# when the Void state is active.
+_SPELL_VOID_ADDS_DRAW_RE = re.compile(
+    r"^Void — If a nonland permanent left the battlefield this turn "
+    r"or a spell was warped this turn, draw another card\.$"
+)
+
+
 # Delirium-rider drop regexes — recognizers for ``Delirium — …``
 # clauses that the parser silently drops because the engine doesn't
 # implement the Delirium graveyard-card-type check today.
@@ -414,6 +428,21 @@ def _parse_void_damage_replacement(
     return DealDamageAnyTarget(amount=int(m.group(1)))
 
 
+def _is_void_adds_draw_rider(phrase: str) -> bool:
+    """Return ``True`` if ``phrase`` is the Void "adds-a-draw" rider
+    from Hymn of the Faller:
+    ``"Void — If a nonland permanent left the battlefield this turn
+    or a spell was warped this turn, draw another card."``
+
+    This rider runs an *additional* ``DrawCards(1)`` on top of the
+    base effects (not a replacement like the damage/pump helpers).
+    When paired with a Sequence base effect, the caller wraps the
+    base Sequence with an appended
+    ``ConditionalIfVoid(then=DrawCards(1), else=None)`` clause.
+    """
+    return _SPELL_VOID_ADDS_DRAW_RE.match(phrase.strip()) is not None
+
+
 def _parse_void_pump_replacement(
     phrase: str, base_effect: Effect
 ) -> Effect | None:
@@ -689,26 +718,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "value X or less, put it onto the battlefield, then shuffle. "
         "Shuffle Green Sun's Zenith into its owner's library."
     ): SearchLibraryForGreenCreatureWithMVAtMostX(),
-    # Hymn of the Faller: three-clause Sequence + Void ADDS-A-DRAW
-    # rider. Unlike the existing Void replacement helpers (which swap
-    # one effect for another), this rider runs an additional effect
-    # (``draw another card``) on top of the base. The static models
-    # the rider as ``ConditionalIfVoid(then=DrawCards(1), else=None)``:
-    # the conditional resolves the extra draw only if the Void state
-    # is active; otherwise it's a no-op (else=None).
-    (
-        "Surveil 1, then you draw a card and lose 1 life.\n"
-        "Void — If a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn, draw another card."
-    ): Sequence(effects=(
-        Surveil(amount=1, use_artifact_count=False),
-        DrawCards(amount=1),
-        LoseLife(amount=1),
-        ConditionalIfVoid(
-            then_effect=DrawCards(amount=1),
-            else_effect=None,
-        ),
-    )),
     # Consult the Star Charts: variable-X library look + kicker-gated
     # extra card kept. The static ships ``ConsultTheStarChartsEffect()``
     # (no parameters; the bespoke class handles the X-formula and the
@@ -1436,6 +1445,40 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
                 return ConditionalIfVoid(
                     then_effect=void_then, else_effect=first
                 )
+            # Hymn-of-the-Faller-shaped "adds-a-draw" Void rider:
+            # the rider APPENDS a ConditionalIfVoid(then=DrawCards(1),
+            # else=None) to the base effect. The base must be a
+            # Sequence (multi-step spell body); the appended conditional
+            # extends the Sequence rather than replacing any step.
+            # Tried after the replacement helpers since the adds-draw
+            # shape is orthogonal (it doesn't depend on the type of
+            # ``first``).
+            if _is_void_adds_draw_rider(clauses[1]):
+                # Flatten any top-level Sequence so the result is a
+                # single flat Sequence (not a nested Sequence-of-
+                # Sequences). The base clause parses via the compound
+                # splitter which may itself return a Sequence (e.g.
+                # Hymn of the Faller's ``Surveil 1, then you draw a
+                # card and lose 1 life.`` → ``Sequence(Sequence(Surveil,
+                # DrawCards), LoseLife)``). Flattening keeps the
+                # produced effect structurally identical to the static-
+                # registry model (a single flat Sequence whose last
+                # element is the ConditionalIfVoid).
+                def _flatten(eff: Effect) -> tuple[Effect, ...]:
+                    if isinstance(eff, Sequence):
+                        flat: list[Effect] = []
+                        for e in eff.effects:
+                            flat.extend(_flatten(e))
+                        return tuple(flat)
+                    return (eff,)
+                base_effects = _flatten(first)
+                return Sequence(effects=(
+                    *base_effects,
+                    ConditionalIfVoid(
+                        then_effect=DrawCards(amount=1),
+                        else_effect=None,
+                    ),
+                ))
     # Modal shape: ``Choose one —`` / ``Choose one or both —`` header
     # line + ≥2 bullet mode lines. Tried before the Sequence fallback
     # because Sequence would uselessly attempt to parse the modal

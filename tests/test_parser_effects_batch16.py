@@ -358,7 +358,9 @@ def test_decode_transmissions_claimed_by_parser():
 
 def test_hymn_of_the_faller_claimed_by_parser():
     # Hymn of the Faller ``{1}{B}`` Sorcery — surveil 1, draw 1,
-    # lose 1, plus a Void-conditional extra draw rider.
+    # lose 1, plus a Void-conditional extra draw rider. Migrated
+    # from the whole-spell exact-text tier to the per-clause grammar
+    # via the new Void "adds-draw" rider recognizer.
     assert "Hymn of the Faller" in _claimed_names()
 
 
@@ -398,16 +400,24 @@ def test_dispatch_decode_transmissions_returns_sequence_with_conditional():
     ))
 
 
-def test_dispatch_hymn_of_the_faller_returns_sequence_with_void_rider():
-    # The Void rider in Hymn of the Faller ADDS an extra draw on top
-    # of the base (it doesn't swap an effect). The static models the
-    # rider as ``ConditionalIfVoid(then=DrawCards(1), else=None)``:
-    # the conditional resolves the extra draw only if the Void state
-    # is active; otherwise it's a no-op (else=None).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_hymn_of_the_faller_no_bespoke_entry():
+    # Hymn of the Faller migrated from the whole-spell exact-text tier
+    # to the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
         "Surveil 1, then you draw a card and lose 1 life.\n"
         "Void — If a nonland permanent left the battlefield this turn "
         "or a spell was warped this turn, draw another card."
+    ) is None
+
+
+def test_hymn_of_the_faller_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar produces the same
+    # Sequence structure as the static registry.
+    eff = _parse_spell_oracle_text(
+        "Surveil 1, then you draw a card and lose 1 life.\n"
+        "Void — If a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn, draw another card.",
+        "Hymn of the Faller",
     )
     assert eff == Sequence(effects=(
         Surveil(amount=1, use_artifact_count=False),
