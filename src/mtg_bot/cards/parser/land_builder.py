@@ -91,6 +91,7 @@ from mtg_bot.cards.base import (
     make_utility_land,
     parse_mana_cost,
 )
+from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.object_predicates import IsCreature
@@ -275,6 +276,91 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 
 
 # ---------------------------------------------------------------------------
+# Plaza of Heroes (Stellar Sights) recognizer.
+#
+# "Legendary Land" with exactly four oracle lines:
+#   1. "{T}: Add {C}."
+#   2. "{T}: Add one mana of any color. Spend this mana only to cast a
+#      legendary spell."
+#   3. "{T}: Add one mana of any color among legendary permanents you
+#      control."
+#   4. "{3}, {T}, Exile this land: Target legendary creature gains
+#      hexproof and indestructible until end of turn."
+#
+# Lines 2–4 parse via ``_parse_activated_ability_line`` (the grammar now
+# has recognizers for all three shapes); line 1 is a hard-coded
+# ``{T}: Add {C}.`` constant that the grammar doesn't claim (colorless
+# mana in activated.py is handled differently — see ``_COLORLESS_TAP_LINE``).
+#
+# Any future "Legendary Land" with this exact four-line oracle layout
+# (same surface, possibly different name) claims through this recognizer
+# at zero additional code.
+# ---------------------------------------------------------------------------
+
+
+def _try_build_plaza_of_heroes_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a ``CardPrinting`` for Plaza of Heroes' four-line
+    plain ``Land`` shape if ``text`` matches, else ``None``.
+
+    The four-line shape is:
+      1. ``{T}: Add {C}.``  — colorless tap (hard-matched; colorless mana
+         isn't routed through the activated-ability grammar today).
+      2. ``{T}: Add one mana of any color. Spend this mana only to cast
+         a legendary spell.``  — legendary-spell restricted mana (parsed
+         via ``_parse_activated_ability_line``).
+      3. ``{T}: Add one mana of any color among legendary permanents you
+         control.``  — legendary-permanent-ability restricted mana (parsed
+         via ``_parse_activated_ability_line``).
+      4. ``{3}, {T}, Exile this land: Target legendary creature gains
+         hexproof and indestructible until end of turn.``  — exile-self
+         keyword grant to a legendary creature (parsed via
+         ``_parse_activated_ability_line``).
+
+    Plain ``Land`` only (no supertypes, no subtypes). Plaza of Heroes
+    is NOT a legendary permanent — its type line is bare ``Land``
+    (``supertypes == ()``); the word "legendary" appears only in its
+    ability text (it produces mana for legendary spells and grants
+    hexproof/indestructible to legendary creatures). Any other
+    supertype/subtype combination falls through.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) != 4:
+        return None
+    if lines[0] != _COLORLESS_TAP_LINE:
+        return None
+    # Lines 2–4: parse via the activated-ability grammar.
+    a1 = _parse_activated_ability_line(lines[1])
+    if a1 is None:
+        return None
+    a2 = _parse_activated_ability_line(lines[2])
+    if a2 is None:
+        return None
+    a3 = _parse_activated_ability_line(lines[3])
+    if a3 is None:
+        return None
+    # Line 1 is the plain {T}: Add {C}. mana ability — build it directly
+    # since the colorless-mana effect isn't in the activated-ability grammar.
+    a0 = ActivatedAbility(
+        cost=ActivationCost(tap_self=True),
+        effect=AddManaToPool(produces=(("C", 1),)),
+        is_mana_ability=True,
+    )
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(a0, a1, a2, a3),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bespoke EoS (Stellar Sights) land dispatch table.
 #
 # Lands whose oracle shape doesn't map cleanly onto any of the generic
@@ -289,56 +375,10 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 #   - Swarmyard          → _try_build_tap_regenerate_land
 #   - Endless Sands      → _try_build_desert_exile_return_land
 #   - Inventors' Fair    → _try_build_legendary_artifact_search_land
+#   - Plaza of Heroes    → _try_build_plaza_of_heroes_land
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
-    return {
-        # Plaza of Heroes: migrated to use exile_self cost atom (added to
-        # ActivationCost). Line 4 reads "{3}, {T}, Exile this land: Target
-        # legendary creature gains hexproof and indestructible until end of
-        # turn." Now uses exile_self=True faithfully per oracle text.
-        # Remaining bespoke because the three mana abilities use non-grammar
-        # spend-restriction fields (legendary_spell,
-        # legendary_permanent_ability) with no parser-side recognizer yet.
-        "Plaza of Heroes": make_utility_land(
-            "Plaza of Heroes", legendary=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("C", 1),)),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(
-                        produces=(("any", 1),),
-                        spend_restriction="legendary_spell",
-                    ),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(
-                        produces=(("any", 1),),
-                        spend_restriction="legendary_permanent_ability",
-                    ),
-                    is_mana_ability=True,
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{3}"),
-                        mana_str="{3}",
-                        tap_self=True,
-                        exile_self=True,
-                    ),
-                    effect=PumpTargetCreatureUntilEOT(
-                        granted_keywords=frozenset(
-                            {"hexproof", "indestructible"}
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    }
+    return {}
 
 
 _BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
@@ -818,6 +858,11 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
         if bespoke is not None:
             return bespoke
     # Non-basic land shapes follow.
+    plaza = _try_build_plaza_of_heroes_land(
+        card, text, supertypes, subtypes,
+    )
+    if plaza is not None:
+        return plaza
     tap_regen = _try_build_tap_regenerate_land(
         card, text, supertypes, subtypes,
     )

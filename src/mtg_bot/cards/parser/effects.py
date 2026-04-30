@@ -74,6 +74,7 @@ from mtg_bot.cards.base import (
     FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
+    GainControlOfTargetSliverPermanently,
     GainLife,
     GrantUnblockableUEOT,
     HouseCartographerSurvivalEffect,
@@ -959,9 +960,17 @@ _SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD = re.compile(
 # accidentally match.  Tutors that use ``you may`` before ``search``
 # don't match this shape and remain unclaimed unless a separate
 # recognizer claims them.
+#
+# Scryfall uses two wordings for the reveal step:
+#   - ``reveal it`` — most tutors (artifact, basic land, legendary
+#     creature, Demon …)
+#   - ``reveal that card`` — Sliver Overlord's "Search your library for
+#     a Sliver card, reveal that card, put it into your hand, then
+#     shuffle." Both are semantically identical; the regex accepts
+#     either form so the same filter dispatch covers both.
 _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE = re.compile(
     r"^search your library for (an?) (.+) card, "
-    r"reveal it, put it into your hand, then shuffle$"
+    r"reveal (?:it|that card), put it into your hand, then shuffle$"
 )
 # Maps the captured filter phrase to (filter_name, may_fail).  The
 # ``may_fail`` is taken from the existing static-registry semantics:
@@ -985,6 +994,11 @@ _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER: dict[str, tuple[str, bool]] = {
     # upgrade is stripped as an unimplemented-mechanic rider before
     # this recognizer is tried); no "you may" rider so may_fail=False.
     "Demon": ("demon", False),
+    # ``a Sliver card`` — Sliver Overlord's first activated ability:
+    # "{3}: Search your library for a Sliver card, reveal that card,
+    # put it into your hand, then shuffle." The ``may_fail=True``
+    # flag preserves graceful behaviour when the library has no Slivers.
+    "Sliver": ("sliver", True),
 }
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger
@@ -1026,6 +1040,29 @@ _SEARCH_LIBRARY_FOR_EQUIPMENT_CARD_ONTO_BATTLEFIELD = re.compile(
     r"^search your library for an Equipment card, "
     r"put it onto the battlefield, then shuffle$"
 )
+# "Gain control of target <subtype>." — permanent-theft activated ability
+# whose legal-target pool is restricted to permanents with a named subtype.
+# Sliver Overlord's second ability "{3}: Gain control of target Sliver.
+# (This effect lasts indefinitely.)" is the only printing in the pool
+# today; the regex captures the subtype word so a future card with the
+# same shape but a different subtype (e.g. "Gain control of target Dragon.")
+# claims through the same recognizer.  The captured subtype is dispatched
+# through ``_GAIN_CONTROL_TARGET_SUBTYPE_EFFECT``; an unknown subtype
+# returns ``None`` so the card stays unclaimed rather than silently
+# dropping the restriction.
+_GAIN_CONTROL_TARGET_SUBTYPE = re.compile(
+    r"^gain control of target (\S+)$"
+)
+# Subtype word → engine effect mapping for the gain-control-by-subtype
+# shape. Each entry is one printed subtype word (as it appears in the
+# oracle text after stripping the trailing period and reminder text);
+# the value is the engine class used when that subtype is targeted.
+_GAIN_CONTROL_TARGET_SUBTYPE_EFFECT: dict[str, "Effect"] = {
+    # Sliver Overlord: "Gain control of target Sliver."
+    # GainControlOfTargetSliverPermanently targets only creatures with
+    # the Sliver subtype and transfers ownership permanently.
+    "Sliver": GainControlOfTargetSliverPermanently(),
+}
 # Token-creation effect grammar. Two related shapes co-exist in Scryfall
 # oracle text:
 #
@@ -1370,6 +1407,35 @@ _ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
     r"Spend this mana only to "
     r"(cast an artifact spell|activate abilities of artifact sources)$"
 )
+# "Add one mana of any color. Spend this mana only to <restriction>."
+# — restricted any-color mana ability (Plaza of Heroes' second ability:
+# "{T}: Add one mana of any color. Spend this mana only to cast a
+# legendary spell."). Produces an ``("any", 1)`` coin tagged with
+# the spend restriction, identical to how the colored form
+# ``_ADD_MANA_WITH_SPEND_RESTRICTION`` works, just with the mana
+# segment being ``one mana of any color`` rather than a brace-colored
+# expression. The captured tail phrase is looked up in
+# ``_SPEND_RESTRICTION_BY_PHRASE``.
+_ADD_ANY_COLOR_MANA_WITH_SPEND_RESTRICTION = re.compile(
+    r"^add one mana of any color\. Spend this mana only to (.+)$"
+)
+# "Add one mana of any color among <group> you control." — mana ability
+# whose produced coin is restricted to activating abilities of permanents
+# in the named group you control. Plaza of Heroes' third ability reads
+# "{T}: Add one mana of any color among legendary permanents you control."
+# Modeled as ``AddManaToPool(produces=(("any", 1),),
+# spend_restriction="legendary_permanent_ability")``. The captured
+# group phrase is looked up in ``_ADD_MANA_AMONG_RESTRICTION``.
+_ADD_ANY_MANA_AMONG_GROUP = re.compile(
+    r"^add one mana of any color among (.+) you control$"
+)
+# Surface phrase → ``AddManaToPool.spend_restriction`` string mapping
+# for the "add one mana of any color among <group> you control" shape.
+_ADD_MANA_AMONG_RESTRICTION: dict[str, str] = {
+    # Plaza of Heroes: "add one mana of any color among legendary
+    # permanents you control" → legendary-permanent-ability restriction.
+    "legendary permanents": "legendary_permanent_ability",
+}
 # Surface phrase → ``ActivationCost.spend_restriction`` string mapping
 # for the restricted-mana ability above. Each tail phrase below comes
 # from a real EoE printing's oracle text; the engine string is the key
@@ -1377,6 +1443,10 @@ _ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
 _SPEND_RESTRICTION_BY_PHRASE: dict[str, str] = {
     "cast an artifact spell": "artifact_spell",
     "activate abilities of artifact sources": "artifact_activation",
+    # Plaza of Heroes line 2: "Spend this mana only to cast a legendary
+    # spell." Maps to the same engine tag honoured by
+    # ``_coin_satisfies_context`` in actions.py.
+    "cast a legendary spell": "legendary_spell",
 }
 # "Target opponent loses N life" — pure life-loss spell/ability surface.
 # TargetOpponentLosesLife filters its legal-targets pool to opponents.
@@ -2526,10 +2596,12 @@ _PUT_PLUS_ONE_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL_IT_GAINS_UEOT = re.compile
     rf"^put (\d+|{_SMALL_CARDINAL_PATTERN}) \+1/\+1 counters on "
     rf"target creature you control\. It gains (.+) until end of turn$"
 )
-# "Target creature gains <kw>[ and <kw2>...] until end of turn." —
-# pure keyword-grant variant with no P/T pump and no control
-# restriction (Horrid Vigor's ``Target creature gains deathtouch and
-# indestructible until end of turn.`` in DSK). Maps to
+# "Target [legendary] [attacking] creature gains <kw>[ and <kw2>...]
+# until end of turn." — pure keyword-grant variant with no P/T pump
+# and no control restriction (Horrid Vigor's ``Target creature gains
+# deathtouch and indestructible until end of turn.`` in DSK; Plaza of
+# Heroes' ``Target legendary creature gains hexproof and indestructible
+# until end of turn.``). Maps to
 # ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
 # granted_keywords=...)`` — bare-target legal pool, same engine class
 # as the pump-and-gain shape just with zero bonuses. Tried AFTER the
@@ -2549,8 +2621,15 @@ _PUT_PLUS_ONE_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL_IT_GAINS_UEOT = re.compile
 # parameterization; the engine class's ``attacking_only=True`` flag
 # is the same one Hospital Room's pump uses, here flipped on by the
 # captured qualifier rather than by a literal-line entry.
+#
+# The optional ``legendary `` qualifier narrows the legal-target pool
+# to creatures whose printing carries the Legendary supertype. Plaza
+# of Heroes' "{3},{T},Exile this land: Target legendary creature gains
+# hexproof and indestructible until end of turn." is the motivating
+# printing. Group 1 → ``legendary`` qualifier; group 2 → ``attacking``
+# qualifier; group 3 → keyword body.
 _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT = re.compile(
-    r"^target (attacking )?creature gains (.+) until end of turn$"
+    r"^target (legendary )?(attacking )?creature gains (.+) until end of turn$"
 )
 # "Target artifact or creature gains <kw>[ and <kw2>...] until end of
 # turn." — pure keyword-grant on a permanent target whose legal pool
@@ -3719,6 +3798,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``Equipment``-keyed payload class with a ``tapped=True``
         # construction (no DSK printing today carries that shape).
         return SearchLibraryForEquipmentToBattlefield()
+    # ``gain control of target <subtype>`` — permanent-theft activated
+    # ability restricted to a named subtype (Sliver Overlord's second
+    # ability: "Gain control of target Sliver. (This effect lasts
+    # indefinitely.)"). The captured subtype word is dispatched through
+    # ``_GAIN_CONTROL_TARGET_SUBTYPE_EFFECT``; an unknown subtype keeps
+    # the card unclaimed rather than silently dropping the filter.
+    m = _GAIN_CONTROL_TARGET_SUBTYPE.match(phrase)
+    if m is not None:
+        effect = _GAIN_CONTROL_TARGET_SUBTYPE_EFFECT.get(m.group(1))
+        if effect is not None:
+            return effect
     m = _EACH_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return EachOpponentLosesLife(amount=int(m.group(1)))
@@ -4085,7 +4175,9 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _ADD_MANA_WITH_SPEND_RESTRICTION.match(phrase)
     if m is not None:
         mana_str = m.group(1)
-        restriction = _SPEND_RESTRICTION_BY_PHRASE[m.group(2)]
+        restriction = _SPEND_RESTRICTION_BY_PHRASE.get(m.group(2))
+        if restriction is None:
+            return None
         # The mana segment is one or two ``{<color>}`` brace pairs;
         # ``parse_mana_cost`` would unpack them but for restricted-mana
         # abilities the engine wants a tuple of single-coin entries
@@ -4094,6 +4186,36 @@ def _parse_effect(phrase: str) -> Effect | None:
         colors = re.findall(r"\{([WUBRG])\}", mana_str)
         return AddManaToPool(
             produces=tuple((c, 1) for c in colors),
+            spend_restriction=restriction,
+        )
+    # ``add one mana of any color. Spend this mana only to <restriction>``
+    # — restricted any-color mana ability (Plaza of Heroes line 2:
+    # "Add one mana of any color. Spend this mana only to cast a
+    # legendary spell."). Tried BEFORE the bare ``add one mana of any
+    # color`` recognizer so the spend-restriction qualifier wins.
+    m = _ADD_ANY_COLOR_MANA_WITH_SPEND_RESTRICTION.match(phrase)
+    if m is not None:
+        tail = m.group(1)
+        restriction = _SPEND_RESTRICTION_BY_PHRASE.get(tail)
+        if restriction is None:
+            return None
+        return AddManaToPool(
+            produces=(("any", 1),),
+            spend_restriction=restriction,
+        )
+    # ``add one mana of any color among <group> you control`` —
+    # mana ability whose coin is restricted to activating abilities of
+    # the named group (Plaza of Heroes line 3: "Add one mana of any
+    # color among legendary permanents you control."). Tried BEFORE
+    # the bare any-color recognizer so the group qualifier wins.
+    m = _ADD_ANY_MANA_AMONG_GROUP.match(phrase)
+    if m is not None:
+        group = m.group(1)
+        restriction = _ADD_MANA_AMONG_RESTRICTION.get(group)
+        if restriction is None:
+            return None
+        return AddManaToPool(
+            produces=(("any", 1),),
             spend_restriction=restriction,
         )
     m = _ADD_TWO_SAME_COLOR_MANA.match(phrase)
@@ -4672,22 +4794,25 @@ def _parse_effect(phrase: str) -> Effect | None:
     # keyword-line whitelist; rejection returns ``None`` so an
     # unknown keyword keeps the wrapping spell unclaimed.
     #
-    # Group 1 captures the optional ``attacking `` qualifier (None
-    # otherwise); when present, ``attacking_only=True`` flips on the
-    # legal-target filter (same flag Hospital Room's counter trigger
-    # uses) so Tunnel of Hate's ``target attacking creature gains
-    # double strike until end of turn`` lands here without a separate
-    # literal-line regex.
+    # Group 1 captures the optional ``legendary `` qualifier (None
+    # otherwise); group 2 captures the optional ``attacking ``
+    # qualifier (None otherwise); group 3 captures the keyword body.
+    # When ``legendary`` is present, ``legendary_only=True`` restricts
+    # the legal-target pool to creatures with the Legendary supertype
+    # (Plaza of Heroes' "Target legendary creature gains hexproof and
+    # indestructible until end of turn."). When ``attacking`` is
+    # present, ``attacking_only=True`` restricts to attacking creatures.
     m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
-        keywords = _parse_keyword_grant_body(m.group(2))
+        keywords = _parse_keyword_grant_body(m.group(3))
         if keywords is None:
             return None
         return PumpTargetCreatureUntilEOT(
             power_bonus=0,
             toughness_bonus=0,
             granted_keywords=keywords,
-            attacking_only=m.group(1) is not None,
+            legendary_only=m.group(1) is not None,
+            attacking_only=m.group(2) is not None,
         )
     # ``target artifact or creature gains <kw>[ and <kw2>...] until
     # end of turn`` — pure keyword grant on a permanent target whose

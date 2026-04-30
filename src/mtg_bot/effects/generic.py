@@ -3968,6 +3968,13 @@ class PumpTargetCreatureUntilEOT(Effect):
     # also the attackers' controller, but keeping the flag orthogonal
     # mirrors the engine class's other narrowing-flag conventions.
     attacking_only: bool = False
+    # "Target legendary creature ..." — restrict the legal-target pool to
+    # creatures whose printing carries the Legendary supertype. Matches
+    # Plaza of Heroes' "{3},{T},Exile this land: Target legendary creature
+    # gains hexproof and indestructible until end of turn." Oracle text
+    # is explicit: only creatures with the Legendary supertype are valid
+    # targets. Independent of all other narrowing flags.
+    legendary_only: bool = False
 
     def requires_target(self) -> bool:
         return not self.optional
@@ -3989,6 +3996,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             and (not self.you_control_only or o.controller_id == controller_id)
             and (not self.opponents_only or o.controller_id != controller_id)
             and (not self.attacking_only or o.attacking)
+            and (not self.legendary_only or o.printing.is_legendary)
             and (
                 self.target_subtype is None
                 or self.target_subtype in effective_subtypes(state, o)

@@ -184,9 +184,32 @@ def test_lotus_field_taps_for_three_of_chosen_color_green():
 # -----------------------
 
 
+def _make_legendary_creature(name: str, mana_cost: str, p: int, t: int):
+    """Build a synthetic legendary creature for Plaza of Heroes tests.
+
+    Plaza's 4th ability targets 'legendary creature' only; plain
+    make_creature() produces a non-legendary printing that is no
+    longer a valid target.
+    """
+    import dataclasses
+    base = make_creature(name, mana_cost, p, t)
+    return dataclasses.replace(
+        base,
+        supertypes=("Legendary",),
+        type_line=f"Legendary {base.type_line}",
+    )
+
+
 def test_plaza_of_heroes_metadata():
     p = _PRINTINGS["Plaza of Heroes"]
-    assert "Legendary" in p.supertypes
+    # Plaza of Heroes is a plain "Land" per Scryfall oracle — NOT a
+    # Legendary permanent. Its type_line is bare "Land"; the word
+    # "legendary" appears only in its ability text (mana for legendary
+    # spells, grant to legendary creatures). The previous bespoke entry
+    # mistakenly used legendary=True; the migrated grammar correctly
+    # reflects the printed type line.
+    assert "Legendary" not in p.supertypes
+    assert p.type_line == "Land"
     # Plaza has four activated abilities: three mana abilities
     # (baseline {C}, legendary-spell-restricted any, legendary-
     # permanent-ability-restricted any) plus the {3},{T},Exile
@@ -200,12 +223,20 @@ def test_plaza_of_heroes_metadata():
 
 
 def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
+    """Plaza's 4th ability targets 'legendary creature' only.
+
+    Uses a synthetic legendary creature — a non-legendary creature
+    (old Wild Bear / Test Bear) is no longer a valid target per the
+    oracle text "Target legendary creature gains hexproof and
+    indestructible until end of turn."
+    """
     state = _new_state()
     plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
     # Mana for {3}.
     for _ in range(3):
         _put(state, BASIC_LANDS["Mountain"])
-    bear = _put(state, make_creature("Test Bear", "{1}{G}", 2, 2))
+    # Must be a LEGENDARY creature for Plaza's ability to target it.
+    legend = _put(state, _make_legendary_creature("Test Legend", "{1}{G}", 2, 2))
     apply_action(
         state, 0, ActivateAbility(source_id=plaza.id, ability_index=3),
     )
@@ -213,8 +244,8 @@ def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():
         resolve_top_of_stack(state)
     assert plaza not in state.battlefield
     from mtg_bot.game import effective_keywords
-    assert "hexproof" in effective_keywords(state, bear)
-    assert "indestructible" in effective_keywords(state, bear)
+    assert "hexproof" in effective_keywords(state, legend)
+    assert "indestructible" in effective_keywords(state, legend)
 
 
 # -----------------------

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import pytest
 
+import dataclasses
+
 from mtg_bot.actions import (
     ActivateAbility,
     _activate_ability,
@@ -48,6 +50,15 @@ _PRINTINGS = get_active_source().get_printings()
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
+
+# Synthetic legendary creature for Plaza of Heroes tests.  Plaza's
+# 4th ability targets "legendary creature" only; Wild Bear is non-
+# legendary so we need a legendary printing for those tests.
+_LEGENDARY_BEAR = dataclasses.replace(
+    SYNTHETIC_CREATURES["Wild Bear"],
+    supertypes=("Legendary",),
+    type_line="Legendary Creature — Bear",
+)
 
 
 def _new_state(num_mountains: int = 3, num_plains: int = 0):
@@ -133,23 +144,45 @@ class TestExileSelf:
 
     def test_plaza_of_heroes_activation_legal_on_battlefield(self):
         """Plaza's exile-self ability is legal when it's on the battlefield
-        (mana available, untapped, target creature exists)."""
+        (mana available, untapped, legendary target creature exists).
+
+        The ability targets "legendary creature" only — uses _LEGENDARY_BEAR
+        (a synthetic creature with the Legendary supertype) rather than Wild
+        Bear (non-legendary, not a legal target for Plaza's 4th ability).
+        """
         state = _new_state(num_mountains=3)
         plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
-        bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)
+        _put(state, _LEGENDARY_BEAR, controller_id=0)
         acts = [
             a for a in legal_actions(state, 0)
             if isinstance(a, ActivateAbility)
             and a.source_id == plaza.id
             and a.ability_index == 3
         ]
-        assert acts, "Plaza's exile-self ability should be legal"
+        assert acts, "Plaza's exile-self ability should be legal with a legendary target"
+
+    def test_plaza_of_heroes_nonlegendary_creature_does_not_enable_activation(self):
+        """Plaza's exile-self ability targets 'legendary creature' only —
+        a non-legendary Wild Bear on the battlefield provides no legal
+        targets, so the activation must NOT appear in legal_actions."""
+        state = _new_state(num_mountains=3)
+        plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
+        _put(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)
+        acts = [
+            a for a in legal_actions(state, 0)
+            if isinstance(a, ActivateAbility)
+            and a.source_id == plaza.id
+            and a.ability_index == 3
+        ]
+        assert acts == [], (
+            "Non-legendary creature should not enable Plaza's exile ability"
+        )
 
     def test_plaza_of_heroes_exile_self_removes_from_battlefield(self):
         """Activating Plaza's exile ability puts Plaza in exile (not graveyard)."""
         state = _new_state(num_mountains=3)
         plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
-        bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)
+        _put(state, _LEGENDARY_BEAR, controller_id=0)
         p0 = state.player_by_id(0)
         apply_action(
             state, 0, ActivateAbility(source_id=plaza.id, ability_index=3)
@@ -166,14 +199,14 @@ class TestExileSelf:
         from mtg_bot.game import effective_keywords
         state = _new_state(num_mountains=3)
         plaza = _put(state, _PRINTINGS["Plaza of Heroes"])
-        bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], controller_id=0)
+        _put(state, _LEGENDARY_BEAR, controller_id=0)
         apply_action(
             state, 0, ActivateAbility(source_id=plaza.id, ability_index=3)
         )
         while state.stack:
             resolve_top_of_stack(state)
-        # At least one creature on the battlefield has hexproof (the bear
-        # chosen as target by RandomAgent).
+        # At least one creature on the battlefield has hexproof (the
+        # legendary bear chosen as target by RandomAgent).
         any_hexproof = any(
             "hexproof" in effective_keywords(state, o)
             for o in state.battlefield
