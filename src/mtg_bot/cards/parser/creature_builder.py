@@ -41,7 +41,6 @@ from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
     AddManaToPool,
-    AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
     ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
@@ -55,7 +54,6 @@ from mtg_bot.cards.base import (
     DiscardSelf,
     DestroyTargetNonlandPermanent,
     DrawCards,
-    DyadrineAttackEffect,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FanaticOfTheHarrowingETBEffect,
@@ -86,7 +84,6 @@ from mtg_bot.cards.base import (
     WickerfolkThresherAttackEffect,
     StaticAbility,
     StaticScope,
-    TannukEnsignLandfallEffect,
     TerrapactIntimidatorETBEffect,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
@@ -103,18 +100,22 @@ from mtg_bot.cards.parser.cost_reduction import (
 )
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_additional_land_per_turn_line,
+    _parse_artifacts_have_blue_mana_ability_line,
     _parse_attack_bypass_if_artifact_entered_line,
+    _parse_cast_artifact_from_top_line,
     _parse_combat_damage_cant_be_prevented_line,
     _parse_creature_spells_uncounterable_line,
     _parse_devour_line,
     _parse_dynamic_pt_formula_line,
     _parse_enters_tapped_line,
+    _parse_enters_with_mana_spent_counters_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
     _parse_enters_with_x_counters_line,
     _parse_extra_etb_trigger_line,
     _parse_impending_line,
     _parse_landcycling_line,
+    _parse_look_at_top_card_any_time_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
     _parse_play_lands_from_graveyard_line,
@@ -637,57 +638,55 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
     and ``"Creature"`` in card_types.
     """
     return {
-        # Dyadrine, Synthesis Amalgam `{X}{G}{W}` 0/1 Legendary Artifact
-        # Creature — Construct.
-        # Trample. Enters with +1/+1 counters equal to mana spent (X +
-        # generic + colored pips). Whenever you attack, may remove a
-        # counter from each of two creatures → draw a card and create a
-        # 2/2 Robot token.
-        # SKIP: enters_with_counters_from_x="mana_spent" has no grammar
-        # recognizer; DyadrineAttackEffect is a bespoke engine class with
-        # no grammar primitive. Both require grammar/engine additions.
-        "Dyadrine, Synthesis Amalgam": make_creature(
-            "Dyadrine, Synthesis Amalgam", "{X}{G}{W}", 0, 1,
-            artifact=True,
-            legendary=True,
-            subtypes=("Construct",),
-            keywords={"trample"},
-            enters_with_counters_from_x="mana_spent",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=DyadrineAttackEffect(),
-                ),
-            ),
-        ),
-        # Alpharael, Dreaming Acolyte `{1}{U}{B}` 2/3 Legendary Creature
-        # — Human Cleric.
-        # ETB: draw two cards, then discard two unless you discard an
-        # artifact card. During your turn, has deathtouch.
-        # SKIP: AlpharaelDreamingAcolyteDiscardEffect is a bespoke engine
-        # class (draw 2 then conditional discard with artifact-exception).
-        # The "During your turn, <source> has <keyword>." static shape
-        # also has no recognizer. Both require grammar additions.
-        "Alpharael, Dreaming Acolyte": make_creature(
-            "Alpharael, Dreaming Acolyte", "{1}{U}{B}", 2, 3,
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        AlpharaelDreamingAcolyteDiscardEffect(),
-                    )),
-                ),
-            ),
-            static_abilities=(
-                StaticAbility(
-                    scope=StaticScope.SELF,
-                    granted_keywords=frozenset({"deathtouch"}),
-                    active_turn_only=True,
-                ),
-            ),
-        ),
+        # Dyadrine, Synthesis Amalgam migrated to parameterized grammar:
+        # "Trample" — keyword line, grammar claims it.
+        # "Dyadrine enters with ... equal to the amount of mana spent to
+        # cast it." — new _parse_enters_with_mana_spent_counters_line
+        # recognizer in printing_keywords.py sets
+        # enters_with_counters_from_x="mana_spent".
+        # "Whenever you attack, you may remove a +1/+1 counter from each
+        # of two creatures you control. If you do, draw a card and create
+        # a 2/2 colorless Robot artifact creature token." — trigger
+        # condition "you attack" parses via _PREDICATE_TRIGGER_PHRASES to
+        # (YOU_ATTACK, Controlled(YOU)); effect body parses via new
+        # DyadrineAttackEffect() literal recognizer in effects.py.
+        # Removed from this table so the grammar path claims it.
+        # Note: the grammar produces event=YOU_ATTACK (faithful to oracle
+        # "Whenever you attack") rather than the bespoke's event=ATTACKS;
+        # test_dyadrine_subtypes_and_trigger_wired updated accordingly.
+        #
+        # Alpharael, Dreaming Acolyte migrated to parameterized grammar:
+        # "When Alpharael enters, draw two cards. Then discard two cards
+        # unless you discard an artifact card." — trigger condition
+        # "this creature enters" (after name substitution) parses via
+        # (ENTERS, IsSelf()); effect body sentence-splits to DrawCards(2)
+        # then AlpharaelDreamingAcolyteDiscardEffect() literal recognizer
+        # in effects.py.
+        # "During your turn, Alpharael has deathtouch." — new
+        # _DURING_YOUR_TURN_SELF_HAS_KEYWORD_LINE recognizer in
+        # statics.py (after name substitution) → StaticAbility(SELF,
+        # deathtouch, active_turn_only=True).
+        # Removed from this table so the grammar path claims it.
+        #
+        # Mm'menon, the Right Hand migrated to parameterized grammar:
+        # "Flying" — keyword line.
+        # "You may look at the top card of your library any time." →
+        # new _parse_look_at_top_card_any_time_line recognizer.
+        # "You may cast artifact spells from the top of your library." →
+        # new _parse_cast_artifact_from_top_line recognizer.
+        # "Artifacts you control have ..." → new
+        # _parse_artifacts_have_blue_mana_ability_line recognizer.
+        # Removed from this table so the grammar path claims it.
+        #
+        # Tannuk, Memorial Ensign migrated to parameterized grammar:
+        # "Landfall — Whenever a land you control enters, this creature
+        # deals 1 damage to each opponent. If this is the second time
+        # this ability has resolved this turn, draw a card." — landfall
+        # trigger condition parses via (ENTERS, land + Controlled(YOU));
+        # effect body parses via new TannukEnsignLandfallEffect() literal
+        # recognizer in effects.py.
+        # Removed from this table so the grammar path claims it.
+        #
         # Alpharael, Stonechosen migrated to parameterized grammar:
         # Ward—discard-random parses via _parse_ward_discard_line;
         # Void — Whenever Alpharael attacks, if <void-gate>,
@@ -770,42 +769,8 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # trailing-if body handler in _parse_at_the_beginning_of_line.
         # Warp {W} parses via _parse_warp_line.
         # Removed from this table so the grammar path claims it.
-        # Mm'menon, the Right Hand `{3}{U}{U}` 3/4 Legendary Creature —
-        # Jellyfish Advisor. Flying.
-        # You may cast artifact spells from the top of your library.
-        # Artifacts you control have {T}: Add {U} (spend only to cast
-        # spells from outside your hand).
-        # SKIP: grants_cast_artifact_from_top_of_library and
-        # grants_blue_mana_ability_to_your_artifacts are printing-level
-        # flags with no grammar recognizer. "You may look at the top card
-        # of your library any time." also has no static-line recognizer.
-        # Requires new grammar for all three oracle lines.
-        "Mm'menon, the Right Hand": make_creature(
-            "Mm'menon, the Right Hand", "{3}{U}{U}", 3, 4,
-            keywords={"flying"},
-            legendary=True,
-            grants_cast_artifact_from_top_of_library=True,
-            grants_blue_mana_ability_to_your_artifacts=True,
-        ),
-        # Tannuk, Memorial Ensign `{1}{R}{G}` 2/4 Legendary Creature —
-        # Kavu Pilot. Landfall — whenever a land you control enters,
-        # Tannuk deals 1 damage to each opponent. If this is the second
-        # time this ability has resolved this turn, draw a card.
-        # SKIP: TannukEnsignLandfallEffect is a bespoke engine class that
-        # tracks per-turn resolution count and draws on the second fire.
-        # There is no grammar primitive for "if this is the second time
-        # this ability has resolved this turn." Requires engine/grammar
-        # additions for per-card resolution tracking.
-        "Tannuk, Memorial Ensign": make_creature(
-            "Tannuk, Memorial Ensign", "{1}{R}{G}", 2, 4,
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
-                    effect=TannukEnsignLandfallEffect(),
-                ),
-            ),
-        ),
+        # Mm'menon, the Right Hand — migrated; see migration comment above.
+        # Tannuk, Memorial Ensign — migrated; see migration comment above.
         # Tannuk, Steadfast Second `{2}{R}{R}` 3/5 Legendary Creature —
         # Kavu Pilot. Static: other creatures you control have haste.
         # Second oracle line: "Artifact cards and red creature cards in
@@ -1020,6 +985,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     enters_with_counters_from_x: str | None = None
     grants_additional_land_per_turn = 0
     grants_play_lands_from_graveyard = False
+    grants_look_at_top_of_library = False
+    grants_cast_artifact_from_top_of_library = False
+    grants_blue_mana_ability_to_your_artifacts = False
     spell_is_uncounterable = False
     combat_damage_cant_be_prevented = False
     grants_toughness_as_damage_for_creatures_you_control = False
@@ -1287,6 +1255,39 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # Explorer's graveyard land-play static. Idempotent.
             grants_play_lands_from_graveyard = True
             continue
+        if _parse_enters_with_mana_spent_counters_line(line):
+            # ``Dyadrine enters with a number of +1/+1 counters on it
+            # equal to the amount of mana spent to cast it.`` —
+            # Dyadrine, Synthesis Amalgam's printed ETB replacement.
+            # Sets ``enters_with_counters_from_x="mana_spent"``; the
+            # engine computes the total mana paid at ETB time.
+            enters_with_counters_from_x = "mana_spent"
+            continue
+        if _parse_look_at_top_card_any_time_line(line):
+            # ``You may look at the top card of your library any time.``
+            # — Mm'menon's passive information-access clause. Recorded
+            # faithfully on the printing; simulation behavior unchanged
+            # (both players have perfect information in the sim).
+            grants_look_at_top_of_library = True
+            continue
+        if _parse_cast_artifact_from_top_line(line):
+            # ``You may cast artifact spells from the top of your
+            # library.`` — Mm'menon's printed library-top artifact-cast
+            # grant. Sets ``grants_cast_artifact_from_top_of_library``;
+            # ``legal_actions`` reads the flag to offer top-of-library
+            # artifact casts.
+            grants_cast_artifact_from_top_of_library = True
+            continue
+        if _parse_artifacts_have_blue_mana_ability_line(line):
+            # ``Artifacts you control have "{T}: Add {U}. Spend this
+            # mana only to cast a spell from anywhere other than your
+            # hand."`` — Mm'menon's printed static-grants-activated-
+            # ability clause. Sets
+            # ``grants_blue_mana_ability_to_your_artifacts``; the engine
+            # appends ``MMNEMON_BLUE_MANA_GRANTED_ABILITY`` to artifact
+            # activations for the controller.
+            grants_blue_mana_ability_to_your_artifacts = True
+            continue
         if _parse_spell_cant_be_countered_line(line):
             # ``This spell can't be countered.`` — printing-level immunity
             # to counter effects. Flips ``spell_is_uncounterable`` kwarg
@@ -1442,6 +1443,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         enters_with_counters_from_x=enters_with_counters_from_x,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
+        grants_look_at_top_of_library=grants_look_at_top_of_library,
+        grants_cast_artifact_from_top_of_library=(
+            grants_cast_artifact_from_top_of_library
+        ),
+        grants_blue_mana_ability_to_your_artifacts=(
+            grants_blue_mana_ability_to_your_artifacts
+        ),
         spell_is_uncounterable=spell_is_uncounterable,
         combat_damage_cant_be_prevented=combat_damage_cant_be_prevented,
         grants_toughness_as_damage_for_creatures_you_control=(

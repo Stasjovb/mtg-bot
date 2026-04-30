@@ -130,12 +130,18 @@ def test_dyadrine_full_attack_trigger_flow():
 
 def test_dyadrine_subtypes_and_trigger_wired():
     from mtg_bot.effects.predicates import (
+        Controlled,
         Event,
-        IsSelf,
+        YOU,
     )
     d = _PRINTINGS["Dyadrine, Synthesis Amalgam"]
     assert "Construct" in d.subtypes
+    # Oracle text: "Whenever you attack" → YOU_ATTACK + Controlled(YOU).
+    # The bespoke entry used ATTACKS+IsSelf(); the grammar correctly
+    # maps the printed surface to the YOU_ATTACK event (once-per-
+    # declare-attackers family, per _PREDICATE_TRIGGER_PHRASES in
+    # triggers.py), matching Razorkin Hordecaller and similar cards.
     assert any(
-        ab.event == Event.ATTACKS and ab.predicate == IsSelf()
+        ab.event == Event.YOU_ATTACK and ab.predicate == Controlled(YOU)
         for ab in d.triggered_abilities
     )

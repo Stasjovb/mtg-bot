@@ -297,16 +297,19 @@ def test_unrelated_subject_returns_none():
     )
 
 
-def test_during_your_turn_with_unrelated_body_returns_none():
-    # The ``During your turn, `` rider only attaches to anthem bodies
-    # the regex recognizes; an unrelated body (or a self-scope body)
-    # after the rider doesn't trick the parser into a false positive.
-    assert (
-        _parse_static_ability_line(
-            "During your turn, this creature has deathtouch."
-        )
-        is None
+def test_during_your_turn_self_has_keyword_produces_self_scope_static():
+    # ``During your turn, this creature has <keyword>.`` is now a
+    # recognized self-scope form: active_turn_only=True, SELF scope,
+    # with the stated keyword. Alpharael, Dreaming Acolyte prints in
+    # this exact surface form.
+    from mtg_bot.cards.base import StaticScope
+    result = _parse_static_ability_line(
+        "During your turn, this creature has deathtouch."
     )
+    assert result is not None
+    assert result.scope == StaticScope.SELF
+    assert "deathtouch" in result.granted_keywords
+    assert result.active_turn_only is True
 
 
 def test_self_scope_line_does_not_match_anthem_directly():

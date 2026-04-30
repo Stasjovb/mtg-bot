@@ -293,6 +293,23 @@ _COUNTER_GATED_ANTHEM_LINE = re.compile(
     r"(?P<keyword>[A-Za-z ]+)\.$"
 )
 
+# ``During your turn, this creature has <keyword>.`` — self-scope
+# keyword grant gated on the active player being the source's
+# controller. The subject may be "this creature" (generic form) or the
+# card's own printed name (e.g. "Alpharael" in "During your turn,
+# Alpharael has deathtouch."). Name-substituted to "this creature"
+# before matching (the caller must pass ``name`` to substitute first).
+# Produces ``StaticAbility(scope=SELF, granted_keywords={kw},
+# active_turn_only=True)``.
+#
+# Recognized: the five battle-relevant keywords plus reach and
+# deathtouch. A future printing with a different keyword would add to
+# the set; the regex's ``[A-Za-z ]+`` capture is broad, and the keyword
+# lookup via ``_KEYWORD_LINES`` provides the actual validation.
+_DURING_YOUR_TURN_SELF_HAS_KEYWORD_LINE = re.compile(
+    r"^During your turn, this creature has (?P<keyword>[A-Za-z ]+)\.$"
+)
+
 # Player-scope static: ``You have no maximum hand size.`` — Steaming
 # Sauna (DSK Room half) is the only EoE/DSK card in the parser pool
 # today fitting this exact surface (Marina Vendrell's Grimoire
@@ -402,9 +419,21 @@ def _parse_counter_gated_anthem_line(line: str) -> StaticAbility | None:
     )
 
 
-def _parse_static_ability_line(line: str) -> StaticAbility | None:
+def _parse_static_ability_line(
+    line: str,
+    *,
+    name: str | None = None,
+) -> StaticAbility | None:
     """Return a ``StaticAbility`` for a single static-ability line, or
     ``None`` if no surface form matches.
+
+    ``name`` is the card's own printed name; when supplied, oracle lines
+    that use the card's name as the subject (e.g. ``"During your turn,
+    Alpharael has deathtouch."``) have the name substituted with ``"this
+    creature"`` before matching the self-scope grammars. Other clause
+    grammars (anthem / counter-gated) use ``[Cc]reatures`` or ``Each
+    creature`` as subjects and never reference the source's name, so
+    they don't need substitution.
 
     Self-scope (``StaticScope.SELF``) shapes are tried first via the
     leading/trailing ``As long as`` grammar; if neither matches, the
@@ -427,10 +456,40 @@ def _parse_static_ability_line(line: str) -> StaticAbility | None:
     test corpus.
     """
     stripped = _strip_static_ability_word_prefix(line.strip())
+    # Substitute the card's own printed name with "this creature" so
+    # self-scope statics that use the card name in the subject (e.g.
+    # "During your turn, Alpharael has deathtouch.") match the same
+    # grammar as lines that spell out "this creature". Only the
+    # first-name fragment (the part before the first comma) is
+    # substituted — for a name like "Alpharael, Dreaming Acolyte" the
+    # trigger is usually printed as just "Alpharael", so we substitute
+    # the full name AND the first fragment to cover both surface forms.
+    if name is not None:
+        first_fragment = name.split(",")[0].strip()
+        for ref in ([name] if name == first_fragment else [name, first_fragment]):
+            if ref in stripped:
+                stripped = stripped.replace(ref, "this creature", 1)
+                break
     m = _STATIC_ABILITY_LINE.match(stripped)
     if m is None:
         m = _STATIC_ABILITY_LINE_TRAILING.match(stripped)
     if m is None:
+        # ``During your turn, this creature has <keyword>.`` — self-scope
+        # keyword grant gated on the active player being the source's
+        # controller. Alpharael, Dreaming Acolyte prints in this form;
+        # name-substitution above converts the card's own name to "this
+        # creature" so the regex sees the generic self-reference.
+        dtk = _DURING_YOUR_TURN_SELF_HAS_KEYWORD_LINE.match(stripped)
+        if dtk is not None:
+            kw_raw = dtk.group("keyword").strip().capitalize()
+            engine_keyword = _KEYWORD_LINES.get(kw_raw)
+            if engine_keyword is not None:
+                return StaticAbility(
+                    scope=StaticScope.SELF,
+                    granted_keywords=frozenset({engine_keyword}),
+                    active_turn_only=True,
+                )
+            return None
         anthem = _parse_anthem_static_line(stripped)
         if anthem is not None:
             return anthem

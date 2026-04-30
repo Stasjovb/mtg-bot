@@ -111,7 +111,7 @@ def _parse_clause(
     activated = _parse_activated_ability_line(line)
     if activated is not None:
         return _ParsedClause(activated=activated)
-    static = _parse_static_ability_line(line)
+    static = _parse_static_ability_line(line, name=name)
     if static is not None:
         return _ParsedClause(static=static)
     return None

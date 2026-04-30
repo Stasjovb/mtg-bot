@@ -773,3 +773,128 @@ def _parse_toughness_as_station_power_line(line: str) -> bool:
     a stationing creature contributes.
     """
     return line.strip() == _TOUGHNESS_AS_STATION_POWER_LINE
+
+
+# ── Dyadrine "enters with mana-spent counters" ────────────────────────────────
+#
+# ``Dyadrine enters with a number of +1/+1 counters on it equal to the
+# amount of mana spent to cast it.`` — Dyadrine, Synthesis Amalgam's
+# printed ETB replacement effect. The engine field
+# ``enters_with_counters_from_x="mana_spent"`` is consumed in
+# ``actions.put_into_battlefield``: it computes the total mana paid
+# (X + generic + colored pips) and calls ``add_plus_one_counters``.
+# Matched as a literal string after name substitution replaces the card
+# name with "this creature" — but Scryfall prints the card's own name
+# here, so the recognizer matches the name-substituted form (the
+# creature-builder pipeline runs ``_substitute_self_name`` on trigger
+# lines but not on printing-keyword lines). The card name check in the
+# builder handles name-specific surfaces; matching the whole printed
+# sentence as a literal is the right approach (only Dyadrine carries
+# this shape today; broader grammar deferred until a second example
+# exists).
+_ENTERS_WITH_MANA_SPENT_COUNTERS_LINE = (
+    "Dyadrine enters with a number of +1/+1 counters on it equal to "
+    "the amount of mana spent to cast it."
+)
+
+
+def _parse_enters_with_mana_spent_counters_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printed ETB replacement for
+    Dyadrine, Synthesis Amalgam — ``Dyadrine enters with a number of
+    +1/+1 counters on it equal to the amount of mana spent to cast it.``
+    — else ``False``. Flips ``enters_with_counters_from_x="mana_spent"``
+    kwarg on ``make_creature``; the engine resolves the counter count
+    from the total mana paid (X + generic + colored pips) at ETB time.
+
+    Only Dyadrine in the current pool has this shape; deferred until a
+    second example exists.
+    """
+    return line.strip() == _ENTERS_WITH_MANA_SPENT_COUNTERS_LINE
+
+
+# ── Mm'menon "you may look at the top card" ──────────────────────────────────
+#
+# ``You may look at the top card of your library any time.`` — Mm'menon,
+# the Right Hand's printed passive information-access clause. In
+# simulation both players have perfect information, so this flag does
+# not change engine behavior; it is recorded faithfully on the printing
+# so the parser does not silently drop a printed oracle line (per
+# parser/CLAUDE.md: "a no-op recognizer is the same kind of dishonest
+# shortcut as a synthetic-behavior factory"). The engine field
+# ``grants_look_at_top_of_library: bool`` exists on ``CardPrinting``
+# as a faithful oracle-text anchor.
+#
+# Matched as a literal string — Mm'menon is the only card in the pool
+# with this exact surface today; deferred until a second example exists.
+_LOOK_AT_TOP_CARD_ANY_TIME_LINE = (
+    "You may look at the top card of your library any time."
+)
+
+
+def _parse_look_at_top_card_any_time_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``You may look at the top card
+    of your library any time.`` clause, else ``False``. Flips the
+    ``grants_look_at_top_of_library`` kwarg on ``make_creature``; the
+    field records the printed oracle clause without changing simulation
+    behavior (both players have perfect information in the sim).
+    """
+    return line.strip() == _LOOK_AT_TOP_CARD_ANY_TIME_LINE
+
+
+# ── Mm'menon "you may cast artifact spells from the top of your library" ─────
+#
+# ``You may cast artifact spells from the top of your library.`` —
+# Mm'menon, the Right Hand's printed library-top artifact-cast grant.
+# The engine field ``grants_cast_artifact_from_top_of_library: bool`` is
+# consumed by ``legal_actions``: when any permanent the controller controls
+# has this flag, a CastSpell action is offered for the top-of-library card
+# if it is an artifact. Matched as a literal string — Mm'menon is the
+# only card in the pool with this exact surface today; deferred until a
+# second example exists (a future printing might generalize to non-artifact
+# card types, which would need a parameterized form).
+_CAST_ARTIFACT_FROM_TOP_LINE = (
+    "You may cast artifact spells from the top of your library."
+)
+
+
+def _parse_cast_artifact_from_top_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``You may cast artifact spells
+    from the top of your library.`` clause, else ``False``. Flips the
+    ``grants_cast_artifact_from_top_of_library`` kwarg on
+    ``make_creature``; ``legal_actions`` reads the flag to offer
+    top-of-library artifact casts when this permanent is on the
+    battlefield.
+    """
+    return line.strip() == _CAST_ARTIFACT_FROM_TOP_LINE
+
+
+# ── Mm'menon "artifacts you control have {T}: Add {U}" ───────────────────────
+#
+# ``Artifacts you control have "{T}: Add {U}. Spend this mana only to
+# cast a spell from anywhere other than your hand."`` — Mm'menon's
+# printed static-grants-activated-ability clause. The engine field
+# ``grants_blue_mana_ability_to_your_artifacts: bool`` is consumed by
+# ``game.effective_activated_abilities`` to append the pre-built
+# ``MMNEMON_BLUE_MANA_GRANTED_ABILITY`` to artifact activations for the
+# controller.
+#
+# Matched as a literal string — the clause text includes a Scryfall-
+# printed quoted ability description and is unique to Mm'menon in the
+# pool today; deferred until a second card with this surface shape
+# appears (a future card granting a different mana color would
+# parameterize the color capture).
+_ARTIFACTS_HAVE_BLUE_MANA_ABILITY_LINE = (
+    'Artifacts you control have "{T}: Add {U}. Spend this mana only '
+    'to cast a spell from anywhere other than your hand."'
+)
+
+
+def _parse_artifacts_have_blue_mana_ability_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the Mm'menon artifact blue-mana
+    grant clause, else ``False``. Flips the
+    ``grants_blue_mana_ability_to_your_artifacts`` kwarg on
+    ``make_creature``; ``game.effective_activated_abilities`` reads the
+    flag to append ``MMNEMON_BLUE_MANA_GRANTED_ABILITY`` to artifact
+    activations for the controller.
+    """
+    return line.strip() == _ARTIFACTS_HAVE_BLUE_MANA_ABILITY_LINE

@@ -17,6 +17,7 @@ import re
 
 from mtg_bot.cards.base import (
     AddManaToPool,
+    AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
     AstelliReclaimerETBEffect,
     CounterTargetSpell,
@@ -138,9 +139,11 @@ from mtg_bot.cards.base import (
     TapTargetOpponentPermanentAndStunIt,
     TargetOpponentDiscardsCasterChoice,
     TargetArtifactBecomesCreatureUEOT,
+    DyadrineAttackEffect,
     EachOpponentDiscardsOrLosesLife,
     TargetOpponentLosesLife,
     TargetPlayerLosesLife,
+    TannukEnsignLandfallEffect,
     UntapTargetOtherPermanent,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
@@ -2896,6 +2899,51 @@ def _parse_effect(phrase: str) -> Effect | None:
         "Each opponent who can't loses 3 life"
     ):
         return EachOpponentDiscardsOrLosesLife(life_if_cant=3)
+    # Dyadrine, Synthesis Amalgam's YOU_ATTACK trigger body. The phrase
+    # spans two printed sentences separated by a period (the "If you do"
+    # sentence is anaphoric to the optional counter-removal clause in the
+    # first). The sentence-splitting grammar would carve at the ``. If``
+    # boundary and try to parse each piece independently, but "if you
+    # do, draw a card and create a 2/2 colorless Robot artifact creature
+    # token" is an anaphoric reflexive that doesn't standalone-parse.
+    # Matched as a single literal so both sentences stay coupled in
+    # ``DyadrineAttackEffect``. Only Dyadrine in the pool has this exact
+    # surface; deferred until a second card with this shape appears.
+    if phrase == (
+        "you may remove a +1/+1 counter from each of two creatures you "
+        "control. If you do, draw a card and create a 2/2 colorless Robot "
+        "artifact creature token"
+    ):
+        return DyadrineAttackEffect()
+    # Alpharael, Dreaming Acolyte's discard tail from the ETB sentence
+    # split. After ``_split_effect_sentences`` carves "draw two cards"
+    # off the front, this piece lands here. It is a "do X unless Y"
+    # choice (discard two vs. discard one artifact) modeled by
+    # ``AlpharaelDreamingAcolyteDiscardEffect``. Only Alpharael in the
+    # pool has this exact surface; deferred until a second card with a
+    # similar "discard N unless you discard a <type>" shape appears.
+    if phrase == (
+        "discard two cards unless you discard an artifact card"
+    ):
+        return AlpharaelDreamingAcolyteDiscardEffect()
+    # Tannuk, Memorial Ensign's landfall trigger body. The phrase spans
+    # two printed sentences (damage + conditional draw on the second
+    # resolution); the second sentence is anaphoric to the per-source
+    # resolution count tracked in ``state.ability_resolutions_this_turn``.
+    # The sentence-splitting grammar would carve at the ``. If`` boundary
+    # but "if this is the second time this ability has resolved this turn,
+    # draw a card" doesn't standalone-parse (no grammar primitive for
+    # per-source resolution counting). Matched as a literal so both
+    # sentences stay coupled in ``TannukEnsignLandfallEffect``. Only
+    # Tannuk, Memorial Ensign in the pool has this exact surface; deferred
+    # until a second card with a "Nth-resolution-this-turn" conditional
+    # appears.
+    if phrase == (
+        "this creature deals 1 damage to each opponent. "
+        "If this is the second time this ability has resolved this turn, "
+        "draw a card"
+    ):
+        return TannukEnsignLandfallEffect()
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound

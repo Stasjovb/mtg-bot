@@ -585,6 +585,11 @@ class CardPrinting:
     # you may instead create that many tokens that are copies of
     # enchanted permanent." Moonlit Meditation. Aura-only flag.
     replaces_first_tokens_with_copies: bool = False
+    # "You may look at the top card of your library any time."
+    # Mm'menon, the Right Hand. In simulation both players have perfect
+    # information, so this flag is informational; it faithfully records
+    # the printed oracle line without adding engine-invisible behavior.
+    grants_look_at_top_of_library: bool = False
     # "You may cast artifact spells from the top of your library."
     # Mm'menon, the Right Hand. legal_actions offers a CastSpell for
     # the controller's top-of-library card when it's an artifact and
@@ -1058,6 +1063,7 @@ def make_creature(
     grants_additional_land_per_turn: int = 0,
     grants_play_lands_from_graveyard: bool = False,
     extra_etb_trigger: int = 0,
+    grants_look_at_top_of_library: bool = False,
     grants_cast_artifact_from_top_of_library: bool = False,
     grants_food_to_your_artifacts: bool = False,
     grants_food_ability_to_your_artifacts: bool = False,
@@ -1115,6 +1121,7 @@ def make_creature(
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         extra_etb_trigger=extra_etb_trigger,
+        grants_look_at_top_of_library=grants_look_at_top_of_library,
         grants_cast_artifact_from_top_of_library=(
             grants_cast_artifact_from_top_of_library
         ),
