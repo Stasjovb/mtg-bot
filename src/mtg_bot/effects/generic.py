@@ -1574,6 +1574,10 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
     # targets. Matches "return target creature or enchantment card from
     # your graveyard to the battlefield" — Rescue Skiff.
     or_enchantment: bool = False
+    # When True, Spacecraft cards in the graveyard are also legal
+    # targets. Matches "return target creature or Spacecraft card from
+    # your graveyard to the battlefield" — Seedship Broodtender.
+    or_spacecraft: bool = False
 
     def requires_target(self) -> bool:
         return True
@@ -1588,6 +1592,7 @@ class ReturnCreatureFromYourGraveyardToBattlefield(Effect):
             if (
                 c.printing.is_creature
                 or (self.or_enchantment and c.printing.is_enchantment)
+                or (self.or_spacecraft and c.printing.is_spacecraft)
             )
             and (
                 self.max_mv is None

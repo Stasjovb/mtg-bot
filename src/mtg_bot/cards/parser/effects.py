@@ -1001,11 +1001,12 @@ _LOOK_TOP_N_REVEAL_OR_COUNTER = re.compile(
 )
 # Mill is "mill <amount> cards" where the amount is either a digit or
 # one of the spelled-out small cardinals (Scryfall printing convention).
-# Singular "mill 1 card" / "mill one card" is intentionally unsupported
-# — no EoE card prints that surface form. Add it the day one ships.
+# Also handles "mill a card" (the ``a`` singular form prints on Icetill
+# Explorer's landfall trigger), aliased to amount=1.
 _MILL_N_CARDS = re.compile(
     rf"^mill (\d+|{_SMALL_CARDINAL_PATTERN}) cards$"
 )
+_MILL_A_CARD = re.compile(r"^mill a card$")
 _DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
 # "Destroy target artifact, enchantment, or creature with flying." —
 # Shattered Wings's destroy clause. Maps to
@@ -1249,6 +1250,18 @@ _RETURN_TARGET_CREATURE_GRAVEYARD_TO_BATTLEFIELD = re.compile(
 _RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD = re.compile(
     r"^return target creature or enchantment card from your graveyard "
     r"to the battlefield$"
+)
+# "Return target creature or Spacecraft card from your graveyard to the
+# battlefield" — Seedship Broodtender's activated sorcery-speed body.
+# Mirrors ``_RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD``
+# above; the only EoE printing with the Spacecraft widening today.
+# Tried BEFORE the bare creature regex below — the bare regex's ``$``
+# anchor on ``battlefield`` wouldn't match the ``or Spacecraft`` rider
+# anyway, but more-specific-first is the convention.
+_RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD = re.compile(
+    r"^return target creature or spacecraft card from your graveyard "
+    r"to the battlefield$",
+    re.IGNORECASE,
 )
 # "Return target creature card with mana value N or less from your
 # graveyard to the battlefield" — narrowed-by-MV reanimation. Surgical
@@ -2949,6 +2962,8 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _MILL_N_CARDS.match(phrase)
     if m is not None:
         return SelfMill(amount=_parse_amount(m.group(1)))
+    if _MILL_A_CARD.match(phrase) is not None:
+        return SelfMill(amount=1)
     if _DESTROY_TARGET_ARTIFACT.match(phrase) is not None:
         return DestroyTargetArtifact()
     if _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE.match(
@@ -3220,6 +3235,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # reanimator. Mirrors the to-hand sibling's max_mv rider.
         return ReturnCreatureFromYourGraveyardToBattlefield(
             max_mv=int(m.group(1)),
+        )
+    if _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD.match(
+        phrase
+    ) is not None:
+        # ``return target creature or Spacecraft card from your graveyard
+        # to the battlefield`` — Seedship Broodtender's activated body.
+        # ``or_spacecraft=True`` widens the legal-target pool to include
+        # Spacecraft cards in the graveyard alongside creature cards.
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            or_spacecraft=True,
         )
     if _RETURN_TARGET_CREATURE_OR_ENCHANTMENT_GRAVEYARD_TO_BATTLEFIELD.match(
         phrase

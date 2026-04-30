@@ -103,6 +103,7 @@ from mtg_bot.cards.parser.cost_reduction import (
     _parse_external_cost_reduction_line,
 )
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_additional_land_per_turn_line,
     _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
     _parse_dynamic_pt_formula_line,
@@ -114,6 +115,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
     _parse_nonbasic_lands_are_mountains_line,
+    _parse_play_lands_from_graveyard_line,
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_token_doubler_line,
     _parse_unblockable_if_two_spells_cast_this_turn_line,
@@ -314,44 +316,11 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Seedship Broodtender {B}{G} 2/3 Insect Citizen.
-        # ETB: mill 3. Activated sorcery-speed: {3}{B}{G}, sac self →
-        # reanimate a creature from your graveyard.
-        "Seedship Broodtender": make_creature(
-            "Seedship Broodtender", "{B}{G}", 2, 3,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SelfMill(amount=3),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=cost(mana="{3}{B}{G}", sacrifice_self=True),
-                    effect=ReturnCreatureFromYourGraveyardToBattlefield(),
-                    sorcery_speed=True,
-                ),
-            ),
-        ),
         # Genemorph Imago {G}{U} 1/3 Insect Druid — flying.
         # Simplified: drops Landfall base P/T 3/3 or 6/6 rider.
         "Genemorph Imago": make_creature(
             "Genemorph Imago", "{G}{U}", 1, 3,
             keywords={"flying"},
-        ),
-        # Icetill Explorer {2}{G}{G} 2/4 Insect Scout.
-        # May play additional land each turn + may play lands from
-        # graveyard + landfall → mill 1.
-        "Icetill Explorer": make_creature(
-            "Icetill Explorer", "{2}{G}{G}", 2, 4,
-            grants_additional_land_per_turn=1,
-            grants_play_lands_from_graveyard=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
-                    effect=SelfMill(amount=1),
-                ),
-            ),
         ),
         # Possibility Technician {2}{R} 3/3 Kavu Artificer. Warp {R}.
         # Whenever this or another Kavu you control enters: exile top
@@ -1193,6 +1162,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     replaces_draw_with_extra_when_hand_at_most_one = False
     dynamic_pt_formula: str | None = None
     enters_with_counters_from_x: str | None = None
+    grants_additional_land_per_turn = 0
+    grants_play_lands_from_graveyard = False
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1379,6 +1350,18 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # +1/+1 counters (Broodguard Elite). Idempotent.
             enters_with_counters_from_x = "x"
             continue
+        if _parse_additional_land_per_turn_line(line):
+            # ``You may play an additional land on each of your turns.``
+            # Increments the grant counter; a card with the line twice
+            # (no current EoE printing) would grant two additional land
+            # plays, matching the engine field's int semantics.
+            grants_additional_land_per_turn += 1
+            continue
+        if _parse_play_lands_from_graveyard_line(line):
+            # ``You may play lands from your graveyard.`` — Icetill
+            # Explorer's graveyard land-play static. Idempotent.
+            grants_play_lands_from_graveyard = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1480,4 +1463,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ),
         dynamic_pt_formula=dynamic_pt_formula,
         enters_with_counters_from_x=enters_with_counters_from_x,
+        grants_additional_land_per_turn=grants_additional_land_per_turn,
+        grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
     )

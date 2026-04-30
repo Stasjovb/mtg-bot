@@ -566,3 +566,43 @@ def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
     if m is None:
         return None
     return m.group("subtype"), m.group("cost")
+
+
+# ``You may play an additional land on each of your turns.`` — Icetill
+# Explorer's printed static land-drop grant. The engine field
+# ``grants_additional_land_per_turn: int`` is consumed by the turn
+# engine when counting legal land plays; the printing increments the
+# controller's per-turn quota by this value. Matched as a literal
+# string — Icetill Explorer is the only card in the pool with this
+# exact surface today; broader grammar deferred until a second example
+# with a different count (``two additional lands``) exists.
+_ADDITIONAL_LAND_PER_TURN_LINE = (
+    "You may play an additional land on each of your turns."
+)
+
+
+def _parse_additional_land_per_turn_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``You may play an additional
+    land on each of your turns.`` static, else ``False``. Increments
+    the ``grants_additional_land_per_turn`` kwarg on ``make_creature``
+    by 1.
+    """
+    return line.strip() == _ADDITIONAL_LAND_PER_TURN_LINE
+
+
+# ``You may play lands from your graveyard.`` — Icetill Explorer's
+# printed lands-from-graveyard static. The engine field
+# ``grants_play_lands_from_graveyard: bool`` is consumed by the land-
+# play pipeline to allow the controller to play land cards from their
+# graveyard as well as their hand. Matched as a literal string — only
+# card in the pool with this surface today; deferred until a second
+# example exists.
+_PLAY_LANDS_FROM_GRAVEYARD_LINE = "You may play lands from your graveyard."
+
+
+def _parse_play_lands_from_graveyard_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``You may play lands from
+    your graveyard.`` static, else ``False``. Flips the
+    ``grants_play_lands_from_graveyard`` kwarg on ``make_creature``.
+    """
+    return line.strip() == _PLAY_LANDS_FROM_GRAVEYARD_LINE
