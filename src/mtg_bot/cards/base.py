@@ -619,6 +619,16 @@ class CardPrinting:
     # pre-built MMNEMON_BLUE_MANA_GRANTED_ABILITY to artifact
     # activations.
     grants_blue_mana_ability_to_your_artifacts: bool = False
+    # "Artifact cards and red creature cards in your hand have warp
+    # {cost}." Tannuk, Steadfast Second's hand-warp grant. Stored as a
+    # tuple of (type_filter_str, warp_cost_str) where type_filter_str is
+    # a canonical description of the affected card types (e.g. "artifact
+    # or red creature"). The engine's warp-cast pipeline does not yet
+    # consult this field — the mechanic requires per-hand-card dynamic
+    # warp-cost injection which is deferred until that pipeline lands.
+    # The field is populated at parse time so the printing faithfully
+    # reflects the oracle line; the engine gap is acknowledged here.
+    grants_warp_in_hand_to: tuple[str, str] | None = None
     # Equipment flag. When this equipment is attached to a creature,
     # that creature gains an activated ability to control the next
     # turn of a target opponent (The Dominion Bracelet). The full
@@ -1069,6 +1079,7 @@ def make_creature(
     grants_food_to_your_artifacts: bool = False,
     grants_food_ability_to_your_artifacts: bool = False,
     grants_blue_mana_ability_to_your_artifacts: bool = False,
+    grants_warp_in_hand_to: "tuple[str, str] | None" = None,
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     external_cost_reductions: tuple[ExternalCostReduction, ...] = (),
@@ -1133,6 +1144,7 @@ def make_creature(
         grants_blue_mana_ability_to_your_artifacts=(
             grants_blue_mana_ability_to_your_artifacts
         ),
+        grants_warp_in_hand_to=grants_warp_in_hand_to,
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),

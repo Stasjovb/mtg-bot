@@ -367,11 +367,27 @@ def test_memorial_team_leader_is_claimed_end_to_end():
     assert "Memorial Team Leader" in claimed
 
 
-def test_tannuk_steadfast_second_claimed_by_bespoke():
-    # Tannuk, Steadfast Second is now claimed via _BESPOKE_LEGENDARY_CREATURES
-    # in creature_builder.py. The second clause ("Artifact cards and red
-    # creature cards in your hand have warp {2}{R}.") is an unmodeled
-    # grant-on-cards-in-hand effect that is intentionally dropped in the
-    # bespoke entry; the card ships with only the haste-granting static.
-    claimed = OracleParserCardSource().claimed_names
-    assert "Tannuk, Steadfast Second" in claimed
+def test_tannuk_steadfast_second_claimed_by_grammar():
+    # Tannuk, Steadfast Second is now claimed by the oracle-text grammar:
+    # Line 1 ("Other creatures you control have haste.") parses via the
+    # keyword-only anthem recognizer; line 2 ("Artifact cards and red
+    # creature cards in your hand have warp {2}{R}.") parses via the new
+    # _parse_hand_warp_grant_line recognizer — the (type_filter, cost)
+    # pair is stored in grants_warp_in_hand_to on the printing. The engine
+    # does not yet enforce the dynamic warp grant; the field is populated
+    # for oracle-text fidelity.
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    p = OracleParserCardSource().get_printings()["Tannuk, Steadfast Second"]
+    assert "Tannuk, Steadfast Second" in OracleParserCardSource().claimed_names
+    assert p.grants_warp_in_hand_to is not None
+    type_filter, cost = p.grants_warp_in_hand_to
+    assert "Artifact" in type_filter
+    assert cost == "{2}{R}"
+    # Haste anthem static still present.
+    from mtg_bot.cards.base import StaticScope
+    haste_statics = [
+        s for s in p.static_abilities
+        if s.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL
+        and "haste" in s.granted_keywords
+    ]
+    assert len(haste_statics) == 1

@@ -775,6 +775,7 @@ def _parse_toughness_as_station_power_line(line: str) -> bool:
     return line.strip() == _TOUGHNESS_AS_STATION_POWER_LINE
 
 
+<<<<<<< HEAD
 # ── Dyadrine "enters with mana-spent counters" ────────────────────────────────
 #
 # ``Dyadrine enters with a number of +1/+1 counters on it equal to the
@@ -898,3 +899,37 @@ def _parse_artifacts_have_blue_mana_ability_line(line: str) -> bool:
     activations for the controller.
     """
     return line.strip() == _ARTIFACTS_HAVE_BLUE_MANA_ABILITY_LINE
+
+
+# ``<Type(s)> cards in your hand have warp {cost}.`` — Tannuk, Steadfast
+# Second's hand-warp grant. The subject phrase describes the type filter
+# (e.g. ``"Artifact cards and red creature cards"``); the cost is a mana
+# cost string. Both are captured so the printing records the oracle line
+# faithfully in ``grants_warp_in_hand_to=(type_filter, cost_str)``.
+#
+# The engine's warp-cast pipeline does not yet consult this field (warp
+# costs are currently a static property of the printed card, not a
+# dynamic grant from a battlefield permanent). The field is stored
+# honestly so the printing reflects oracle text; the engine gap is
+# acknowledged here. Only Tannuk, Steadfast Second in the pool today;
+# broader grammar deferred until a second example exists.
+_HAND_WARP_GRANT_LINE = re.compile(
+    r"^(.+?) cards in your hand have warp "
+    r"(\{[^}]+\}(?:\{[^}]+\})*)(?: \([^)]*\))?(?:\.)?"
+    r"$"
+)
+
+
+def _parse_hand_warp_grant_line(line: str) -> "tuple[str, str] | None":
+    """Return ``(type_filter_str, warp_cost_str)`` if ``line`` is a
+    ``<types> cards in your hand have warp {cost}.`` clause, else
+    ``None``. The creature builder stores the result in
+    ``grants_warp_in_hand_to`` on ``make_creature``.
+
+    The engine does not yet enforce the warp grant at cast time;
+    the field is populated at parse time for oracle-text fidelity.
+    """
+    m = _HAND_WARP_GRANT_LINE.match(line.strip())
+    if m is None:
+        return None
+    return m.group(1), m.group(2)

@@ -120,6 +120,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_spell_cant_be_countered_line,
     _parse_token_doubler_line,
+    _parse_hand_warp_grant_line,
     _parse_toughness_as_damage_line,
     _parse_toughness_as_station_power_line,
     _parse_unblockable_if_two_spells_cast_this_turn_line,
@@ -736,24 +737,18 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # Removed from this table so the grammar path claims it.
         # Mm'menon, the Right Hand — migrated; see migration comment above.
         # Tannuk, Memorial Ensign — migrated; see migration comment above.
-        # Tannuk, Steadfast Second `{2}{R}{R}` 3/5 Legendary Creature —
-        # Kavu Pilot. Static: other creatures you control have haste.
-        # Second oracle line: "Artifact cards and red creature cards in
-        # your hand have warp {2}{R}."
-        # SKIP: The second oracle line grants warp to cards in hand by
-        # type — a printing-level effect with no grammar recognizer.
-        # The grammar would fail on this line and reject the card.
-        # Requires a new grammar recognizer for the hand-warp grant.
-        "Tannuk, Steadfast Second": make_creature(
-            "Tannuk, Steadfast Second", "{2}{R}{R}", 3, 5,
-            legendary=True,
-            static_abilities=(
-                StaticAbility(
-                    scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-                    granted_keywords=frozenset({"haste"}),
-                ),
-            ),
-        ),
+        # Tannuk, Steadfast Second migrated to parameterized grammar:
+        # Line 1 — "Other creatures you control have haste." parses via
+        # the keyword-only anthem recognizer (``_ANTHEM_KEYWORD_LINE`` in
+        # ``statics.py``) with scope ``OTHER_CREATURES_YOU_CONTROL``.
+        # Line 2 — "Artifact cards and red creature cards in your hand
+        # have warp {2}{R}." parses via the new
+        # ``_parse_hand_warp_grant_line`` recognizer in
+        # ``printing_keywords.py``; result stored in
+        # ``grants_warp_in_hand_to`` on the printing. The engine's
+        # warp-cast pipeline does not yet enforce the dynamic warp grant;
+        # the field is populated for oracle-text fidelity.
+        # Removed from this table so the grammar path claims it.
         # Ragost, Deft Gastronaut `{R}{W}` 2/2 Legendary Creature —
         # Lobster Citizen. Artifacts you control are also Foods and have
         # the Food sac ability. {1}, {T}, Sacrifice a Food: Ragost deals
@@ -957,6 +952,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     combat_damage_cant_be_prevented = False
     grants_toughness_as_damage_for_creatures_you_control = False
     grants_toughness_as_station_power_for_creatures_you_control = False
+    grants_warp_in_hand_to: "tuple[str, str] | None" = None
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -1019,6 +1015,18 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # printing somehow had two we just keep the last — parity
             # against the static registry will catch any drift.
             warp = warp_cost
+            continue
+        hand_warp = _parse_hand_warp_grant_line(line)
+        if hand_warp is not None:
+            # ``<types> cards in your hand have warp {cost}.`` — Tannuk,
+            # Steadfast Second's printed hand-warp grant. Stores the
+            # (type_filter_str, cost_str) pair in ``grants_warp_in_hand_to``
+            # on the printing. The engine does not yet enforce the warp
+            # grant at cast time (the warp-cast pipeline currently reads
+            # warp costs from the card's own printing, not from battlefield
+            # sources); the field is populated here for oracle-text
+            # fidelity. Keep the last-seen pair if somehow two appear.
+            grants_warp_in_hand_to = hand_warp
             continue
         if _parse_warp_castable_from_graveyard_line(line):
             # ``You may cast this card from your graveyard using its warp
@@ -1423,4 +1431,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         grants_toughness_as_station_power_for_creatures_you_control=(
             grants_toughness_as_station_power_for_creatures_you_control
         ),
+        grants_warp_in_hand_to=grants_warp_in_hand_to,
     )
