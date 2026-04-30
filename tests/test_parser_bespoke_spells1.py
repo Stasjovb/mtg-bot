@@ -67,11 +67,14 @@ def _claimed_names() -> frozenset[str]:
 # Table-size regression                                               #
 # ------------------------------------------------------------------ #
 
-def test_bespoke_table_shrank_by_six():
-    # Five Delirium-bearing entries plus Temporal Intervention were
-    # removed from the table. Previous count was 50; after this batch
-    # it should be 44.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 44
+def test_bespoke_table_count():
+    # Removals in this branch:
+    #   5 Delirium-bearing (Impossible Inferno, Violent Urge,
+    #     Drag to the Roots, Let's Play a Game, Demonic Counsel)
+    #   + Temporal Intervention (directed-discard recognizer)
+    #   + Dual-Sun Technique (keyword-grant-with-draw recognizer)
+    # 50 - 7 = 43 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 43
 
 
 # ------------------------------------------------------------------ #

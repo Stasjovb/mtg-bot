@@ -135,9 +135,10 @@ def test_zealous_display_claimed_by_parser():
 def test_dual_sun_technique_claimed_by_parser():
     # Dual-Sun Technique ``{1}{W}`` Instant — grant double strike
     # plus conditional draw rider (``If it has a +1/+1 counter on
-    # it, draw a card.``). The rider doesn't parse as a standalone
-    # effect, so the spell is claimed via the whole-spell exact-
-    # text dispatcher.
+    # it, draw a card.``). Migrated from the whole-spell exact-text
+    # tier to the per-clause grammar (effects.py's
+    # ``_GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_
+    # UEOT``); claim is end-to-end via the active source's printing.
     assert "Dual-Sun Technique" in _claimed_names()
 
 
@@ -214,15 +215,26 @@ def test_dispatch_zealous_display_returns_engine_class():
     )
 
 
-def test_dispatch_dual_sun_technique_returns_engine_class():
-    # The conditional draw rider lands on the engine class's
-    # ``draw_if_target_has_plus_one_counter`` field; the keyword
-    # grant rides the standard pump path. ``you_control_only=True``
-    # restricts the legal-target pool to your own creatures.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_dual_sun_technique_no_bespoke_entry():
+    # Dual-Sun Technique migrated from the whole-spell exact-text tier
+    # to the per-clause grammar (effects.py's
+    # ``_GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_
+    # UEOT``); whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Target creature you control gains double strike until end "
+        "of turn. If it has a +1/+1 counter on it, draw a card."
+    ) is None
+
+
+def test_dual_sun_technique_parses_via_per_clause_grammar():
+    # Belt-and-suspenders that the per-clause grammar correctly claims
+    # the 2-sentence body with the keyword grant and conditional draw.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Target creature you control gains double strike until end "
         "of turn. If it has a +1/+1 counter on it, draw a card."
     )
+    eff = _parse_spell_effect_phrase(body, "Dual-Sun Technique")
     assert eff == PumpTargetCreatureUntilEOT(
         power_bonus=0,
         toughness_bonus=0,

@@ -2045,6 +2045,35 @@ _GAIN_KEYWORDS_SELF_UEOT = re.compile(
 _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
     r"^another target creature you control gains (.+) until end of turn$"
 )
+# "Target creature you control gains <kw> until end of turn. If it
+# has a +1/+1 counter on it, draw a card." — keyword-grant on a
+# you-control target with a conditional draw rider (Dual-Sun Technique
+# ``{1}{W}{U}`` Instant). The two sentences are matched as a single
+# multi-sentence recognizer because the second sentence's ``it``
+# pronoun is anaphoric to the first sentence's target, so splitting
+# them would lose the per-target conditionality — the draw must fire
+# on the SAME creature that received the keyword grant, not an
+# independently selected target.
+#
+# Two capture groups: the keyword body (group 1) for the grant, and
+# the draw amount is fixed at 1 (the only form printed today).
+# Maps to ``PumpTargetCreatureUntilEOT(power_bonus=0,
+# toughness_bonus=0, granted_keywords=..., you_control_only=True,
+# draw_if_target_has_plus_one_counter=1)``.
+#
+# Currently only Dual-Sun Technique in the EoE/DSK pool fits this
+# exact surface; the recognizer is a literal-line match because no
+# second card with a varying piece (e.g. different draw amount or
+# different counter condition) exists today. Per parser CLAUDE.md,
+# a literal is acceptable when exactly one card fits and the
+# docstring explains why generalization is deferred.  A future card
+# with ``draw two cards instead`` or ``if it has a loyalty counter``
+# would share the underlying shape; at that point replace this with
+# a parameterized regex capturing the counter type and draw amount.
+_GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_UEOT = re.compile(
+    r"^target creature you control gains (.+) until end of turn\. "
+    r"If it has a \+1/\+1 counter on it, draw a card$"
+)
 # "Target creature gains <kw>[ and <kw2>...] until end of turn." —
 # pure keyword-grant variant with no P/T pump and no control
 # restriction (Horrid Vigor's ``Target creature gains deathtouch and
@@ -3747,6 +3776,30 @@ def _parse_effect(phrase: str) -> Effect | None:
     # line whitelist via ``_parse_keyword_grant_body``; rejection
     # returns ``None`` so an unknown keyword keeps the wrapping card
     # unclaimed rather than silently dropping the grant.
+    #
+    # Tried BEFORE the ``another target creature you control gains …``
+    # shape so the more-specific 2-sentence body (including the
+    # conditional draw rider) wins on phrases that carry it.
+    m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_UEOT.match(
+        phrase
+    )
+    if m is not None:
+        # ``target creature you control gains <kw> until end of turn.
+        # If it has a +1/+1 counter on it, draw a card`` — Dual-Sun
+        # Technique's 2-sentence body. The keyword body is validated
+        # via ``_parse_keyword_grant_body`` (rejection returns None);
+        # ``draw_if_target_has_plus_one_counter=1`` fires when the
+        # chosen target has at least one +1/+1 counter at resolve time.
+        keywords = _parse_keyword_grant_body(m.group(1))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=keywords,
+            you_control_only=True,
+            draw_if_target_has_plus_one_counter=1,
+        )
     m = _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT.match(
         phrase
     )
