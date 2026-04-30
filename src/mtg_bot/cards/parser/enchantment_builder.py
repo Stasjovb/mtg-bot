@@ -706,15 +706,18 @@ def _build_duskmourns_domination() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    # Non-Aura (unchanged — not yet migrated to oracle-text path)
-    "Loading Zone": _build_loading_zone,
-    "Weftwalking": _build_weftwalking,
+    # Non-Aura cards remaining on the bespoke path:
+    #
+    # Sothera, the Supervoid — bespoke DIES trigger (SotheraExileOpponent
+    # CreatureEffect) and bespoke end-step trigger (SotheraEndStepReanimate
+    # Effect); deferred until those effects land as grammar-level phrases.
     "Sothera, the Supervoid": _build_sothera_the_supervoid,
+    # Terrasymbiosis — COUNTERS_ADDED trigger with "you may draw that many
+    # cards" (DrawCardsEqualToResolvingCounterAmount, bespoke). The trigger
+    # phrase and the "Do this only once each turn." rider both need grammar
+    # work; deferred to the next batch.
     "Terrasymbiosis": _build_terrasymbiosis,
-    "Bioengineered Future": _build_bioengineered_future,
-    "Leyline of Mutation": _build_leyline_of_mutation,
-    # Auras that remain on the bespoke path because their oracle text
-    # contains bespoke effect classes not yet in the grammar:
+    # Aura remaining on the bespoke path:
     #
     # Chorale of the Void — the attacks trigger body is
     # ChoraleReanimateDefenderGraveCreatureEffect (no parseable effect
@@ -1351,6 +1354,103 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
 # explicit opt-in for that card. Other enchantments still take the
 # name-dispatched bespoke factory path (or fall through to silent
 # skip).
+# ---------------------------------------------------------------------------
+# Non-Aura enchantment oracle-text static recognizers
+# ---------------------------------------------------------------------------
+#
+# Literal lines whose corresponding engine flag is a boolean or string field
+# on ``make_enchantment``. Each is checked in ``_build_enchantment_via_
+# oracle_text`` before the trigger parser so the flag accumulates before
+# any trigger lines are processed. Adding a new flag-line is a one-entry
+# addition here + one kwarg name in the call to ``make_enchantment`` below.
+
+# "If one or more counters would be put on a creature, Spacecraft, or
+# Planet you control, twice that many of each of those kinds of counters
+# are put on it instead." → is_counter_doubler=True. (Loading Zone.)
+# Only card in the pool with this exact counter-doubler surface; deferred
+# generalization until a second counter-doubler enchantment lands.
+_COUNTER_DOUBLER_LINE = (
+    "If one or more counters would be put on a creature, Spacecraft, or "
+    "Planet you control, twice that many of each of those kinds of "
+    "counters are put on it instead."
+)
+
+# "Each creature you control enters with an additional +1/+1 counter on it
+# for each land that entered the battlefield under your control this turn."
+# → grants_etb_counter_per_land_entered_this_turn=True. (Bioengineered
+# Future.) Only card in the pool with this surface today; deferred until
+# a second example exists.
+_GRANTS_ETB_COUNTER_PER_LAND_LINE = (
+    "Each creature you control enters with an additional +1/+1 counter "
+    "on it for each land that entered the battlefield under your control "
+    "this turn."
+)
+
+# "The first spell each player casts during each of their turns may be cast
+# without paying its mana cost." → grants_first_spell_each_turn_free=True.
+# (Weftwalking.) Only card in the pool with this surface; deferred until a
+# second example exists.
+_GRANTS_FIRST_SPELL_FREE_LINE = (
+    "The first spell each player casts during each of their turns may be "
+    "cast without paying its mana cost."
+)
+
+# Honest no-op lines for non-Aura enchantments. Lines that appear on
+# migrated cards but map to inert / unoffered / engine-unmodeled mechanics.
+# The recognizer silently drops them so the remaining lines still parse.
+#
+# - Leyline of Mutation's two lines are both inert in this engine:
+#   opening-hand replacement and the alt-cost offer are not modeled.
+#   Both are therefore honest no-ops per the permission-not-offered
+#   precedent (same shape as Lecture Hall / Shardmage's Rescue).
+_NONAURA_HONEST_NOOP_LINES: frozenset[str] = frozenset({
+    # Leyline of Mutation: opening-hand replacement (engine never places
+    # it on the battlefield at game start — not modeled).
+    "If this card is in your opening hand, you may begin the game "
+    "with it on the battlefield.",
+    # Leyline of Mutation: alt-cost offer (not wired in legal.py —
+    # same permission-not-offered shape Lecture Hall ships).
+    "You may pay {W}{U}{B}{R}{G} rather than pay the mana cost for "
+    "spells you cast.",
+})
+
+
+# Cards in this set are allowed to produce a cost-and-name-only
+# ``CardPrinting`` even when ``_build_enchantment_via_oracle_text``
+# recognizes no actionable lines. Every line on these cards is either
+# in ``_NONAURA_HONEST_NOOP_LINES`` or is otherwise inert; the printing
+# sits on the battlefield doing nothing, which is rules-correct given
+# that none of its surface clauses is wired through the engine today.
+# (Same honest-no-op discipline the bespoke ``_build_leyline_of_mutation``
+# factory uses, documented in the bespoke docstring.)
+_UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES: frozenset[str] = frozenset({
+    "Leyline of Mutation",
+})
+
+
+# Literal trigger-line recognizers for non-Aura enchantments whose ETB
+# uses a bespoke engine class not yet in the general grammar. Parallel to
+# ``_AURA_LITERAL_TRIGGER_LINES`` for non-Aura paths.
+_NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
+    # Weftwalking ETB — "When this enchantment enters, if you cast it,
+    # shuffle your hand and graveyard into your library, then draw seven
+    # cards." → WeftwalkingETBEffect.
+    # The "if you cast it" intervening-if gate is honored by the engine
+    # class (reads ``state.resolving_source`` to check if it was cast).
+    # Only Weftwalking in the pool has this ETB; generalization deferred
+    # until a second card with a shuffle-hand-and-graveyard-then-draw-N
+    # surface exists.
+    (
+        "When this enchantment enters, if you cast it, shuffle your hand "
+        "and graveyard into your library, then draw seven cards."
+    ): TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=WeftwalkingETBEffect(),
+    ),
+}
+
+
 _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Deafening Silence",
     "Burgeoning",
@@ -1369,6 +1469,20 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # Munitions token. Trigger phrase and named-token recognizer added
     # in wave 5.
     "Weapons Manufacturing",
+    # Wave 1 (bespoke-enchantments) non-Aura additions:
+    # Loading Zone — counter-doubler static + warp. The counter-doubler
+    # line is recognized as a literal; warp parses via _parse_warp_line.
+    "Loading Zone",
+    # Bioengineered Future — ETB create-Lander trigger (parseable) +
+    # grants_etb_counter_per_land_entered_this_turn static (literal).
+    "Bioengineered Future",
+    # Leyline of Mutation — both printed lines are honest no-ops.
+    # The printing sits inert, same shape as the bespoke factory.
+    "Leyline of Mutation",
+    # Weftwalking — grants_first_spell_each_turn_free static (literal)
+    # + ETB trigger deferred as honest no-op (WeftwalkingETBEffect not
+    # yet in the grammar).
+    "Weftwalking",
 })
 
 
@@ -1383,6 +1497,15 @@ def _build_enchantment_via_oracle_text(
     cards that have been explicitly migrated. Returns ``None`` for
     any card with an unrecognized line so the silent-skip path
     mirrors the rest of the parser.
+
+    Printing-flag statics recognized (in addition to warp, ward, and
+    restricts_noncreature_spells):
+    - ``_COUNTER_DOUBLER_LINE`` → ``is_counter_doubler=True``
+    - ``_GRANTS_ETB_COUNTER_PER_LAND_LINE`` →
+      ``grants_etb_counter_per_land_entered_this_turn=True``
+    - ``_GRANTS_FIRST_SPELL_FREE_LINE`` →
+      ``grants_first_spell_each_turn_free=True``
+    - ``_NONAURA_HONEST_NOOP_LINES`` → silently dropped (honest no-ops)
     """
     name = card.get("name", "")
     if name not in _UNIFIED_ENCHANTMENT_NAMES:
@@ -1391,6 +1514,9 @@ def _build_enchantment_via_oracle_text(
     text = card.get("oracle_text", "")
     legendary = "Legendary" in card.get("type_line", "")
     restricts_noncreature_spells = False
+    is_counter_doubler = False
+    grants_etb_counter_per_land = False
+    grants_first_spell_free = False
     ward: str | None = None
     warp: str | None = None
     triggers: list[TriggeredAbility] = []
@@ -1398,6 +1524,9 @@ def _build_enchantment_via_oracle_text(
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
+            continue
+        # Honest no-op lines — recognized and dropped
+        if line in _NONAURA_HONEST_NOOP_LINES:
             continue
         if _parse_restricts_noncreature_spells_line(line):
             restricts_noncreature_spells = True
@@ -1410,6 +1539,23 @@ def _build_enchantment_via_oracle_text(
         if warp_cost is not None:
             warp = warp_cost
             continue
+        # Counter-doubler static (Loading Zone)
+        if line == _COUNTER_DOUBLER_LINE:
+            is_counter_doubler = True
+            continue
+        # ETB-counter-per-land static (Bioengineered Future)
+        if line == _GRANTS_ETB_COUNTER_PER_LAND_LINE:
+            grants_etb_counter_per_land = True
+            continue
+        # First-spell-free static (Weftwalking)
+        if line == _GRANTS_FIRST_SPELL_FREE_LINE:
+            grants_first_spell_free = True
+            continue
+        # Literal bespoke trigger lines for non-Aura enchantments
+        literal_trigger = _NONAURA_LITERAL_TRIGGER_LINES.get(line)
+        if literal_trigger is not None:
+            triggers.append(literal_trigger)
+            continue
         parsed_trigger = _parse_triggered_ability_line(line, name=name)
         if parsed_trigger is not None:
             if isinstance(parsed_trigger, tuple):
@@ -1421,9 +1567,20 @@ def _build_enchantment_via_oracle_text(
         # statics — falls through to the silent-skip path.
         return None
 
-    if not restricts_noncreature_spells and not triggers:
+    has_any_recognized = (
+        restricts_noncreature_spells
+        or triggers
+        or is_counter_doubler
+        or grants_etb_counter_per_land
+        or grants_first_spell_free
+        or ward is not None
+        or warp is not None
+    )
+    if not has_any_recognized and name not in _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES:
         # Nothing recognized — leave the card for a future grammar
-        # slice rather than emit a blank Enchantment.
+        # slice rather than emit a blank Enchantment. Exception: cards
+        # in _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES are explicitly
+        # all-no-op and still emit a cost-and-name-only printing.
         return None
 
     return make_enchantment(
@@ -1433,6 +1590,11 @@ def _build_enchantment_via_oracle_text(
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells
         ),
+        is_counter_doubler=is_counter_doubler,
+        grants_etb_counter_per_land_entered_this_turn=(
+            grants_etb_counter_per_land
+        ),
+        grants_first_spell_each_turn_free=grants_first_spell_free,
         ward=ward,
         warp=warp,
         triggered_abilities=tuple(triggers),
