@@ -64,6 +64,7 @@ from mtg_bot.cards.base import (
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
     ExileTargetCreatureUntilSourceLeaves,
+    ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileOpponentsNonlandPermanentUntilLeaves,
     BoilerbilgesRipperETBEffect,
     ExorciseEffect,
@@ -579,6 +580,19 @@ _DESTROY_TARGET_CREATURE_OR_ENCHANTMENT = re.compile(
     r"^destroy target creature or enchantment$"
 )
 _COUNTER_TARGET_SPELL = re.compile(r"^counter target spell$")
+# "Counter target sorcery spell." — Warping Wail's mode 2. Same engine
+# class as the bare counterspell, with ``filter_types=frozenset({"Sorcery"})``
+# to gate which stack items are legal targets. Tried BEFORE the bare
+# ``counter target spell`` regex so the more-specific filter-typed shape
+# wins; the bare regex's ``$`` anchor won't match this tail anyway.
+# Currently only Warping Wail in the pool fits this shape; the regex
+# is a literal (no capture groups) because the filter is a fixed
+# ``{"Sorcery"}`` frozenset with no varying piece. A future
+# ``counter target instant spell`` or ``counter target creature spell``
+# would land as separate sibling literals here (one filter per
+# literal), following the precedent of the existing
+# ``_COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL`` literal below.
+_COUNTER_TARGET_SORCERY_SPELL = re.compile(r"^counter target sorcery spell$")
 # "Counter target artifact or enchantment spell." — Annul. Same engine
 # class as the bare counterspell, just with a non-empty ``filter_types``
 # frozenset that gates which stack items are legal targets. Tried before
@@ -588,6 +602,22 @@ _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Exile target creature with power or toughness N or less." — Warping
+# Wail's mode 1. Maps to ``ExileTargetCreatureWithPowerOrToughnessAtMost
+# (max_value=N)`` whose combined ``power ≤ N OR toughness ≤ N`` filter
+# gates both target selection and the at-resolve recheck. The captured
+# group is the max value (digit only — the only form printed today).
+# Currently only Warping Wail in the pool fits this shape; the regex
+# captures the max value as a parameter so a future printing with a
+# different threshold (e.g. ``power or toughness 2 or less``) lands on
+# the same primitive without further grammar work.
+# Tried BEFORE the bare ``exile target creature`` regex so the power/
+# toughness-threshold tail wins; the bare regex's ``$`` anchor would
+# never match this longer form anyway, but ordering more-specific
+# before more-general is the convention here.
+_EXILE_TARGET_CREATURE_WITH_POWER_OR_TOUGHNESS_AT_MOST = re.compile(
+    r"^exile target creature with power or toughness (\d+) or less$"
+)
 # "Exile target artifact, enchantment, or creature with power 4 or
 # greater." — Exorcise `{1}{W}` Sorcery (Duskmourn): a single-sentence
 # three-way disjunctive exile (target an artifact OR an enchantment OR
@@ -907,15 +937,22 @@ _TOKEN_COLOR_PATTERN = r"white|blue|black|red|green|colorless"
 _CREATE_CREATURE_TOKEN = re.compile(
     rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?(\d+)/(\d+) "
     rf"({_TOKEN_COLOR_PATTERN}) ([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
-    rf"(artifact )?(enchantment )?creature tokens?(?:\s+with\s+.+)?$",
+    rf"(artifact )?(enchantment )?creature tokens?"
+    rf"""(?:\s+with\s+.+|\.?\s+It has\s+.+)?$""",
     re.DOTALL,
 )
-# The optional trailing ``(?:\s+with\s+.+)?`` allows oracle text that
-# appends the token's built-in abilities as a reminder (e.g. Station
-# Monitor's "…Drone artifact creature token with flying and 'This token
-# can block only creatures with flying.'"): the abilities are already
-# encoded in ``TOKEN_PRINTINGS`` so the trailing description is
-# redundant and can be safely ignored by the recognizer.
+# The optional trailing ``(?:\s+with\s+.+|\.?\s+It has\s+.+)?``
+# accepts both surface forms that append the token's built-in
+# abilities as a reminder:
+#   - ``... with flying and 'This token can block only ...'``
+#     (Station Monitor's Drone token — the ``with`` form).
+#   - ``... Eldrazi Scion creature token. It has "Sacrifice this
+#     token: Add {C}."`` (Warping Wail mode 3 — the ``. It has``
+#     form, where the period + space + "It has" is a sentence-
+#     boundary inside a modal mode line).
+# Both forms are already encoded in ``TOKEN_PRINTINGS`` so the
+# trailing description is redundant and can be safely ignored by
+# the recognizer.
 # Named artifact token shape — ``create a [color] artifact token named
 # [Name] [with abilities]``.  Weapons Manufacturing prints "create a
 # colorless artifact token named Munitions with 'When this token leaves
@@ -3005,6 +3042,12 @@ def _parse_effect(phrase: str) -> Effect | None:
     # the EoE/Duskmourn surface form that introduced this primitive.
     if _TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN.match(phrase) is not None:
         return GrantUnblockableUEOT()
+    # ``counter target sorcery spell`` — Warping Wail mode 2. Tried
+    # BEFORE the bare ``counter target spell`` regex so the more-
+    # specific filter-typed shape wins. Maps to
+    # ``CounterTargetSpell(filter_types=frozenset({"Sorcery"}))``.
+    if _COUNTER_TARGET_SORCERY_SPELL.match(phrase) is not None:
+        return CounterTargetSpell(filter_types=frozenset({"Sorcery"}))
     # ``counter target artifact or enchantment spell`` — Annul. Tried
     # BEFORE the bare ``counter target spell`` regex so the more
     # specific filter-typed shape wins. Both shapes return the same
@@ -3042,6 +3085,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     # a Spacecraft-aware engine class in lockstep with the static.
     if _EXILE_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return ExileTargetCreature()
+    # ``exile target creature with power or toughness N or less`` —
+    # Warping Wail mode 1. Tried BEFORE the bare ``exile target
+    # creature`` regex so the more-specific power/toughness-threshold
+    # tail wins; the bare regex's ``$`` anchor wouldn't match this
+    # longer form anyway. Maps to
+    # ``ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=N)``.
+    m = _EXILE_TARGET_CREATURE_WITH_POWER_OR_TOUGHNESS_AT_MOST.match(phrase)
+    if m is not None:
+        return ExileTargetCreatureWithPowerOrToughnessAtMost(
+            max_value=int(m.group(1)),
+        )
     # ``exile target artifact, enchantment, or creature with power 4 or
     # greater`` — Exorcise's full single-sentence body. Maps to the
     # parameterless ``ExorciseEffect`` engine class which evaluates the

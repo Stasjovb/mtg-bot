@@ -51,7 +51,6 @@ from mtg_bot.cards.base import (
     CounterTargetSpell,
     CreateToken,
     ExileTargetCreature,
-    ExileTargetCreatureWithPowerOrToughnessAtMost,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     CutPropulsionEffect,
     DealDamageAnyTarget,
@@ -754,28 +753,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Close Encounter deals damage equal to the power of the "
         "chosen creature or card to target creature."
     ): CloseEncounterEffect(),
-    # Warping Wail: 3-mode modal whose third mode contains an inner
-    # quoted ability sentence (``It has "Sacrifice this token: Add
-    # {C}."``). The static side simplifies mode 3 to a bare token
-    # creation because the token printing already carries the
-    # sacrifice-for-mana ability — no redundant inner-effect modeling
-    # needed. The modal-mode parser is single-sentence per mode and
-    # the existing per-mode primitives don't cover ``Exile target
-    # creature with power or toughness 1 or less.`` or ``Counter
-    # target sorcery spell.``, so the spell lands here as a whole-
-    # text dispatch entry. The leading ``({C} represents colorless
-    # mana.)`` line is reminder text and stripped before lookup.
-    (
-        "Choose one —\n"
-        "• Exile target creature with power or toughness 1 or less.\n"
-        "• Counter target sorcery spell.\n"
-        "• Create a 1/1 colorless Eldrazi Scion creature token. "
-        "It has \"Sacrifice this token: Add {C}.\""
-    ): ModalChooseOne(modes=(
-        ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1),
-        CounterTargetSpell(filter_types=frozenset({"Sorcery"})),
-        CreateToken(token_printing=TOKEN_PRINTINGS["Eldrazi Scion"]),
-    )),
     # Lithobraking: create-Lander + reflexive-trigger optional sac.
     # The static ships ``Sequence(CreateToken(Lander),
     # OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)))``.
@@ -1420,6 +1397,17 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             # fragment. Keep it whole so ``_parse_modal_choose_one``
             # can match the full header against
             # ``_DELIRIUM_MODAL_HEADER_RE`` on the next pass.
+            new_clauses.append(c)
+        elif _MODAL_MODE_LINE_RE.match(c) is not None:
+            # Modal mode lines (``• <sentence>``) must NOT be sentence-
+            # split, even when the mode sentence contains an embedded
+            # period (e.g. Warping Wail mode 3:
+            # ``• Create a 1/1 colorless Eldrazi Scion creature token.
+            # It has "Sacrifice this token: Add {C}."``) — splitting
+            # would carve the second sentence into an unrecognizable
+            # fragment that makes the modal shape unclaimable. Keep mode
+            # lines whole so ``_parse_modal_choose_one`` can strip the
+            # leading ``• `` and parse the full sentence as a mode.
             new_clauses.append(c)
         else:
             new_clauses.extend(_split_sentences(c))

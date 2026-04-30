@@ -77,8 +77,10 @@ def test_bespoke_table_count():
     #   + Zealous Display (anthem-untap-if-not-your-turn recognizer)
     #   + Emergency Eject (destroy + Lander-for-controller recognizer)
     #   + Hymn of the Faller (Void adds-draw rider recognizer)
-    # 50 - 11 = 39 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 39
+    #   + Warping Wail (exile-p/t-threshold + sorcery-counter +
+    #     "It has" token suffix recognizers)
+    # 50 - 12 = 38 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 38
 
 
 # ------------------------------------------------------------------ #

@@ -377,27 +377,44 @@ def test_detect_kicker_cost_returns_none_when_absent():
 # ---------- Warping Wail ----------
 
 def test_warping_wail_claimed_by_parser():
-    # Warping Wail ``{1}{C}`` Instant — 3-mode modal whose third mode
-    # has an inner quoted ability sentence (``It has "Sacrifice this
-    # token: Add {C}."``) that the modal-mode parser can't carve up;
-    # plus modes 1 and 2 are bespoke target shapes (power-or-tough
-    # gate, sorcery-only counter) without per-clause primitives. The
-    # spell lands as a whole-spell exact-text dispatch entry that
-    # returns the static-side ``ModalChooseOne`` directly. The
-    # leading ``({C} represents colorless mana.)`` reminder line is
-    # stripped before lookup.
+    # Warping Wail ``{1}{C}`` Instant — 3-mode modal now claimed via
+    # the per-clause modal grammar: mode 1 (exile with p/t threshold)
+    # via ``_EXILE_TARGET_CREATURE_WITH_POWER_OR_TOUGHNESS_AT_MOST``,
+    # mode 2 (sorcery counter) via ``_COUNTER_TARGET_SORCERY_SPELL``,
+    # mode 3 (Eldrazi Scion token with inner "It has" suffix) via the
+    # extended ``_CREATE_CREATURE_TOKEN`` regex that accepts the
+    # ``. It has ...`` trailing clause.
     assert "Warping Wail" in _claimed_names()
 
 
-def test_dispatch_warping_wail_returns_modal():
-    # The dispatch key uses the post-reminder-stripping form — the
-    # leading ``({C} represents colorless mana.)`` reminder is gone.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_warping_wail_no_bespoke_entry():
+    # After migration, the whole-spell exact-text dispatcher no longer
+    # has an entry for Warping Wail.
+    assert _try_whole_spell_exact_text(
         "Choose one —\n"
         "• Exile target creature with power or toughness 1 or less.\n"
         "• Counter target sorcery spell.\n"
         "• Create a 1/1 colorless Eldrazi Scion creature token. "
         "It has \"Sacrifice this token: Add {C}.\""
+    ) is None
+
+
+def test_warping_wail_per_clause_grammar_produces_correct_modal():
+    # Belt-and-suspenders: the per-clause modal grammar produces the
+    # expected ModalChooseOne with three parsed modes.
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    from mtg_bot.cards.base import (
+        CounterTargetSpell, CreateToken,
+        ExileTargetCreatureWithPowerOrToughnessAtMost, ModalChooseOne,
+    )
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    eff = _parse_spell_oracle_text(
+        "Choose one —\n"
+        "• Exile target creature with power or toughness 1 or less.\n"
+        "• Counter target sorcery spell.\n"
+        "• Create a 1/1 colorless Eldrazi Scion creature token. "
+        "It has \"Sacrifice this token: Add {C}.\"",
+        "Warping Wail",
     )
     assert eff == ModalChooseOne(modes=(
         ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1),
