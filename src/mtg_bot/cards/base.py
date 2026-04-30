@@ -139,6 +139,7 @@ from mtg_bot.effects import (
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
+    ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
     DestroyTargetNonlandPermanentWithLanderForController,

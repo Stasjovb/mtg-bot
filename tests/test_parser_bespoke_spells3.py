@@ -1,7 +1,7 @@
 """Tests for the bespoke-spells3 migration batch.
 
-This batch migrates two entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
-``parser.spell_builder`` by introducing four grammar extensions:
+This batch migrates three entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
+``parser.spell_builder`` by introducing five grammar extensions:
 
 1. **``_SENTENCE_BOUNDARY_RE`` lookahead extension** — the negative
    lookahead in ``spell_builder._split_sentences`` is widened from
@@ -49,8 +49,21 @@ This batch migrates two entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    ``max_mv=5`` cap, and the Lander rider entirely, returning only the
    bare ``ReturnCreatureFromYourGraveyardToBattlefield()``).
 
-Total migration: 2 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
-Table shrinks from 22 to 20.
+5. **``_RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED``
+   recognizer** (``effects.py``) + new
+   ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`` engine class —
+   matches "return up to N target nonland permanent cards from your
+   graveyard to your hand, then return up to M target land cards from
+   your graveyard to the battlefield tapped" → ``ReturnUpToNNonlandPermanent
+   CardsFromGraveyardToHand(max_n=N, min_n=0)``, dropping the second
+   compound piece (land cards to battlefield tapped) as an unimplemented
+   rider.  The new per-clause parse is MORE faithful than the previous
+   simplification which returned bare ``ReturnCreatureFromYourGraveyardToHand()``
+   (dropping both the "up to two" count AND the nonland-permanent widening).
+   Migrates: **Pull Through the Weft**.
+
+Total migration: 3 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 22 to 19.
 """
 
 from __future__ import annotations
@@ -62,11 +75,13 @@ from mtg_bot.cards.base import (
     DealNDamageToEachCreature,
     OptionalSacArtifactForEffect,
     ReturnCreatureFromYourGraveyardToBattlefield,
+    ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     Sequence,
 )
 from mtg_bot.cards.parser.effects import (
     _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO,
     _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV,
+    _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED,
     _normalize_spell_effect_phrase,
     _parse_effect,
     _parse_spell_effect_phrase,
@@ -93,9 +108,9 @@ def _claimed_names() -> frozenset[str]:
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more → 22 remaining;
-    # bespoke-spells3 removes 2 more (Lithobraking, Scrounge for Eternity)
-    # → 20 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 20
+    # bespoke-spells3 removes 3 more (Lithobraking, Scrounge for Eternity,
+    # Pull Through the Weft) → 19 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 19
 
 
 # ------------------------------------------------------------------ #
@@ -432,4 +447,92 @@ def test_create_lander_token_still_parses():
     )
     assert eff == CreateToken(
         token_printing=TOKEN_PRINTINGS["Lander"], count=1
+    )
+
+
+# ------------------------------------------------------------------ #
+# _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED  #
+# ------------------------------------------------------------------ #
+
+def test_return_nonland_permanent_gy_to_hand_regex_matches():
+    m = _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED.match(
+        "return up to two target nonland permanent cards from your graveyard "
+        "to your hand, then return up to two target land cards from your "
+        "graveyard to the battlefield tapped"
+    )
+    assert m is not None
+    assert m.group(1) == "two"  # first count
+    assert m.group(2) == "two"  # second count (captured but unused)
+
+
+def test_return_nonland_permanent_gy_to_hand_regex_parameterized():
+    # Different counts should also match — verifying the recognizer is
+    # parameterized.
+    m = _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED.match(
+        "return up to three target nonland permanent cards from your graveyard "
+        "to your hand, then return up to one target land cards from your "
+        "graveyard to the battlefield tapped"
+    )
+    assert m is not None
+    assert m.group(1) == "three"
+
+
+def test_return_nonland_permanent_gy_to_hand_parses_as_effect():
+    eff = _parse_effect(
+        "return up to two target nonland permanent cards from your graveyard "
+        "to your hand, then return up to two target land cards from your "
+        "graveyard to the battlefield tapped"
+    )
+    assert eff == ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
+        max_n=2, min_n=0
+    )
+
+
+def test_return_nonland_permanent_gy_to_hand_does_not_match_partial():
+    # Without the "then return" second clause must not match.
+    m = _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED.match(
+        "return up to two target nonland permanent cards from your graveyard "
+        "to your hand"
+    )
+    assert m is None
+
+
+# ------------------------------------------------------------------ #
+# Pull Through the Weft migration                                     #
+# ------------------------------------------------------------------ #
+
+def test_pull_through_the_weft_claimed_by_parser():
+    assert "Pull Through the Weft" in _claimed_names()
+
+
+def test_pull_through_the_weft_no_bespoke_entry():
+    # After migration, the whole-spell table no longer has a key for
+    # Pull Through the Weft's text.
+    assert _try_whole_spell_exact_text(
+        "Return up to two target nonland permanent cards from your "
+        "graveyard to your hand, then return up to two target land "
+        "cards from your graveyard to the battlefield tapped."
+    ) is None
+
+
+def test_pull_through_the_weft_engine_class_more_faithful():
+    # The per-clause parse preserves the "up to two" count and the
+    # "nonland permanent" scope — more faithful than the old
+    # ReturnCreatureFromYourGraveyardToHand() simplification.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Pull Through the Weft"]
+    assert p.spell_effect == ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
+        max_n=2, min_n=0
+    )
+
+
+def test_pull_through_the_weft_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Return up to two target nonland permanent cards from your "
+        "graveyard to your hand, then return up to two target land "
+        "cards from your graveyard to the battlefield tapped.",
+        "Pull Through the Weft",
+    )
+    assert eff == ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
+        max_n=2, min_n=0
     )

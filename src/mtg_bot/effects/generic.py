@@ -2092,6 +2092,80 @@ class ReturnUpToNCreaturesFromYourGraveyardToHand(Effect):
 
 
 @dataclass(frozen=True)
+class ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(Effect):
+    """Return up to ``max_n`` nonland permanent cards from your graveyard
+    to your hand.
+
+    Models the first clause of "Return up to two target nonland permanent
+    cards from your graveyard to your hand, then return up to two target
+    land cards from your graveyard to the battlefield tapped." (Pull
+    Through the Weft). The second clause (lands to battlefield tapped)
+    is not modeled today — the engine has no "return land card from GY to
+    BF tapped" primitive; the parser drops the second clause as an
+    unimplemented rider.
+
+    Legal targets: all cards in the controller's graveyard that are NOT
+    lands (``not is_land``). Lands are excluded because the oracle text
+    explicitly separates "nonland permanent cards" (first clause) from
+    "land cards" (second clause). In practice the current EoE/DSK card
+    pool keeps the two categories disjoint in GY targets.
+    """
+
+    max_n: int = 2
+    min_n: int = 0
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (self.min_n, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if not c.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        if not targets:
+            return
+        p = state.player_by_id(controller_id)
+        seen_ids: set[int] = set()
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            if target_id in seen_ids:
+                continue
+            seen_ids.add(target_id)
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            reveal_to_all(state, card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target nonland permanent cards "
+            f"from your graveyard to your hand"
+        )
+
+
+@dataclass(frozen=True)
 class ReturnAllCreaturesFromYourGraveyardToBattlefield(Effect):
     """Return every creature card from your graveyard to the battlefield
     under your control. Untargeted mass-reanimation — Awakening Hall's

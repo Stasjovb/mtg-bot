@@ -123,6 +123,7 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
+    ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
@@ -1530,6 +1531,43 @@ _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
 _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS = re.compile(
     rf"^return up to (\d+|{_SMALL_CARDINAL_PATTERN}) target "
     rf"non-Spacecraft creatures to their owners' hands$"
+)
+# "Return up to N target nonland permanent cards from your graveyard to
+# your hand, then return up to M target land cards from your graveyard to
+# the battlefield tapped." — Pull Through the Weft `{2}{G}{U}` Sorcery.
+#
+# A compound sentence joined by ``, then ``; ``_parse_compound_effect``
+# would split it into two pieces but fails on the second piece (no
+# "return up to N land cards from graveyard to battlefield tapped"
+# primitive exists in the engine today). This recognizer matches the
+# FULL unsplit sentence and drops the second clause as an unimplemented
+# rider — a parser-is-right simplification identical in kind to the
+# simplifications the static registry already ships (the old whole-spell
+# entry returned bare ``ReturnCreatureFromYourGraveyardToHand()``
+# dropping BOTH the "up to two" count AND the "nonland permanent"
+# widening; the new per-clause grammar is MORE faithful because it
+# preserves the multi-target count and the nonland-permanent scope).
+#
+# Parameterized: two capture groups capture the "up to N" counts for
+# the first and second clauses respectively (the second is consumed but
+# the second clause's effect is not modeled). The first count drives
+# ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(max_n=N)``
+# (``min_n=0`` reflects the ``up to`` optionality). Maps to
+# ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`` from
+# ``effects.generic``.
+#
+# Currently only Pull Through the Weft in the EoE pool fits this
+# combined shape; the regex captures both counts as parameters so a
+# future printing with different bounds (e.g. ``up to three … then
+# return up to one …``) lands on the same primitive without further
+# grammar work — the parameterized-recognizer-preferred form per parser
+# CLAUDE.md. The second count is unused today but captured to ensure
+# the regex matches the full oracle-text surface.
+_RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED = re.compile(
+    rf"^return up to ({_SMALL_CARDINAL_PATTERN}|\d+) target nonland permanent "
+    rf"cards from your graveyard to your hand, then return up to "
+    rf"({_SMALL_CARDINAL_PATTERN}|\d+) target land cards from your graveyard "
+    rf"to the battlefield tapped$"
 )
 # "Return target artifact or creature card from your graveyard to your
 # hand" — Interceptor Mechan's ETB body. Maps to
@@ -4344,6 +4382,26 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnUpToNTargetCreaturesToOwnersHands(
             max_n=_parse_amount(m.group(1)),
             exclude_spacecraft=True,
+        )
+    m = _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED.match(
+        phrase
+    )
+    if m is not None:
+        # ``return up to N target nonland permanent cards from your
+        # graveyard to your hand, then return up to M target land cards
+        # from your graveyard to the battlefield tapped`` — Pull Through
+        # the Weft's full two-compound sentence. The first compound piece
+        # (nonland permanent cards to hand) is modeled;  the second
+        # compound piece (land cards to battlefield tapped) is dropped as
+        # an unimplemented rider — the engine has no "return land card
+        # from GY to BF tapped" primitive today.  This produces a more
+        # faithful parse than the previous whole-spell entry which
+        # simplified to bare ``ReturnCreatureFromYourGraveyardToHand()``
+        # (dropping BOTH the multi-target count AND the nonland-permanent
+        # scope widening).
+        count_n = _parse_amount(m.group(1))
+        return ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
+            max_n=count_n, min_n=0
         )
     # ``return one or two target creature and/or planeswalker cards from
     # your graveyard to your hand`` — Archenemy's Charm mode 2. Maps to

@@ -156,6 +156,7 @@ from mtg_bot.effects.generic import (
     ReturnTargetLandFromGraveyardToHand,
     ReturnTargetPermanentYouControlToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
+    ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
     SacrificeNLandsYouControl,

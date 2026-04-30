@@ -1078,18 +1078,18 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     ): CreateToken(
         token_printing=TOKEN_PRINTINGS["Robot"], count=2
     ),
-    # Pull Through the Weft: multi-target graveyard return — up to two
-    # nonland permanents to hand, then up to two lands to battlefield
-    # tapped. The per-clause grammar has no "nonland permanent card to
-    # hand" nor "land card to battlefield tapped" primitive; the static
-    # ships ``ReturnCreatureFromYourGraveyardToHand()`` as a single-
-    # target simplification. Match the full printed oracle text
-    # verbatim.
-    (
-        "Return up to two target nonland permanent cards from your "
-        "graveyard to your hand, then return up to two target land "
-        "cards from your graveyard to the battlefield tapped."
-    ): ReturnCreatureFromYourGraveyardToHand(),
+    # Pull Through the Weft — "Return up to two target nonland permanent
+    # cards from your graveyard to your hand, then return up to two
+    # target land cards from your graveyard to the battlefield tapped."
+    # — migrated to per-clause grammar: the new
+    # ``_RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED``
+    # recognizer in ``effects.py`` claims the full compound sentence as
+    # ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(max_n=2,
+    # min_n=0)``, dropping the second compound piece ("then return up to
+    # two target land cards…") as an unimplemented rider. This is MORE
+    # faithful than the previous simplification which returned bare
+    # ``ReturnCreatureFromYourGraveyardToHand()`` (dropping both the
+    # multi-target count and the nonland-permanent scope widening).
     # Scorching Dragonfire (Duskmourn) — "Scorching Dragonfire deals 3
     # damage to target creature or planeswalker. If that creature or
     # planeswalker would die this turn, exile it instead." — migrated
