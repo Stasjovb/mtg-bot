@@ -47,6 +47,7 @@ from mtg_bot.cards.base import (
     DestroyTargetNoncreaturePermanent,
     DestroyTargetNonlandPermanent,
     DestroyTargetNonlandPermanentWithLanderForController,
+    DestroyUpToOneTargetNonlandPermanent,
     DiscardHandThenDrawN,
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,
@@ -1261,6 +1262,16 @@ _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
 _DESTROY_TARGET_NONLAND_PERMANENT_ITS_CONTROLLER_CREATES_LANDER = re.compile(
     r"^destroy target nonland permanent\. "
     r"Its controller creates a Lander token$"
+)
+# "Destroy up to one target nonland permanent." — Syr Vondam, Sunstar
+# Exemplar's self-leaves trigger: optional-target destroy (0 or 1
+# nonland permanents). Maps to ``DestroyUpToOneTargetNonlandPermanent``
+# whose TargetSpec carries ``count_min=0`` so the controller may legally
+# pass with no target. Distinct from the bare "destroy target" form below
+# (which requires exactly 1 target); tried BEFORE the bare form so the
+# more-specific "up to one" phrase wins.
+_DESTROY_UP_TO_ONE_TARGET_NONLAND_PERMANENT = re.compile(
+    r"^destroy up to one target nonland permanent$"
 )
 # "Destroy target nonland permanent." — Thaumaton Torpedo's activated
 # ability. Maps to the existing ``DestroyTargetNonlandPermanent`` engine
@@ -3826,6 +3837,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         # would never match the rider tail anyway, but ordering
         # more-specific before more-general is the convention here.
         return DestroyTargetNonlandPermanentWithLanderForController()
+    if _DESTROY_UP_TO_ONE_TARGET_NONLAND_PERMANENT.match(phrase) is not None:
+        # ``destroy up to one target nonland permanent`` — Syr Vondam,
+        # Sunstar Exemplar's self-leaves trigger. The "up to one" wording
+        # makes the target optional (0 or 1); maps to
+        # ``DestroyUpToOneTargetNonlandPermanent`` whose TargetSpec carries
+        # ``count_min=0``. Tried BEFORE the bare "destroy target" form so
+        # the more-specific "up to one" spelling wins.
+        return DestroyUpToOneTargetNonlandPermanent()
     if _DESTROY_TARGET_NONLAND_PERMANENT.match(phrase) is not None:
         # ``destroy target nonland permanent`` — Thaumaton Torpedo's
         # activated ability. Tried after ``destroy target noncreature

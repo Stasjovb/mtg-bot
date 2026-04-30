@@ -47,12 +47,10 @@ from mtg_bot.cards.base import (
     AttackInTheBoxAttackEffect,
     BoilerbilgesRipperETBEffect,
     CardPrinting,
-    ConditionalIfSourcePowerAtLeast,
     CostReduction,
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
-    DestroyTargetNonlandPermanent,
     DrawCards,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
@@ -694,40 +692,23 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # parses via intervening-if + _DEFENDING_PLAYER_LOSES_HALF_LIFE
         # regex in effects.py.  Removed from this table so the grammar
         # path claims it.
-        # Syr Vondam, Sunstar Exemplar `{W}{B}` 2/2 Legendary Creature —
-        # Human Knight. Vigilance, menace.
-        # Whenever another creature you control dies or is put into exile,
-        # put a +1/+1 counter on Syr Vondam and you gain 1 life.
-        # When Syr Vondam dies or is put into exile while its power is 4+,
-        # destroy up to one target nonland permanent.
-        # SKIP: Line 2 needs trigger phrase "another creature you control
-        # dies or is put into exile" (LEAVES_BATTLEFIELD). Line 3 needs
-        # intervening-while gate "its power is 4 or greater" (encoded as
-        # ConditionalIfSourcePowerAtLeast effect wrapper, not a predicate)
-        # and "destroy up to one target nonland permanent" (optional-target
-        # effect). All three require grammar additions.
-        "Syr Vondam, Sunstar Exemplar": make_creature(
-            "Syr Vondam, Sunstar Exemplar", "{W}{B}", 2, 2,
-            legendary=True,
-            keywords={"vigilance", "menace"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.LEAVES_BATTLEFIELD,
-                    predicate=Subject(None, IsCreature()) & Controlled(YOU) & ~IsSelf(),
-                    effect=Sequence(effects=(
-                        PutPlusOneCounterOnSelf(amount=1),
-                        GainLife(amount=1),
-                    )),
-                ),
-                TriggeredAbility(
-                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
-                    effect=ConditionalIfSourcePowerAtLeast(
-                        effect=DestroyTargetNonlandPermanent(),
-                        threshold=4,
-                    ),
-                ),
-            ),
-        ),
+        # Syr Vondam, Sunstar Exemplar migrated to parameterized grammar:
+        # Line 1 (keywords) — "Vigilance, menace." parsed via standard
+        # keyword-line recognizer.
+        # Line 2 — "Whenever another creature you control dies or is put
+        # into exile, put a +1/+1 counter on Syr Vondam and you gain 1
+        # life." — new phrase ``"another creature you control dies or is
+        # put into exile"`` → (LEAVES_BATTLEFIELD, Subject(None,
+        # IsCreature()) & Controlled(YOU) & ~IsSelf()); effect via Sequence
+        # PutPlusOneCounterOnSelf + GainLife (name-substituted).
+        # Line 3 — "When Syr Vondam dies or is put into exile while its
+        # power is 4 or greater, destroy up to one target nonland
+        # permanent." — new phrase ``"this creature dies or is put into
+        # exile"`` → (LEAVES_BATTLEFIELD, IsSelf()); new effect-wrapper
+        # gate ``"its power is 4 or greater"`` → wraps effect in
+        # ``ConditionalIfSourcePowerAtLeast(threshold=4, …)``; new
+        # ``DestroyUpToOneTargetNonlandPermanent`` effect (count_min=0).
+        # Removed from this table so the grammar path claims it.
         # Haliya, Ascendant Cadet migrated to parameterized grammar:
         # Line 1 — "Whenever Haliya enters or attacks, put a +1/+1 counter
         # on target creature you control." maps to

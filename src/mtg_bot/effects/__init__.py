@@ -72,6 +72,7 @@ from mtg_bot.effects.generic import (
     DestroyTargetNoncreaturePermanent,
     DestroyTargetNonlandPermanent,
     DestroyTargetNonlandPermanentWithLanderForController,
+    DestroyUpToOneTargetNonlandPermanent,
     DiscardHandThenDrawN,
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,

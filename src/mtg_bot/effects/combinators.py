@@ -839,6 +839,15 @@ class ConditionalIfSourcePowerAtLeast(Effect):
     def requires_target(self) -> bool:
         return self.effect.requires_target()
 
+    def target_count_range(self) -> "tuple[int, float]":
+        """Delegate to the inner effect so "up to one target" wrappers
+        (e.g. ``DestroyUpToOneTargetNonlandPermanent`` inside this gate)
+        correctly report ``(0, 1)`` rather than the default ``(0, 0)``
+        that the base ``Effect.target_count_range`` would infer from the
+        empty ``self.targets`` tuple.
+        """
+        return self.effect.target_count_range()
+
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:

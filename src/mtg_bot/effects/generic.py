@@ -6182,6 +6182,28 @@ class DestroyTargetNonlandPermanent(Destroy):
         return "destroy target nonland permanent"
 
 
+@dataclass(frozen=True)
+class DestroyUpToOneTargetNonlandPermanent(Destroy):
+    """``Destroy`` constructor sugar for "destroy up to one target nonland
+    permanent".
+
+    Filter is ``~IsLand() & ~IsPlayer()`` with ``count_min=0`` so the
+    target is optional (0 or 1). When the controller selects no target the
+    Destroy.resolve early-return fires cleanly — no crash, no wasted state.
+    Syr Vondam, Sunstar Exemplar's self-leaves trigger uses this shape.
+    """
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsLand, IsPlayer
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(~IsLand() & ~IsPlayer(), count_min=0),),
+        )
+
+    def describe(self) -> str:
+        return "destroy up to one target nonland permanent"
+
 
 @dataclass(frozen=True)
 class MoveSelfCountersToTargetCreatureYouControl(Effect):

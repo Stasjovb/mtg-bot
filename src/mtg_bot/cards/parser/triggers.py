@@ -67,6 +67,7 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ConditionalIfSourcePowerAtLeast,
     ConditionalIfYouGainedLifeAtLeast,
     ConditionalOnTappedCreatures,
     DrawCards,
@@ -568,6 +569,30 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # scope.
     "this creature leaves the battlefield": (
         Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    # ``When this creature dies or is put into exile`` (Syr Vondam,
+    # Sunstar Exemplar — used in the intervening-while shape "while its
+    # power is 4 or greater"). Both death and exile are zone changes
+    # that fire LEAVES_BATTLEFIELD; collapsing both to that event with
+    # IsSelf() matches the static-registry convention (the engine fires
+    # LEAVES_BATTLEFIELD on both graveyard and exile moves). Only one
+    # LEAVES+IsSelf trigger is produced — the "or is put into exile"
+    # arm doesn't generate a second independent trigger.
+    "this creature dies or is put into exile": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    # ``Whenever another creature you control dies or is put into exile``
+    # (Syr Vondam, Sunstar Exemplar — the ally-leaves observer trigger).
+    # Both death and exile fire LEAVES_BATTLEFIELD; collapsing the two
+    # zone changes onto that event preserves parity with the
+    # static-registry's single LEAVES_BATTLEFIELD+Subject trigger for
+    # this card. The ``~IsSelf()`` excludes Syr Vondam itself (the
+    # "another" qualifier); ``Subject(None, IsCreature())`` and
+    # ``Controlled(YOU)`` gate the firing pool to creatures the source's
+    # controller controls.
+    "another creature you control dies or is put into exile": (
+        Event.LEAVES_BATTLEFIELD,
+        Subject(None, IsCreature()) & Controlled(YOU) & ~IsSelf(),
     ),
     # ``When this artifact is put into a graveyard from the
     # battlefield`` (Nutrient Block). Per CR 700-series the
@@ -1221,6 +1246,44 @@ def _parse_intervening_while_phrase(phrase: str) -> Predicate | None:
     return _INTERVENING_WHILE_PHRASES.get(phrase.strip())
 
 
+# Intervening-``while`` gates whose semantics are best expressed as an
+# effect wrapper rather than a predicate AND-ed onto the trigger event
+# predicate. Each entry maps a gate phrase to a factory function
+# ``(inner_effect) -> Effect`` that wraps the parsed inner effect in the
+# appropriate conditional wrapper class. The trigger's event and predicate
+# stay unchanged (no AND); the gate is checked at resolve time via the
+# wrapper's own logic.
+#
+# This table is consulted AFTER ``_INTERVENING_WHILE_PHRASES`` in the
+# dispatch: if the gate phrase is a predicate gate it wins; if it's only
+# in this table the effect-wrapper path runs instead. The two tables are
+# mutually exclusive by construction (each phrase appears in at most one).
+#
+# ``"its power is 4 or greater"`` — Syr Vondam, Sunstar Exemplar's self-
+# leaves trigger: "When this creature dies or is put into exile while its
+# power is 4 or greater, destroy up to one target nonland permanent."
+# Wraps the inner effect in ``ConditionalIfSourcePowerAtLeast(threshold=4,
+# effect=inner)``; the wrapper reads ``state.resolving_source`` at resolve
+# time and gates the destroy on the source's effective power. This matches
+# the static-registry's ``ConditionalIfSourcePowerAtLeast`` layout exactly.
+_INTERVENING_WHILE_EFFECT_WRAPPERS: dict[str, "callable"] = {
+    "its power is 4 or greater": lambda inner: ConditionalIfSourcePowerAtLeast(
+        effect=inner, threshold=4,
+    ),
+}
+
+
+def _parse_intervening_while_effect_wrapper(phrase: str):
+    """Look up ``phrase`` in ``_INTERVENING_WHILE_EFFECT_WRAPPERS``.
+
+    Returns the factory callable ``(inner_effect) -> Effect`` for a
+    recognized gate phrase, or ``None`` when the phrase isn't claimed.
+    The factory wraps the parsed inner effect in the appropriate
+    conditional wrapper class at dispatch time.
+    """
+    return _INTERVENING_WHILE_EFFECT_WRAPPERS.get(phrase.strip())
+
+
 def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
     """Look up ``phrase`` (a trailing-``if`` gate clause from the
     ``... if <gate>.`` tail) in ``_TRAILING_IF_PHRASES``. Returns the
@@ -1647,10 +1710,34 @@ def _parse_triggered_ability_line(
         condition = iwhile_match.group(1)
         gate_phrase = iwhile_match.group(2)
         gate_pred = _parse_intervening_while_phrase(gate_phrase)
-        if gate_pred is None:
+        if gate_pred is not None:
+            effect = _parse_effect_phrase(iwhile_match.group(3))
+            if effect is None:
+                return None
+            pred_match = _parse_predicate_trigger_phrase(condition)
+            if pred_match is None:
+                return None
+            event, base_predicate = pred_match
+            phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
+            return TriggeredAbility(
+                event=event,
+                predicate=base_predicate & gate_pred,
+                effect=effect,
+                once_per_turn=once_per_turn or phrase_once,
+            )
+        # Effect-wrapper gate: the ``while`` clause isn't a predicate
+        # AND but instead wraps the resolved inner effect at resolve time
+        # (e.g. Syr Vondam's "while its power is 4 or greater" gate maps
+        # to ``ConditionalIfSourcePowerAtLeast``). Tried AFTER the
+        # predicate-gate path so explicit predicate gates win; when the
+        # gate phrase isn't in either phrasebook the line is rejected
+        # outright (same don't-silently-drop-the-gate discipline as the
+        # predicate path).
+        wrapper_factory = _parse_intervening_while_effect_wrapper(gate_phrase)
+        if wrapper_factory is None:
             return None
-        effect = _parse_effect_phrase(iwhile_match.group(3))
-        if effect is None:
+        inner_effect = _parse_effect_phrase(iwhile_match.group(3))
+        if inner_effect is None:
             return None
         pred_match = _parse_predicate_trigger_phrase(condition)
         if pred_match is None:
@@ -1659,8 +1746,8 @@ def _parse_triggered_ability_line(
         phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
         return TriggeredAbility(
             event=event,
-            predicate=base_predicate & gate_pred,
-            effect=effect,
+            predicate=base_predicate,
+            effect=wrapper_factory(inner_effect),
             once_per_turn=once_per_turn or phrase_once,
         )
     # Trailing-if shape: ``When/Whenever <condition>, <effect> if
