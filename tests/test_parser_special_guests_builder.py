@@ -84,7 +84,19 @@ def test_burgeoning_falls_through_to_enchantment_builder():
     assert burgeoning.triggered_abilities[0].event == Event.PLAYS_LAND
 
 
-def test_sliver_overlord_matches_static():
+def test_sliver_overlord_falls_through_to_creature_builder():
+    """Sliver Overlord is no longer claimed by the special-guests
+    dispatch — both activated abilities now parse via the unified
+    grammar:
+      * "{3}: Search your library for a Sliver card, reveal that
+        card, put it into your hand, then shuffle." claims through
+        _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE with the new "Sliver"
+        filter entry (and "reveal that card" wording variant).
+      * "{3}: Gain control of target Sliver." claims through the new
+        _GAIN_CONTROL_TARGET_SUBTYPE regex dispatching to
+        GainControlOfTargetSliverPermanently().
+    The special-guests builder returns None so the chain falls
+    through to the creature builder."""
     card = {
         "name": "Sliver Overlord",
         "type_line": "Legendary Creature — Sliver Mutant",
@@ -96,9 +108,10 @@ def test_sliver_overlord_matches_static():
         ),
         "set": "spg",
     }
-    parsed = _build_special_guest_printing(card)
-    assert parsed is not None
-    assert parsed == _PRINTINGS["Sliver Overlord"]
+    assert _build_special_guest_printing(card) is None
+    # End-to-end: the active source still claims it (via creature builder).
+    assert _PRINTINGS["Sliver Overlord"].activated_abilities[0].effect.__class__.__name__ == "SearchLibraryForCard"
+    assert _PRINTINGS["Sliver Overlord"].activated_abilities[1].effect.__class__.__name__ == "GainControlOfTargetSliverPermanently"
 
 
 def test_skips_non_spg_set():
@@ -142,13 +155,19 @@ def test_skips_when_oracle_text_drifts():
     assert _build_special_guest_printing(card) is None
 
 
-def test_source_claims_both_via_data_walk():
-    """End-to-end: the parser source's data walk picks up both
-    Special Guests via the new dispatch."""
+def test_source_claims_special_guests_via_data_walk():
+    """End-to-end: the parser source's data walk picks up Special
+    Guests. Deafening Silence and Magus of the Moon still claim via
+    their respective builders. Sliver Overlord now claims via the
+    creature builder (migrated from special-guests dispatch)."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     parser = OracleParserCardSource()
     parsed = parser.get_printings()
     assert "Magus of the Moon" in parsed
     assert "Deafening Silence" in parsed
+    # Sliver Overlord still appears in the parser output, now via the
+    # creature builder rather than the special-guests dispatch.
+    assert "Sliver Overlord" in parsed
     assert parsed["Magus of the Moon"] == _PRINTINGS["Magus of the Moon"]
     assert parsed["Deafening Silence"] == _PRINTINGS["Deafening Silence"]
+    assert parsed["Sliver Overlord"] == _PRINTINGS["Sliver Overlord"]
