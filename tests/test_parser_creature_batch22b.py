@@ -39,6 +39,25 @@ def test_lightstall_inquisitor_claimed_by_parser():
     assert "Lightstall Inquisitor" in _PARSER_PRINTINGS
 
 
+def test_lightstall_inquisitor_not_in_bespoke_creatures():
+    """Lightstall Inquisitor migrated from _BESPOKE_CREATURES to the
+    literal trigger-line dispatch in _BESPOKE_TRIGGER_LINES."""
+    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
+    assert "Lightstall Inquisitor" not in _BESPOKE_CREATURES
+
+
+def test_lightstall_inquisitor_has_etb_exile_trigger():
+    from mtg_bot.effects.generic import EachOpponentExilesCardFromHandWithCastPermission
+    from mtg_bot.effects.predicates import Event
+    p = _parser("Lightstall Inquisitor")
+    etb_effects = [
+        ta.effect for ta in p.triggered_abilities
+        if ta.event is Event.ENTERS
+        and isinstance(ta.effect, EachOpponentExilesCardFromHandWithCastPermission)
+    ]
+    assert len(etb_effects) == 1
+
+
 
 
 def test_biomechan_engineer_claimed_by_parser():

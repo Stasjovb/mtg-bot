@@ -50,6 +50,7 @@ from mtg_bot.cards.base import (
     DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
     DrawCards,
+    EachOpponentExilesCardFromHandWithCastPermission,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FanaticOfTheHarrowingETBEffect,
@@ -271,21 +272,14 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     """
     return {
         # ── bespoke-creature-wave7 ─────────────────────────────────────
-        # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
-        # SKIP (ETB): "When this creature enters, each opponent exiles
-        # a card from their hand and may play that card for as long as
-        # it remains exiled. Each spell cast this way costs {1} more to
-        # cast. Each land played this way enters tapped." This is a
-        # complex three-clause ETB: (1) opponent exiles from hand,
-        # (2) grants per-card cast-from-exile permission with a {1}
-        # surcharge, (3) lands played this way enter tapped. No engine
-        # model exists for per-exiled-card cast permissions with
-        # per-card cost modification and tapped-entry overrides. The
-        # ETB body is dropped; only Vigilance is retained faithfully.
-        "Lightstall Inquisitor": make_creature(
-            "Lightstall Inquisitor", "{W}", 2, 1,
-            keywords={"vigilance"},
-        ),
+        # Lightstall Inquisitor migrated to the literal trigger-line
+        # dispatch in ``_BESPOKE_TRIGGER_LINES`` (engine-lightstall).
+        # The ETB body uses ``EachOpponentExilesCardFromHandWithCastPermission``
+        # which sets ``cast_from_exile_with_lightstall_surcharge`` on
+        # the exiled card; all other oracle lines (Vigilance keyword,
+        # mana cost, P/T, Angel Wizard subtypes) now flow through the
+        # unified grammar. Removed from this table so the oracle parser
+        # claims Lightstall Inquisitor end-to-end.
         # Genemorph Imago migrated to the grammar:
         # ``SetBasePTConditionalUntilEOT`` now models the landfall
         # trigger's "has base power and toughness 3/3 until end of turn;
@@ -802,6 +796,21 @@ _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
         event=Event.ATTACKS,
         predicate=IsSelf() & StateBound(Delirium()),
         effect=WickerfolkThresherAttackEffect(),
+    ),
+    # Lightstall Inquisitor: each opponent exiles a card from their hand
+    # and may play it from exile (with {1} surcharge on spells, tapped-
+    # entry on lands). The surcharge and tapped-entry are enforced by
+    # engine flags (``cast_from_exile_with_lightstall_surcharge``) set
+    # by the effect, not by grammar primitives. Only card in the pool
+    # with this exact "exile from hand with conditional-cost play
+    # permission" shape; generalize if a second example exists.
+    "When this creature enters, each opponent exiles a card from their "
+    "hand and may play that card for as long as it remains exiled. "
+    "Each spell cast this way costs {1} more to cast. Each land played "
+    "this way enters tapped.": TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=EachOpponentExilesCardFromHandWithCastPermission(),
     ),
 }
 
