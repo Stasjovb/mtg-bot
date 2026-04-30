@@ -2,7 +2,9 @@
 
 Covers:
 - Parser claims the Overlord cycle's Impending cost via
-  ``_parse_impending_line`` and the bespoke Overlord entries.
+  ``_parse_impending_line`` and the grammar path (not the bespoke
+  table). The Overlords were removed from ``_BESPOKE_CREATURES``
+  in the bespoke: migrate Overlord cycle commit.
 - ``CastSpell(use_impending=True)`` uses ``impending_cost`` and
   enters the permanent with N time counters,
   ``impending_active=True``, suppressing the printed creature type.
@@ -17,12 +19,21 @@ Covers:
   counters.
 """
 
+import json
+import os
+
+import pytest
+
 from mtg_bot import legal_moves
 from mtg_bot.actions import (
     CastSpell, apply_action, drain_stack, put_into_battlefield,
 )
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS
+from mtg_bot.cards.parser.creature_builder import (
+    _BESPOKE_CREATURES,
+    _build_creature_printing,
+)
 from mtg_bot.cards.parser.printing_keywords import _parse_impending_line
 from mtg_bot.cards.parser.triggers import _parse_compound_predicate_trigger_phrase
 from mtg_bot.effects.predicates import Event, IsSelf
@@ -34,6 +45,19 @@ from mtg_bot.turn import (
 from mtg_bot.cards.source import get_active_source
 
 _PRINTINGS = get_active_source().get_printings()
+
+
+def _load_dsk_card(name: str) -> "dict | None":
+    """Return the Scryfall record for ``name`` from duskmourn.json."""
+    data_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "duskmourn.json"
+    )
+    with open(data_path) as f:
+        data = json.load(f)
+    for card in data:
+        if card.get("name") == name:
+            return card
+    return None
 
 
 class _PickFirstAgent(Agent):
@@ -461,3 +485,49 @@ def test_compound_trigger_phrase_this_permanent_enters_or_attacks():
     # Both arms use IsSelf() — predicate identity check.
     for _, pred in result:
         assert isinstance(pred, IsSelf)
+
+
+# -----------------------
+# Grammar-path migration: Overlords NOT in _BESPOKE_CREATURES
+# -----------------------
+
+
+def test_overlord_mistmoors_not_in_bespoke_table():
+    """Overlord of the Mistmoors was removed from ``_BESPOKE_CREATURES``
+    after engine-impending migration; the grammar claims it directly."""
+    assert "Overlord of the Mistmoors" not in _BESPOKE_CREATURES
+
+
+def test_overlord_floodpits_not_in_bespoke_table():
+    assert "Overlord of the Floodpits" not in _BESPOKE_CREATURES
+
+
+def test_overlord_boilerbilges_not_in_bespoke_table():
+    assert "Overlord of the Boilerbilges" not in _BESPOKE_CREATURES
+
+
+@pytest.mark.parametrize("name", [
+    "Overlord of the Mistmoors",
+    "Overlord of the Floodpits",
+    "Overlord of the Boilerbilges",
+])
+def test_overlord_grammar_claims_card(name):
+    """``_build_creature_printing`` produces the card from oracle text.
+
+    Verifies that the grammar path (trigger-phrase + impending line +
+    enchantment type-line handling) successfully claims each Overlord
+    and produces the expected impending fields, enchantment card type,
+    and two triggered abilities.
+    """
+    card = _load_dsk_card(name)
+    assert card is not None, f"Card {name!r} not found in duskmourn.json"
+    result = _build_creature_printing(card)
+    assert result is not None, f"Grammar returned None for {name!r}"
+    assert result.impending_count == 4
+    assert result.impending_cost is not None
+    assert "Enchantment" in result.card_types
+    # Two triggers: one ENTERS+IsSelf, one ATTACKS+IsSelf.
+    assert len(result.triggered_abilities) == 2
+    events = {ta.event for ta in result.triggered_abilities}
+    assert Event.ENTERS in events
+    assert Event.ATTACKS in events

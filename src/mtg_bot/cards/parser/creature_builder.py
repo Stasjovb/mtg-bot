@@ -50,7 +50,6 @@ from mtg_bot.cards.base import (
     CardPrinting,
     ConditionalIfSourcePowerAtLeast,
     CostReduction,
-    DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
@@ -92,7 +91,6 @@ from mtg_bot.cards.base import (
     TerrapactIntimidatorETBEffect,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
-    CreateToken,
     cost,
     make_creature,
     parse_mana_cost,
@@ -138,7 +136,6 @@ from mtg_bot.cards.parser.triggers import (
     _strip_ability_word_prefix,
 )
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.object_predicates import (
     HasSubtype,
     IsArtifact,
@@ -306,100 +303,19 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Duskmourn Overlord cycle — Enchantment Creatures with the
-        # Impending alt-cost. Each enters as a creature when cast for
-        # its printed cost, OR enters with N time counters and is
-        # suppressed-as-non-creature when cast for its impending
-        # cost (``GameObject.impending_active`` → ``is_creature_now``
-        # returns False). At the active player's end step the
-        # turn-based action ``run_impending_decrement_turn_based_action``
-        # removes one time counter; when the last is removed, the
-        # permanent becomes a creature. The "Whenever this permanent
-        # enters or attacks, …" trigger fires on entry regardless of
-        # impending state — the ENTERS dispatcher walks the
-        # battlefield and matches any TriggeredAbility whose predicate
-        # accepts the entering object, and ``IsSelf()`` doesn't depend
-        # on creature-ness. The ATTACKS arm only fires once the
-        # permanent has become a creature (combat eligibility checks
-        # ``is_creature_now``), which is the correct CR behavior.
-        # TODO(engine-impending): All three Overlords are now claimed
-        # by the grammar (``_parse_impending_line`` + enchantment
-        # type-line detection + ``"this permanent enters or attacks"``
-        # compound trigger phrase). Remove from bespoke in the next
-        # commit (bespoke: migrate Overlord cycle).
-        # Overlord of the Mistmoors {5}{W}{W} 6/6 Avatar Horror.
-        # Impending 4 — {2}{W}{W}. ETB/attack: create two 2/1 white
-        # Insect creature tokens with flying. (Color isn't tracked
-        # through tokens; see tokens.py.)
-        "Overlord of the Mistmoors": make_creature(
-            "Overlord of the Mistmoors", "{5}{W}{W}", 6, 6,
-            enchantment=True,
-            subtypes=("Avatar", "Horror"),
-            impending="{2}{W}{W}",
-            impending_count=4,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Insect"], count=2,
-                    ),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=CreateToken(
-                        token_printing=TOKEN_PRINTINGS["Insect"], count=2,
-                    ),
-                ),
-            ),
-        ),
-        # Overlord of the Floodpits {3}{U}{U} 5/3 Avatar Horror.
-        # Flying. Impending 4 — {1}{U}{U}. ETB/attack: draw two
-        # cards, then discard a card. (Sequence(DrawCards(2),
-        # DiscardSelf(1)).)
-        "Overlord of the Floodpits": make_creature(
-            "Overlord of the Floodpits", "{3}{U}{U}", 5, 3,
-            enchantment=True,
-            subtypes=("Avatar", "Horror"),
-            keywords={"flying"},
-            impending="{1}{U}{U}",
-            impending_count=4,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        DiscardSelf(amount=1),
-                    )),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=Sequence(effects=(
-                        DrawCards(amount=2),
-                        DiscardSelf(amount=1),
-                    )),
-                ),
-            ),
-        ),
-        # Overlord of the Boilerbilges {4}{R}{R} 5/5 Avatar Horror.
-        # Impending 4 — {2}{R}{R}. ETB/attack: deals 4 damage to any
-        # target.
-        "Overlord of the Boilerbilges": make_creature(
-            "Overlord of the Boilerbilges", "{4}{R}{R}", 5, 5,
-            enchantment=True,
-            subtypes=("Avatar", "Horror"),
-            impending="{2}{R}{R}",
-            impending_count=4,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=DealDamageAnyTarget(amount=4),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=DealDamageAnyTarget(amount=4),
-                ),
-            ),
-        ),
+        # Duskmourn Overlord cycle (Mistmoors, Floodpits, Boilerbilges)
+        # migrated to the parameterized grammar (engine-impending):
+        # - ``Impending N—{cost}`` parses via ``_parse_impending_line``
+        #   and wires ``impending=`` / ``impending_count=`` on
+        #   ``make_creature``.
+        # - ``Enchantment`` in the type_line sets ``enchantment=True``
+        #   via the ``"Enchantment" in card_types`` check in the builder.
+        # - ``"Whenever this permanent enters or attacks, …"`` maps to
+        #   the ``"this permanent enters or attacks"`` entry in
+        #   ``_COMPOUND_PREDICATE_TRIGGER_PHRASES`` (triggers.py),
+        #   producing one ENTERS+IsSelf and one ATTACKS+IsSelf
+        #   ``TriggeredAbility``.
+        # All three Overlords removed — the grammar claims them.
         # ── DSK creatures batch 7 ─────────────────────────────────────
     }
 
