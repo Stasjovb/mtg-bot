@@ -31,6 +31,170 @@ def _eff_subtypes(state: "GameState", obj) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
+class DealDamage(Effect):
+    """Unified deal-damage primitive driven by ``targets``.
+
+    Replaces the eleven pre-PR-#3 deal-damage recognizer-classes at
+    the static-amount level (``DealDamageAnyTarget``,
+    ``DealDamageToTargetCreature``, ``DealDamageToOpponentCreature``,
+    ``DealDamageToTargetTappedCreature``,
+    ``DealDamageToTargetOpponent``). The ``targets`` field — typically
+    a single ``TargetSpec`` for damage today — declares the legal-
+    target shape via the ``TargetFilter`` grammar; the resolve walk
+    re-verifies legality at fire time per CR 608.2b and applies the
+    damage to whichever slots survive.
+
+    Bespoke-amount damage classes (count-source artifact / cards-in-
+    hand, X-base-plus-creature-count Focus Fire, excess-rider
+    Lander, Spacecraft-boosted) keep their own engine classes —
+    they need bespoke amount logic — but consult ``targets[0].filter``
+    via ``Effect._enumerate_for_filter`` to share the same target-
+    grammar plumbing.
+    """
+
+    amount: int = 0
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        # Re-verify each chosen target against its slot's filter at
+        # resolution per CR 608.2b. Slots whose object is no longer
+        # legal (creature untapped, blocking creature stopped blocking,
+        # etc.) log a fizzle line and skip — the user-visible feedback
+        # mirrors the legacy per-class messages ("is no longer tapped
+        # — damage fizzles") with a generic phrasing the unified
+        # dispatcher can produce without introspecting the filter.
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    # Back-references aren't in the targets tuple
+                    # under PR #3 — defensively skip.
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(_fizzle_message(state, chosen))
+                    continue
+                _apply_damage(state, chosen, self.amount)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"deals {self.amount} damage to {_describe_targets(self.targets)}"
+
+
+def _slot_target_still_legal(state, slot, chosen):
+    """Return True if ``chosen`` (engine ``("kind", id)`` tuple) still
+    satisfies ``slot.filter`` against the current ``state``. Pure
+    helper used by ``DealDamage.resolve`` and any future new-shape
+    re-verification path."""
+    kind, target_id = chosen
+    if kind == "player":
+        try:
+            obj = state.player_by_id(target_id)
+        except KeyError:
+            return False
+        if getattr(obj, "has_lost", False):
+            return False
+    else:
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return False
+    return slot.filter.test(obj, state)
+
+
+def _fizzle_message(state, chosen):
+    """Produce the user-visible log line for a target whose at-resolve
+    legality re-check failed. Names the target where possible so the
+    log entry reads like the legacy per-class fizzle messages without
+    each effect having to compose its own string."""
+    kind, target_id = chosen
+    if kind == "player":
+        return (
+            f"P{target_id} is no longer a legal target — damage fizzles"
+        )
+    obj = next(
+        (o for o in state.battlefield if o.id == target_id), None
+    )
+    if obj is None:
+        return "target is no longer on the battlefield — damage fizzles"
+    name = obj.printing.name
+    if not getattr(obj, "tapped", False):
+        # Common case: the slot's filter was IsCreature() & IsTapped()
+        # and the creature untapped between target-pick and resolve.
+        # Naming the specific change reads cleanest in the log; falls
+        # back to the generic phrasing for other re-check failures.
+        return f"{name} is no longer tapped — damage fizzles"
+    return f"{name} is no longer a legal target — damage fizzles"
+
+
+def _describe_targets(targets) -> str:
+    """Coarse human-readable rendering of a target-slot tuple. PR #3
+    only ships single-slot damage but the helper handles the multi-
+    slot case for forward compat."""
+    from mtg_bot.effects.targets import SlotRef, TargetSpec
+    if not targets:
+        return "any target"
+    parts: list[str] = []
+    for slot in targets:
+        if isinstance(slot, SlotRef):
+            parts.append(f"that target (slot {slot.idx})")
+        elif isinstance(slot, TargetSpec):
+            parts.append(_describe_filter(slot.filter))
+        else:
+            parts.append("?")
+    return " and ".join(parts)
+
+
+def _describe_filter(target_filter) -> str:
+    """Render a ``TargetFilter`` as a printed-style noun phrase for
+    log lines / describe(). Coarse — exact wording is owned by the
+    parser's phrasebook on the way in."""
+    from mtg_bot.effects.object_predicates import (
+        ControlledByOpponent, ControlledByYou,
+        IsAttacking, IsBlocking, IsCreature, IsPlayer, IsTapped,
+        ObjectAnd, ObjectOr,
+    )
+    from mtg_bot.effects.target_filter import OneOf
+    from mtg_bot.effects.targets import any_target_filter
+    if target_filter == any_target_filter():
+        return "any target"
+    if isinstance(target_filter, IsCreature):
+        return "target creature"
+    if isinstance(target_filter, IsPlayer):
+        return "target player"
+    if isinstance(target_filter, ObjectAnd):
+        l = target_filter.left
+        r = target_filter.right
+        if isinstance(l, IsCreature) and isinstance(r, IsTapped):
+            return "target tapped creature"
+        if isinstance(l, IsCreature) and isinstance(r, ControlledByOpponent):
+            return "target creature an opponent controls"
+        if isinstance(l, IsCreature) and isinstance(r, ControlledByYou):
+            return "target creature you control"
+        if isinstance(l, IsPlayer) and isinstance(r, ControlledByOpponent):
+            return "target opponent"
+        if isinstance(l, IsCreature) and isinstance(r, ObjectOr):
+            inner_l, inner_r = r.left, r.right
+            if (isinstance(inner_l, IsAttacking)
+                    and isinstance(inner_r, IsBlocking)):
+                return "target attacking or blocking creature"
+    if isinstance(target_filter, OneOf):
+        return "any target"  # default rendering for OneOf disjuncts
+    return "target"
+
+
+
+@dataclass(frozen=True)
 class GainLife(Effect):
     amount: int
 
@@ -1618,43 +1782,30 @@ class ExileEachOpponentsGraveyard(Effect):
 
 
 @dataclass(frozen=True)
-class DealDamageToTargetOpponent(Effect):
-    """This source deals ``amount`` damage to target opponent.
+class DealDamageToTargetOpponent(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    opponent".
 
-    Matches oracle text like Biotech Specialist's "this creature deals 2
-    damage to target opponent." Damage routes through the player-damage
-    path (so lifelink and other modifiers on the source apply naturally
-    via _apply_damage).
+    Filter is ``IsPlayer() & ControlledByOpponent()``; the
+    ``ControlledByOpponent`` arm makes the spell's caster (the
+    "you" in MTG parlance) ineligible.
+
+    NB: ``amount`` defaults to 1 to mirror the legacy class's default;
+    most call sites pass an explicit value but a few constructed it
+    bare.
     """
 
     amount: int = 1
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("player", p.id) for p in state.players
-            if p.id != controller_id and not p.has_lost
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, pid = targets[0]
-        if kind != "player":
-            return
-        if pid == controller_id:
-            return
-        _apply_damage(state, ("player", pid), self.amount)
-
-    def describe(self) -> str:
-        return f"deals {self.amount} damage to target opponent"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent, IsPlayer,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsPlayer() & ControlledByOpponent()),),
+        )
 
 
 
@@ -7542,27 +7693,21 @@ class DealDamageEqualToSourcePowerAnyTarget(Effect):
     nonpositive the damage is a no-op (CR 119.5: "if the amount of
     damage that would be dealt is 0 or less, no damage is dealt").
 
-    Same legal-target pool as ``DealDamageAnyTarget`` (creatures + non-
-    eliminated players); the cast-time pool is computed at trigger-
-    enters-stack time so a between-cast-and-resolve change to the
-    source's power doesn't change the legal targets.
+    Bespoke amount (driven by source power) so the class survives the
+    PR #3 collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` via the structural ``TargetFilter``
+    grammar — same any-target expansion ``DealDamage`` uses.
     """
 
-    def requires_target(self) -> bool:
-        return True
+    targets: tuple = ()
 
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        from mtg_bot.game import is_creature_now
-        targets: list[Target] = []
-        for o in state.battlefield:
-            if is_creature_now(o):
-                targets.append(("creature", o.id))
-        for p in state.players:
-            if not p.has_lost:
-                targets.append(("player", p.id))
-        return targets
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.targets import TargetSpec, any_target_filter
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(any_target_filter()),),
+            )
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -7577,7 +7722,14 @@ class DealDamageEqualToSourcePowerAnyTarget(Effect):
         amount = effective_power(state, source)
         if amount <= 0:
             return
-        _apply_damage(state, targets[0], amount)
+        if not _slot_target_still_legal(state, self.targets[0], targets[0]):
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            _apply_damage(state, targets[0], amount)
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (
@@ -7586,92 +7738,57 @@ class DealDamageEqualToSourcePowerAnyTarget(Effect):
 
 
 
-@dataclass(frozen=True)
-class DealDamageAnyTarget(Effect):
-    """Deal ``amount`` damage to any target (creature or player).
-
-    Matches "deals N damage to any target" on cards like Nebula Dragon.
-    Planeswalkers and battles are valid MTG targets too — they just don't
-    exist yet in our engine.
-    """
-
-    amount: int
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        from mtg_bot.game import is_creature_now
-        targets: list[Target] = []
-        for o in state.battlefield:
-            # Use ``is_creature_now`` (not ``printing.is_creature``)
-            # so impending-suppressed Overlords aren't valid creature
-            # targets — they're enchantments while their time
-            # counters remain.
-            if is_creature_now(o):
-                targets.append(("creature", o.id))
-        for p in state.players:
-            if not p.has_lost:
-                targets.append(("player", p.id))
-        return targets
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        _apply_damage(state, targets[0], self.amount)
-
-    def describe(self) -> str:
-        return f"deals {self.amount} damage to any target"
+# DealDamage and its helpers moved earlier in the file (above
+# DealDamageToTargetOpponent at line ~1620 in the pre-collapse
+# layout) so the sugar subclasses can reference DealDamage at class-
+# definition time. See the canonical DealDamage definition near the
+# top of the module.
 
 
 
 @dataclass(frozen=True)
-class DealDamageToTargetCreature(Effect):
-    """Deal ``amount`` damage to any target creature (controller's or otherwise).
+class DealDamageAnyTarget(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to any
+    target".
 
-    Matches oracle text like "~ deals N damage to target creature" (Bombard).
-    Unlike DealDamageToOpponentCreature this can target your own creatures
-    too. Set ``optional=True`` for "up to one target creature" oracle text:
-    the effect resolves as a no-op when no target is chosen / available.
+    Identical at the engine level to
+    ``DealDamage(amount=N, targets=(TargetSpec(any_target_filter()),))``;
+    the subclass is sugar so the parser can emit a self-describing
+    name in the AST and existing parser tests' equality assertions
+    keep their per-shape granularity. No extra fields, no behavioural
+    overrides — every code path is the unified ``DealDamage`` resolve.
     """
 
-    amount: int
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+        # Frozen dataclass: bypass __setattr__ via __dict__ write.
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(any_target_filter()),),
+        )
+
+
+@dataclass(frozen=True)
+class DealDamageToTargetCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to (up to
+    one) target creature".
+
+    ``optional=True`` flips the slot's ``count_min`` to 0 so the
+    targeting pipeline treats the slot as ``0..1`` ("up to one
+    target creature"); default ``False`` is the bare 1..1 form.
+    """
+
     optional: bool = False
 
-    def requires_target(self) -> bool:
-        return not self.optional
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, 1) if self.optional else (1, 1)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, _ = targets[0]
-        if kind != "creature":
-            return
-        _apply_damage(state, targets[0], self.amount)
-
-    def describe(self) -> str:
-        prefix = "up to one target" if self.optional else "target"
-        return f"deals {self.amount} damage to {prefix} creature"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        spec = TargetSpec(
+            IsCreature(),
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
 
 
 
@@ -7688,21 +7805,23 @@ class DealDamageToTargetCreatureWithExcessLanderRider(Effect):
     "excess" is resolved through rule 120.3e which handles that, but
     for our simplified model, comparing amount to remaining toughness
     is sufficient.
+
+    Bespoke amount-and-rider so the class survives PR #3's damage
+    collapse; legal-target pool now consults
+    ``self.targets[0].filter`` (``IsCreature()``) via the structural
+    target-grammar plumbing.
     """
 
     amount: int = 6
+    targets: tuple = ()
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import IsCreature
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets", (TargetSpec(IsCreature()),),
+            )
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -7714,28 +7833,35 @@ class DealDamageToTargetCreatureWithExcessLanderRider(Effect):
 
         if not targets:
             return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        excess = 0
-        if obj is not None:
-            remaining = max(0, effective_toughness(state, obj) - obj.damage)
-            excess = max(0, self.amount - remaining)
-        _apply_damage(state, targets[0], self.amount)
-        if excess > 0:
-            lander = state.new_object(
-                TOKEN_PRINTINGS["Lander"],
-                owner_id=controller_id,
-                zone=Zone.BATTLEFIELD,
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            kind, target_id = targets[0]
+            obj = next(
+                (o for o in state.battlefield if o.id == target_id), None
             )
-            put_into_battlefield(state, lander, controller_id)
-            state.log.append(
-                f"Orbital Plunge dealt {excess} excess damage; "
-                f"P{controller_id} creates a Lander token"
-            )
+            excess = 0
+            if obj is not None:
+                remaining = max(0, effective_toughness(state, obj) - obj.damage)
+                excess = max(0, self.amount - remaining)
+            _apply_damage(state, targets[0], self.amount)
+            if excess > 0:
+                lander = state.new_object(
+                    TOKEN_PRINTINGS["Lander"],
+                    owner_id=controller_id,
+                    zone=Zone.BATTLEFIELD,
+                )
+                put_into_battlefield(state, lander, controller_id)
+                state.log.append(
+                    f"Orbital Plunge dealt {excess} excess damage; "
+                    f"P{controller_id} creates a Lander token"
+                )
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (
@@ -7747,24 +7873,30 @@ class DealDamageToTargetCreatureWithExcessLanderRider(Effect):
 
 @dataclass(frozen=True)
 class DealDamageToOpponentCreatureByArtifactCount(Effect):
-    """Deal damage equal to the number of artifacts you control to target
-    creature an opponent controls.
+    """Deal damage equal to the number of artifacts you control to
+    target creature an opponent controls.
 
     Matches Warmaker Gunship's ETB. Counts include lands that are also
     artifacts (there aren't any in EoE) and tokens like Lander.
+
+    Bespoke amount (artifact count) so the class survives PR #3's
+    damage collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` via the structural ``TargetFilter``
+    grammar — ``IsCreature() & ControlledByOpponent()``.
     """
 
-    def requires_target(self) -> bool:
-        return True
+    targets: tuple = ()
 
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.controller_id != controller_id
-        ]
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -7772,16 +7904,22 @@ class DealDamageToOpponentCreatureByArtifactCount(Effect):
     ) -> None:
         if not targets:
             return
-        kind, _ = targets[0]
-        if kind != "creature":
-            return
-        artifact_count = sum(
-            1 for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
-        )
-        if artifact_count <= 0:
-            return
-        _apply_damage(state, targets[0], artifact_count)
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            artifact_count = sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_artifact
+            )
+            if artifact_count <= 0:
+                return
+            _apply_damage(state, targets[0], artifact_count)
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (
@@ -7807,19 +7945,24 @@ class DealDamageToOpponentCreatureByCardsInHand(Effect):
     resolves), so a hand-of-N + the cast Room produces N damage, not
     N+1 — same hand count an opponent or a third-party observer would
     see at resolve time.
+
+    Bespoke amount (hand size) so the class survives PR #3's damage
+    collapse, but the legal-target pool now consults
+    ``self.targets[0].filter`` — ``IsCreature() & ControlledByOpponent()``.
     """
 
-    def requires_target(self) -> bool:
-        return True
+    targets: tuple = ()
 
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.controller_id != controller_id
-        ]
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -7827,13 +7970,19 @@ class DealDamageToOpponentCreatureByCardsInHand(Effect):
     ) -> None:
         if not targets:
             return
-        kind, _ = targets[0]
-        if kind != "creature":
-            return
-        hand_size = len(state.player_by_id(controller_id).hand)
-        if hand_size <= 0:
-            return
-        _apply_damage(state, targets[0], hand_size)
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            hand_size = len(state.player_by_id(controller_id).hand)
+            if hand_size <= 0:
+                return
+            _apply_damage(state, targets[0], hand_size)
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (
@@ -7845,26 +7994,28 @@ class DealDamageToOpponentCreatureByCardsInHand(Effect):
 
 @dataclass(frozen=True)
 class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
-    """Deal ``base`` damage to a target creature; ``boosted`` instead if you
-    control a Spacecraft.
+    """Deal ``base`` damage to a target creature; ``boosted`` instead
+    if you control a Spacecraft.
 
     Matches Invasive Maneuvers (3/5). Any-target creature.
+
+    Bespoke amount (Spacecraft-conditional) so the class survives
+    PR #3's damage collapse; legal-target pool now consults
+    ``self.targets[0].filter`` (``IsCreature()``) via the structural
+    target-grammar plumbing.
     """
 
     base: int = 3
     boosted: int = 5
+    targets: tuple = ()
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import IsCreature
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets", (TargetSpec(IsCreature()),),
+            )
 
     def _amount(self, state: "GameState", controller_id: int) -> int:
         has_spacecraft = any(
@@ -7879,10 +8030,18 @@ class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
     ) -> None:
         if not targets:
             return
-        kind, _ = targets[0]
-        if kind != "creature":
-            return
-        _apply_damage(state, targets[0], self._amount(state, controller_id))
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            _apply_damage(
+                state, targets[0], self._amount(state, controller_id),
+            )
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (
@@ -7893,41 +8052,25 @@ class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
 
 
 @dataclass(frozen=True)
-class DealDamageToOpponentCreature(Effect):
-    """Deal ``amount`` damage to target creature an opponent controls.
+class DealDamageToOpponentCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    creature an opponent controls".
 
-    Matches oracle text like "deals N damage to target creature an opponent
-    controls" (Nova Hellkite). Only enemy creatures are legal targets — the
-    controller can't target their own creatures with this.
+    The filter ``IsCreature() & ControlledByOpponent()`` reads
+    ``state.resolving_controller_id`` (pinned by
+    ``Effect._enumerate_for_filter``) so the legal-target pool is
+    restricted to creatures the spell's caster doesn't control.
     """
 
-    amount: int
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.controller_id != controller_id
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, _ = targets[0]
-        if kind != "creature":
-            return
-        _apply_damage(state, targets[0], self.amount)
-
-    def describe(self) -> str:
-        return f"deals {self.amount} damage to target creature an opponent controls"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent, IsCreature,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & ControlledByOpponent()),),
+        )
 
 
 
@@ -8442,56 +8585,24 @@ class PumpTargetArtifactOrCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
-class DealDamageToTargetTappedCreature(Effect):
-    """Deal ``amount`` damage to a target *tapped* creature.
+class DealDamageToTargetTappedCreature(DealDamage):
+    """``DealDamage`` constructor sugar for "deals N damage to target
+    tapped creature".
 
-    Matches oracle text "~ deals N damage to target tapped creature"
-    (Reroute Systems mode 2). Like ``DealDamageToTargetCreature`` but the
-    legal-targets pool is gated on ``obj.tapped`` and the damage application
-    re-verifies tappedness at resolution (the target may have untapped
-    between cast and resolve — fizzle in that case).
+    Filter is ``IsCreature() & IsTapped()``; the unified
+    ``DealDamage.resolve`` re-verifies the slot's filter against the
+    current battlefield at resolution time, so a target that
+    untapped between cast and resolve fails the recheck and the
+    damage application is skipped per CR 608.2b.
     """
 
-    amount: int
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and o.tapped
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature, IsTapped
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsCreature() & IsTapped()),),
         )
-        if obj is None:
-            return
-        # Re-verify tappedness at resolution — target may have untapped
-        # since the spell was cast.
-        if not obj.tapped:
-            state.log.append(
-                f"{obj.printing.name} is no longer tapped — "
-                f"damage fizzles"
-            )
-            return
-        _apply_damage(state, targets[0], self.amount)
-
-    def describe(self) -> str:
-        return f"deals {self.amount} damage to target tapped creature"
 
 
 

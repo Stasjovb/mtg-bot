@@ -2371,32 +2371,35 @@ class ZeroPointBalladEffect(Effect):
 
 @dataclass(frozen=True)
 class FocusFireEffect(Effect):
-    """Deal (``base`` + your creatures and Spacecraft) damage to an attacking
-    or blocking creature.
+    """Deal (``base`` + your creatures and Spacecraft) damage to an
+    attacking or blocking creature.
 
     Matches Focus Fire. Dynamic amount is recomputed at resolution.
-    Legality is filtered to attackers/blockers only; that's re-checked at
-    resolve time so a creature that stops attacking/blocking between cast
-    and resolve fizzles the damage.
+    Legality is filtered to attackers/blockers only via
+    ``self.targets[0].filter`` (``IsCreature() & (IsAttacking() |
+    IsBlocking())``); that's re-checked at resolve time so a creature
+    that stops attacking/blocking between cast and resolve fizzles
+    the damage (CR 608.2b).
+
+    Bespoke amount (X = base + creature/Spacecraft count) so the
+    class survives PR #3's damage collapse.
     """
 
     base: int = 2
+    targets: tuple = ()
 
-    def requires_target(self) -> bool:
-        return True
-
-    @staticmethod
-    def _is_in_combat(obj: "GameObject") -> bool:
-        return obj.attacking or obj.blocking is not None
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature and self._is_in_combat(o)
-        ]
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                IsAttacking, IsBlocking, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(
+                    IsCreature() & (IsAttacking() | IsBlocking())
+                ),),
+            )
 
     def _amount(self, state: "GameState", controller_id: int) -> int:
         bonus = sum(
@@ -2410,17 +2413,21 @@ class FocusFireEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.effects.generic import _slot_target_still_legal
         if not targets:
             return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None or not self._is_in_combat(obj):
-            return
-        _apply_damage(state, targets[0], self._amount(state, controller_id))
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            _apply_damage(
+                state, targets[0], self._amount(state, controller_id),
+            )
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         return (

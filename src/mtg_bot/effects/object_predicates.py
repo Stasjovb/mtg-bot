@@ -91,12 +91,25 @@ class IsLand(ObjectPredicate):
 
 @dataclass(frozen=True)
 class IsCreature(ObjectPredicate):
-    """The object is a creature."""
+    """The object is a creature, in the rules-correct sense.
+
+    Reads through :func:`mtg_bot.game.is_creature_now` so type-changing
+    runtime state is honoured: an Impending-suppressed Overlord whose
+    printed type line still reads "Creature" evaluates False until the
+    last time counter is removed (CR 702.176); a face-down permanent
+    is True regardless of the printed type (CR 701.34); a Spacecraft
+    above its tier-threshold is True; a manlanded land is True for
+    the activation duration. Mirrors the
+    :class:`HasSubtype` precedent — predicates should reflect the
+    object's effective state, not just its printing.
+    """
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Creature" in obj.printing.card_types
+        from mtg_bot.game import is_creature_now
+
+        return is_creature_now(obj)
 
 
 @dataclass(frozen=True)
@@ -145,6 +158,39 @@ class IsPlayer(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsPlaneswalker(ObjectPredicate):
+    """The object is a planeswalker (``"Planeswalker"`` in its
+    card_types).
+
+    Models the planeswalker arm of the "any target" expansion (CR 115:
+    a planeswalker is one of the legal kinds for damage-targeting
+    effects whose printed phrasing is "any target"). Players evaluate
+    false.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Planeswalker" in obj.printing.card_types
+
+
+@dataclass(frozen=True)
+class IsBattle(ObjectPredicate):
+    """The object is a Battle (``"Battle"`` in its card_types).
+
+    Models the battle arm of the "any target" expansion. The current
+    EoE pool ships no Battles, so this atom never matches today, but
+    it's part of the structural target-filter vocabulary so a future
+    printing wired to "any target" picks Battles up automatically.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Battle" in obj.printing.card_types
+
+
+@dataclass(frozen=True)
 class IsNontoken(ObjectPredicate):
     """The object is NOT a token.
 
@@ -163,14 +209,18 @@ class IsNontoken(ObjectPredicate):
 
 @dataclass(frozen=True)
 class HasSubtype(ObjectPredicate):
-    """The object's printing has the given subtype string.
+    """The object's *effective* subtypes include the given string.
 
-    Models the type-line subtype check used by triggers that gate on a
-    creature subtype (e.g. ``"Whenever a Kavu you control enters"``).
-    Compares against ``obj.printing.subtypes`` directly — runtime
-    subtype grants (``temp_subtype``, ``effective_subtypes``) are not
-    consulted here because every existing in-scope trigger keys off
-    the printed subtype.
+    Models the type-line subtype check used by triggers and Affinity-
+    style cost reductions that gate on a creature subtype (e.g.
+    ``"Whenever a Kavu you control enters"``,
+    ``PerControlled(HasSubtype("Sliver"))``). Reads through
+    :func:`mtg_bot.game.effective_subtypes` so a creature granted a
+    subtype by a layer-3 / layer-4 continuous effect (Conspiracy
+    granting "Sliver", Ragost granting "Food", Magus / Dryad layering
+    on lands, …) counts toward the predicate. This is the rules-correct
+    CR 613 reading: subtype membership is determined after all type-
+    changing layers apply, not from the printed type line alone.
     """
 
     name: str
@@ -178,7 +228,9 @@ class HasSubtype(ObjectPredicate):
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return self.name in obj.printing.subtypes
+        from mtg_bot.game import effective_subtypes
+
+        return self.name in effective_subtypes(state, obj)
 
 
 @dataclass(frozen=True)
@@ -194,6 +246,72 @@ class IsTapped(ObjectPredicate):
 
     def test(self, obj, state):
         return bool(getattr(obj, "tapped", False))
+
+
+@dataclass(frozen=True)
+class ControlledByOpponent(ObjectPredicate):
+    """The object's controller is NOT the current target-selecting
+    controller.
+
+    Models the "an opponent controls" qualifier on filters like
+    "target creature an opponent controls". The "current target-
+    selecting controller" is read from
+    ``state.resolving_controller_id`` — a transient field the
+    targeting pipeline pins before invoking ``TargetFilter.test``.
+    Players evaluate against ``id != resolving_controller_id``;
+    permanents against ``controller_id != resolving_controller_id``.
+
+    A ``None`` ``resolving_controller_id`` means the field hasn't
+    been pinned for this enumeration — defensively returns ``False``
+    rather than over-accepting.
+    """
+
+    def test(self, obj, state):
+        viewer_id = getattr(state, "resolving_controller_id", None)
+        if viewer_id is None:
+            return False
+        if hasattr(obj, "printing"):
+            return obj.controller_id != viewer_id
+        # Players: their ``id`` is the controller identity.
+        if obj is None:
+            return False
+        return getattr(obj, "id", None) != viewer_id
+
+
+@dataclass(frozen=True)
+class ControlledByYou(ObjectPredicate):
+    """The object's controller IS the current target-selecting
+    controller.
+
+    Mirror of :class:`ControlledByOpponent` for "you control"
+    qualifiers ("target creature you control"). Same
+    ``resolving_controller_id`` source; same defensive ``False``
+    when the field is unset.
+    """
+
+    def test(self, obj, state):
+        viewer_id = getattr(state, "resolving_controller_id", None)
+        if viewer_id is None:
+            return False
+        if hasattr(obj, "printing"):
+            return obj.controller_id == viewer_id
+        if obj is None:
+            return False
+        return getattr(obj, "id", None) == viewer_id
+
+
+@dataclass(frozen=True)
+class IsAttacking(ObjectPredicate):
+    """The object is currently attacking — ``obj.attacking`` is True.
+
+    Models the "attacking creature" qualifier on filters like Focus
+    Fire's "target attacking or blocking creature" (composed as
+    ``IsCreature() & (IsAttacking() | IsBlocking())``). Players and
+    lands have no ``attacking`` attribute and evaluate false.
+    """
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "attacking", False))
 
 
 @dataclass(frozen=True)

@@ -5,11 +5,13 @@ TriggeredAbility), and shared private helpers used across effect modules.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mtg_bot.cards import CostReduction, ManaCost
+    from mtg_bot.effects.targets import TargetSlot
     from mtg_bot.game import GameState
 
 
@@ -20,26 +22,160 @@ Target = tuple[str, int]
 class Effect:
     """Base class for ability effects.
 
-    Untargeted effects override ``resolve``; targeted effects also override
-    ``requires_target`` + ``legal_targets``. ``resolve`` receives a tuple of
-    chosen targets (empty for untargeted effects).
+    Untargeted effects override ``resolve``; targeted effects come in
+    two flavours during the PR #3 → PR #4 phased migration:
+
+    1. **New-shape effects** carry a non-empty
+       ``targets: tuple[TargetSlot, ...]`` field describing each
+       target slot via the
+       :mod:`mtg_bot.effects.targets` grammar (``TargetSpec`` /
+       ``SlotRef``). The default ``requires_target()`` /
+       ``legal_targets()`` / ``target_count_range()`` implementations
+       below consult ``self.targets`` to answer the targeting
+       pipeline's questions.
+    2. **Old-shape effects** (destroy / exile / tap / pump / +1+1 /
+       return-to-hand / …) leave ``targets`` at its empty default
+       and override ``requires_target()`` / ``legal_targets()``
+       directly. Those overrides keep working unchanged because
+       ``targets`` is empty — the default impls below short-circuit
+       to "no target" and the per-class overrides take precedence.
+       PR #4 migrates those families to the new shape.
+
+    ``resolve`` receives a tuple of chosen targets (empty for
+    untargeted effects). New-shape effects iterate the chosen targets
+    in slot order; back-reference ``SlotRef`` slots are NOT in the
+    targets tuple — the resolve path looks the parent slot's resolved
+    target back up in-place.
     """
 
+    # Per-effect target list. Empty for old-shape effects whose
+    # targeting machinery lives on per-class ``requires_target`` /
+    # ``legal_targets`` overrides; non-empty for new-shape effects
+    # whose targeting is driven structurally through this field.
+    # Class-level default — subclasses opt in by setting their own
+    # ``targets`` field (typically as a frozen-dataclass field).
+    targets: "tuple[TargetSlot, ...]" = ()
+
     def requires_target(self) -> bool:
-        """Whether this effect needs at least one chosen target to resolve."""
+        """Whether this effect needs at least one chosen target to resolve.
+
+        Default: True iff any ``TargetSpec`` in ``self.targets`` has a
+        ``count_min >= 1``. ``SlotRef`` slots don't count toward
+        target-required because they're back-references, not fresh
+        prompts. Old-shape effects override this directly and the
+        default never fires for them (their ``targets`` is empty).
+        """
+        from mtg_bot.effects.targets import TargetSpec
+        for slot in self.targets:
+            if isinstance(slot, TargetSpec) and slot.count_min >= 1:
+                return True
         return False
 
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
-        """Enumerate legal targets. Empty list means no targets are needed."""
+        """Enumerate legal targets for the FIRST ``TargetSpec`` slot.
+
+        Default behaviour: walks the battlefield + players for objects
+        satisfying the slot's ``filter``, returning each as the
+        engine's ``("creature"|"player"|"permanent", id)`` tuple form.
+        Old-shape effects override this and the default never fires;
+        new-shape effects with multiple ``TargetSpec`` slots use
+        ``legal_targets_for_slot`` (below).
+
+        Empty list means no targets are needed.
+        """
+        if not self.targets:
+            return []
+        from mtg_bot.effects.targets import TargetSpec
+        # Find the first TargetSpec slot — any leading ``SlotRef`` is
+        # nonsense (no slot to back-reference) but defensively skip.
+        for slot in self.targets:
+            if isinstance(slot, TargetSpec):
+                return self._enumerate_for_filter(state, controller_id, slot.filter)
         return []
 
+    @staticmethod
+    def _enumerate_for_filter(
+        state: "GameState", controller_id: int, target_filter
+    ) -> list[Target]:
+        """Walk battlefield + players, returning legal targets for
+        ``target_filter``. Pure helper — used by both
+        :meth:`legal_targets` and per-slot enumeration in multi-slot
+        new-shape effects.
+
+        Pins ``state.resolving_controller_id`` to ``controller_id``
+        for the duration of the walk so controller-aware atoms
+        (``ControlledByOpponent`` / ``ControlledByYou``) can resolve
+        "you" / "an opponent" without the predicate test signature
+        having to grow. Restores the prior value on exit so nested
+        enumerations don't see a stale id.
+        """
+        from mtg_bot.game import is_creature_now
+
+        prior_controller = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            results: list[Target] = []
+            for o in state.battlefield:
+                if not target_filter.test(o, state):
+                    continue
+                # Pick the engine "kind" tag for the object. Creatures
+                # use the legal-now check (``is_creature_now``) so
+                # impending-suppressed Overlords aren't valid creature
+                # targets even if their printed type carries Creature.
+                if is_creature_now(o):
+                    results.append(("creature", o.id))
+                elif "Planeswalker" in o.printing.card_types:
+                    results.append(("planeswalker", o.id))
+                elif "Battle" in o.printing.card_types:
+                    results.append(("battle", o.id))
+                else:
+                    results.append(("permanent", o.id))
+            # Players are not on the battlefield list — walk them
+            # separately so an "any target" filter (which accepts
+            # IsPlayer) picks them up. Filters that don't admit
+            # players (``IsCreature`` etc.) reject every player via
+            # their own ``test`` and the loop is a cheap no-op.
+            for p in state.players:
+                if p.has_lost:
+                    continue
+                if target_filter.test(p, state):
+                    results.append(("player", p.id))
+            return results
+        finally:
+            state.resolving_controller_id = prior_controller
+
     def target_count_range(self) -> tuple[int, int]:
-        """Return (min, max) number of targets. Default:
-        (1, 1) if requires_target(), else (0, 0).
-        Override for "up to N target" effects (min=0, max=N)."""
-        return (1, 1) if self.requires_target() else (0, 0)
+        """Return (min, max) number of TARGETS (not slots).
+
+        Default for new-shape effects: sums ``count_min`` and
+        ``count_max`` across every ``TargetSpec`` in ``self.targets``;
+        ``SlotRef`` slots contribute zero. Old-shape effects override
+        this and the default never fires.
+
+        For backward-compat with old-shape effects whose
+        ``requires_target()`` returns True without overriding this:
+        returns ``(1, 1)`` so the "old default" stays correct.
+        """
+        from mtg_bot.effects.targets import TargetSpec
+        if not self.targets:
+            return (1, 1) if self.requires_target() else (0, 0)
+        total_min = 0
+        total_max: float = 0
+        for slot in self.targets:
+            if isinstance(slot, TargetSpec):
+                total_min += slot.count_min
+                if slot.count_max == math.inf:
+                    total_max = math.inf
+                elif total_max != math.inf:
+                    total_max += slot.count_max
+        # Cap to int when finite (callers expect ints for the legacy
+        # one-spec common case); leave math.inf intact for the "any
+        # number of target X" form.
+        if total_max == math.inf:
+            return (total_min, total_max)  # type: ignore[return-value]
+        return (total_min, int(total_max))
 
     def target_slot_kinds(self) -> tuple[str, ...]:
         """Per-slot required target kinds, for effects with multiple
@@ -68,6 +204,51 @@ class Effect:
 
     def describe(self) -> str:
         raise NotImplementedError
+
+
+
+# Type alias for an ordered run of effects executed back-to-back. Slot
+# indices in ``TargetSpec.distinct_from`` and ``SlotRef.idx`` are 0-
+# based across the EffectSequence, NOT across the larger card. A modal
+# wrapper resets the scope for each mode.
+EffectSequence = tuple[Effect, ...]
+
+
+@dataclass(frozen=True)
+class ModalEffect(Effect):
+    """A modal wrapper around several alternative effect sequences.
+
+    Models "Choose one — / Choose two —" / "Choose any number —"
+    cards. ``pick`` is the printed number of modes the caster
+    chooses (``1`` for "Choose one"; ``2`` for "Choose two"; etc.).
+    ``modes`` is a tuple of :data:`EffectSequence` — each mode is its
+    own sequence, with its own slot scope.
+
+    ``repeats_allowed=True`` models the "the same mode may be chosen
+    more than once" rider on Charm-style cards; default False matches
+    "different modes" semantics.
+
+    Out of scope this PR: actual mode-selection plumbing in the
+    targeting pipeline. This dataclass exists so the architectural
+    grammar is complete (PR #3 design table covers modal in the
+    layered types) — there are no engine consumers in this PR.
+    """
+
+    pick: int = 1
+    modes: tuple[EffectSequence, ...] = ()
+    repeats_allowed: bool = False
+
+    def describe(self) -> str:
+        # Coarse human-readable summary; the full mode text lives on
+        # each sub-effect. ``pick`` of 1 reads as "Choose one"; 2 as
+        # "Choose two"; etc.
+        words = {1: "one", 2: "two", 3: "three"}
+        n = words.get(self.pick, str(self.pick))
+        joined = " | ".join(
+            "; ".join(eff.describe() for eff in seq)
+            for seq in self.modes
+        )
+        return f"Choose {n} — {joined}"
 
 
 

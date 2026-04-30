@@ -167,6 +167,40 @@ def test_legal_actions_exposes_hivepool_at_reduced_cost():
     assert casts, "Affinity-reduced cast must be legal"
 
 
+def test_creature_granted_sliver_via_layer4_counts_toward_affinity():
+    """A creature granted ``Sliver`` via a layer-4 ``add_subtype``
+    continuous-effect entry counts toward Hivepool's Affinity-for-
+    Slivers discount, even though its printed subtype list omits
+    Sliver. ``HasSubtype`` reads through ``effective_subtypes`` so
+    the layered grant lands in the predicate's count.
+    """
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import ContinuousEffect
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
+    # Without the layer-4 grant: not a Sliver, no discount.
+    p = _PRINTINGS["Thrumming Hivepool"]
+    reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
+    assert reduced.generic == p.mana_cost.generic
+    # Grant the Bear "Sliver" via a layer-4 add_subtype effect — the
+    # CR-613 layered walk now reports the Bear as a Sliver, and
+    # Hivepool's Affinity discount picks it up.
+    state.continuous_effects.append(
+        ContinuousEffect(
+            source_id=bear.id + 1000,
+            layer=4,
+            timestamp=0,
+            kind="add_subtype",
+            target_id=bear.id,
+            params=("Sliver",),
+            description="Conspiracy: creatures are Slivers",
+        )
+    )
+    reduced = apply_cost_reductions(p, state, 0, p.mana_cost)
+    assert reduced.generic == p.mana_cost.generic - 1
+
+
 def test_legal_actions_blocks_hivepool_without_enough_slivers():
     """Same setup but with zero Slivers — full {6} unaffordable
     against {4}, so cast must NOT be exposed."""
