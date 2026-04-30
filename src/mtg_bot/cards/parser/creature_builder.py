@@ -359,28 +359,24 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # table so the oracle parser claims it directly.
         #
         # Kavaron Harrier {R} 2/1 Robot Soldier.
+        # Migrated to the oracle-text grammar (engine-kavaron-elevator):
         # "Whenever this creature attacks, you may pay {2}. If you do,
         # create a 2/2 colorless Robot artifact creature token that's
         # tapped and attacking. Sacrifice that token at end of combat."
-        # SKIP (wave7): ``_YOU_MAY_PAY_THEN_EFFECT`` exists and the token-
-        # create shape ``create a tapped N/N <color> <type> token`` parses,
-        # but the oracle phrase ``that's tapped and attacking`` (not just
-        # ``tapped``) fails the ``_CREATE_CREATURE_TOKEN`` regex.  The
-        # "Sacrifice that token at end of combat" sentence is a
-        # delayed-trigger sac encoded in ``state.pending_end_of_combat_
-        # sacrifices`` — no grammar primitive covers the delayed-sac shape.
-        # Both gaps require grammar/engine additions before the grammar can
-        # claim this card.
-        "Kavaron Harrier": make_creature(
-            "Kavaron Harrier", "{R}", 2, 1,
-            artifact=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=KavaronHarrierAttackEffect(),
-                ),
-            ),
-        ),
+        # Two grammar additions unlock end-to-end parsing:
+        # 1. ``_CREATE_CREATURE_TOKEN`` extended with ``(?: that's tapped
+        #    and attacking)?`` qualifier; ``_parse_create_token_effect``
+        #    sets ``attacking=True`` when matched; ``CreateToken`` gains
+        #    ``attacking`` and ``schedule_end_of_combat_sacrifice`` flags.
+        # 2. Literal multi-sentence recognizer in ``_parse_effect`` for the
+        #    two-sentence "create ... that's tapped and attacking. Sacrifice
+        #    that token at end of combat." phrase → ``CreateToken(
+        #    attacking=True, schedule_end_of_combat_sacrifice=True)``.
+        #    The anaphoric "that token" across sentences requires the two
+        #    clauses be collapsed into one engine operation; ``CreateToken``
+        #    schedules end-of-combat sacrifice during its own resolve step.
+        # Removed from this table so the oracle parser claims it directly.
+        #
         # Monoist Circuit-Feeder {4}{B}{B} 4/4 Nautilus.
         # "Flying. When this creature enters, until end of turn, target
         # creature you control gets +X/+0 and target creature an opponent

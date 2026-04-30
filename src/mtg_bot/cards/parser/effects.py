@@ -1139,7 +1139,7 @@ _CREATE_CREATURE_TOKEN = re.compile(
     rf"^create ({_TOKEN_COUNT_PATTERN}) (tapped )?(\d+)/(\d+) "
     rf"({_TOKEN_COLOR_PATTERN}) ([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
     rf"(artifact )?(enchantment )?creature tokens?"
-    rf"""(?:\s+with\s+.+|\.?\s+It has\s+.+)?$""",
+    rf"""(?: that's tapped and attacking)?(?:\s+with\s+.+|\.?\s+It has\s+.+)?$""",
     re.DOTALL,
 )
 # The optional trailing ``(?:\s+with\s+.+|\.?\s+It has\s+.+)?``
@@ -2936,10 +2936,16 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
         subtype = m.group(6)
         if subtype not in TOKEN_PRINTINGS:
             return None
+        # ``that's tapped and attacking`` qualifier — token enters declared
+        # as an attacker in the current combat. Only meaningful during an
+        # attack trigger; the ``attacking`` flag on ``CreateToken`` sets
+        # obj.attacking=True and clears summoning sickness in ``resolve``.
+        attacking = "that's tapped and attacking" in phrase
         return CreateToken(
             token_printing=TOKEN_PRINTINGS[subtype],
             count=count,
-            tapped=tapped,
+            tapped=tapped or attacking,  # attacking tokens are always tapped
+            attacking=attacking,
         )
     # Named artifact token shape — ``create a [colors] artifact token
     # named [Name] [with abilities]`` (Weapons Manufacturing's Munitions).
@@ -3424,6 +3430,31 @@ def _parse_effect(phrase: str) -> Effect | None:
         "beginning of the next end step"
     ):
         return SystemsOverrideEffect()
+    # Kavaron Harrier's "create ... that's tapped and attacking. Sacrifice
+    # that token at end of combat." two-sentence phrase. The second
+    # sentence is anaphoric ("that token" refers to the token created in
+    # sentence 1) so the sentence-splitting compound parser can't model
+    # this as two standalone effects — both sentences are collapsed into
+    # a single ``CreateToken(attacking=True,
+    # schedule_end_of_combat_sacrifice=True)`` operation. Tried BEFORE
+    # ``_parse_compound_effect`` so the `. S` sentence boundary doesn't
+    # split it prematurely. Only Kavaron Harrier in the EoE pool prints
+    # this exact "that's tapped and attacking + end-of-combat sac" two-
+    # sentence pairing; broader grammar deferred until a second card
+    # with a varying piece (different token type, different sac timing)
+    # ships.
+    if phrase == (
+        "create a 2/2 colorless Robot artifact creature token that's "
+        "tapped and attacking. Sacrifice that token at end of combat"
+    ):
+        if "Robot" in TOKEN_PRINTINGS:
+            return CreateToken(
+                token_printing=TOKEN_PRINTINGS["Robot"],
+                count=1,
+                tapped=True,
+                attacking=True,
+                schedule_end_of_combat_sacrifice=True,
+            )
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner

@@ -5255,12 +5255,27 @@ class CreateToken(Effect):
 
     Set ``tapped=True`` for effects whose oracle text says "enters tapped"
     (e.g. Gravpack Monoist's "create a tapped 2/2 Robot token").
+
+    Set ``attacking=True`` for effects whose oracle text says "that's tapped
+    and attacking" — the token enters declared as an attacker in the current
+    combat (summoning sickness cleared). Only meaningful when the trigger
+    fires during the declare-attackers step or a combat trigger.
+
+    Set ``schedule_end_of_combat_sacrifice=True`` when the oracle text also
+    says "Sacrifice that token at end of combat." — each created token's id
+    is appended to ``state.pending_end_of_combat_sacrifices`` immediately
+    after ETB, so ``clear_combat_state`` will sacrifice it at end of combat.
+    This flag exists to model the paired creation+sacrifice oracle printed on
+    Kavaron Harrier as a single engine operation, since the two sentences
+    share "that token" anaphora that can't be tracked across a ``Sequence``.
     """
 
     token_printing: "CardPrinting"
     count: int = 1
     tapped: bool = False
     each_player: bool = False  # if True, every living player creates the token
+    attacking: bool = False  # token enters declared as attacker
+    schedule_end_of_combat_sacrifice: bool = False  # sac at end of combat
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -5343,6 +5358,7 @@ class CreateToken(Effect):
                 state.log.append(
                     f"P{recipient} creates a {printing.name} token"
                     + (" (tapped)" if self.tapped else "")
+                    + (" (attacking)" if self.attacking else "")
                     + (
                         f" (replaced x{effective_count}/{self.count})"
                         if doubled else ""
@@ -5351,6 +5367,11 @@ class CreateToken(Effect):
                 put_into_battlefield(state, obj, recipient)
                 if self.tapped:
                     obj.tapped = True
+                if self.attacking:
+                    obj.attacking = True
+                    obj.summoning_sick = False
+                if self.schedule_end_of_combat_sacrifice:
+                    state.pending_end_of_combat_sacrifices.append(obj.id)
             if effective_count > 0:
                 state.players_who_created_tokens_this_turn.add(recipient)
 
@@ -5364,7 +5385,12 @@ class CreateToken(Effect):
         else:
             article = str(self.count)
         pieces = [article, pt, color_word, subtype, "creature token"]
-        return "create " + " ".join(x for x in pieces if x)
+        desc = "create " + " ".join(x for x in pieces if x)
+        if self.attacking:
+            desc += " that's tapped and attacking"
+        if self.schedule_end_of_combat_sacrifice:
+            desc += "; sacrifice that token at end of combat"
+        return desc
 
 
 

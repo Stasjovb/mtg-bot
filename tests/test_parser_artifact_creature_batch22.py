@@ -34,16 +34,26 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     ``WickerfolkThresherAttackEffect``; all other oracle lines parse
     via the unified grammar. Migrated in bespoke-delirium.
 
+Migrated to grammar in engine-kavaron-elevator:
+  - Kavaron Harrier — ``_CREATE_CREATURE_TOKEN`` extended with
+    ``(?: that's tapped and attacking)?`` qualifier; literal multi-
+    sentence recognizer in ``_parse_effect`` for the two-sentence
+    "create ... that's tapped and attacking. Sacrifice that token at
+    end of combat." phrase → ``CreateToken(attacking=True,
+    schedule_end_of_combat_sacrifice=True)``. ``CreateToken`` gains
+    ``attacking`` and ``schedule_end_of_combat_sacrifice`` fields that
+    wire the engine behavior faithfully (tapped+attacking entry, pending
+    end-of-combat sac schedule). The trigger fires via the unified
+    ``_YOU_MAY_PAY_THEN_EFFECT`` grammar.
+
 Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
   2. Interceptor Mechan — flying + ETB return + void end-step counter
-  3. Kavaron Harrier — attack trigger (KavaronHarrierAttackEffect);
-     "that's tapped and attacking" token + end-of-combat delayed sac
-  4. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
-  5. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
-  6. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
-  7. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
-  8. Splitskin Doll — draw + source-relative conditional discard (DSK)
+  3. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
+  4. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
+  5. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
+  6. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
+  7. Splitskin Doll — draw + source-relative conditional discard (DSK)
 """
 
 from __future__ import annotations
@@ -95,6 +105,41 @@ def test_interceptor_mechan_claimed_by_parser():
 
 def test_kavaron_harrier_claimed_by_parser():
     assert "Kavaron Harrier" in _PARSER_PRINTINGS
+
+
+def test_kavaron_harrier_grammar_structure():
+    """Grammar-claimed Kavaron Harrier has the attack trigger wired via
+    OptionalManaCostThenEffect → CreateToken(attacking=True,
+    schedule_end_of_combat_sacrifice=True).
+
+    Migration from bespoke ``KavaronHarrierAttackEffect`` to the unified
+    grammar: the trigger body "you may pay {2}. If you do, create a 2/2
+    colorless Robot artifact creature token that's tapped and attacking.
+    Sacrifice that token at end of combat." parses via the
+    ``_YOU_MAY_PAY_THEN_EFFECT`` recognizer + literal multi-sentence inner
+    recognizer → ``OptionalManaCostThenEffect("{2}", CreateToken(...))``.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.effects.generic import CreateToken
+    from mtg_bot.effects.predicates import Event
+
+    kh = _parser("Kavaron Harrier")
+    assert kh.is_artifact
+    assert kh.power == 2
+    assert kh.toughness == 1
+    # Exactly one triggered ability: the attacks trigger.
+    assert len(kh.triggered_abilities) == 1
+    ta = kh.triggered_abilities[0]
+    assert ta.event == Event.ATTACKS
+    # Effect is the OptionalManaCostThenEffect wrapper.
+    assert isinstance(ta.effect, OptionalManaCostThenEffect)
+    assert ta.effect.cost_str == "{2}"
+    inner = ta.effect.inner_effect
+    assert isinstance(inner, CreateToken)
+    assert inner.tapped is True
+    assert inner.attacking is True
+    assert inner.schedule_end_of_combat_sacrifice is True
+    assert inner.token_printing.name == "Robot"
 
 
 
