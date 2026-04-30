@@ -58,7 +58,6 @@ from mtg_bot.cards.base import (
     DyadrineAttackEffect,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
-    FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     GainLife,
     HouseCartographerSurvivalEffect,
@@ -298,22 +297,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         "Genemorph Imago": make_creature(
             "Genemorph Imago", "{G}{U}", 1, 3,
             keywords={"flying"},
-        ),
-        # Famished Worldsire {5}{G}{G}{G} 6/6 Leviathan. Ward {3}.
-        # Devour land 3 (enters with 3× sacrificed lands as +1/+1
-        # counters). ETB: look at top X cards (X = power), put land
-        # cards onto battlefield tapped.
-        "Famished Worldsire": make_creature(
-            "Famished Worldsire", "{5}{G}{G}{G}", 6, 6,
-            subtypes=("Leviathan",),
-            ward="{3}",
-            devour_land_multiplier=3,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=FamishedWorldsireETBEffect(),
-                ),
-            ),
         ),
         # Duskmourn Overlord cycle (Mistmoors, Floodpits, Boilerbilges)
         # migrated to the parameterized grammar (engine-impending):

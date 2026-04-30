@@ -170,10 +170,55 @@ def test_build_creature_printing_devour_default_zero():
 # ---------- end-to-end EoE source claim ----------
 
 def test_source_claims_famished_worldsire():
-    """Famished Worldsire is now claimed via the ``_BESPOKE_CREATURES``
-    dispatch table (creature-batch22b). The ETB trigger relies on
-    ``FamishedWorldsireETBEffect`` which has no generic-grammar surface
-    form, so the bespoke entry is the only path to claim it.
+    """Famished Worldsire is now claimed by the grammar
+    (engine-devour-land). The ETB body ``look at the top X cards …``
+    is registered as a literal in ``_parse_effect`` mapping to
+    ``FamishedWorldsireETBEffect``; Ward and Devour land 3 parse via
+    their own per-keyword recognizers.
     """
     source = OracleParserCardSource()
     assert "Famished Worldsire" in source.claimed_names
+
+
+def test_build_creature_printing_famished_worldsire_grammar_attributes():
+    """Grammar-claimed Famished Worldsire has the correct oracle
+    attributes: 0/0 (real card), devour_land_multiplier=3, Ward {3},
+    and an ETB trigger that fires FamishedWorldsireETBEffect.
+    Only EoE card with this exact ETB body; broader grammar deferred
+    until a second card with the same shape exists.
+    """
+    from mtg_bot.effects import FamishedWorldsireETBEffect as _Effect
+    card = {
+        "name": "Famished Worldsire",
+        "mana_cost": "{5}{G}{G}{G}",
+        "type_line": "Creature — Leviathan",
+        "power": "0",
+        "toughness": "0",
+        "oracle_text": (
+            "Ward {3}\n"
+            "Devour land 3 (As this creature enters, you may sacrifice "
+            "any number of lands. It enters with three times that many "
+            "+1/+1 counters on it.)\n"
+            "When this creature enters, look at the top X cards of your "
+            "library, where X is this creature's power. Put any number "
+            "of land cards from among them onto the battlefield tapped, "
+            "then shuffle."
+        ),
+    }
+    p = _build_creature_printing(card)
+    assert p is not None
+    assert p.power == 0
+    assert p.toughness == 0
+    assert p.devour_land_multiplier == 3
+    assert p.ward_cost_str == "{3}"
+    assert len(p.triggered_abilities) == 1
+    assert isinstance(p.triggered_abilities[0].effect, _Effect)
+
+
+def test_famished_worldsire_not_in_bespoke():
+    """After migration, Famished Worldsire must NOT be in
+    ``_BESPOKE_CREATURES`` — the grammar now claims it through the
+    ``_parse_effect`` literal registered for its ETB body.
+    """
+    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
+    assert "Famished Worldsire" not in _BESPOKE_CREATURES

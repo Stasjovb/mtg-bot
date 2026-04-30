@@ -110,10 +110,12 @@ def test_famished_worldsire_etb_puts_library_lands_onto_battlefield():
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.LIBRARY,
     )
     p.library.append(bear)
-    # Famished Worldsire on battlefield with power 6 (printed).
+    # Real card is 0/0; give it 6 counters so effective power = 6 and
+    # the library window covers all 3 cards (2 lands + 1 bear).
     ws = state.new_object(
         _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
+    ws.plus_one_counters = 6
     state.battlefield.append(ws)
     state.resolving_source = ws
     FamishedWorldsireETBEffect().resolve(state, 0, ())
@@ -126,7 +128,8 @@ def test_famished_worldsire_etb_puts_library_lands_onto_battlefield():
 
 
 def test_famished_worldsire_etb_x_equals_power():
-    """With more counters, X grows and the library window widens."""
+    """With counters, X grows and the library window widens.
+    Real card is 0/0; +1/+1 counters drive effective power."""
     state = _new_state()
     p = state.players[0]
     # Library with 10 lands.
@@ -138,7 +141,7 @@ def test_famished_worldsire_etb_x_equals_power():
     ws = state.new_object(
         _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
-    ws.plus_one_counters = 4  # effective power 10
+    ws.plus_one_counters = 10  # effective power 10 (base 0 + 10 counters)
     state.battlefield.append(ws)
     state.resolving_source = ws
     FamishedWorldsireETBEffect().resolve(state, 0, ())
@@ -157,12 +160,12 @@ def test_famished_worldsire_etb_no_source_noop():
 
 
 def test_famished_worldsire_etb_zero_power_noop():
+    """Real card is 0/0; with no counters effective power is 0 → no-op."""
     state = _new_state()
     ws = state.new_object(
         _PRINTINGS["Famished Worldsire"], 0, Zone.BATTLEFIELD,
     )
-    # Override printed power via temp bonus to force 0.
-    ws.temp_power_bonus = -6
+    # No counters: effective power = 0 (printed 0/0, no counters).
     state.battlefield.append(ws)
     state.resolving_source = ws
     FamishedWorldsireETBEffect().resolve(state, 0, ())
