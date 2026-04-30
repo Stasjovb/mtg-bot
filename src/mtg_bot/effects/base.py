@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mtg_bot.cards import CostReduction, ManaCost
+    from mtg_bot.effects.conditions import Condition
+    from mtg_bot.effects.modifiers import (
+        ContinuousEffect, ReplacementEffect,
+    )
     from mtg_bot.effects.targets import TargetSlot
     from mtg_bot.game import GameState
 
@@ -551,6 +555,32 @@ class StaticAbility:
     # P/T bonuses to creatures, so the existing scope/applies_to
     # plumbing isn't exercised.
     grants_no_max_hand_size: bool = False
+    # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
+    # Optional structural condition gating ``applies_to``. When
+    # present, evaluated against ``(state, source.controller_id,
+    # chosen_targets=None)`` and AND-ed with the existing per-field
+    # gate checks above. Lets a card declare its activation
+    # condition compositionally (e.g. ``DuringYourTurn() &
+    # ControlPermanent(IsArtifact())``) instead of toggling a
+    # legacy boolean flag. Existing per-field gates stay as the
+    # surface today; PR D / future PRs collapse them by routing
+    # through the synthesized condition path on the way down.
+    condition: "Condition | None" = None
+    # Optional CR 614 replacement effect carried by this static.
+    # Collected by :func:`mtg_bot.effects.modifiers
+    # ._collect_replacement_effects` when ``StaticAbility`` is
+    # exposed via the printing's static-abilities surface (PR-D
+    # migrations move from per-printing boolean flags to native
+    # ``ReplacementEffect`` declarations carried here). Unused
+    # today — empty for every existing card.
+    replacement_effect: "ReplacementEffect | None" = None
+    # Optional CR 613 continuous effect carried by this static. The
+    # PR-D continuous-effect dispatcher walks every active
+    # ``StaticAbility`` with this slot populated and folds the
+    # ``ContinuousEffect.payload`` into the matching object's
+    # effective state at the declared layer. Unused today — empty
+    # for every existing card.
+    continuous_effect: "ContinuousEffect | None" = None
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
@@ -632,6 +662,19 @@ class StaticAbility:
                 if len(seen) >= 4:
                     break
             if len(seen) < 4:
+                return False
+        # Optional structural condition gate. Evaluated against
+        # ``(state, source.controller_id)``; ANDed with all the per-
+        # field gates above so a card declaring its condition
+        # compositionally still respects any legacy boolean toggles
+        # the parser also emits. ``None`` (default) is "no condition"
+        # and short-circuits to the existing always-on behaviour.
+        if self.condition is not None:
+            if state is None:
+                return False
+            if not self.condition.matches(
+                state, source.controller_id, chosen_targets=None,
+            ):
                 return False
         if self.scope == StaticScope.SELF:
             return target.id == source.id
