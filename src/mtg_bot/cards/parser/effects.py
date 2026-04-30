@@ -1482,6 +1482,30 @@ _PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
     r"^target creature you control gets ([+-]\d+)/([+-]\d+) "
     r"until end of turn$"
 )
+# "Target creature you control gets +N/+M until end of turn. If that
+# creature was cast for its warp cost, it also gains <kw> until end
+# of turn." — warp-conditional keyword-grant rider on a
+# you-control pump (Full Bore ``{1}{R}`` Instant). Two-sentence
+# recognizer: the second sentence's ``that creature`` is anaphoric to
+# the pump target, so the two sentences must be kept together.
+#
+# Three capture groups: pump power (group 1), pump toughness (group 2),
+# and the keyword body (group 3). Maps to
+# ``PumpTargetCreatureUntilEOT(power_bonus=N, toughness_bonus=M,
+# you_control_only=True, granted_keywords_if_warp_cast=<kw-set>)``.
+#
+# Currently only Full Bore in the pool fits this shape; the regex
+# captures the amounts and keywords as parameters so a future printing
+# with different values (e.g. "+2/+1" or additional keywords) lands on
+# the same primitive without further grammar work. Per parser CLAUDE.md,
+# a parameterized recognizer is preferred even when only one card in
+# the pool fits — the captured groups are the varying pieces.
+_PUMP_TARGET_CREATURE_YOU_CONTROL_WARP_KEYWORDS_RIDER_UEOT = re.compile(
+    r"^target creature you control gets ([+-]\d+)/([+-]\d+) "
+    r"until end of turn\. "
+    r"If that creature was cast for its warp cost, it also gains "
+    r"(.+) until end of turn$"
+)
 # "Double the power of target creature you control until end of turn"
 # — Mightform Harmonizer's landfall trigger body. The
 # ``DoubleTargetCreaturesPowerUEOT`` engine class adds the target's
@@ -3621,6 +3645,30 @@ def _parse_effect(phrase: str) -> Effect | None:
     # qualifier wins; the bare regex's ``$`` anchor wouldn't match the
     # qualifier anyway, but ordering more-specific before more-general
     # is the convention here.
+    #
+    # Tried BEFORE the bare ``you control gets …`` regex (below) because
+    # the bare regex's ``$`` anchor would never match the warp-rider tail
+    # anyway, but ordering more-specific before more-general is the
+    # convention here.
+    m = _PUMP_TARGET_CREATURE_YOU_CONTROL_WARP_KEYWORDS_RIDER_UEOT.match(
+        phrase
+    )
+    if m is not None:
+        # ``target creature you control gets +N/+M until end of turn.
+        # If that creature was cast for its warp cost, it also gains
+        # <kw> until end of turn`` — Full Bore's 2-sentence body.
+        # Keyword body validated via ``_parse_keyword_grant_body``;
+        # rejection returns None so an unknown keyword keeps the spell
+        # unclaimed rather than silently dropping the grant.
+        keywords = _parse_keyword_grant_body(m.group(3))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            you_control_only=True,
+            granted_keywords_if_warp_cast=keywords,
+        )
     m = _PUMP_TARGET_CREATURE_YOU_CONTROL_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(

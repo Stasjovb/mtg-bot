@@ -683,21 +683,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "of turn. Sacrifice them at the beginning of the next end "
         "step."
     ): CreateXTokensOfTargetPermanentWithHasteEndStepSac(),
-    # Full Bore: pump-your-creature with warp-conditional extra
-    # keywords. The ``granted_keywords_if_warp_cast`` field on the
-    # generic pump engine class fires only when the target was
-    # cast for its warp cost — a generic primitive that any future
-    # warp-conditional pump spell can reuse.
-    (
-        "Target creature you control gets +3/+2 until end of turn. "
-        "If that creature was cast for its warp cost, it also gains "
-        "trample and haste until end of turn."
-    ): PumpTargetCreatureUntilEOT(
-        power_bonus=3,
-        toughness_bonus=2,
-        you_control_only=True,
-        granted_keywords_if_warp_cast=frozenset({"trample", "haste"}),
-    ),
     # Nexus of Fate: take-extra-turn instant + shuffle-instead-of-
     # graveyard rider. The rider is wired separately via the
     # ``shuffles_into_library_instead_of_graveyard`` printing flag

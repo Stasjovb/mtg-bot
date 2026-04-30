@@ -466,7 +466,10 @@ def test_devastating_onslaught_claimed_by_parser():
 
 def test_full_bore_claimed_by_parser():
     # Full Bore ``{R}`` Instant — pump-your-creature with warp-
-    # conditional extra keywords (trample, haste).
+    # conditional extra keywords (trample, haste). Migrated from
+    # the whole-spell exact-text tier to the per-clause grammar
+    # (effects.py's ``_PUMP_TARGET_CREATURE_YOU_CONTROL_WARP_
+    # KEYWORDS_RIDER_UEOT``).
     assert "Full Bore" in _claimed_names()
 
 
@@ -572,15 +575,26 @@ def test_dispatch_devastating_onslaught_returns_engine_class():
     assert eff == CreateXTokensOfTargetPermanentWithHasteEndStepSac()
 
 
-def test_dispatch_full_bore_returns_engine_class():
-    # The warp-conditional grant lands on the engine class's
-    # ``granted_keywords_if_warp_cast`` field; the base pump is
-    # +3/+2 UEOT on a creature you control.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_full_bore_no_bespoke_entry():
+    # Full Bore migrated from the whole-spell exact-text tier to the
+    # per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Target creature you control gets +3/+2 until end of turn. "
+        "If that creature was cast for its warp cost, it also gains "
+        "trample and haste until end of turn."
+    ) is None
+
+
+def test_full_bore_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar claims the 2-sentence
+    # body with the warp-conditional keyword grant.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Target creature you control gets +3/+2 until end of turn. "
         "If that creature was cast for its warp cost, it also gains "
         "trample and haste until end of turn."
     )
+    eff = _parse_spell_effect_phrase(body, "Full Bore")
     assert eff == PumpTargetCreatureUntilEOT(
         power_bonus=3,
         toughness_bonus=2,

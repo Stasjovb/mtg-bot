@@ -73,8 +73,9 @@ def test_bespoke_table_count():
     #     Drag to the Roots, Let's Play a Game, Demonic Counsel)
     #   + Temporal Intervention (directed-discard recognizer)
     #   + Dual-Sun Technique (keyword-grant-with-draw recognizer)
-    # 50 - 7 = 43 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 43
+    #   + Full Bore (warp-conditional keyword-rider recognizer)
+    # 50 - 8 = 42 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 42
 
 
 # ------------------------------------------------------------------ #
