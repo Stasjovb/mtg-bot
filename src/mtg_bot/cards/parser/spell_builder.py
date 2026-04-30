@@ -64,16 +64,13 @@ from mtg_bot.cards.base import (
     DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
     DrawCards,
-    EachOpponentDiscards,
     EachOpponentLosesLife,
     Effect,
-    GainLife,
     LoseLife,
     ManifestDread,
     ModalChooseOne,
     MutinousMassacreEffect,
     OptionalSacArtifactForEffect,
-    PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
@@ -82,7 +79,6 @@ from mtg_bot.cards.base import (
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
-    SearchLibraryForCard,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     Sequence,
     Surveil,
@@ -140,6 +136,83 @@ _SPELL_VOID_PUMP_REPLACEMENT = re.compile(
     r"if a nonland permanent left the battlefield this turn "
     r"or a spell was warped this turn\.$"
 )
+
+
+# Delirium-rider drop regexes — recognizers for ``Delirium — …``
+# clauses that the parser silently drops because the engine doesn't
+# implement the Delirium graveyard-card-type check today.
+#
+# Three distinct shapes exist in the EoE/Duskmourn pool:
+#
+#   1. **Effect rider** — ``Delirium — If there are four or more card
+#      types among cards in your graveyard, <effect>.``  The effect
+#      is an upside that is lost entirely when Delirium support is
+#      absent; no CostReduction is produced.  (Impossible Inferno,
+#      Violent Urge, Demonic Counsel.)
+#
+#   2. **Cost-reduction rider** — ``Delirium — This spell costs {N}
+#      less to cast as long as there are four or more card types among
+#      cards in your graveyard.``  Would be a CostReduction but the
+#      ``four_or_more_card_types_in_graveyard`` condition isn't wired
+#      into ``_evaluate_cost_reduction``; drop cleanly so no spurious
+#      CostReduction rule is attached to the printing.  (Drag to the
+#      Roots.)
+#
+#   3. **Modal-header upgrade** — ``Delirium — Choose one. If there
+#      are four or more card types among cards in your graveyard, choose
+#      one or more instead.``  The header is replaced by the bare
+#      ``Choose one —`` semantics; the mode lines that follow still
+#      parse normally via ``_parse_modal_choose_one``.
+#      (Let's Play a Game.)
+#
+# All three shapes start with ``Delirium — `` and the remainder
+# differs enough that three regexes (rather than one catch-all) are
+# cleaner; each regex's sole purpose is to match that shape so the
+# caller knows to drop the clause.
+_DELIRIUM_EFFECT_RIDER_RE = re.compile(
+    r"^Delirium — If there are four or more card types among "
+    r"cards in your graveyard, "
+)
+_DELIRIUM_COST_REDUCTION_RIDER_RE = re.compile(
+    r"^Delirium — This spell costs \{\d+\} less to cast as long as "
+    r"there are four or more card types among cards in your graveyard\.$"
+)
+_DELIRIUM_MODAL_HEADER_RE = re.compile(
+    r"^Delirium — Choose one\. "
+    r"If there are four or more card types among cards in your graveyard, "
+    r"choose one or more instead\.$"
+)
+
+
+def _is_delirium_drop_clause(clause: str) -> bool:
+    """Return ``True`` if ``clause`` is a Delirium-prefix line that
+    the parser drops as an unimplemented mechanic.
+
+    Two shapes are recognized for dropping:
+      - Effect rider: ``Delirium — If there are four or more card
+        types …, <effect>.``  (Impossible Inferno, Violent Urge,
+        Demonic Counsel) — upside dropped because the engine has no
+        Delirium graveyard-card-type check.
+      - Cost-reduction rider: ``Delirium — This spell costs {N} less
+        to cast as long as there are four or more card types ….``
+        (Drag to the Roots) — dropped so no spurious ``CostReduction``
+        rule is attached (this drop happens BEFORE the cost-reduction-
+        stripping pass so the line never reaches ``_detect_cost_
+        reductions``).
+
+    The modal-header variant (``Delirium — Choose one. If there are
+    four or more card types …, choose one or more instead.``) is NOT
+    dropped here; instead ``_parse_modal_choose_one`` recognizes it
+    directly and treats it as a plain ``Choose one —`` header (the
+    Delirium upgrade to "choose one or more" is silently discarded
+    since the engine has no Delirium-conditional modal-count combinator
+    today).
+    """
+    c = clause.strip()
+    return (
+        _DELIRIUM_EFFECT_RIDER_RE.match(c) is not None
+        or _DELIRIUM_COST_REDUCTION_RIDER_RE.match(c) is not None
+    )
 
 
 # Sentence-boundary splitter for multi-sentence oracle-text lines.
@@ -413,6 +486,16 @@ def _parse_modal_choose_one(
         or_both = False
     elif _MODAL_CHOOSE_ONE_OR_BOTH_HEADER_RE.match(clauses[0]) is not None:
         or_both = True
+    elif _DELIRIUM_MODAL_HEADER_RE.match(clauses[0]) is not None:
+        # ``Delirium — Choose one. If there are four or more card types
+        # among cards in your graveyard, choose one or more instead.``
+        # (Let's Play a Game). Treated as a bare ``Choose one —`` shape
+        # (``or_both=False``) — the Delirium upgrade to "choose one or
+        # more instead" is dropped because the engine has no Delirium-
+        # conditional modal-count combinator today.  The mode lines that
+        # follow still parse normally through the unified per-mode
+        # grammar; the printed Delirium threshold is silently discarded.
+        or_both = False
     else:
         return None
     mode_lines = clauses[1:]
@@ -1238,88 +1321,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         power_bonus=3,
         toughness_bonus=0,
     ),
-    # Impossible Inferno (Duskmourn) ``{4}{R}`` Instant — 6-damage
-    # burn plus a Delirium-gated impulse-draw rider ("If there are
-    # four or more card types among cards in your graveyard, exile
-    # the top card of your library. You may play it until the end of
-    # your next turn."). Whole-spell exact-text dispatch simplifies
-    # to bare ``DealDamageToTargetCreature(amount=6)`` because:
-    # (1) the spell-builder has no Delirium-gated conditional
-    #     dispatcher today; the only conditional combinator wired in
-    #     is ``ConditionalIfVoid`` (Plasma Bolt's Void rider) and
-    #     extending it to Delirium would require both a graveyard-
-    #     card-types runtime predicate and a UEOT impulse-draw
-    #     primitive — neither shape is reused by another DSK card we
-    #     model, so the work would be a one-off;
-    # (2) the per-clause grammar can't claim the second clause as a
-    #     standalone effect either — "Delirium — If there are four
-    #     or more card types..." parses as an ability-word prefix on
-    #     a conditional impulse-draw, not a standalone spell-effect
-    #     phrase.
-    # Same parser-is-right precedent as Trial of Agony (drop the
-    # multi-target-opp-choice + can't-block rider, keep the bare
-    # 5-damage burn): keep the base damage, drop the unmodelable
-    # Delirium impulse-draw upside.
-    (
-        "Impossible Inferno deals 6 damage to target creature.\n"
-        "Delirium — If there are four or more card types among "
-        "cards in your graveyard, exile the top card of your "
-        "library. You may play it until the end of your next turn."
-    ): DealDamageToTargetCreature(amount=6),
-    # Violent Urge (Duskmourn) ``{R}`` Instant — +1/+0 first-strike
-    # UEOT pump plus a Delirium-gated double-strike upgrade rider
-    # ("If there are four or more card types among cards in your
-    # graveyard, that creature gains double strike until end of
-    # turn."). Whole-spell exact-text dispatch simplifies to bare
-    # ``PumpTargetCreatureUntilEOT(power_bonus=1, granted_keywords=
-    # frozenset({"first strike"}))`` — the base mechanic is preserved
-    # (the +1/+0 plus first strike UEOT) and the Delirium-gated
-    # double-strike upgrade is dropped. Same parser-is-right
-    # precedent as Impossible Inferno: no Delirium-gated conditional
-    # dispatcher in the spell-builder today, and the second clause
-    # doesn't parse as a standalone spell-effect phrase. The
-    # ``first strike`` keyword grant rides on the existing
-    # ``PumpTargetCreatureUntilEOT.granted_keywords`` field already
-    # used by other DSK pump spells (no new field needed).
-    (
-        "Target creature gets +1/+0 and gains first strike until end "
-        "of turn.\n"
-        "Delirium — If there are four or more card types among "
-        "cards in your graveyard, that creature gains double strike "
-        "until end of turn."
-    ): PumpTargetCreatureUntilEOT(
-        power_bonus=1,
-        toughness_bonus=0,
-        granted_keywords=frozenset({"first strike"}),
-    ),
-    # Drag to the Roots (Duskmourn) ``{2}{B}{G}`` Instant — Delirium-
-    # gated ``{2}``-cost-reduction rider plus a bare destroy-target-
-    # nonland-permanent body. Whole-spell exact-text dispatch
-    # simplifies to bare ``DestroyTargetNonlandPermanent()`` because:
-    # (1) the cost-reduction parser ``_parse_cost_reduction_line``
-    #     recognizes only the ``This spell costs {N} less to cast if
-    #     <condition>.`` and ``... cast <connector>.`` shapes, not
-    #     the ``Delirium — This spell costs {N} less to cast as
-    #     long as <condition>.`` shape with the ability-word prefix
-    #     and the ``as long as`` connector — adding it would require
-    #     a new ``four_or_more_card_types_in_graveyard`` engine
-    #     condition key plus a matching branch in
-    #     ``mtg_bot.actions._evaluate_cost_reduction``, neither of
-    #     which exists today and would be a one-off for this card;
-    # (2) the per-clause grammar drops the cost-reduction rider via
-    #     ``_parse_cost_reduction_line`` only when that helper
-    #     recognizes the line, so an unrecognized cost-reduction
-    #     leaves the clause intact and the spell fails to parse.
-    # Same parser-is-right precedent as the other Delirium-gated
-    # drops (Impossible Inferno, Violent Urge): keep the base
-    # mechanic (destroy a nonland permanent at the printed full
-    # cost) and drop the unmodelable Delirium cost discount.
-    (
-        "Delirium — This spell costs {2} less to cast as long "
-        "as there are four or more card types among cards in your "
-        "graveyard.\n"
-        "Destroy target nonland permanent."
-    ): DestroyTargetNonlandPermanent(),
     # Come Back Wrong (Duskmourn) ``{2}{B}`` Sorcery — destroy
     # target creature with a conditional reanimate-then-sac-next-
     # end-step rider ("If a creature card is put into a graveyard
@@ -1351,99 +1352,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "your control. Sacrifice it at the beginning of your next "
         "end step."
     ): DestroyTargetCreature(),
-    # Let's Play a Game (Duskmourn) ``{3}{B}`` Sorcery — three-mode
-    # ``Choose one`` modal whose printed header carries a Delirium-
-    # gated expansion ("If there are four or more card types among
-    # cards in your graveyard, choose one or more instead."). The
-    # three modes themselves all parse cleanly as standalone spell-
-    # effect phrases:
-    #   • "Creatures your opponents control get -1/-1 until end of
-    #     turn." → ``PumpCreaturesOpponentsControlUntilEOT(
-    #       power_bonus=-1, toughness_bonus=-1)``
-    #   • "Each opponent discards two cards." →
-    #     ``EachOpponentDiscards(count=2)``
-    #   • "Each opponent loses 3 life and you gain 3 life." →
-    #     ``Sequence(EachOpponentLosesLife(amount=3),
-    #              GainLife(amount=3))``
-    # Whole-spell exact-text dispatch simplifies the modal header
-    # to a plain ``Choose one`` shape — the Delirium-gated "choose
-    # one or more instead" upgrade is dropped because:
-    # (1) the spell-builder has no Delirium-gated conditional
-    #     dispatcher today and the modal-header parser
-    #     ``_parse_modal_choose_one`` only recognizes the bare
-    #     ``Choose one —`` and ``Choose one or both —`` shapes;
-    #     adding a "choose one or more if delirium" header parser
-    #     plus a matching engine combinator would be a one-off for
-    #     this card;
-    # (2) the per-clause grammar can't claim the Delirium header
-    #     line as a standalone spell-effect phrase either —
-    #     ``Delirium — Choose one. If there are four or more card
-    #     types among cards in your graveyard, choose one or more
-    #     instead.`` is a header, not an effect.
-    # Same parser-is-right precedent as Get Out / Untimely
-    # Malfunction (claim a well-modeled subset of a multi-mode
-    # modal rather than leaving the spell unclaimed): keep the
-    # bare three-mode "choose one" shape and drop the Delirium-
-    # gated modal-count upgrade.
-    (
-        "Delirium — Choose one. If there are four or more card "
-        "types among cards in your graveyard, choose one or more "
-        "instead.\n"
-        "• Creatures your opponents control get -1/-1 until end of "
-        "turn.\n"
-        "• Each opponent discards two cards.\n"
-        "• Each opponent loses 3 life and you gain 3 life."
-    ): ModalChooseOne(
-        modes=(
-            PumpCreaturesOpponentsControlUntilEOT(
-                power_bonus=-1, toughness_bonus=-1,
-            ),
-            EachOpponentDiscards(count=2),
-            Sequence(
-                effects=(
-                    EachOpponentLosesLife(amount=3),
-                    GainLife(amount=3),
-                ),
-            ),
-        ),
-    ),
-    # Demonic Counsel (Duskmourn) ``{1}{B}`` Sorcery — tutor for a
-    # Demon creature card with a Delirium-gated upgrade ("If there
-    # are four or more card types among cards in your graveyard,
-    # instead search your library for any card, put it into your
-    # hand, then shuffle."). Whole-spell exact-text dispatch
-    # simplifies to bare
-    # ``SearchLibraryForCard(filter_name="demon", may_fail=False)``
-    # because:
-    # (1) the spell-builder has no Delirium-gated conditional
-    #     dispatcher today; the only conditional combinator wired in
-    #     is ``ConditionalIfVoid`` (Plasma Bolt's Void rider) and
-    #     extending it to Delirium would require a graveyard-card-
-    #     types runtime predicate that no other DSK card we model
-    #     reuses;
-    # (2) the per-clause grammar can't claim the Delirium upgrade
-    #     line as a standalone spell-effect phrase either —
-    #     ``Delirium — If there are four or more card types ...,
-    #     instead search your library for any card ...`` is a
-    #     conditional-replacement rider, not a standalone effect.
-    # The ``demon`` filter is added to ``SearchLibraryForCard`` as
-    # an additive subtype-keyed branch alongside the existing
-    # ``sliver`` filter (no new field — purely a new value of the
-    # existing ``filter_name`` enum). ``may_fail=False`` because the
-    # printed text says "Search your library for a Demon card,
-    # reveal it, put it into your hand, then shuffle" — no "you
-    # may" rider, so the controller doesn't get to decline the
-    # fetch when a Demon card is available (matches how the static
-    # registry models other forced tutors).
-    # Same parser-is-right precedent as Impossible Inferno (drop the
-    # Delirium-gated upgrade rider, keep the base mechanic).
-    (
-        "Search your library for a Demon card, reveal it, put it "
-        "into your hand, then shuffle.\n"
-        "Delirium — If there are four or more card types among "
-        "cards in your graveyard, instead search your library for "
-        "any card, put it into your hand, then shuffle."
-    ): SearchLibraryForCard(filter_name="demon", may_fail=False),
 }
 
 
@@ -1529,6 +1437,14 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         for stripped in (_strip_reminder_text(c) for c in clauses)
         if stripped
     ]
+    # Drop Delirium-prefix rider clauses BEFORE the cost-reduction pass.
+    # These ``Delirium — …`` lines are unimplemented mechanics that the
+    # parser drops entirely — doing so before the cost-reduction pass
+    # ensures that Delirium cost-reduction lines (Drag to the Roots's
+    # ``Delirium — This spell costs {2} less to cast as long as …``)
+    # are not forwarded to ``_detect_cost_reductions`` and do not
+    # produce spurious ``CostReduction`` rules on the printing.
+    clauses = [c for c in clauses if not _is_delirium_drop_clause(c)]
     # Drop recognized cost-reduction rider clauses — they don't
     # contribute an ``Effect`` (the engine consumes them at cast time
     # via ``CostReduction`` rules on the printing). ``_build_spell_
@@ -1556,6 +1472,17 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     new_clauses: list[str] = []
     for c in clauses:
         if _parse_spell_effect_phrase(c, name) is not None:
+            new_clauses.append(c)
+        elif _DELIRIUM_MODAL_HEADER_RE.match(c) is not None:
+            # The Delirium modal header ``Delirium — Choose one. If
+            # there are four or more card types …, choose one or more
+            # instead.`` is a two-sentence clause that must NOT be
+            # split: splitting would carve it into a bare
+            # ``Delirium — Choose one.`` fragment (which the modal
+            # parser won't recognize) and a dangling ``If …``
+            # fragment. Keep it whole so ``_parse_modal_choose_one``
+            # can match the full header against
+            # ``_DELIRIUM_MODAL_HEADER_RE`` on the next pass.
             new_clauses.append(c)
         else:
             new_clauses.extend(_split_sentences(c))

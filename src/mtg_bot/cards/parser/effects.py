@@ -757,58 +757,57 @@ _DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
     r"^(?:this creature |this Spacecraft )?"
     r"deals (\d+) damage to each creature$"
 )
-# "Search your library for an artifact card, reveal it, put it into
-# your hand, then shuffle." — Scour for Scrap mode 1 (and any future
-# narrow tutor with the same surface). Maps to
-# ``SearchLibraryForCard(filter_name="artifact", may_fail=True)``.
-# The full surface form (with reveal/hand/shuffle tail) is required:
-# this primitive doesn't claim a simpler ``search your library for an
-# artifact card`` line because that bare shape isn't a complete oracle
-# clause for any printed card — every artifact tutor in EoE prints the
-# full reveal/hand/shuffle tail.
-_SEARCH_LIBRARY_FOR_ARTIFACT_CARD = re.compile(
-    r"^search your library for an artifact card, "
+# "Search your library for a(n) <filter-phrase> card, reveal it, put it
+# into your hand, then shuffle." — parameterized tutor-to-hand shape.
+# Captures the article (``a`` / ``an``) and the filter phrase so a
+# single regex claims every card with this surface regardless of the
+# filter type.  The filter phrase is dispatched through
+# ``_SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER`` to resolve the
+# ``SearchLibraryForCard.filter_name`` string and ``may_fail`` flag.
+#
+# Replaces the three former literal regexes:
+#   * ``_SEARCH_LIBRARY_FOR_ARTIFACT_CARD``
+#     (artifact, may_fail=True)
+#   * ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD``
+#     (basic_land, may_fail=True)
+#   * ``_SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD``
+#     (legendary_creature, may_fail=False)
+# and also claims Demonic Counsel's base clause
+# (Demon card, may_fail=False) once the per-clause Delirium-rider
+# dropper removes the second line from the oracle text.
+#
+# The full reveal/hand/shuffle tail is required so a tutor with a
+# different reward (onto-the-battlefield, into-graveyard) won't
+# accidentally match.  Tutors that use ``you may`` before ``search``
+# don't match this shape and remain unclaimed unless a separate
+# recognizer claims them.
+_SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE = re.compile(
+    r"^search your library for (an?) (.+) card, "
     r"reveal it, put it into your hand, then shuffle$"
 )
-# "Search your library for a basic land card, reveal it, put it into
-# your hand, then shuffle." — Spineseeker Centipede's ETB tutor (and
-# any future generic basic-land-to-hand tutor with the same surface).
-# Maps to ``SearchLibraryForCard(filter_name="basic_land", may_fail=
-# True)``. Like the artifact-tutor sibling above, the full surface
-# form (reveal / put-into-hand / shuffle tail) is required — the bare
-# ``search your library for a basic land card`` shape isn't a complete
-# oracle clause for any DSK printing today, and the all-or-nothing
-# tail keeps the regex's claim narrow enough that an unrelated tutor
-# with a different reward (onto-the-battlefield, into-graveyard) won't
-# accidentally match.
-_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD = re.compile(
-    r"^search your library for a basic land card, "
-    r"reveal it, put it into your hand, then shuffle$"
-)
-# "Search your library for a legendary creature card, reveal it, put
-# it into your hand, then shuffle." — The Seriema's ETB body (the only
-# EoE/DSK printing of this exact filter today). Maps to
-# ``SearchLibraryForCard(filter_name="legendary_creature",
-# may_fail=False)``. The printed text contains no "you may" rider, so
-# ``may_fail=False`` is the faithful reading: when a legendary creature
-# card exists in the library, the controller MUST take one. This
-# differs from the ``may_fail=True`` semantics the older
-# ``_SEARCH_LIBRARY_FOR_ARTIFACT_CARD`` /
-# ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD`` recognizers ship — those two
-# pre-date the explicit-faithfulness rules and should likely flip to
-# ``may_fail=False`` in a future pass; doing so here would change
-# behaviour pinned by many existing tests, so it's out of scope for
-# this batch. Literal-line recognizer because The Seriema is the only
-# EoE/DSK card printing this exact "legendary creature card" filter
-# in the reveal/hand/shuffle shape today; broader generalization
-# (parameterizing the filter substring across artifact / basic land /
-# legendary creature shapes into one regex) is deferred until the
-# may_fail-faithfulness cleanup above merges the existing two literals
-# at the same time.
-_SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD = re.compile(
-    r"^search your library for a legendary creature card, "
-    r"reveal it, put it into your hand, then shuffle$"
-)
+# Maps the captured filter phrase to (filter_name, may_fail).  The
+# ``may_fail`` is taken from the existing static-registry semantics:
+#   - ``may_fail=True``  → original artifact / basic-land literals
+#   - ``may_fail=False`` → legendary-creature literal (no "you may")
+# Adding a new card whose filter phrase matches an existing entry is
+# zero code; adding a new filter phrase is one line here plus
+# confirmation the ``SearchLibraryForCard._matches`` dispatch handles
+# the new filter_name.
+_SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER: dict[str, tuple[str, bool]] = {
+    # ``an artifact card`` — Scour for Scrap mode 1 and any future
+    # artifact tutor in the reveal/hand/shuffle shape.
+    "artifact": ("artifact", True),
+    # ``a basic land card`` — Spineseeker Centipede's ETB tutor and
+    # any future generic basic-land-to-hand tutor.
+    "basic land": ("basic_land", True),
+    # ``a legendary creature card`` — The Seriema's ETB body; no "you
+    # may" rider so may_fail=False (forced fetch).
+    "legendary creature": ("legendary_creature", False),
+    # ``a Demon card`` — Demonic Counsel's base clause (the Delirium
+    # upgrade is stripped as an unimplemented-mechanic rider before
+    # this recognizer is tried); no "you may" rider so may_fail=False.
+    "Demon": ("demon", False),
+}
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger
 # (the tapped-onto-battlefield reward form). Same fetch-land payload
@@ -2972,38 +2971,32 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _EXILE_ALL_ARTIFACTS_WITH_MANA_VALUE_AT_MOST.match(phrase)
     if m is not None:
         return ExileAllArtifactsWithManaValueAtMost(max_mv=int(m.group(1)))
-    if _SEARCH_LIBRARY_FOR_ARTIFACT_CARD.match(phrase) is not None:
-        # ``may_fail=True`` mirrors the static Scour-for-Scrap printing —
-        # the controller may decline the fetch (and shuffle anyway). No
-        # EoE oracle text spells out ``may_fail=False`` for an artifact
-        # tutor today; if one ships, gate it on a different surface form.
-        return SearchLibraryForCard(
-            filter_name="artifact", may_fail=True,
+    m = _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE.match(phrase)
+    if m is not None:
+        # ``search your library for a(n) <filter-phrase> card, reveal
+        # it, put it into your hand, then shuffle`` — parameterized
+        # tutor-to-hand shape. The captured filter phrase is looked up
+        # in ``_SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER`` to resolve
+        # both the ``filter_name`` string and the ``may_fail`` flag.
+        # Unrecognized filter phrases return ``None`` (spell stays
+        # unclaimed) so a future card with a new filter phrase doesn't
+        # silently resolve to the wrong engine class.
+        #
+        # Replaces the three former literal recognizers:
+        #   artifact (may_fail=True), basic_land (may_fail=True),
+        #   legendary_creature (may_fail=False).
+        # Also claims Demonic Counsel's base clause (Demon card,
+        # may_fail=False) when the Delirium-rider dropper removes the
+        # second oracle line before this recognizer is tried.
+        filter_phrase = m.group(2).strip()
+        mapping = _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER.get(
+            filter_phrase
         )
-    if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD.match(phrase) is not None:
-        # ``may_fail=True`` mirrors the existing artifact-tutor sibling —
-        # the controller may decline the fetch (and shuffle anyway). No
-        # DSK oracle text spells out a non-may basic-land tutor today,
-        # but the engine field defaults the way the mandatory phrasing
-        # would expect, so any future ``... reveal it, put it into your
-        # hand, then shuffle`` printing landing here will keep parity.
-        return SearchLibraryForCard(
-            filter_name="basic_land", may_fail=True,
-        )
-    if _SEARCH_LIBRARY_FOR_LEGENDARY_CREATURE_CARD.match(
-        phrase
-    ) is not None:
-        # ``search your library for a legendary creature card, reveal
-        # it, put it into your hand, then shuffle`` — The Seriema's ETB
-        # body. Maps to
-        # ``SearchLibraryForCard(filter_name="legendary_creature",
-        # may_fail=False)``. ``may_fail=False`` reflects the faithful
-        # reading of the printed text (no "you may" rider). See the
-        # regex comment for the deferred unification with the
-        # ``may_fail=True`` artifact / basic-land siblings above.
-        return SearchLibraryForCard(
-            filter_name="legendary_creature", may_fail=False,
-        )
+        if mapping is not None:
+            filter_name, may_fail = mapping
+            return SearchLibraryForCard(
+                filter_name=filter_name, may_fail=may_fail,
+            )
     if _SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_BATTLEFIELD.match(
         phrase
     ) is not None:
