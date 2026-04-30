@@ -120,6 +120,26 @@ _SACRIFICE_SELF_PIECES = frozenset({
     "Sacrifice this artifact",
 })
 
+# "Exile this land" / "Exile this creature" / "Exile this artifact" —
+# exile-self cost (Plaza of Heroes uses "Exile this land"). The exact
+# Scryfall oracle phrase depends on the source's card type; all map to
+# ``ActivationCost.exile_self``.
+_EXILE_SELF_PIECES = frozenset({
+    "Exile this land",
+    "Exile this creature",
+    "Exile this artifact",
+})
+
+# "Tap an untapped permanent you control" — Gene Pollinator's mana
+# ability cost atom. Exact literal from Scryfall oracle text.
+_TAP_PERMANENT_YOU_CONTROL_PIECE = "Tap an untapped permanent you control"
+
+# "Exile an artifact card from your graveyard" — Rust Harvester's
+# activated ability cost atom. Exact literal from Scryfall oracle text.
+_EXILE_ARTIFACT_FROM_GRAVEYARD_PIECE = (
+    "Exile an artifact card from your graveyard"
+)
+
 # Pure sacrifice-another-creature-or-artifact cost piece. The exact
 # literal phrase from Umbral Collar Zealot's
 # ``Sacrifice another creature or artifact: Surveil 1.`` Stored as a
@@ -190,6 +210,12 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="tap")
     if piece in _SACRIFICE_SELF_PIECES:
         return _CostPiece(kind="sacrifice_self")
+    if piece in _EXILE_SELF_PIECES:
+        return _CostPiece(kind="exile_self")
+    if piece == _TAP_PERMANENT_YOU_CONTROL_PIECE:
+        return _CostPiece(kind="tap_permanent_you_control")
+    if piece == _EXILE_ARTIFACT_FROM_GRAVEYARD_PIECE:
+        return _CostPiece(kind="exile_artifact_from_graveyard")
     if piece == _SACRIFICE_ANOTHER_CREATURE_OR_ARTIFACT_PIECE:
         return _CostPiece(
             kind="named_sac",
@@ -238,6 +264,9 @@ def _build_cost_from_pieces(
     mana_str: str | None = None
     tap_self = False
     sacrifice_self = False
+    exile_self = False
+    tap_permanent_you_control = False
+    exile_artifact_from_graveyard = False
     pay_life = 0
     named_sac_field: str | None = None
     sacrifice_seen = False
@@ -256,6 +285,19 @@ def _build_cost_from_pieces(
                 return None
             sacrifice_self = True
             sacrifice_seen = True
+        elif p.kind == "exile_self":
+            if sacrifice_seen or exile_self:
+                return None
+            exile_self = True
+            sacrifice_seen = True  # exile-self and sac-self are mutually exclusive
+        elif p.kind == "tap_permanent_you_control":
+            if tap_permanent_you_control:
+                return None
+            tap_permanent_you_control = True
+        elif p.kind == "exile_artifact_from_graveyard":
+            if exile_artifact_from_graveyard:
+                return None
+            exile_artifact_from_graveyard = True
         elif p.kind == "named_sac":
             if sacrifice_seen:
                 return None
@@ -279,6 +321,12 @@ def _build_cost_from_pieces(
         kwargs["tap_self"] = True
     if sacrifice_self:
         kwargs["sacrifice_self"] = True
+    if exile_self:
+        kwargs["exile_self"] = True
+    if tap_permanent_you_control:
+        kwargs["tap_permanent_you_control"] = True
+    if exile_artifact_from_graveyard:
+        kwargs["exile_artifact_from_graveyard"] = True
     if pay_life:
         kwargs["pay_life"] = pay_life
     if named_sac_field is not None:

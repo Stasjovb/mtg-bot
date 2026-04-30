@@ -292,13 +292,13 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # SKIP — Plaza of Heroes: line 4 reads "{3}, {T}, Exile this land:
-        # Target legendary creature gains hexproof and indestructible until
-        # end of turn." Oracle text says "Exile this land" but
-        # ``ActivationCost`` has no ``exile_self`` field; the engine models
-        # it as ``sacrifice_self`` which is faithful to the engine's current
-        # zone-transfer semantics. Migrate when ``exile_self`` is added to
-        # ``ActivationCost`` and ``legal.py``.
+        # Plaza of Heroes: migrated to use exile_self cost atom (added to
+        # ActivationCost). Line 4 reads "{3}, {T}, Exile this land: Target
+        # legendary creature gains hexproof and indestructible until end of
+        # turn." Now uses exile_self=True faithfully per oracle text.
+        # Remaining bespoke because the three mana abilities use non-grammar
+        # spend-restriction fields (legendary_spell,
+        # legendary_permanent_ability) with no parser-side recognizer yet.
         "Plaza of Heroes": make_utility_land(
             "Plaza of Heroes", legendary=True,
             activated_abilities=(
@@ -328,7 +328,7 @@ def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
                         mana=parse_mana_cost("{3}"),
                         mana_str="{3}",
                         tap_self=True,
-                        sacrifice_self=True,
+                        exile_self=True,
                     ),
                     effect=PumpTargetCreatureUntilEOT(
                         granted_keywords=frozenset(

@@ -635,6 +635,38 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_granter:
                     continue
+            # exile_self — source must be on the battlefield to exile
+            # it. The battlefield presence check at the top of this
+            # loop already guarantees that, so there is no additional
+            # gate beyond what sacrifice_self requires. The field is
+            # checked here for explicitness and future-proofing (e.g.
+            # if a card ever has an exile_self restriction beyond the
+            # normal "must be on battlefield" one).
+            # (no extra gate beyond battlefield presence for exile_self)
+            if ability.cost.tap_permanent_you_control:
+                # "Tap an untapped permanent you control" — Gene
+                # Pollinator. Requires at least one OTHER untapped
+                # permanent under the activator's control. The source
+                # itself cannot be used (same ruling as crewing: the
+                # source is the thing benefiting from the cost).
+                has_untapped_other = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and not o2.tapped
+                )
+                if not has_untapped_other:
+                    continue
+            if ability.cost.exile_artifact_from_graveyard:
+                # "Exile an artifact card from your graveyard" — Rust
+                # Harvester. Requires at least one artifact card in the
+                # activating player's graveyard.
+                has_artifact_in_gy = any(
+                    card for card in p.graveyard
+                    if card.printing.is_artifact
+                )
+                if not has_artifact_in_gy:
+                    continue
             # If the effect requires a target, at least one must be legal.
             # Set resolving_source so effects with self-exclusion filters
             # (e.g. "another target creature") compute the correct legal

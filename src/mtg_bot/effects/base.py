@@ -338,6 +338,21 @@ class ActivationCost:
     mana_str: str = ""  # display form like "{2}"
     tap_self: bool = False
     sacrifice_self: bool = False
+    # "Exile [the source permanent]" — Plaza of Heroes's fourth ability.
+    # The source is exiled as a cost, not sacrificed, so it goes to the
+    # exile zone rather than the graveyard. Paid last (same ordering as
+    # sacrifice_self) so target selection and other cost payments can
+    # still read the source from the battlefield.
+    exile_self: bool = False
+    # "Tap an untapped permanent you control" — Gene Pollinator's mana
+    # ability. The activating player picks any other untapped permanent
+    # they control (not the source) and taps it as a cost.
+    tap_permanent_you_control: bool = False
+    # "Exile an artifact card from your graveyard" — Rust Harvester's
+    # activated ability. The activating player exiles one artifact card
+    # from their graveyard as a cost. Legal only when the graveyard
+    # contains at least one artifact card.
+    exile_artifact_from_graveyard: bool = False
     # "Sacrifice another creature or artifact" — the caster picks a
     # legal target via choose_sacrifice. Cannot be the source itself.
     sacrifice_another_creature_or_artifact: bool = False
@@ -398,6 +413,12 @@ class ActivationCost:
             parts.append("{T}")
         if self.sacrifice_self:
             parts.append("Sacrifice ~")
+        if self.exile_self:
+            parts.append("Exile ~")
+        if self.tap_permanent_you_control:
+            parts.append("Tap an untapped permanent you control")
+        if self.exile_artifact_from_graveyard:
+            parts.append("Exile an artifact card from your graveyard")
         if self.sacrifice_another_creature_or_artifact:
             parts.append("Sacrifice another creature or artifact")
         if self.sacrifice_another_artifact_or_land:

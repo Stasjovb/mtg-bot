@@ -189,11 +189,14 @@ def test_plaza_of_heroes_metadata():
     assert "Legendary" in p.supertypes
     # Plaza has four activated abilities: three mana abilities
     # (baseline {C}, legendary-spell-restricted any, legendary-
-    # permanent-ability-restricted any) plus the {3},{T},Sacrifice
-    # flagship pump.
+    # permanent-ability-restricted any) plus the {3},{T},Exile
+    # flagship pump (exile_self cost atom, not sacrifice_self).
     assert len(p.activated_abilities) == 4
     flagship = p.activated_abilities[3]
-    assert flagship.cost.sacrifice_self is True
+    # Oracle text reads "Exile this land" — the cost is exile_self, not
+    # sacrifice_self (Plaza goes to exile, not the graveyard).
+    assert flagship.cost.exile_self is True
+    assert flagship.cost.sacrifice_self is False
 
 
 def test_plaza_of_heroes_grants_hexproof_and_indestructible_ueot():

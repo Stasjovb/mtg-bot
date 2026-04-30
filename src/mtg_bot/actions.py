@@ -676,6 +676,9 @@ def _classify_sac_for_mana(
             or c.sacrifice_a_desert
             or c.remove_plus_one_counter_from_your_creature
             or c.exile_granting_equipment
+            or c.exile_self
+            or c.tap_permanent_you_control
+            or c.exile_artifact_from_graveyard
             or c.pay_life
         ):
             continue
@@ -1932,7 +1935,7 @@ def _activate_ability(
             legal = ability.effect.legal_targets(state, player_id)
         finally:
             state.resolving_source = None
-        if ability.cost.sacrifice_self:
+        if ability.cost.sacrifice_self or ability.cost.exile_self:
             legal = [t for t in legal if t[1] != source.id]
         _, max_t = ability.effect.target_count_range()
         if max_t <= 0:
@@ -2139,6 +2142,69 @@ def _activate_ability(
             f"(Food cost for {source.printing.name}'s ability)"
         )
         _sacrifice(state, chosen)
+
+    # "Tap an untapped permanent you control" cost (Gene Pollinator).
+    # Agent picks an untapped permanent they control (excluding source).
+    # legal_actions gates on at least one such permanent existing.
+    if ability.cost.tap_permanent_you_control:
+        from mtg_bot.turn import tap_permanent
+
+        p = state.player_by_id(player_id)
+        options = [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and o.id != source.id
+            and not o.tapped
+        ]
+        chosen = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_permanent_to_tap(
+                state, player_id, [o.id for o in options]
+            )
+            if pick_id is not None:
+                chosen = next(
+                    (o for o in options if o.id == pick_id), options[0]
+                )
+        state.log.append(
+            f"P{player_id} taps {chosen.printing.name} "
+            f"(cost for {source.printing.name}'s ability)"
+        )
+        tap_permanent(state, chosen)
+
+    # "Exile an artifact card from your graveyard" cost (Rust Harvester).
+    # Agent picks which artifact card from graveyard to exile.
+    # legal_actions gates on at least one artifact card in graveyard.
+    if ability.cost.exile_artifact_from_graveyard:
+        p = state.player_by_id(player_id)
+        options = [
+            card for card in p.graveyard
+            if card.printing.is_artifact
+        ]
+        chosen_card = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_sacrifice(
+                state, player_id, [c.id for c in options]
+            )
+            chosen_card = next(
+                (c for c in options if c.id == pick_id), options[0]
+            )
+        state.log.append(
+            f"P{player_id} exiles {chosen_card.printing.name} from graveyard "
+            f"(cost for {source.printing.name}'s ability)"
+        )
+        p.graveyard.remove(chosen_card)
+        p.exile.append(chosen_card)
+
+    # Exile-self and sacrifice-self are paid LAST so the source is still
+    # on the battlefield for target selection. exile_self moves the source
+    # to exile (not the graveyard); sacrifice_self triggers graveyard SBAs.
+    if ability.cost.exile_self:
+        from mtg_bot.turn import move_off_battlefield
+
+        state.log.append(
+            f"P{player_id} exiles {source.printing.name}"
+        )
+        move_off_battlefield(state, source, destination="exile")
 
     # Sacrifice-self is paid LAST so the source is still on the battlefield
     # for target selection — the Lander case where the ability's effect
