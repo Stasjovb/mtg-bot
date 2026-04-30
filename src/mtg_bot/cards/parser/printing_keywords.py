@@ -775,7 +775,6 @@ def _parse_toughness_as_station_power_line(line: str) -> bool:
     return line.strip() == _TOUGHNESS_AS_STATION_POWER_LINE
 
 
-<<<<<<< HEAD
 # ── Dyadrine "enters with mana-spent counters" ────────────────────────────────
 #
 # ``Dyadrine enters with a number of +1/+1 counters on it equal to the
@@ -899,6 +898,32 @@ def _parse_artifacts_have_blue_mana_ability_line(line: str) -> bool:
     activations for the controller.
     """
     return line.strip() == _ARTIFACTS_HAVE_BLUE_MANA_ABILITY_LINE
+
+
+# ``Artifacts you control are Foods in addition to their other types and
+# have "{2}, {T}, Sacrifice this artifact: You gain 3 life."`` — Ragost,
+# Deft Gastronaut's dual static: grants the Food subtype AND the standard
+# Food sac ability to every artifact under the controller's control.
+# The quoted inner ability is the canonical Food activated ability text.
+# Matched as a literal string — Ragost is the only card in the parser
+# pool with this exact combined Food-type-plus-ability grant today;
+# broader grammar deferred until a second example exists. Sets both
+# ``grants_food_to_your_artifacts=True`` and
+# ``grants_food_ability_to_your_artifacts=True`` on ``make_creature``
+# via the sentinel return value; the creature builder maps both booleans.
+_GRANTS_FOOD_AND_ABILITY_TO_YOUR_ARTIFACTS_LINE = (
+    'Artifacts you control are Foods in addition to their other types '
+    'and have "{2}, {T}, Sacrifice this artifact: You gain 3 life."'
+)
+
+
+def _parse_grants_food_and_ability_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is Ragost's combined Food-type-and-
+    ability grant clause, else ``False``. The creature builder uses the
+    True result to set both ``grants_food_to_your_artifacts=True`` and
+    ``grants_food_ability_to_your_artifacts=True`` on ``make_creature``.
+    """
+    return line.strip() == _GRANTS_FOOD_AND_ABILITY_TO_YOUR_ARTIFACTS_LINE
 
 
 # ``<Type(s)> cards in your hand have warp {cost}.`` — Tannuk, Steadfast

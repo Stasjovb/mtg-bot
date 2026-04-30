@@ -23,7 +23,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.keywords import _parse_keyword_line
 from mtg_bot.cards.parser.statics import _parse_static_ability_line
-from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+from mtg_bot.cards.parser.triggers import (
+    _parse_triggered_ability_line,
+    _substitute_self_name,
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,18 @@ def _parse_clause(
     the parameter.
     """
     line = line.strip()
+    # Apply self-name substitution early so all downstream parsers
+    # (keywords, triggered, activated, static) see the canonical
+    # ``"this creature"`` surface rather than a printing's own name.
+    # ``_parse_triggered_ability_line`` also applies this substitution
+    # internally; the double-application is idempotent (the substituted
+    # line no longer contains the name, so the second pass is a no-op).
+    # Activated-ability lines (Ragost's "{1},{T},Sacrifice a Food:
+    # Ragost deals 3 damage …") need the substitution before the
+    # ``_parse_activated_ability_line`` call below; applying it here
+    # rather than per-parser keeps the architecture clean.
+    if name is not None:
+        line = _substitute_self_name(line, name)
     keywords = _parse_keyword_line(line)
     if keywords is not None:
         return _ParsedClause(keywords=keywords)

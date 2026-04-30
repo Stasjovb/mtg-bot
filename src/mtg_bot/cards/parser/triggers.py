@@ -72,6 +72,7 @@ from mtg_bot.cards.base import (
     ConditionalOnTappedCreatures,
     DrawCards,
     Effect,
+    IfGainedLifeThisTurnUntapSelf,
     PutPlusOneCounterOnSelf,
     PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
     TriggeredAbility,
@@ -385,6 +386,24 @@ _GAINED_LIFE_TRAILING_IF_SUFFIX = re.compile(
 # this one (parser/static parity is easier when the surface text and
 # the engine constant match 1:1).
 _TAPPED_CREATURES_GATE_PREFIX = "if you control two or more tapped creatures, "
+
+
+# ``if you gained life this turn, untap this creature`` — Ragost, Deft
+# Gastronaut's beginning-of-each-end-step body: "At the beginning of each
+# end step, if you gained life this turn, untap Ragost." After name-
+# substitution the body is "if you gained life this turn, untap this
+# creature". Detected as a prefix; the entire body collapses to
+# ``IfGainedLifeThisTurnUntapSelf()`` which encodes both the life-gain
+# check and the untap action in one resolve step, matching the static-
+# registry layout exactly. Only Ragost in the EoE/DSK pool today; a
+# second card with this shape (different inner effect, different life-gain
+# threshold) would require decomposing into a separate
+# ``ConditionalIfGainedLifeThisTurn(threshold=N, inner=…)`` primitive —
+# deferred until a second example lands.
+_IF_GAINED_LIFE_GATE_BODY = "if you gained life this turn, untap this creature"
+_IF_GAINED_LIFE_GATE_BODY_PERMANENT = (
+    "if you gained life this turn, untap this permanent"
+)
 
 
 # DSK Survival ability-word prefix — when the trigger line starts with
@@ -1499,6 +1518,17 @@ def _parse_at_the_beginning_of_line(
             effect=ConditionalOnTappedCreatures(
                 effect=inner, min_count=2,
             ),
+        )
+    # ``if you gained life this turn, untap this creature`` — Ragost,
+    # Deft Gastronaut's body after name-substitution. Both the
+    # "this creature" and "this permanent" surface forms collapse to the
+    # same ``IfGainedLifeThisTurnUntapSelf()`` engine class that handles
+    # the life-gain check and the untap in one resolve step. Tried BEFORE
+    # the bare body parse so the more-specific full-body match wins.
+    if body in (_IF_GAINED_LIFE_GATE_BODY, _IF_GAINED_LIFE_GATE_BODY_PERMANENT):
+        return TriggeredAbility(
+            event=event, predicate=predicate,
+            effect=IfGainedLifeThisTurnUntapSelf(),
         )
     # Trailing-if-gained-life variant: ``<inner-effect> if you've
     # gained N or more life this turn``. Detect the suffix, parse the

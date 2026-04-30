@@ -48,7 +48,6 @@ from mtg_bot.cards.base import (
     BoilerbilgesRipperETBEffect,
     CardPrinting,
     CostReduction,
-    DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
     DrawCards,
@@ -57,7 +56,6 @@ from mtg_bot.cards.base import (
     FanaticOfTheHarrowingETBEffect,
     GainLife,
     HouseCartographerSurvivalEffect,
-    IfGainedLifeThisTurnUntapSelf,
     KavaronHarrierAttackEffect,
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
@@ -120,6 +118,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_spell_cant_be_countered_line,
     _parse_token_doubler_line,
+    _parse_grants_food_and_ability_line,
     _parse_hand_warp_grant_line,
     _parse_toughness_as_damage_line,
     _parse_toughness_as_station_power_line,
@@ -749,39 +748,23 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # warp-cast pipeline does not yet enforce the dynamic warp grant;
         # the field is populated for oracle-text fidelity.
         # Removed from this table so the grammar path claims it.
-        # Ragost, Deft Gastronaut `{R}{W}` 2/2 Legendary Creature —
-        # Lobster Citizen. Artifacts you control are also Foods and have
-        # the Food sac ability. {1}, {T}, Sacrifice a Food: Ragost deals
-        # 3 damage to each opponent. At beginning of each end step, if
-        # you gained life this turn, untap Ragost.
-        # SKIP: grants_food_to_your_artifacts and
-        # grants_food_ability_to_your_artifacts are printing-level flags
-        # with no grammar recognizer. The activated ability with
-        # sacrifice_food cost and IfGainedLifeThisTurnUntapSelf also have
-        # no grammar support. Requires new grammar for all oracle lines.
-        "Ragost, Deft Gastronaut": make_creature(
-            "Ragost, Deft Gastronaut", "{R}{W}", 2, 2,
-            legendary=True,
-            grants_food_to_your_artifacts=True,
-            grants_food_ability_to_your_artifacts=True,
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                        sacrifice_food=True,
-                    ),
-                    effect=DealDamageEachOpponent(amount=3),
-                ),
-            ),
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_END_STEP, predicate=Always(),
-                    effect=IfGainedLifeThisTurnUntapSelf(),
-                ),
-            ),
-        ),
+        # Ragost, Deft Gastronaut migrated to parameterized grammar:
+        # Line 1 — "Artifacts you control are Foods in addition to their
+        # other types and have "{2}, {T}, Sacrifice this artifact: You
+        # gain 3 life."" parses via the new
+        # ``_parse_grants_food_and_ability_line`` literal recognizer;
+        # sets both ``grants_food_to_your_artifacts`` and
+        # ``grants_food_ability_to_your_artifacts`` on the printing.
+        # Line 2 — "{1}, {T}, Sacrifice a Food: Ragost deals 3 damage to
+        # each opponent." parses via the existing activated-ability
+        # grammar (sacrifice_food cost + DealDamageEachOpponent effect);
+        # name-substitution converts "Ragost" to "this creature".
+        # Line 3 — "At the beginning of each end step, if you gained life
+        # this turn, untap Ragost." parses via the end-step body handler
+        # in ``_parse_at_the_beginning_of_line``; new
+        # ``_IF_GAINED_LIFE_GATE_BODY`` constant maps the full post-sub
+        # body to ``IfGainedLifeThisTurnUntapSelf()``.
+        # Removed from this table so the grammar path claims it.
         # ── DSK artifacts batch 3 ─────────────────────────────────────
         # Arabella, Abandoned Doll {R}{W} 1/3 Legendary Artifact Creature
         # — Toy. "Whenever Arabella attacks, it deals X damage to each
@@ -953,6 +936,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     grants_toughness_as_damage_for_creatures_you_control = False
     grants_toughness_as_station_power_for_creatures_you_control = False
     grants_warp_in_hand_to: "tuple[str, str] | None" = None
+    grants_food_to_your_artifacts = False
+    grants_food_ability_to_your_artifacts = False
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -1342,6 +1327,17 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # these at cast time.
             external_cost_reductions.append(external_cost_reduction)
             continue
+        if _parse_grants_food_and_ability_line(line):
+            # ``Artifacts you control are Foods in addition to their other
+            # types and have "{2}, {T}, Sacrifice this artifact: You gain 3
+            # life."`` — Ragost, Deft Gastronaut. Sets both the
+            # ``grants_food_to_your_artifacts`` (game.effective_subtypes
+            # injects "Food") and ``grants_food_ability_to_your_artifacts``
+            # (game.effective_activated_abilities appends the Food sac
+            # ability) flags on the printing.
+            grants_food_to_your_artifacts = True
+            grants_food_ability_to_your_artifacts = True
+            continue
         if _is_sorcery_rider_line(line):
             # The rider attaches to the immediately preceding activated
             # ability on the same card. With no preceding ability there's
@@ -1432,4 +1428,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             grants_toughness_as_station_power_for_creatures_you_control
         ),
         grants_warp_in_hand_to=grants_warp_in_hand_to,
+        grants_food_to_your_artifacts=grants_food_to_your_artifacts,
+        grants_food_ability_to_your_artifacts=(
+            grants_food_ability_to_your_artifacts
+        ),
     )
