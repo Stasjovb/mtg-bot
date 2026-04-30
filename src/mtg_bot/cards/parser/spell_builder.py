@@ -149,6 +149,26 @@ _SPELL_VOID_ADDS_DRAW_RE = re.compile(
 )
 
 
+# Void "instead" rider: ``Void — If a nonland permanent left the
+# battlefield this turn or a spell was warped this turn, instead
+# <then-effect>.`` (Decode Transmissions). The "instead" keyword
+# indicates the rider REPLACES the preceding base effect entirely —
+# distinct from the "adds-draw" rider (which appends an effect) and
+# from the damage/pump replacement helpers (which swap one specific
+# field). The then-branch phrase after ``instead `` is parsed by the
+# unified spell-effect grammar; if it doesn't parse, the rider is
+# rejected and the spell stays in the bespoke table.
+#
+# Two-clause shape:
+#   base clause → parses via ``_parse_spell_effect_phrase``
+#   Void-instead rider → captures the then-branch for parsing
+# Combined: ``ConditionalIfVoid(then=then_effect, else=base_effect)``
+_SPELL_VOID_INSTEAD_EFFECT_RE = re.compile(
+    r"^Void — If a nonland permanent left the battlefield this turn "
+    r"or a spell was warped this turn, instead (.+)\.$"
+)
+
+
 # Delirium-rider drop regexes — recognizers for ``Delirium — …``
 # clauses that the parser silently drops because the engine doesn't
 # implement the Delirium graveyard-card-type check today.
@@ -427,6 +447,43 @@ def _parse_void_damage_replacement(
     return DealDamageAnyTarget(amount=int(m.group(1)))
 
 
+def _parse_void_instead_effect_rider(
+    phrase: str, base_effect: Effect, name: str
+) -> Effect | None:
+    """If ``phrase`` is a Void "instead" rider (``Void — If a nonland
+    permanent left the battlefield this turn or a spell was warped
+    this turn, instead <then-effect>.``), parse the then-branch and
+    return ``ConditionalIfVoid(then=then_effect, else=base_effect)``.
+    Returns ``None`` if the phrase doesn't match or the then-branch
+    doesn't parse.
+
+    The "instead" keyword means the rider replaces the base effect
+    entirely when Void is active (distinct from the adds-draw rider
+    which appends, and from the damage/pump replacement helpers which
+    swap a specific field). The ``else_effect`` is the original
+    ``base_effect`` — the spell resolves as the base when Void is not
+    active.
+
+    Currently supports any parseable then-branch; no restriction on
+    the base-effect type. The only EoE/Duskmourn card using this shape
+    today is Decode Transmissions (base = ``Sequence(DrawCards(2),
+    LoseLife(2))``, then = ``Sequence(DrawCards(2), EachOpponentLosesLife
+    (2))`` parsed from ``"you draw two cards and each opponent loses 2
+    life"``). Extend as new "instead" Void riders ship.
+    """
+    m = _SPELL_VOID_INSTEAD_EFFECT_RE.match(phrase.strip())
+    if m is None:
+        return None
+    then_phrase = m.group(1).strip()
+    then_effect = _parse_spell_effect_phrase(then_phrase, name)
+    if then_effect is None:
+        return None
+    return ConditionalIfVoid(
+        then_effect=then_effect,
+        else_effect=base_effect,
+    )
+
+
 def _is_void_adds_draw_rider(phrase: str) -> bool:
     """Return ``True`` if ``phrase`` is the Void "adds-a-draw" rider
     from Hymn of the Faller:
@@ -617,28 +674,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     ): Sequence(effects=(
         Surveil(amount=1, use_artifact_count=True),
         DrawCards(amount=3),
-    )),
-    # Decode Transmissions: two-clause Void shape that doesn't fit
-    # the existing ``_parse_void_damage_replacement`` /
-    # ``_parse_void_pump_replacement`` helpers — the Void rider
-    # replaces the LIFE-LOSS half of the base sentence (the draw stays,
-    # the lose-2-life flips to each-opponent-loses-2-life). The
-    # static models this as ``Sequence(DrawCards, ConditionalIfVoid(
-    # then=EachOpponentLosesLife, else=LoseLife))``: the draw runs
-    # unconditionally, then the Void branch picks lose-life at the
-    # caster vs at each opponent. Multi-line oracle text — the key
-    # carries the literal newline between base sentence and rider.
-    (
-        "You draw two cards and lose 2 life.\n"
-        "Void — If a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn, instead you draw two cards "
-        "and each opponent loses 2 life."
-    ): Sequence(effects=(
-        DrawCards(amount=2),
-        ConditionalIfVoid(
-            then_effect=EachOpponentLosesLife(amount=2),
-            else_effect=LoseLife(amount=2),
-        ),
     )),
     # Desculpting Blast: bounce-target-permanent + a Drone-token
     # rider for the attacking-permanent branch. The bespoke engine
@@ -1467,6 +1502,19 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
                         else_effect=None,
                     ),
                 ))
+            # Void "instead" rider: the rider replaces the base effect
+            # entirely when Void is active (Decode Transmissions's
+            # ``Void — ... instead you draw two cards and each opponent
+            # loses 2 life.`` rider). ``_parse_void_instead_effect_rider``
+            # parses the then-branch and returns a ConditionalIfVoid
+            # whose else-branch is the base effect. Tried after the
+            # adds-draw rider since the "instead" keyword is a distinct
+            # surface form that the adds-draw matcher doesn't fire on.
+            instead_eff = _parse_void_instead_effect_rider(
+                clauses[1], first, name
+            )
+            if instead_eff is not None:
+                return instead_eff
     # Modal shape: ``Choose one —`` / ``Choose one or both —`` header
     # line + ≥2 bullet mode lines. Tried before the Sequence fallback
     # because Sequence would uselessly attempt to parse the modal

@@ -352,7 +352,9 @@ def test_cerebral_download_claimed_by_parser():
 
 def test_decode_transmissions_claimed_by_parser():
     # Decode Transmissions ``{2}{B}`` Sorcery — draw 2 + Void-
-    # replaceable lose-2 / each-opponent-loses-2.
+    # "instead" rider. Migrated from the whole-spell exact-text tier
+    # to the per-clause grammar via the new Void "instead" rider
+    # recognizer (_SPELL_VOID_INSTEAD_EFFECT_RE).
     assert "Decode Transmissions" in _claimed_names()
 
 
@@ -379,25 +381,42 @@ def test_dispatch_cerebral_download_returns_sequence():
     ))
 
 
-def test_dispatch_decode_transmissions_returns_sequence_with_conditional():
-    # The Void rider in Decode Transmissions only swaps the lose-life
-    # half of the base sentence; the draw runs unconditionally. The
-    # static models this as ``Sequence(DrawCards, ConditionalIfVoid(
-    # then=EachOpponentLosesLife, else=LoseLife))``. The dispatch key
-    # carries the literal newline between base and rider sentences.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_decode_transmissions_no_bespoke_entry():
+    # Decode Transmissions migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    assert _try_whole_spell_exact_text(
         "You draw two cards and lose 2 life.\n"
         "Void — If a nonland permanent left the battlefield this turn "
         "or a spell was warped this turn, instead you draw two cards "
         "and each opponent loses 2 life."
+    ) is None
+
+
+def test_decode_transmissions_parses_via_per_clause_grammar():
+    # The per-clause grammar produces ConditionalIfVoid whose then-
+    # branch is the full "instead" effect and else-branch is the base.
+    # Both branches draw 2 cards and differ only in the life-loss
+    # target — semantically equivalent to the former bespoke form
+    # Sequence(DrawCards(2), ConditionalIfVoid(EachOpponentLosesLife(2),
+    # LoseLife(2))).
+    from mtg_bot.cards.base import EachOpponentLosesLife
+    eff = _parse_spell_oracle_text(
+        "You draw two cards and lose 2 life.\n"
+        "Void — If a nonland permanent left the battlefield this turn "
+        "or a spell was warped this turn, instead you draw two cards "
+        "and each opponent loses 2 life.",
+        "Decode Transmissions",
     )
-    assert eff == Sequence(effects=(
-        DrawCards(amount=2),
-        ConditionalIfVoid(
-            then_effect=EachOpponentLosesLife(amount=2),
-            else_effect=LoseLife(amount=2),
-        ),
-    ))
+    assert eff == ConditionalIfVoid(
+        then_effect=Sequence(effects=(
+            DrawCards(amount=2),
+            EachOpponentLosesLife(amount=2),
+        )),
+        else_effect=Sequence(effects=(
+            DrawCards(amount=2),
+            LoseLife(amount=2),
+        )),
+    )
 
 
 def test_dispatch_hymn_of_the_faller_no_bespoke_entry():

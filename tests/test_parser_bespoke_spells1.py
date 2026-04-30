@@ -79,8 +79,9 @@ def test_bespoke_table_count():
     #   + Hymn of the Faller (Void adds-draw rider recognizer)
     #   + Warping Wail (exile-p/t-threshold + sorcery-counter +
     #     "It has" token suffix recognizers)
-    # 50 - 12 = 38 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 38
+    #   + Decode Transmissions (Void "instead" rider recognizer)
+    # 50 - 13 = 37 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 37
 
 
 # ------------------------------------------------------------------ #
