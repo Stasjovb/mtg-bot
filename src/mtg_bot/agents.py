@@ -77,6 +77,23 @@ class Agent:
         """
         raise NotImplementedError
 
+    def choose_permanent_to_tap(
+        self,
+        state: "GameState",
+        player_id: int,
+        legal_object_ids: list[int],
+    ) -> int | None:
+        """For "Tap an untapped permanent you control" activation costs
+        (Gene Pollinator). Pick which battlefield object to tap as cost
+        payment. ``legal_object_ids`` are the untapped permanents the
+        player controls (source excluded). Return None to fall back to
+        the first option.
+
+        Default: returns the first id. Concrete agents override for
+        smarter selection.
+        """
+        return legal_object_ids[0] if legal_object_ids else None
+
     def choose_mode(
         self,
         state: "GameState",
@@ -339,6 +356,11 @@ class RandomAgent(Agent):
         return self.rng.random() < 0.5
 
     def choose_sacrifice(self, state, player_id, legal_object_ids):
+        return self.rng.choice(legal_object_ids)
+
+    def choose_permanent_to_tap(self, state, player_id, legal_object_ids):
+        if not legal_object_ids:
+            return None
         return self.rng.choice(legal_object_ids)
 
     def choose_mode(self, state, player_id, mode_descriptions):

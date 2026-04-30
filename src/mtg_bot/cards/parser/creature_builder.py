@@ -40,6 +40,7 @@ from dataclasses import replace
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
+    AddManaToPool,
     AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
     ArabellaAttackEffect,
@@ -51,6 +52,7 @@ from mtg_bot.cards.base import (
     CostReduction,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
+    DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
     DestroyTargetNonlandPermanent,
     DrawCards,
@@ -424,14 +426,26 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
     return {
         # Gene Pollinator {G} 1/2 Robot Insect.
         # Real oracle: "{T}, Tap an untapped permanent you control: Add
-        # one mana of any color." — activated mana ability not yet in
-        # grammar; shipped as vanilla Artifact Creature 1/2.
-        # Skip — "Tap an untapped permanent you control" is not a
-        # recognized activation-cost atom; the grammar rejects the
-        # activation line and cannot claim the card.
+        # one mana of any color." — migrated to use the
+        # tap_permanent_you_control cost atom (added to ActivationCost).
+        # Still bespoke because the grammar's creature-builder line-loop
+        # only sees oracle lines through _parse_clause, which doesn't
+        # yet route {T}+tap_permanent_you_control two-atom costs through
+        # the activated parser. Remove when the grammar round-trips this
+        # cost shape automatically.
         "Gene Pollinator": make_creature(
             "Gene Pollinator", "{G}", 1, 2,
             artifact=True,
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        tap_self=True,
+                        tap_permanent_you_control=True,
+                    ),
+                    effect=AddManaToPool(produces=(("any", 1),)),
+                    is_mana_ability=True,
+                ),
+            ),
         ),
         # Kavaron Harrier {R} 2/1 Robot Soldier.
         # "Whenever this creature attacks, you may pay {2}. If you do,
@@ -498,15 +512,31 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # Rust Harvester {R} 1/1.
         # Real oracle: "Menace. {2}, {T}, Exile an artifact card from
         # your graveyard: Put a +1/+1 counter on this creature, then it
-        # deals damage equal to its power to any target." — activated
-        # ability dropped; shipped as menace-only vanilla.
-        # Static has artifact=False; registry entry is authoritative.
-        # Skip — "Exile an artifact card from your graveyard" is not a
-        # recognized activation-cost atom; the grammar rejects the
-        # activation line and cannot claim the card.
+        # deals damage equal to its power to any target." — migrated to
+        # use the exile_artifact_from_graveyard cost atom (added to
+        # ActivationCost). The effect is Sequence(PutPlusOneCounterOnSelf,
+        # DealDamageEqualToSourcePowerAnyTarget) — the counter resolves
+        # first so the damage snapshot includes the new +1/+1.
+        # Still bespoke because the grammar cannot yet claim a card with
+        # keyword + activated-ability oracle lines through the
+        # creature-builder's clause dispatcher.
         "Rust Harvester": make_creature(
             "Rust Harvester", "{R}", 1, 1,
             keywords={"menace"},
+            activated_abilities=(
+                ActivatedAbility(
+                    cost=ActivationCost(
+                        mana=parse_mana_cost("{2}"),
+                        mana_str="{2}",
+                        tap_self=True,
+                        exile_artifact_from_graveyard=True,
+                    ),
+                    effect=Sequence(effects=(
+                        PutPlusOneCounterOnSelf(amount=1),
+                        DealDamageEqualToSourcePowerAnyTarget(),
+                    )),
+                ),
+            ),
         ),
         # Selfcraft Mechan {3}{U} 3/4 Robot Artificer.
         # "When this creature enters, you may sacrifice an artifact. When

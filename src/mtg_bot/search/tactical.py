@@ -76,6 +76,11 @@ class DefaultTacticalAgent(Agent):
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         return legal_object_ids[0] if legal_object_ids else 0
 
+    def choose_permanent_to_tap(self, state, player_id, legal_object_ids):
+        # Tap the first listed untapped permanent (deterministic for
+        # search; tactical policy can override for smarter selection).
+        return legal_object_ids[0] if legal_object_ids else None
+
     def choose_mode(self, state, player_id, mode_descriptions):
         return 0
 
