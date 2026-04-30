@@ -230,15 +230,23 @@ _DEAL_DAMAGE_ANY_TARGET = re.compile(
 )
 # "<source> deals damage equal to its power to any target" — Infernal
 # Phantom's dies trigger body in DSK (after the ``it `` source-subject
-# strip in ``_normalize_creature_effect_phrase``). Maps to
-# ``DealDamageEqualToSourcePowerAnyTarget`` whose resolve reads the
-# source's effective power at fire time and routes through
+# strip in ``_normalize_creature_effect_phrase``).  Also accepts the
+# ``it `` pronoun prefix so that compound effects split by ``, then ``
+# in activated-ability context (Rust Harvester's
+# ``Put a +1/+1 counter on this creature, then it deals damage equal
+# to its power to any target``) also match after the compound splitter
+# hands the second piece directly to ``_parse_effect`` without the
+# creature-trigger normalizer's ``it ``-strip.  The ``(?:it )?``
+# optional group mirrors the same guard on ``_DEAL_DAMAGE_TARGET_CREATURE``
+# (which already accepts ``it deals N damage to target creature``).
+# Maps to ``DealDamageEqualToSourcePowerAnyTarget`` whose resolve reads
+# the source's effective power at fire time and routes through
 # ``_apply_damage`` against the chosen target. Distinct from the bare
 # ``deals N damage to any target`` shape above (which carries a literal
 # integer amount); this primitive uses the source's power as a dynamic
 # integer. Same legal-target pool either way.
 _DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET = re.compile(
-    r"^deals damage equal to its power to any target$"
+    r"^(?:it )?deals damage equal to its power to any target$"
 )
 _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     # Optional ``it `` prefix accepts the activated-ability surface
