@@ -450,3 +450,27 @@ class HasPowerAtMost(ObjectPredicate):
         except Exception:
             return False
         return power <= self.n
+
+
+@dataclass(frozen=True)
+class HasToughnessAtMost(ObjectPredicate):
+    """The object's effective toughness is less than or equal to ``n``.
+
+    Mirror of :class:`HasPowerAtMost` for the "with toughness N or
+    less" qualifier. Composes with ``HasPowerAtMost`` via ``|`` to
+    express "with power or toughness N or less" (Warping Wail's
+    Scryfall-updated mode 1).
+    """
+
+    n: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_toughness
+
+        try:
+            toughness = effective_toughness(state, obj)
+        except Exception:
+            return False
+        return toughness <= self.n

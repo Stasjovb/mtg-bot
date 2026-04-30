@@ -85,6 +85,7 @@ from mtg_bot.effects.generic import (
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     EachPlayerDraws,
+    Exile,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
     ExileAllGraveyards,

@@ -211,6 +211,62 @@ def _describe_filter(target_filter) -> str:
 
 
 @dataclass(frozen=True)
+class Exile(Effect):
+    """Unified exile primitive driven by ``targets``.
+
+    Sibling of :class:`Destroy` for the exile family. The unified
+    resolve walks each slot's chosen target, re-verifies legality at
+    resolution per CR 608.2b, and exiles whichever survive the
+    recheck via ``move_off_battlefield(..., destination="exile")``.
+
+    Variants that need extra resolve logic (Mystifying Maze's
+    delayed return-trigger, Oblivion-Ring's "until source leaves"
+    bookkeeping) override ``resolve`` rather than reusing this base
+    — ``Exile.resolve`` covers the bare "exile target X" oracle
+    shape, not the until-clause/leave-trigger riders.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.turn import move_off_battlefield
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="exile")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                state.log.append(f"{obj.printing.name} is exiled")
+                move_off_battlefield(state, obj, destination="exile")
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"exile {_describe_targets(self.targets)}"
+
+
+@dataclass(frozen=True)
 class Destroy(Effect):
     """Unified destroy primitive driven by ``targets``.
 
@@ -6931,47 +6987,18 @@ class ExileAllCreaturesAndSpacecraft(Effect):
 
 
 @dataclass(frozen=True)
-class ExileTargetCreature(Effect):
-    """Exile any target creature on the battlefield.
+class ExileTargetCreature(Exile):
+    """``Exile`` constructor sugar for "exile target creature".
 
-    Matches oracle text like "exile target creature" (Gravkill, minus its
-    "or Spacecraft" option since Spacecraft aren't implemented yet). Tokens
-    exiled cease to exist per rule 704.5d.
+    Filter is :class:`IsCreature` (which reads ``is_creature_now`` so
+    Impending-suppressed Overlords aren't legal targets). Tokens
+    exiled cease to exist per CR 704.5d.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import move_off_battlefield
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None:
-            return
-        state.log.append(f"{obj.printing.name} is exiled")
-        move_off_battlefield(state, obj, destination="exile")
-
-    def describe(self) -> str:
-        return "exile target creature"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(self, "targets", (TargetSpec(IsCreature()),))
 
 
 
@@ -7182,68 +7209,30 @@ class PreventAllCombatDamageThisTurn(Effect):
 
 
 @dataclass(frozen=True)
-class ExileTargetCreatureWithPowerOrToughnessAtMost(Effect):
-    """Exile target creature whose effective power OR effective toughness
-    is at most ``max_value``.
+class ExileTargetCreatureWithPowerOrToughnessAtMost(Exile):
+    """``Exile`` constructor sugar for "exile target creature with power
+    or toughness N or less" (Warping Wail mode 1, Scryfall-updated
+    oracle).
 
-    Matches Warping Wail mode 1 (Scryfall-updated oracle): "Exile target
-    creature with power or toughness 1 or less." Uses effective_* so
-    temp buffs and static anthems are respected at targeting and
-    resolution.
+    Filter is ``IsCreature() & (HasPowerAtMost(n) | HasToughnessAtMost(n))``.
+    Both predicates read ``effective_power`` / ``effective_toughness``
+    so temp buffs and static anthems are respected at both targeting
+    and the at-resolve recheck (a Giant-Growth-style pump between cast
+    and resolve will fail the recheck and fizzle the exile).
     """
 
-    max_value: int
+    max_value: int = 1
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        from mtg_bot.game import effective_power, effective_toughness
-
-        out: list[Target] = []
-        for o in state.battlefield:
-            if not o.printing.is_creature:
-                continue
-            if (
-                effective_power(state, o) <= self.max_value
-                or effective_toughness(state, o) <= self.max_value
-            ):
-                out.append(("creature", o.id))
-        return out
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import effective_power, effective_toughness
-        from mtg_bot.turn import move_off_battlefield
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            HasPowerAtMost, HasToughnessAtMost, IsCreature,
         )
-        if obj is None:
-            return
-        # Re-check the condition at resolution — a pump between cast and
-        # resolve could make the target no longer legal (e.g., Giant
-        # Growth ended the "power or toughness ≤ 1" clause).
-        if not (
-            effective_power(state, obj) <= self.max_value
-            or effective_toughness(state, obj) <= self.max_value
-        ):
-            state.log.append(
-                f"{obj.printing.name} no longer has power or toughness "
-                f"≤ {self.max_value} — exile fizzles"
-            )
-            return
-        state.log.append(f"{obj.printing.name} is exiled")
-        move_off_battlefield(state, obj, destination="exile")
+        from mtg_bot.effects.targets import TargetSpec
+        f = IsCreature() & (
+            HasPowerAtMost(self.max_value)
+            | HasToughnessAtMost(self.max_value)
+        )
+        object.__setattr__(self, "targets", (TargetSpec(f),))
 
     def describe(self) -> str:
         return (
