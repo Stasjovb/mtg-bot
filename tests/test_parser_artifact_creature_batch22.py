@@ -53,13 +53,19 @@ Migrated to grammar in bespoke-roving-actuator:
     cast-free) claimed by a literal multi-sentence recognizer in
     ``_parse_effect`` → ``RovingActuatorETBEffect(max_mv=2)``.
 
+Migrated to ``_BESPOKE_TRIGGER_LINES`` in bespoke-splitskin-monoist:
+  - Splitskin Doll — ETB trigger line matched verbatim routes to
+    ``SplitskinDollETBEffect``; all other oracle lines parse via the
+    unified grammar.
+  - Monoist Circuit-Feeder — ETB trigger line matched verbatim routes to
+    ``MonoistCircuitFeederETBEffect``; ``Flying`` keyword and all other
+    oracle lines parse via the unified grammar.
+
 Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
   2. Interceptor Mechan — flying + ETB return + void end-step counter
   3. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
-  4. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
-  5. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
-  6. Splitskin Doll — draw + source-relative conditional discard (DSK)
+  4. Survey Mechan — flying + hexproof; activated ability needs differently-named-land cost reduction
 """
 
 from __future__ import annotations
@@ -158,6 +164,30 @@ def test_mechan_shieldmate_claimed_by_parser():
 
 def test_monoist_circuit_feeder_claimed_by_parser():
     assert "Monoist Circuit-Feeder" in _PARSER_PRINTINGS
+
+
+def test_monoist_circuit_feeder_grammar_structure():
+    """Grammar-claimed Monoist Circuit-Feeder has flying + a single
+    ENTERS trigger wired to ``MonoistCircuitFeederETBEffect`` via the
+    literal trigger-line dispatch in ``_BESPOKE_TRIGGER_LINES``.
+
+    Migration from ``_BESPOKE_ARTIFACT_CREATURES`` to the trigger-line
+    dispatch: the ETB oracle line "When this creature enters, until end
+    of turn, target creature you control gets +X/+0 and target creature
+    an opponent controls gets -0/-X, where X is the number of artifacts
+    you control." is matched verbatim; Flying parses via the standard
+    keyword-line recognizer.
+    """
+    from mtg_bot.effects.bespoke import MonoistCircuitFeederETBEffect
+    from mtg_bot.effects.predicates import Event
+
+    mcf = _parser("Monoist Circuit-Feeder")
+    assert mcf.is_artifact
+    assert mcf.power == 4 and mcf.toughness == 4
+    assert "flying" in mcf.keywords
+    etb = [t for t in mcf.triggered_abilities if t.event == Event.ENTERS]
+    assert len(etb) == 1
+    assert isinstance(etb[0].effect, MonoistCircuitFeederETBEffect)
 
 
 

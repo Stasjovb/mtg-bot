@@ -32,8 +32,11 @@ def _claimed_names() -> frozenset[str]:
 # ---------- Splitskin Doll ----------
 
 def test_splitskin_doll_claimed_by_parser():
-    # Splitskin Doll lands via name-keyed bespoke dispatch in
-    # ``_BESPOKE_ARTIFACT_CREATURES``.
+    # Splitskin Doll now claims via the oracle-text parser: the ETB
+    # trigger line is caught by ``_BESPOKE_TRIGGER_LINES`` and routes to
+    # ``SplitskinDollETBEffect``; all other oracle lines parse via the
+    # unified grammar. Migrated from ``_BESPOKE_ARTIFACT_CREATURES`` in
+    # bespoke-splitskin-monoist.
     assert "Splitskin Doll" in _claimed_names()
 
 
@@ -42,7 +45,8 @@ def test_splitskin_doll_carries_etb_with_bespoke_effect():
     # single ENTERS trigger via the bespoke ``SplitskinDollETBEffect``
     # engine class. The effect handles both halves of the printed
     # body — the unconditional draw and the conditional discard — in
-    # one resolve step.
+    # one resolve step. The card now routes through the unified grammar
+    # with the ETB trigger claimed by ``_BESPOKE_TRIGGER_LINES``.
     from mtg_bot.effects.bespoke import SplitskinDollETBEffect
 
     p = OracleParserCardSource().get_printings()["Splitskin Doll"]
