@@ -38,6 +38,17 @@ class FakePrinting:
     card_types: tuple[str, ...] = ()
     subtypes: tuple[str, ...] = ()
     is_token: bool = False
+    # Fields read by ``mtg_bot.game.effective_subtypes`` to walk
+    # CR-613 layered-subtype effects. Defaulted so a bare
+    # ``FakePrinting()`` short-circuits the layered walk to just the
+    # printed subtypes.
+    is_artifact: bool = False
+    is_land: bool = False
+    is_basic_land: bool = False
+    nonbasic_lands_are_mountains: bool = False
+    grants_food_to_your_artifacts: bool = False
+    grants_all_basic_land_types_to_lands_you_control: bool = False
+    grants_basic_land_type_to_all_lands: str | None = None
 
 
 @dataclass
@@ -51,6 +62,10 @@ class FakeObject:
     loyalty_counters: int = 0
     tapped: bool = False
     blocking: int | None = None
+    # Read by ``effective_subtypes`` (face-down permanents have no
+    # subtypes per CR 701.34) and by the Magus / Dryad timestamp walks.
+    face_down: bool = False
+    etb_timestamp: int = 0
 
 
 @dataclass
@@ -60,7 +75,11 @@ class FakePlayer:
 
 @dataclass
 class FakeState:
-    pass
+    # ``effective_subtypes`` walks ``state.battlefield`` and
+    # ``state.continuous_effects``; both default to empty so the
+    # layered walk is a no-op and printed subtypes flow through.
+    battlefield: list = field(default_factory=list)
+    continuous_effects: list = field(default_factory=list)
 
 
 # ---------- type predicates ----------
@@ -173,6 +192,48 @@ def test_has_subtype_matches_within_multi_subtype_printing():
 
 def test_has_subtype_false_for_player():
     assert HasSubtype("Kavu").test(FakePlayer(id=1), FakeState()) is False
+
+
+def test_has_subtype_face_down_returns_false():
+    """A face-down permanent has no subtypes per CR 701.34, even if
+    its printing prints with the subtype."""
+    obj = FakeObject(
+        printing=FakePrinting(subtypes=("Sliver",)),
+        face_down=True,
+    )
+    assert HasSubtype("Sliver").test(obj, FakeState()) is False
+
+
+def test_has_subtype_includes_layer4_add_subtype_grant():
+    """A creature granted ``Sliver`` by a continuous-effect-registry
+    layer-4 ``add_subtype`` entry counts toward ``HasSubtype("Sliver")``
+    even if the printed subtype list omits it. This is the path
+    Hivepool's Affinity-for-Slivers needs to be rules-correct: a token
+    or creature granted Sliver by a Conspiracy-style continuous effect
+    is a Sliver for layer-7-independent subtype checks."""
+    from mtg_bot.game import ContinuousEffect
+
+    obj = FakeObject(
+        id=42,
+        printing=FakePrinting(card_types=("Creature",), subtypes=("Bear",)),
+    )
+    state = FakeState()
+    state.continuous_effects.append(
+        ContinuousEffect(
+            source_id=99,
+            layer=4,
+            timestamp=0,
+            kind="add_subtype",
+            target_id=42,
+            params=("Sliver",),
+            description="Conspiracy: creatures are Slivers",
+        )
+    )
+    assert HasSubtype("Sliver").test(obj, state) is True
+    # Printed Bear subtype still recognized.
+    assert HasSubtype("Bear").test(obj, state) is True
+    # An unrelated subtype isn't introduced.
+    assert HasSubtype("Goblin").test(obj, state) is False
 
 
 # ---------- IsTapped ----------

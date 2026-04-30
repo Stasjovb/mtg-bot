@@ -163,14 +163,18 @@ class IsNontoken(ObjectPredicate):
 
 @dataclass(frozen=True)
 class HasSubtype(ObjectPredicate):
-    """The object's printing has the given subtype string.
+    """The object's *effective* subtypes include the given string.
 
-    Models the type-line subtype check used by triggers that gate on a
-    creature subtype (e.g. ``"Whenever a Kavu you control enters"``).
-    Compares against ``obj.printing.subtypes`` directly — runtime
-    subtype grants (``temp_subtype``, ``effective_subtypes``) are not
-    consulted here because every existing in-scope trigger keys off
-    the printed subtype.
+    Models the type-line subtype check used by triggers and Affinity-
+    style cost reductions that gate on a creature subtype (e.g.
+    ``"Whenever a Kavu you control enters"``,
+    ``PerControlled(HasSubtype("Sliver"))``). Reads through
+    :func:`mtg_bot.game.effective_subtypes` so a creature granted a
+    subtype by a layer-3 / layer-4 continuous effect (Conspiracy
+    granting "Sliver", Ragost granting "Food", Magus / Dryad layering
+    on lands, …) counts toward the predicate. This is the rules-correct
+    CR 613 reading: subtype membership is determined after all type-
+    changing layers apply, not from the printed type line alone.
     """
 
     name: str
@@ -178,7 +182,9 @@ class HasSubtype(ObjectPredicate):
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return self.name in obj.printing.subtypes
+        from mtg_bot.game import effective_subtypes
+
+        return self.name in effective_subtypes(state, obj)
 
 
 @dataclass(frozen=True)
