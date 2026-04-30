@@ -1394,62 +1394,96 @@ def effective_draw_count(
     state: "GameState", player_id: int, base_count: int
 ) -> int:
     """Effective number of cards a "draw N" event should draw for
-    ``player_id``, accounting for active replacement effects.
+    ``player_id``, accounting for active CR 614 replacement effects.
 
-    Currently models Quantum Riddler: "As long as you have one or
-    fewer cards in hand, if you would draw one or more cards, you
-    draw that many cards plus one instead." Returns ``base_count + 1``
-    when the controller has a Quantum-Riddler-flavored permanent on
-    the battlefield AND hand size ≤ 1 AND base_count ≥ 1; otherwise
-    returns ``base_count`` unchanged. Multiple Riddlers don't stack —
-    the replacement adds one card per draw event regardless.
+    Routes through :func:`mtg_bot.effects.modifiers
+    .dispatch_replacement` on ``WOULD_DRAW_CARDS``. The legacy
+    Quantum-Riddler-shape flag (``replaces_draw_with_extra_when_hand
+    _at_most_one``) synthesises an ``AddToCount(1)`` replacement
+    gated on the drawing player's hand size ≤ 1; future replacement
+    effects (Quantum-Riddler-style or otherwise) layer on by adding
+    a ``ReplacementEffect`` to the printing without touching this
+    site.
     """
     if base_count < 1:
         return base_count
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
     p = state.player_by_id(player_id)
-    if len(p.hand) > 1:
-        return base_count
-    has_riddler = any(
-        o.controller_id == player_id
-        and o.printing.replaces_draw_with_extra_when_hand_at_most_one
-        for o in state.battlefield
+    out = dispatch_replacement(
+        state, Event.WOULD_DRAW_CARDS,
+        affected_player_id=player_id,
+        subjects={"player": p},
+        payload={"count": base_count},
     )
-    return base_count + 1 if has_riddler else base_count
+    if out.get("prevented"):
+        return 0
+    return out.get("count", base_count)
 
 
 def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
     """Return how many times an ETB-caused triggered ability on a
     permanent controlled by ``controller_id`` should fire.
 
-    1 by default, +1 per permanent the controller controls with
-    ``extra_etb_trigger > 0`` (Starfield Vocalist). Matches the
-    oracle wording: "If a permanent entering the battlefield causes
-    a triggered ability of a permanent you control to trigger, that
-    ability triggers an additional time."
+    Routes through :func:`mtg_bot.effects.modifiers
+    .dispatch_replacement` on ``TRIGGERED_ABILITY_TRIGGERS`` with a
+    base ``instances=1`` payload. The Starfield-Vocalist-shape
+    ``extra_etb_trigger`` flag synthesises an ``AddInstances(N)``
+    replacement keyed on the carrier's controller; the post-
+    replacement ``instances`` count drives the per-trigger fire
+    loop.
     """
-    extra = sum(
-        o.printing.extra_etb_trigger for o in state.battlefield
-        if o.controller_id == controller_id
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    # The "ability_source" subject is what gates the replacement.
+    # Our caller doesn't know the source object yet (this helper
+    # answers a per-controller question), so we synthesise a
+    # placeholder: a sentinel object whose controller_id matches
+    # the question. The synthesizer reads ``ability_source
+    # .controller_id`` off it. This keeps the Starfield-Vocalist
+    # match shape consistent with how a real source-aware caller
+    # would pass the ETB-target permanent.
+    class _SourceSentinel:
+        def __init__(self, controller_id):
+            self.controller_id = controller_id
+    sentinel = _SourceSentinel(controller_id)
+    out = dispatch_replacement(
+        state, Event.TRIGGERED_ABILITY_TRIGGERS,
+        affected_player_id=controller_id,
+        subjects={"ability_source": sentinel, "triggering_obj": sentinel},
+        payload={"instances": 1},
     )
-    return 1 + extra
+    return out.get("instances", 1)
 
 
 def _counter_doubling_factor(state: GameState, obj: GameObject) -> int:
-    """Return 2^N where N is the number of Loading-Zone-style counter
-    doublers active for ``obj``. Loading Zone's scope: counters being
-    put on a creature, Spacecraft, or Planet you control. The "Planet"
-    type isn't modeled yet, so we apply on creatures and Spacecraft.
-    Returns 1 when ``obj`` is outside that scope or no doublers are in
-    play.
+    """Return the post-replacement factor for +1/+1 counters being
+    placed on ``obj``.
+
+    Routes through :func:`mtg_bot.effects.modifiers
+    .dispatch_replacement` on ``WOULD_PLACE_COUNTER`` with a base
+    ``count=1`` payload; the post-replacement count IS the factor.
+    Loading-Zone-shape doublers (``is_counter_doubler``) synthesise
+    a ``MultiplyCount(2)`` replacement gated on the recipient's
+    controller matching the doubler's controller. Recipients that
+    aren't creatures or Spacecraft (Loading Zone's printed scope)
+    short-circuit to 1 — the dispatch is skipped entirely so future
+    replacements with broader scopes don't accidentally fire.
     """
     if not (obj.printing.is_creature or obj.printing.is_spacecraft):
         return 1
-    doublers = sum(
-        1 for o in state.battlefield
-        if o.controller_id == obj.controller_id
-        and o.printing.is_counter_doubler
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    out = dispatch_replacement(
+        state, Event.WOULD_PLACE_COUNTER,
+        affected_player_id=obj.controller_id,
+        subjects={"obj": obj, "kind": "+1/+1"},
+        payload={"count": 1},
     )
-    return 2 ** doublers
+    return out.get("count", 1)
 
 
 def add_plus_one_counters(
