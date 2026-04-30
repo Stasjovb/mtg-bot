@@ -68,6 +68,7 @@ from mtg_bot.cards.base import (
     ExileOpponentsNonlandPermanentUntilLeaves,
     BoilerbilgesRipperETBEffect,
     ExorciseEffect,
+    FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
     GainLife,
@@ -2847,6 +2848,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         "When you do, this creature deals 2 damage to any target"
     ):
         return BoilerbilgesRipperETBEffect()
+    # Famished Worldsire's ETB body (only EoE card with the
+    # "look at top X cards where X is this creature's power; put land
+    # cards onto battlefield tapped; shuffle" shape; broader grammar
+    # deferred until a second example exists). The ``where X is this
+    # creature's power`` clause and the ``put any number of land cards
+    # from among them`` "any number" selection are anaphoric references
+    # that the sentence-splitting grammar can't model as standalone
+    # clauses; the entire two-sentence surface is matched as a single
+    # literal so the engine's ``FamishedWorldsireETBEffect`` is wired
+    # in one place.
+    if phrase == (
+        "look at the top X cards of your library, where X is this "
+        "creature's power. Put any number of land cards from among "
+        "them onto the battlefield tapped, then shuffle"
+    ):
+        return FamishedWorldsireETBEffect()
     # Terrapact Intimidator's ETB body (only EoE card with the
     # "opponent may have you create tokens; if not, self-counters"
     # shape; broader grammar deferred until a second example exists).
