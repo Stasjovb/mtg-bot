@@ -80,6 +80,7 @@ from mtg_bot.cards.base import (
     HouseCartographerSurvivalEffect,
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
+    LookTopNPutOneInHandRestToGraveyard,
     LoseLife,
     ManifestDread,
     ModalChooseOne,
@@ -1226,6 +1227,32 @@ _SURVEIL_N = re.compile(r"^surveil (\d+)$")
 _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
     r"^look at the top two cards of your library\. "
     r"Put one into your hand and the other into your graveyard$"
+)
+# "Look at the top N cards of your library. Put one of them into your
+# hand and the rest into your graveyard. You gain M life." — Commune with
+# Evil ``{2}{B}`` (Duskmourn). Three-sentence compound: the first two
+# sentences form the look-pick-split mechanic
+# (``LookTopNPutOneInHandRestToGraveyard(n=N)``); the third sentence is
+# a trailing life-gain rider (``GainLife(amount=M)``). Together they
+# produce ``Sequence(LookTopNPutOneInHandRestToGraveyard(N), GainLife(M))``.
+#
+# Tried BEFORE the two-sentence ``_LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD``
+# form because the "to your graveyard. You gain" boundary suffix
+# distinguishes the shapes; the bare two-sentence graveyard form's ``$``
+# anchor would not match the trailing life-gain sentence anyway, but
+# more-specific-first is the convention here.
+#
+# Parameterized over both N (the top-of-library look count) and M (the
+# life-gain amount) via capture groups. Only Commune with Evil in the
+# EoE/DSK pool prints this combined shape today; the regex captures both
+# parameters as integers so a future printing with different N or M
+# values (e.g. "Look at the top three cards … You gain 2 life.") lands
+# on the same primitive without further grammar work — the parameterized-
+# recognizer-preferred form per parser CLAUDE.md.
+_LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE = re.compile(
+    rf"^look at the top (\d+|{_SMALL_CARDINAL_PATTERN}) cards of your library\. "
+    rf"Put one of them into your hand and the rest into your graveyard\. "
+    rf"You gain (\d+) life$"
 )
 # ``look at the top N cards of your library. You may reveal a <filter>
 # card from among them and put it into your hand. Put the rest on the
@@ -4057,6 +4084,22 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))
+    m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(phrase)
+    if m is not None:
+        # ``look at the top N cards of your library. Put one of them
+        # into your hand and the rest into your graveyard. You gain M
+        # life.`` — Commune with Evil's three-sentence body. Tried
+        # BEFORE the bare two-sentence form below so the more-specific
+        # three-sentence shape with the life-gain rider wins.
+        # Produces Sequence(LookTopNPutOneInHandRestToGraveyard(n),
+        # GainLife(m)).
+        n_token = m.group(1)
+        n = _parse_amount(n_token)
+        m_amount = int(m.group(2))
+        return Sequence(effects=(
+            LookTopNPutOneInHandRestToGraveyard(n=n),
+            GainLife(amount=m_amount),
+        ))
     if _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD.match(phrase) is not None:
         # ``look at the top two cards of your library. Put one into
         # your hand and the other into your graveyard`` — Codecracker

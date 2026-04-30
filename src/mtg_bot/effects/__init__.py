@@ -109,6 +109,7 @@ from mtg_bot.effects.generic import (
     LockOrUnlockDoorOfTargetRoomYouControl,
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
+    LookTopNPutOneInHandRestToGraveyard,
     LoseLife,
     MagicalHackTextChangeEffect,
     ManifestDread,

@@ -3523,6 +3523,75 @@ class LookAtTopTwoSplitHandGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class LookTopNPutOneInHandRestToGraveyard(Effect):
+    """Look at the top ``n`` cards of your library; put one of them into
+    your hand and the rest into your graveyard.
+
+    Parameterized version of ``LookAtTopTwoSplitHandGraveyard`` for
+    arbitrary ``n``.  Models the first two sentences of Commune with
+    Evil (``{2}{B}`` Duskmourn Sorcery): "Look at the top four cards of
+    your library. Put one of them into your hand and the rest into your
+    graveyard."
+
+    The agent's ``choose_card_from_library`` hook picks which of the
+    examined cards goes to hand (the others go to graveyard). If the
+    library has fewer than ``n`` cards, all available cards are examined.
+    With 0 cards the effect is a no-op.
+    """
+
+    n: int = 4
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        examined = p.library[:self.n]
+        if not examined:
+            return
+        # Agent picks one card to put into hand; default to the top card
+        # when no agent is seated or the agent declines / picks an out-
+        # of-pool id.
+        chosen_id: int | None = None
+        if p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in examined],
+            )
+        hand_card = next(
+            (c for c in examined if c.id == chosen_id), None
+        )
+        if hand_card is None:
+            hand_card = examined[0]
+        # Move the chosen card to hand.
+        p.library.remove(hand_card)
+        hand_card.zone = Zone.HAND
+        p.hand.append(hand_card)
+        reveal_to_all(state, hand_card)
+        state.log.append(
+            f"P{controller_id} puts {hand_card.printing.name} into "
+            f"hand (look at top {self.n})"
+        )
+        # Move the rest of the examined cards to graveyard.
+        for c in [c for c in examined if c is not hand_card]:
+            p.library.remove(c)
+            c.zone = Zone.GRAVEYARD
+            p.graveyard.append(c)
+            state.log.append(
+                f"P{controller_id} puts {c.printing.name} into "
+                f"graveyard (look at top {self.n})"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.n} cards of your library; put one "
+            f"into your hand and the rest into your graveyard"
+        )
+
+
+
+@dataclass(frozen=True)
 class ManifestDread(Effect):
     """CR 701.55: To manifest dread, look at the top two cards of your
     library, manifest one of them, then put the other into your

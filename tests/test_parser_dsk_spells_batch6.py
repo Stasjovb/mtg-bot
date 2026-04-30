@@ -494,20 +494,27 @@ def test_commune_with_evil_agent_invalid_pick_falls_back_to_top():
 # ---------- Commune with Evil parser claim ----------
 
 def test_commune_with_evil_claimed_by_parser():
-    # Commune with Evil ``{2}{B}`` Sorcery — claimed via the new
-    # whole-spell exact-text dispatch entry mapping to the new
-    # ``CommuneWithEvilEffect`` engine class.
+    # Commune with Evil ``{2}{B}`` Sorcery — now claimed via the
+    # per-clause grammar (migrated from the whole-spell exact-text
+    # table in bespoke-spells3).
     assert "Commune with Evil" in _claimed_names()
 
 
 def test_commune_with_evil_engine_class():
-    # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the ``CommuneWithEvilEffect`` engine class.
-    from mtg_bot.effects import CommuneWithEvilEffect
+    # In bespoke-spells3, Commune with Evil was migrated from the
+    # whole-spell exact-text table to the per-clause grammar. The new
+    # ``_LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE``
+    # recognizer produces ``Sequence(LookTopNPutOneInHandRestToGraveyard(4),
+    # GainLife(3))`` — more faithful than the previous atomic
+    # ``CommuneWithEvilEffect()`` class.
+    from mtg_bot.cards.base import GainLife, LookTopNPutOneInHandRestToGraveyard, Sequence
 
     parser = OracleParserCardSource()
     p = parser.get_printings()["Commune with Evil"]
-    assert p.spell_effect == CommuneWithEvilEffect()
+    assert p.spell_effect == Sequence(effects=(
+        LookTopNPutOneInHandRestToGraveyard(n=4),
+        GainLife(amount=3),
+    ))
 
 
 def test_commune_with_evil_is_sorcery():

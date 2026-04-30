@@ -1294,28 +1294,16 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Return up to one target nonland permanent to its owner's "
         "hand. Manifest dread."
     ): ManifestDread(count=1),
-    # Commune with Evil (Duskmourn) ``{2}{B}`` Sorcery — three-step
-    # single-resolve effect: look at top 4 cards, put one of them
-    # into hand, the rest into graveyard, and gain 3 life. The static
-    # ships ``CommuneWithEvilEffect()`` (no parameters; the bespoke
-    # class folds all three steps into one resolve). The whole-spell
-    # tier is the right place because the per-clause grammar can't
-    # carve up the printed text — the first sentence ``Look at the
-    # top four cards of your library.`` is informational (the actual
-    # mechanical effect happens in the second sentence's split), and
-    # the second sentence ``Put one of them into your hand and the
-    # rest into your graveyard.`` has no per-clause primitive (the
-    # existing ``LookAtTopTwoSplitHandGraveyard`` is fixed at 2 cards
-    # with a per-card surveil-vs-hand prompt; Commune with Evil
-    # generalizes to 4 cards with a single forced-pick prompt). The
-    # trailing ``You gain 3 life.`` rider would parse as a standalone
-    # ``GainLife(amount=3)`` but the static ships the whole spell as
-    # one engine class for resolve-step atomicity.
-    (
-        "Look at the top four cards of your library. Put one of them "
-        "into your hand and the rest into your graveyard. You gain 3 "
-        "life."
-    ): CommuneWithEvilEffect(),
+    # Commune with Evil (Duskmourn) ``{2}{B}`` Sorcery — migrated to
+    # per-clause grammar: the new
+    # ``_LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE``
+    # three-sentence recognizer in ``effects.py`` matches the full
+    # oracle text as a single effect-phrase (before sentence splitting)
+    # and returns ``Sequence(LookTopNPutOneInHandRestToGraveyard(4),
+    # GainLife(3))``. This is more faithful than the previous
+    # ``CommuneWithEvilEffect()`` atomic class: the two sub-effects
+    # resolve as separate steps, matching the printed structure of three
+    # independent sentences.
     # Turn Inside Out (Duskmourn) — "Target creature gets +3/+0 until
     # end of turn. When it dies this turn, manifest dread." — migrated
     # to per-clause grammar: ``PumpTargetCreatureUntilEOT(3, 0)``

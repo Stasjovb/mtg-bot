@@ -62,8 +62,8 @@ This batch migrates three entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    (dropping both the "up to two" count AND the nonland-permanent widening).
    Migrates: **Pull Through the Weft**.
 
-Total migration: 3 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
-Table shrinks from 22 to 19.
+Total migration: 4 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 22 to 18.
 """
 
 from __future__ import annotations
@@ -73,6 +73,8 @@ import pytest
 from mtg_bot.cards.base import (
     CreateToken,
     DealNDamageToEachCreature,
+    GainLife,
+    LookTopNPutOneInHandRestToGraveyard,
     OptionalSacArtifactForEffect,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
@@ -80,6 +82,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.effects import (
     _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO,
+    _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE,
     _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV,
     _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED,
     _normalize_spell_effect_phrase,
@@ -108,9 +111,9 @@ def _claimed_names() -> frozenset[str]:
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more → 22 remaining;
-    # bespoke-spells3 removes 3 more (Lithobraking, Scrounge for Eternity,
-    # Pull Through the Weft) → 19 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 19
+    # bespoke-spells3 removes 4 more (Lithobraking, Scrounge for Eternity,
+    # Pull Through the Weft, Commune with Evil) → 18 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 18
 
 
 # ------------------------------------------------------------------ #
@@ -536,3 +539,94 @@ def test_pull_through_the_weft_parses_via_per_clause_grammar():
     assert eff == ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
         max_n=2, min_n=0
     )
+
+
+# ------------------------------------------------------------------ #
+# _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE          #
+# ------------------------------------------------------------------ #
+
+def test_look_top_n_graveyard_gain_life_regex_matches():
+    m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(
+        "look at the top four cards of your library. "
+        "Put one of them into your hand and the rest into your graveyard. "
+        "You gain 3 life"
+    )
+    assert m is not None
+    assert m.group(1) == "four"  # N
+    assert m.group(2) == "3"     # M
+
+
+def test_look_top_n_graveyard_gain_life_regex_parameterized():
+    # A different N and M should also match.
+    m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(
+        "look at the top 5 cards of your library. "
+        "Put one of them into your hand and the rest into your graveyard. "
+        "You gain 2 life"
+    )
+    assert m is not None
+    assert m.group(1) == "5"
+    assert m.group(2) == "2"
+
+
+def test_look_top_n_graveyard_gain_life_parses_as_effect():
+    eff = _parse_effect(
+        "look at the top four cards of your library. "
+        "Put one of them into your hand and the rest into your graveyard. "
+        "You gain 3 life"
+    )
+    assert eff == Sequence(effects=(
+        LookTopNPutOneInHandRestToGraveyard(n=4),
+        GainLife(amount=3),
+    ))
+
+
+def test_look_top_two_split_hand_graveyard_not_claimed_by_new_regex():
+    # The bare two-sentence form (Codecracker Hound) must NOT match the
+    # new three-sentence recognizer — the two forms are disjoint.
+    m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(
+        "look at the top two cards of your library. "
+        "Put one into your hand and the other into your graveyard"
+    )
+    assert m is None
+
+
+# ------------------------------------------------------------------ #
+# Commune with Evil migration                                         #
+# ------------------------------------------------------------------ #
+
+def test_commune_with_evil_claimed_by_parser():
+    assert "Commune with Evil" in _claimed_names()
+
+
+def test_commune_with_evil_no_bespoke_entry():
+    # After migration, the whole-spell table no longer has a key for
+    # Commune with Evil's text.
+    assert _try_whole_spell_exact_text(
+        "Look at the top four cards of your library. Put one of them "
+        "into your hand and the rest into your graveyard. You gain 3 "
+        "life."
+    ) is None
+
+
+def test_commune_with_evil_engine_class_more_faithful():
+    # The per-clause parse produces Sequence(LookTopN..., GainLife(3))
+    # — more faithful than the previous atomic CommuneWithEvilEffect().
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Commune with Evil"]
+    assert p.spell_effect == Sequence(effects=(
+        LookTopNPutOneInHandRestToGraveyard(n=4),
+        GainLife(amount=3),
+    ))
+
+
+def test_commune_with_evil_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Look at the top four cards of your library. Put one of them "
+        "into your hand and the rest into your graveyard. You gain 3 "
+        "life.",
+        "Commune with Evil",
+    )
+    assert eff == Sequence(effects=(
+        LookTopNPutOneInHandRestToGraveyard(n=4),
+        GainLife(amount=3),
+    ))

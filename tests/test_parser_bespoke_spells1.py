@@ -111,14 +111,16 @@ def test_bespoke_table_count():
     #   + Cerebral Download (surveil-X-artifact-count primitive)
     #   + Jump Scare (leading-UEOT + keywords + becomes-type-change dropper)
     #   + Depressurize (debuff-then-conditional-destroy multi-sentence literal)
-    # Additional removals in bespoke-spells3 branch (3 more, 19 remaining):
+    # Additional removals in bespoke-spells3 branch (4 more, 18 remaining):
     #   + Lithobraking (optional-sac-artifact-when-you-do compound)
     #   + Scrounge for Eternity (creature-or-Spacecraft+MV GY reanimate +
     #     Then-create-Lander rider)
     #   + Pull Through the Weft (nonland-permanent GY-to-hand multi-target,
     #     then-lands-BF-tapped rider dropped)
-    # 50 - 31 = 19 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 19
+    #   + Commune with Evil (look-top-N-put-one-in-hand-rest-to-graveyard
+    #     three-sentence recognizer)
+    # 50 - 32 = 18 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 18
 
 
 # ------------------------------------------------------------------ #
