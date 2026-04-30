@@ -374,40 +374,77 @@ def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
     return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
 
 
-# ``This creature gets +X/+0, where X is the greatest mana value among
-# other artifacts you control.`` — Emissary Escort's printed dynamic-
-# power static. The engine wires the dynamic P/T off the printing-level
-# ``dynamic_pt_formula`` string field (rather than a generic
-# ``StaticAbility`` shape, since the formula evaluation lives in
-# ``game._dynamic_pt`` and reads the controller's battlefield each
-# query). Matched as a literal string — Emissary Escort is the only
-# card in the pool with this exact surface today; "broader grammar
-# deferred until a second example exists" (a future printing whose
-# X-source phrase differs — e.g. ``+X/+0 where X is the number of
-# artifacts you control``, or a different baseline P/T offset — would
-# parameterize this recognizer's X-source capture).
-_EMISSARY_ESCORT_DYNAMIC_PT_LINE = (
+# Dynamic P/T formula recognizer. The engine stores a string key
+# (``dynamic_pt_formula``) on the ``CardPrinting``; ``game._dynamic_pt``
+# reads the key and computes the actual P/T at query time. Each distinct
+# oracle surface maps to its own key via the table below; adding a new
+# card is one entry, no new function.
+#
+# ``*``-based power/toughness cards (Cosmogoyf ``*/(1+*)``; Harmonious
+# Grovestrider ``*/*``) get 0 / ``offset`` as their placeholder P/T in
+# the grammar path — consistent with the bespoke-table printings.
+#
+# The Emissary Escort entry stays for backwards compatibility; it ships
+# with integer P/T (1/2) so no ``*`` handling is needed for it.
+_DYNAMIC_PT_FORMULA_LINES: dict[str, str] = {
+    # Emissary Escort {2}{W} 1/2 — printed power incremented by the
+    # greatest MV among other artifacts you control. Only card today
+    # with this exact surface; parameterization deferred until a second
+    # example (e.g. "+X/+0 where X is the number of creatures…") lands.
     "This creature gets +X/+0, where X is the greatest mana value "
-    "among other artifacts you control."
-)
+    "among other artifacts you control.": "emissary_escort",
+    # Cosmogoyf {B}{G} */(1+*) Elemental Lhurgoyf — power = exile count,
+    # toughness = exile count + 1. Only card with this formula today;
+    # deferred until a second lhurgoyf-style formula lands.
+    "Cosmogoyf's power is equal to the number of cards you own in "
+    "exile and its toughness is equal to that number plus 1.": "cosmogoyf",
+    # Harmonious Grovestrider {3}{G}{G} */* Beast — P/T each = lands
+    # you control. Only card with this formula today; deferred until a
+    # second land-count P/T formula lands.
+    "Harmonious Grovestrider's power and toughness are each equal to "
+    "the number of lands you control.": "harmonious_grovestrider",
+}
+
+
+def _parse_dynamic_pt_formula_line(line: str) -> str | None:
+    """Return the ``dynamic_pt_formula`` key if ``line`` is a known
+    dynamic-P/T oracle surface, else ``None``. The key is forwarded as
+    the ``dynamic_pt_formula`` kwarg on ``make_creature``; the engine
+    reads it in ``game._dynamic_pt`` and computes the actual P/T at
+    query time.
+
+    Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``.
+    """
+    return _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
 
 
 def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
-    """Return ``"emissary_escort"`` if ``line`` is Emissary Escort's
-    printed dynamic-power static, else ``None``. The returned string is
-    the formula key consumed by ``game._dynamic_pt``; the creature
-    builder forwards it as the ``dynamic_pt_formula`` kwarg on
-    ``make_creature``.
-
-    Distinct from a boolean recognizer because future X-source variants
-    (different formula keys mapping to different in-engine
-    computations) will share this same recognizer slot — each new
-    surface form lands its own line→key entry while the wiring stays
-    centralized.
+    """Alias retained for backwards compatibility. Delegates to
+    ``_parse_dynamic_pt_formula_line``.
     """
-    if line.strip() == _EMISSARY_ESCORT_DYNAMIC_PT_LINE:
-        return "emissary_escort"
-    return None
+    return _parse_dynamic_pt_formula_line(line)
+
+
+# ``This creature enters with X +1/+1 counters on it.`` — Broodguard
+# Elite's printed ETB counter rider where X equals the X cost paid to
+# cast it. The engine field ``enters_with_counters_from_x="x"`` is
+# consumed in ``actions.put_into_battlefield``: it reads
+# ``state.resolving_x_value`` and calls ``add_plus_one_counters``.
+# Matched as a literal string — Broodguard Elite is the only card in
+# the pool with this exact surface today; "broader grammar deferred
+# until a second example exists" (a future printing with a different
+# counter type or gating condition would land its own recognizer).
+_ENTERS_WITH_X_COUNTERS_LINE = "This creature enters with X +1/+1 counters on it."
+
+
+def _parse_enters_with_x_counters_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level
+    ``This creature enters with X +1/+1 counters on it.`` ETB-counter
+    rider, else ``False``. Flips ``enters_with_counters_from_x="x"``
+    kwarg on ``make_creature``; the engine resolves the X count from
+    ``state.resolving_x_value`` at ETB time.
+    """
+    return line.strip() == _ENTERS_WITH_X_COUNTERS_LINE
 
 
 # Basic-landcycling: ``<Land>cycling {cost}`` where ``<Land>`` is one of

@@ -105,10 +105,11 @@ from mtg_bot.cards.parser.cost_reduction import (
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_attack_bypass_if_artifact_entered_line,
     _parse_devour_line,
-    _parse_emissary_escort_dynamic_pt_line,
+    _parse_dynamic_pt_formula_line,
     _parse_enters_tapped_line,
     _parse_enters_with_minus_one_counters_from_hand_cast_line,
     _parse_enters_with_plus_one_counter_if_creature_died_line,
+    _parse_enters_with_x_counters_line,
     _parse_extra_etb_trigger_line,
     _parse_landcycling_line,
     _parse_must_be_blocked_line,
@@ -165,13 +166,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     identical to the static registry so parity tests pass.
     """
     return {
-        # Cosmogoyf {B}{G} */1+* Elemental Lhurgoyf.
-        # Power = exile count, toughness = exile count + 1.
-        "Cosmogoyf": make_creature(
-            "Cosmogoyf", "{B}{G}", 0, 1,
-            subtypes=("Elemental", "Lhurgoyf"),
-            dynamic_pt_formula="cosmogoyf",
-        ),
         # Frenzied Baloth {G}{G} 3/2 Beast.
         # "This spell can't be countered. Trample, haste.
         #  Creature spells you control can't be countered.
@@ -181,14 +175,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         "Frenzied Baloth": make_creature(
             "Frenzied Baloth", "{G}{G}", 3, 2,
             keywords={"trample", "haste"},
-        ),
-        # Harmonious Grovestrider {3}{G}{G} */* Beast. Ward {2}.
-        # P/T = number of lands you control.
-        "Harmonious Grovestrider": make_creature(
-            "Harmonious Grovestrider", "{3}{G}{G}", 0, 0,
-            subtypes=("Beast",),
-            ward="{2}",
-            dynamic_pt_formula="harmonious_grovestrider",
         ),
         # Cosmogrand Zenith {2}{W} 2/4.
         # Trigger: second spell each turn → modal: two Human Soldier tokens
@@ -352,21 +338,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
         "Genemorph Imago": make_creature(
             "Genemorph Imago", "{G}{U}", 1, 3,
             keywords={"flying"},
-        ),
-        # Broodguard Elite {X}{G}{G} 0/0 Insect Knight. Warp {X}{G}.
-        # Enters with X +1/+1 counters. When it leaves, move counters
-        # to a target creature you control.
-        "Broodguard Elite": make_creature(
-            "Broodguard Elite", "{X}{G}{G}", 0, 0,
-            subtypes=("Insect", "Knight"),
-            warp="{X}{G}",
-            enters_with_counters_from_x="x",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.LEAVES_BATTLEFIELD, predicate=IsSelf(),
-                    effect=MoveSelfCountersToTargetCreatureYouControl(),
-                ),
-            ),
         ),
         # Icetill Explorer {2}{G}{G} 2/4 Insect Scout.
         # May play additional land each turn + may play lands from
@@ -1163,11 +1134,42 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     )
     if "Creature" not in card_types:
         return None
+
+    # Pre-scan oracle text to detect dynamic P/T formulas before the
+    # main line loop. A ``*``-based Scryfall power/toughness value is
+    # only valid when the oracle text contains a known dynamic-PT line;
+    # cards with ``*`` P/T but no such line (e.g. a vanilla ``*``-power
+    # card whose formula isn't implemented yet) still return None.
+    _raw_text = card.get("oracle_text", "")
+    _has_dynamic_pt = any(
+        _parse_dynamic_pt_formula_line(_strip_reminder_text(l))
+        for l in _raw_text.split("\n")
+        if _strip_reminder_text(l)
+    )
+
+    def _star_pt(val: str) -> int | None:
+        """Return numeric base for a ``*``-based P/T string, else None.
+        ``"*"`` → 0; ``"1+*"`` / ``"*+1"`` → 1; other offsets likewise.
+        """
+        import re as _re
+        v = val.strip()
+        if v == "*":
+            return 0
+        m = _re.match(r"^(\d+)\+\*$", v) or _re.match(r"^\*\+(\d+)$", v)
+        return int(m.group(1)) if m else None
+
     try:
         power = int(card["power"])
+    except (KeyError, ValueError):
+        power = _star_pt(card.get("power", "")) if _has_dynamic_pt else None
+        if power is None:
+            return None
+    try:
         toughness = int(card["toughness"])
     except (KeyError, ValueError):
-        return None
+        toughness = _star_pt(card.get("toughness", "")) if _has_dynamic_pt else None
+        if toughness is None:
+            return None
 
     keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
@@ -1190,6 +1192,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
     dynamic_pt_formula: str | None = None
+    enters_with_counters_from_x: str | None = None
     text = card.get("oracle_text", "")
     for raw_line in text.split("\n"):
         # Strip parenthesized reminder text per-line before any clause
@@ -1360,18 +1363,21 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 ),
             ))
             continue
-        dpt_key = _parse_emissary_escort_dynamic_pt_line(line)
+        dpt_key = _parse_dynamic_pt_formula_line(line)
         if dpt_key is not None:
-            # ``This creature gets +X/+0, where X is the greatest mana
-            # value among other artifacts you control.`` — Emissary
-            # Escort's printed dynamic-power static. Sets the
-            # ``dynamic_pt_formula`` kwarg below to the formula key
-            # ``"emissary_escort"``; the engine reads the key in
-            # ``game._dynamic_pt`` and applies the +X/+0 over the
-            # printed P/T at every P/T query. A card carries at most
-            # one dynamic-PT clause; a malformed printing with the line
-            # twice keeps the same key (idempotent).
+            # Dynamic P/T formula line (e.g. Emissary Escort, Cosmogoyf,
+            # Harmonious Grovestrider). The formula key is forwarded as
+            # ``dynamic_pt_formula`` to ``make_creature``; ``game._dynamic_pt``
+            # computes the actual P/T at query time. A card carries at most
+            # one such clause; idempotent on the same key.
             dynamic_pt_formula = dpt_key
+            continue
+        if _parse_enters_with_x_counters_line(line):
+            # ``This creature enters with X +1/+1 counters on it.``
+            # Sets ``enters_with_counters_from_x="x"``; the engine reads
+            # ``state.resolving_x_value`` at ETB and adds that many
+            # +1/+1 counters (Broodguard Elite). Idempotent.
+            enters_with_counters_from_x = "x"
             continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
@@ -1473,4 +1479,5 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             replaces_draw_with_extra_when_hand_at_most_one
         ),
         dynamic_pt_formula=dynamic_pt_formula,
+        enters_with_counters_from_x=enters_with_counters_from_x,
     )
