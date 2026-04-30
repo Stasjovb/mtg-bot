@@ -55,11 +55,13 @@ from mtg_bot.cards.parser.spell_builder import (
     _DELIRIUM_EFFECT_RIDER_RE,
     _DELIRIUM_MODAL_HEADER_RE,
     _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE,
+    _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE,
     _IF_THEY_DO_RIDER_RE,
     _is_delirium_drop_clause,
     _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
     _is_unimplemented_secondary_rider,
     _MANA_SPENT_CONDITIONAL_DRAW_RE,
+    _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE,
     _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE,
     _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE,
     _WHOLE_SPELL_EXACT_TEXT,
@@ -100,8 +102,10 @@ def test_bespoke_table_count():
     #   + Divert Disaster (Mana-Leak counterspell recognizer +
     #     "If they do" consequent dropper)
     #   + Don't Make a Sound (same Mana-Leak + consequent dropper)
-    # 50 - 22 = 28 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 28
+    #   + Come Back Wrong (conditional-reanimate + delayed-sac droppers,
+    #     N-clause general rider-drop path)
+    # 50 - 23 = 27 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 27
 
 
 # ------------------------------------------------------------------ #
@@ -743,3 +747,58 @@ def test_dont_make_a_sound_parses_via_per_clause_grammar():
         "Don't Make a Sound",
     )
     assert eff == CounterTargetSpell()
+
+
+# ------------------------------------------------------------------ #
+# Come Back Wrong                                                      #
+# (N-clause general rider-drop + conditional-reanimate / delayed-sac  #
+#  rider patterns)                                                     #
+# ------------------------------------------------------------------ #
+
+def test_if_creature_card_put_into_gy_this_way_re_matches():
+    assert _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE.match(
+        "If a creature card is put into a graveyard this way, "
+        "return it to the battlefield under your control."
+    ) is not None
+
+
+def test_sacrifice_it_at_beginning_of_next_end_step_re_matches():
+    assert _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE.match(
+        "Sacrifice it at the beginning of your next end step."
+    ) is not None
+
+
+def test_conditional_reanimate_this_way_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "If a creature card is put into a graveyard this way, "
+        "return it to the battlefield under your control."
+    )
+
+
+def test_delayed_sac_trigger_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "Sacrifice it at the beginning of your next end step."
+    )
+
+
+def test_come_back_wrong_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Destroy target creature. If a creature card is put into a "
+        "graveyard this way, return it to the battlefield under "
+        "your control. Sacrifice it at the beginning of your next "
+        "end step."
+    ) is None
+
+
+def test_come_back_wrong_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import DestroyTargetCreature
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Destroy target creature. If a creature card is put into a "
+        "graveyard this way, return it to the battlefield under "
+        "your control. Sacrifice it at the beginning of your next "
+        "end step.",
+        "Come Back Wrong",
+    )
+    assert eff == DestroyTargetCreature()

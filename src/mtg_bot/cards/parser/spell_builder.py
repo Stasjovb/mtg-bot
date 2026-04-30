@@ -311,6 +311,19 @@ def _is_delirium_drop_clause(clause: str) -> bool:
 #      token.`` / ``If they do, surveil 2.`` has no standalone
 #      primitive because the engine doesn't model the pay-cost-or-
 #      counter branching that determines whether "they do" applies.
+#
+#   8. **Conditional reanimate-this-way rider** — ``If a creature
+#      card is put into a graveyard this way, return it to the
+#      battlefield under your control.``  (entry: Come Back Wrong).
+#      The engine has no "if destroyed-this-way creature card was
+#      put into graveyard, reanimate it" conditional reanimate
+#      primitive; adding one would require wiring back to the
+#      resolution context of the triggering Destroy effect.
+#
+#   9. **Delayed end-step sacrifice trigger** — ``Sacrifice it at
+#      the beginning of your next end step.``  (entry: Come Back
+#      Wrong).  The engine has no per-object one-shot delayed
+#      end-step sacrifice trigger registry.
 _ITS_CONTROLLER_MANIFESTS_DREAD_RE = re.compile(
     r"^Its controller manifests dread\.$"
 )
@@ -351,13 +364,28 @@ _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE = re.compile(
 # "if they do" clause has no standalone primitive because the engine
 # doesn't model which pay-cost-or-counter branch fires.
 _IF_THEY_DO_RIDER_RE = re.compile(r"^If they do, .+\.$")
+# Conditional reanimate-this-way rider — ``If a creature card is put
+# into a graveyard this way, return it to the battlefield under your
+# control.``  (Come Back Wrong).  The engine has no "destroyed-this-
+# way conditional reanimate" primitive.
+_IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE = re.compile(
+    r"^If a creature card is put into a graveyard this way, "
+    r"return it to the battlefield under your control\.$"
+)
+# Delayed end-step sacrifice trigger — ``Sacrifice it at the beginning
+# of your next end step.``  (Come Back Wrong).  The engine has no per-
+# object one-shot delayed end-step sacrifice trigger registry.
+_SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE = re.compile(
+    r"^Sacrifice it at the beginning of your next end step\.$"
+)
 
 
 def _is_unimplemented_secondary_rider(clause: str) -> bool:
-    """Return ``True`` if ``clause`` is a second-sentence rider that the
-    parser drops because the engine lacks the plumbing to model it.
+    """Return ``True`` if ``clause`` is an unimplemented rider sentence
+    that the parser drops because the engine lacks the plumbing to model
+    it.
 
-    Seven shapes are recognized:
+    Nine shapes are recognized:
       - ``Its controller manifests dread.`` (controller-manifest rider)
       - ``When it dies this turn, manifest dread.`` (death-trigger
         manifest rider)
@@ -371,11 +399,17 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         instead.`` (exile-on-death rider)
       - ``If they do, <effect>.`` (pay-or-counter consequent; the first
         sentence must be a ``unless controller pays {N}`` counterspell)
+      - ``If a creature card is put into a graveyard this way, return it
+        to the battlefield under your control.`` (conditional reanimate-
+        this-way rider; Come Back Wrong)
+      - ``Sacrifice it at the beginning of your next end step.``
+        (delayed end-step sac trigger; Come Back Wrong)
 
-    When the FIRST sentence of a two-clause spell parses cleanly and
-    the second sentence matches one of these, the two-clause path in
-    ``_parse_spell_oracle_text`` returns just the first-sentence effect
-    (mirroring the simplification the bespoke entries already make).
+    Used in the two-clause path and the general N-clause rider-drop
+    path in ``_parse_spell_oracle_text``: when the FIRST clause parses
+    cleanly and all remaining clauses match these patterns, the first
+    clause's effect is returned (mirroring the simplification the
+    bespoke entries already make).
     """
     c = clause.strip()
     return (
@@ -386,6 +420,8 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         or _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(c) is not None
         or _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE.match(c) is not None
         or _IF_THEY_DO_RIDER_RE.match(c) is not None
+        or _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE.match(c) is not None
+        or _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE.match(c) is not None
     )
 
 
@@ -1282,37 +1318,16 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # rider (the engine has no UEOT-scoped per-target death-trigger
     # registry; adding one for a single card's rider is a non-trivial
     # engine widening).
-    # Come Back Wrong (Duskmourn) ``{2}{B}`` Sorcery — destroy
-    # target creature with a conditional reanimate-then-sac-next-
-    # end-step rider ("If a creature card is put into a graveyard
-    # this way, return it to the battlefield under your control.
-    # Sacrifice it at the beginning of your next end step."). Whole-
-    # spell exact-text dispatch simplifies to bare
-    # ``DestroyTargetCreature()`` because:
-    # (1) the rider is a conditional reanimation chained to the
-    #     destruction's outcome (only fires if the destroyed
-    #     creature was actually put into a graveyard — tokens,
-    #     indestructible creatures, and replacement-effect-killed
-    #     creatures don't trigger it), plus a one-shot delayed
-    #     end-step sacrifice trigger on the reanimated creature;
-    #     the engine has no "if a creature card was put into
-    #     graveyard this way, reanimate-and-schedule-end-step-sac"
-    #     primitive and no per-target delayed sacrifice trigger
-    #     plumbing;
-    # (2) the per-clause grammar can't claim the second and third
-    #     sentences as standalone spell-effect phrases either —
-    #     both are riders on the resolution of the first sentence,
-    #     not self-contained effects.
-    # Same parser-is-right precedent as Trial of Agony (drop the
-    # multi-target opp-choice + can't-block rider, keep the bare
-    # 5-damage burn): keep the base destroy and drop the
-    # unmodelable conditional reanimation rider.
-    (
-        "Destroy target creature. If a creature card is put into a "
-        "graveyard this way, return it to the battlefield under "
-        "your control. Sacrifice it at the beginning of your next "
-        "end step."
-    ): DestroyTargetCreature(),
+    # Come Back Wrong (Duskmourn) — "Destroy target creature. If a
+    # creature card is put into a graveyard this way, return it to the
+    # battlefield under your control. Sacrifice it at the beginning of
+    # your next end step." — migrated to per-clause grammar:
+    # ``DestroyTargetCreature()`` claims the first sentence and the
+    # general N-clause ``_is_unimplemented_secondary_rider`` dropper
+    # silently discards the conditional-reanimate-this-way rider and
+    # the delayed-end-step-sac trigger (the engine has no
+    # "destroyed-this-way conditional reanimate" primitive and no
+    # per-object one-shot delayed end-step sacrifice registry).
 }
 
 
@@ -1535,6 +1550,20 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             # bespoke entries already make (entries 23, 28, 34).
             if _is_unimplemented_secondary_rider(clauses[1]):
                 return first
+    # General N-clause unimplemented-rider drop: if the first clause
+    # parses cleanly AND all remaining clauses (2 through N) are
+    # unimplemented secondary riders, return the first-clause effect.
+    # Handles spells like Come Back Wrong whose three-sentence body
+    # has one parseable base clause + two unimplemented rider clauses
+    # (conditional reanimate + delayed-sacrifice trigger).  Only
+    # reaches here when ``len(clauses) >= 3`` (the ``len == 2`` path
+    # above already handles the two-clause case).
+    if len(clauses) >= 3:
+        first_multi = _parse_spell_effect_phrase(clauses[0], name)
+        if first_multi is not None and all(
+            _is_unimplemented_secondary_rider(c) for c in clauses[1:]
+        ):
+            return first_multi
     # Modal shape: ``Choose one —`` / ``Choose one or both —`` header
     # line + ≥2 bullet mode lines. Tried before the Sequence fallback
     # because Sequence would uselessly attempt to parse the modal
