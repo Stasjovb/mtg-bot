@@ -42,7 +42,7 @@ Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   4. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
   5. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
   6. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
-  7. Survey Mechan — flying only (simplified; large activated body dropped)
+  7. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
   8. Splitskin Doll — draw + source-relative conditional discard (DSK)
 """
 

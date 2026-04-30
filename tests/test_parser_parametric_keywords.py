@@ -226,14 +226,20 @@ def test_build_creature_printing_skips_qualified_hexproof():
 
 
 def test_source_claims_survey_mechan():
-    """Survey Mechan is now claimed via ``_BESPOKE_ARTIFACT_CREATURES``
-    in ``creature_builder.py`` (artifact-creature-batch22).  The shipped
-    printing is a simplified vanilla: flying only, dropping hexproof and
-    the bespoke {10}/sac activated ability, matching the static registry
-    entry exactly.
+    """Survey Mechan is claimed via ``_BESPOKE_ARTIFACT_CREATURES``
+    in ``creature_builder.py``. The printing now faithfully includes
+    both keyword lines: flying and hexproof. The {10}/Sacrifice
+    activated ability is still dropped because its X-based cost-
+    reduction formula ("costs {X} less where X is number of
+    differently named lands you control") has no grammar primitive.
     """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
     source = OracleParserCardSource()
     assert "Survey Mechan" in source.claimed_names
+    printings = source.get_printings()
+    sm = printings["Survey Mechan"]
+    assert "flying" in sm.keywords
+    assert "hexproof" in sm.keywords
 
 
 def test_source_claims_nutrient_block():

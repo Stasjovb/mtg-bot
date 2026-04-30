@@ -272,12 +272,16 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     return {
         # ── bespoke-creature-wave7 ─────────────────────────────────────
         # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
-        # SKIP (wave7): ETB clause "each opponent exiles a card from
-        # their hand and may play that card for as long as it remains
-        # exiled" requires engine support for "may play card exiled this
-        # way" — an opponent-exiles-from-hand-and-grants-cast-from-exile
-        # rider that has no grammar primitive and no engine model.
-        # Only Vigilance is retained faithfully; the ETB body is dropped.
+        # SKIP (ETB): "When this creature enters, each opponent exiles
+        # a card from their hand and may play that card for as long as
+        # it remains exiled. Each spell cast this way costs {1} more to
+        # cast. Each land played this way enters tapped." This is a
+        # complex three-clause ETB: (1) opponent exiles from hand,
+        # (2) grants per-card cast-from-exile permission with a {1}
+        # surcharge, (3) lands played this way enter tapped. No engine
+        # model exists for per-exiled-card cast permissions with
+        # per-card cost modification and tapped-entry overrides. The
+        # ETB body is dropped; only Vigilance is retained faithfully.
         "Lightstall Inquisitor": make_creature(
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
@@ -469,18 +473,25 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # Removed from this table so the oracle parser claims it directly.
         # Survey Mechan {4} 1/3.
         # Real oracle: "Flying. Hexproof. {10}, Sacrifice this creature:
-        # …" — large activated ability dropped; shipped with flying only
-        # (hexproof also dropped, matching static registry entry).
-        # Skip — the activated-ability body is a three-part sequence
-        # (deal 3 damage to any target, target player draws three cards,
-        # gains 3 life) with an X-based cost-reduction rider; no grammar
-        # primitive covers the compound activation body or its inline
-        # X cost-reduction, and the static registry entry also drops
-        # hexproof + the activation (registry is authoritative here).
+        # It deals 3 damage to any target. Target player draws three
+        # cards and gains 3 life. This ability costs {X} less to
+        # activate, where X is the number of differently named lands you
+        # control."
+        # Flying and Hexproof are both keyword lines the grammar
+        # recognizes; both are now retained faithfully per oracle text.
+        # SKIP (activation): the activated-ability body is a three-part
+        # sequence (deal 3 damage to any target, target player draws
+        # three cards, gains 3 life) with an X-based dynamic cost-
+        # reduction rider ("costs {X} less to activate where X is the
+        # number of differently named lands you control"). The X formula
+        # is not a static Condition in _ACTIVATED_COST_REDUCTION_CONDITIONS
+        # — it requires a new "count-N-differently-named-permanents"
+        # evaluator that doesn't exist in the engine. The activation is
+        # skipped until that evaluator is implemented.
         "Survey Mechan": make_creature(
             "Survey Mechan", "{4}", 1, 3,
             artifact=True,
-            keywords={"flying"},
+            keywords={"flying", "hexproof"},
         ),
         # ── DSK artifacts batch 3 ─────────────────────────────────────
         # Splitskin Doll {1}{W} 2/1 Toy.
