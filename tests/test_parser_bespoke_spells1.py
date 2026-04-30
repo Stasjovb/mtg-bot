@@ -57,6 +57,8 @@ from mtg_bot.cards.parser.spell_builder import (
     _is_delirium_drop_clause,
     _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
     _is_unimplemented_secondary_rider,
+    _MANA_SPENT_CONDITIONAL_DRAW_RE,
+    _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE,
     _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE,
     _WHOLE_SPELL_EXACT_TEXT,
     _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE,
@@ -89,8 +91,10 @@ def test_bespoke_table_count():
     #   + Unwanted Remake (controller-manifest rider dropper)
     #   + Under the Skin (optional-graveyard-return rider dropper)
     #   + Turn Inside Out (death-trigger-manifest rider dropper)
-    # 50 - 17 = 33 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 33
+    #   + Unravel (mana-spent-conditional-draw rider dropper)
+    #   + Midnight Mayhem (subtype-filtered UEOT keyword-grant dropper)
+    # 50 - 19 = 31 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 31
 
 
 # ------------------------------------------------------------------ #
@@ -525,3 +529,86 @@ def test_turn_inside_out_parses_via_per_clause_grammar():
         "Turn Inside Out",
     )
     assert eff == PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0)
+
+
+# ------------------------------------------------------------------ #
+# Unravel / Midnight Mayhem                                           #
+# (per-clause grammar claims via mana-spent / subtype-pump dropper)   #
+# ------------------------------------------------------------------ #
+
+def test_mana_spent_conditional_draw_re_matches():
+    assert _MANA_SPENT_CONDITIONAL_DRAW_RE.match(
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card."
+    ) is not None
+
+
+def test_subtype_creatures_gain_keywords_ueot_re_matches():
+    assert _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(
+        "Gremlins you control gain menace, lifelink, and haste until "
+        "end of turn."
+    ) is not None
+
+
+def test_subtype_creatures_gain_keywords_ueot_re_no_false_positive_on_creatures():
+    # ``Creatures you control gain…`` IS modelable via the pump
+    # recognizer — must NOT be dropped by this rider pattern.
+    assert _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(
+        "Creatures you control gain flying until end of turn."
+    ) is None
+
+
+def test_mana_spent_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card."
+    )
+
+
+def test_subtype_pump_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "Gremlins you control gain menace, lifelink, and haste until end of turn."
+    )
+
+
+def test_unravel_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Counter target spell. "
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card."
+    ) is None
+
+
+def test_midnight_mayhem_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Create three 1/1 red Gremlin creature tokens. "
+        "Gremlins you control gain menace, lifelink, and haste until "
+        "end of turn."
+    ) is None
+
+
+def test_unravel_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import CounterTargetSpell
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell. "
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card.",
+        "Unravel",
+    )
+    assert eff == CounterTargetSpell()
+
+
+def test_midnight_mayhem_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import CreateToken
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Create three 1/1 red Gremlin creature tokens. "
+        "Gremlins you control gain menace, lifelink, and haste until "
+        "end of turn.",
+        "Midnight Mayhem",
+    )
+    assert eff == CreateToken(token_printing=TOKEN_PRINTINGS["Gremlin"], count=3)

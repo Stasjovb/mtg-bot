@@ -95,14 +95,24 @@ def test_divert_disaster_claimed_by_parser():
 
 # ---------- dispatch tests (direct lookup) ----------
 
-def test_dispatch_unravel_returns_engine_class():
-    # Unravel's two sentences sit on a single oracle-text line; the
-    # dispatch key joins them with a single space (matches the printed
-    # surface form post reminder-text strip).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_unravel_no_bespoke_entry():
+    # After migration, the whole-spell dispatcher no longer has an
+    # entry for Unravel; the per-clause grammar claims it via
+    # CounterTargetSpell() + _is_unimplemented_secondary_rider dropper.
+    assert _try_whole_spell_exact_text(
         "Counter target spell. "
         "If the amount of mana spent to cast that spell was less "
         "than its mana value, you draw a card."
+    ) is None
+
+
+def test_unravel_parses_via_per_clause_grammar():
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Counter target spell. "
+        "If the amount of mana spent to cast that spell was less "
+        "than its mana value, you draw a card.",
+        "Unravel",
     )
     assert eff == CounterTargetSpell()
 

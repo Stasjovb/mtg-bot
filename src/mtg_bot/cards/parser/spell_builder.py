@@ -253,7 +253,7 @@ def _is_delirium_drop_clause(clause: str) -> bool:
 # matches one of these patterns, the two-clause path returns just the
 # first-sentence effect (same simplification the bespoke entries make).
 #
-# Three shapes exist in the EoE/DSK pool:
+# Five shapes exist in the EoE/DSK pool:
 #
 #   1. **Controller-manifest rider** — ``Its controller manifests
 #      dread.``  (entry: "Destroy target creature. Its controller
@@ -276,6 +276,21 @@ def _is_delirium_drop_clause(clause: str) -> bool:
 #      ``Return*FromGraveyardToHand`` primitive is creature-typed;
 #      widening to "any permanent card" with optionality for a single
 #      card's rider is a non-trivial engine change.
+#
+#   4. **Mana-spent conditional draw** — ``If the amount of mana spent
+#      to cast that spell was less than its mana value, you draw a
+#      card.``  (entry: Unravel, "Counter target spell. If the
+#      amount…" → CounterTargetSpell()).  The engine doesn't track
+#      per-spell cast-time mana accounting.
+#
+#   5. **Subtype-filtered UEOT keyword grant** — ``<Subtype>s you
+#      control gain <keywords> until end of turn.``  (entry: Midnight
+#      Mayhem, "Create three 1/1 red Gremlin creature tokens. Gremlins
+#      you control gain menace, lifelink, and haste until end of
+#      turn." → CreateToken(Gremlin, count=3)).  The existing
+#      ``PumpCreaturesYouControlUntilEOT`` applies to ALL your
+#      creatures; a subtype-filtered variant would need a new optional
+#      kwarg or a sibling primitive for one card's rider.
 _ITS_CONTROLLER_MANIFESTS_DREAD_RE = re.compile(
     r"^Its controller manifests dread\.$"
 )
@@ -285,18 +300,38 @@ _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE = re.compile(
 _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE = re.compile(
     r"^You may return a permanent card from your graveyard to your hand\.$"
 )
+_MANA_SPENT_CONDITIONAL_DRAW_RE = re.compile(
+    r"^If the amount of mana spent to cast that spell was less than "
+    r"its mana value, you draw a card\.$"
+)
+# Subtype-filtered UEOT keyword grant — ``<Subtype>s you control gain
+# <keywords> until end of turn.``  The subtype group anchors on a
+# capitalized word followed by ``s you control gain``.  The negative
+# lookahead ``(?!Creatures )`` excludes the bare generic plural
+# ``Creatures you control gain …`` surface, which IS modelable via
+# the existing ``PumpCreaturesYouControlUntilEOT`` recognizer and
+# must not be dropped.  Only subtype-specific plurals (``Gremlins``,
+# ``Vampires``, etc.) are dropped because the engine has no subtype-
+# filtered UEOT pump primitive today.
+_SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE = re.compile(
+    r"^(?!Creatures )[A-Z][a-z]+s you control gain .+ until end of turn\.$"
+)
 
 
 def _is_unimplemented_secondary_rider(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a second-sentence rider that the
     parser drops because the engine lacks the plumbing to model it.
 
-    Three shapes are recognized:
+    Five shapes are recognized:
       - ``Its controller manifests dread.`` (controller-manifest rider)
       - ``When it dies this turn, manifest dread.`` (death-trigger
         manifest rider)
       - ``You may return a permanent card from your graveyard to your
         hand.`` (optional graveyard-return rider)
+      - ``If the amount of mana spent to cast that spell was less than
+        its mana value, you draw a card.`` (mana-spent conditional draw)
+      - ``<Subtype>s you control gain <keywords> until end of turn.``
+        (subtype-filtered UEOT keyword grant)
 
     When the FIRST sentence of a two-clause spell parses cleanly and
     the second sentence matches one of these, the two-clause path in
@@ -308,6 +343,8 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         _ITS_CONTROLLER_MANIFESTS_DREAD_RE.match(c) is not None
         or _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE.match(c) is not None
         or _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE.match(c) is not None
+        or _MANA_SPENT_CONDITIONAL_DRAW_RE.match(c) is not None
+        or _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(c) is not None
     )
 
 
@@ -874,21 +911,14 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
             inner_effect=DealNDamageToEachCreature(amount=2),
         ),
     )),
-    # Unravel: counter-target-spell + conditional-draw rider whose
-    # condition (``the amount of mana spent to cast that spell was
-    # less than its mana value``) requires per-spell cast-time accounting
-    # the engine doesn't track. The static ships the bare
-    # ``CounterTargetSpell()`` and drops the rider; matching here
-    # mirrors that simplification on a single multi-sentence printed
-    # line. The per-clause grammar would carve this on the sentence
-    # boundary and try to parse the conditional rider as a standalone
-    # effect, which has no primitive — so the whole-spell tier is the
-    # right place to claim the simplified shape.
-    (
-        "Counter target spell. "
-        "If the amount of mana spent to cast that spell was less "
-        "than its mana value, you draw a card."
-    ): CounterTargetSpell(),
+    # Unravel — "Counter target spell. If the amount of mana spent to
+    # cast that spell was less than its mana value, you draw a card."
+    # — migrated to per-clause grammar: ``CounterTargetSpell()``
+    # claims the first sentence and the
+    # ``_is_unimplemented_secondary_rider`` dropper silently discards
+    # the ``If the amount of mana spent…`` mana-spent-conditional
+    # draw rider (the engine doesn't track per-spell cast-time mana
+    # accounting).
     # Divert Disaster: ``unless its controller pays {2}`` mana-pump
     # counterspell + ``If they do, you create a Lander token.`` rider.
     # The static ships the bare ``CounterTargetSpell()`` (no pay-cost
@@ -1107,36 +1137,17 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``Return*FromGraveyardToHand`` primitive is creature-typed;
     # widening to "any permanent card" with optionality for a single
     # card's rider is a non-trivial engine change).
-    # Midnight Mayhem (Duskmourn) ``{2}{R}{W}`` Sorcery — three-Gremlin
-    # token creation plus a UEOT keyword grant ("Gremlins you control
-    # gain menace, lifelink, and haste until end of turn"). The static
-    # side simplifies to bare ``CreateToken(Gremlin, count=3)``: the
-    # UEOT keyword grant on a creature subtype is dropped because:
-    # (1) the engine has no
-    #     ``PumpCreaturesYouControlOfSubtypeUntilEOT`` primitive — the
-    #     existing ``PumpCreaturesYouControlUntilEOT`` widens to ALL
-    #     your creatures, not a subtype-filtered subset, and adding
-    #     the subtype filter would require a new optional kwarg or a
-    #     sibling class for one card's rider;
-    # (2) the just-created Gremlin tokens with haste are the
-    #     mechanically dominant payload — three 1/1 attackers UEOT
-    #     under any combinator-style Sequence still wouldn't get the
-    #     keywords on the freshly-created tokens unless the pump runs
-    #     against creatures-you-control-with-subtype-Gremlin AT
-    #     resolve time, which the existing
-    #     ``PumpCreaturesYouControlUntilEOT`` doesn't do.
-    # Same parser-is-right precedent as Terminal Velocity / Pull
-    # Through the Weft — claim the bare token-creation payload and
-    # drop the UEOT keyword-grant rider rather than leaving the spell
-    # unclaimed for an unmodeled rider. The trailing parenthesized
+    # Midnight Mayhem (Duskmourn) — "Create three 1/1 red Gremlin
+    # creature tokens. Gremlins you control gain menace, lifelink, and
+    # haste until end of turn." — migrated to per-clause grammar:
+    # ``CreateToken(Gremlin, count=3)`` claims the first sentence and
+    # the ``_is_unimplemented_secondary_rider`` dropper silently
+    # discards the ``Gremlins you control gain…`` subtype-filtered
+    # UEOT keyword-grant rider (the engine's
+    # ``PumpCreaturesYouControlUntilEOT`` applies to ALL your
+    # creatures; a subtype-filtered variant is a non-trivial engine
+    # change for a single card's rider). The trailing parenthesized
     # menace reminder text is stripped before dispatch.
-    (
-        "Create three 1/1 red Gremlin creature tokens. "
-        "Gremlins you control gain menace, lifelink, and haste until "
-        "end of turn."
-    ): CreateToken(
-        token_printing=TOKEN_PRINTINGS["Gremlin"], count=3,
-    ),
     # Get Out (Duskmourn) ``{U}{U}`` Instant — two-mode modal: ``•
     # Counter target creature or enchantment spell.`` and ``• Return
     # one or two target creatures and/or enchantments you own to your
