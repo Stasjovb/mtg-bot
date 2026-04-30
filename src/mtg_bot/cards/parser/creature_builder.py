@@ -122,6 +122,8 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_replaces_draw_when_hand_at_most_one_line,
     _parse_spell_cant_be_countered_line,
     _parse_token_doubler_line,
+    _parse_toughness_as_damage_line,
+    _parse_toughness_as_station_power_line,
     _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
@@ -493,34 +495,9 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
             artifact=True,
             keywords={"flying"},
         ),
-        # Tapestry Warden {3}{G} 3/4 Robot Soldier.
-        # Real oracle: "Vigilance. Each creature you control with
-        # toughness greater than its power assigns combat damage equal
-        # to its toughness rather than its power. …" — toughness-as-
-        # damage statics dropped; shipped with vigilance only.
-        # Static has artifact=False; registry entry is authoritative.
-        # Skip — "assigns combat damage equal to its toughness rather
-        # than its power" is a CR 510.1 damage-assignment replacement
-        # effect not modeled in the engine; the grammar has no static
-        # scope for toughness-as-damage and the registry entry drops the
-        # clause (registry is authoritative here).
-        "Tapestry Warden": make_creature(
-            "Tapestry Warden", "{3}{G}", 3, 4,
-            keywords={"vigilance"},
-        ),
         # Virulent Silencer {3} 2/3 Robot Assassin.
-        # "Whenever a nontoken artifact creature you control deals combat
-        # damage to a player, that player gets two poison counters."
-        # Uses the aggregated observer trigger string (fired once per
-        # (controller, target_player) pair by combat.py).
-        # Skip — the trigger phrase "a nontoken artifact creature you
-        # control deals combat damage to a player" requires an observer
-        # registration on the attacker's controller that doesn't fit the
-        # per-event predicate model (the engine's
-        # ``_fire_combat_damage_to_player_triggers`` explicitly keeps
-        # this on the legacy string-key path; see its docstring). The
-        # grammar cannot produce a ``trigger=`` string-key ability, so
-        # this card cannot be claimed via ``_parse_clause``.
+        # Migrated to grammar in Feature 2 (predicate-dispatch
+        # combat-damage-to-player trigger).
         "Virulent Silencer": make_creature(
             "Virulent Silencer", "{3}", 2, 3,
             artifact=True,
@@ -1065,6 +1042,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     grants_play_lands_from_graveyard = False
     spell_is_uncounterable = False
     combat_damage_cant_be_prevented = False
+    grants_toughness_as_damage_for_creatures_you_control = False
+    grants_toughness_as_station_power_for_creatures_you_control = False
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -1357,6 +1336,24 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # ``combat._source_bypasses_prevention``.
             combat_damage_cant_be_prevented = True
             continue
+        if _parse_toughness_as_damage_line(line):
+            # ``Each creature you control with toughness greater than its
+            # power assigns combat damage equal to its toughness rather
+            # than its power.`` — CR 510.1b replacement effect. Flips the
+            # ``grants_toughness_as_damage_for_creatures_you_control``
+            # kwarg below; the engine checks the flag per-controller in
+            # ``combat._effective_combat_damage_amount``.
+            grants_toughness_as_damage_for_creatures_you_control = True
+            continue
+        if _parse_toughness_as_station_power_line(line):
+            # ``Each creature you control with toughness greater than its
+            # power stations permanents using its toughness rather than
+            # its power.`` — station-power replacement effect. Flips the
+            # ``grants_toughness_as_station_power_for_creatures_you_control``
+            # kwarg below; the engine checks the flag per-controller in
+            # ``actions._station_spacecraft``.
+            grants_toughness_as_station_power_for_creatures_you_control = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1467,4 +1464,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         spell_is_uncounterable=spell_is_uncounterable,
         combat_damage_cant_be_prevented=combat_damage_cant_be_prevented,
+        grants_toughness_as_damage_for_creatures_you_control=(
+            grants_toughness_as_damage_for_creatures_you_control
+        ),
+        grants_toughness_as_station_power_for_creatures_you_control=(
+            grants_toughness_as_station_power_for_creatures_you_control
+        ),
     )

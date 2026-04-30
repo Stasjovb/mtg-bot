@@ -333,6 +333,37 @@ def _source_bypasses_prevention(state: GameState, source_id: int) -> bool:
     return False
 
 
+def _effective_combat_damage_amount(
+    state: GameState, obj: "GameObject", base_power: int
+) -> int:
+    """Return the combat damage amount ``obj`` assigns.
+
+    Normally this is ``base_power`` (the creature's effective power).
+    However, CR 510.1b: if any permanent ``obj``'s controller controls has
+    ``grants_toughness_as_damage_for_creatures_you_control`` set AND
+    ``obj``'s effective toughness exceeds its effective power, ``obj``
+    assigns damage equal to its effective toughness instead.
+
+    This implements Tapestry Warden's static replacement effect. The check
+    walks the controller's battlefield once and short-circuits on the first
+    qualifying permanent.
+    """
+    controller_id = obj.controller_id
+    for permanent in state.battlefield:
+        if permanent.controller_id != controller_id:
+            continue
+        if not permanent.printing.grants_toughness_as_damage_for_creatures_you_control:
+            continue
+        # A qualifying source exists — check the creature itself.
+        t = effective_toughness(state, obj)
+        p = effective_power(state, obj)
+        if t > p:
+            return t
+        # Toughness <= power: the effect doesn't apply; fall through.
+        break
+    return base_power
+
+
 def _resolve_damage_step(
     state: GameState, defending_player_id: int, *, first_strike_step: bool
 ) -> None:
@@ -358,7 +389,10 @@ def _resolve_damage_step(
                 blocker_kws = effective_keywords(state, blocker)
                 if not _deals_in_step(blocker_kws, first_strike_step=first_strike_step):
                     continue
-                blocker_power = effective_power(state, blocker)
+                blocker_base_power = effective_power(state, blocker)
+                blocker_power = _effective_combat_damage_amount(
+                    state, blocker, blocker_base_power
+                )
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
@@ -367,7 +401,10 @@ def _resolve_damage_step(
             continue
 
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
-        attacker_power = effective_power(state, attacker)
+        attacker_base_power = effective_power(state, attacker)
+        attacker_power = _effective_combat_damage_amount(
+            state, attacker, attacker_base_power
+        )
         attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
         has_deathtouch = "deathtouch" in attacker_kws
@@ -403,7 +440,10 @@ def _resolve_damage_step(
                 blocker_kws = effective_keywords(state, blocker)
                 if not _deals_in_step(blocker_kws, first_strike_step=first_strike_step):
                     continue
-                blocker_power = effective_power(state, blocker)
+                blocker_base_power = effective_power(state, blocker)
+                blocker_power = _effective_combat_damage_amount(
+                    state, blocker, blocker_base_power
+                )
                 if blocker_power > 0:
                     damage_events_typed.append(
                         ("creature", attacker.id, blocker_power,
@@ -602,6 +642,12 @@ def _fire_combat_damage_to_player_triggers(
     ``ChangeControllerToCombatDamageSource`` can read the new
     controller without having to thread it through ``fixed_targets``.
 
+    The target player is pre-wired as ``fixed_targets=(("player", id),)``
+    on every push so effects that read ``targets[0]`` at resolve time
+    can identify the damaged player. Effects that don't use ``targets``
+    (``DrawCards``, ``DrawCardsEqualToResolvingCombatDamage``) silently
+    ignore the pre-wired tuple.
+
     Two specialty observer keys remain on the legacy string-key path
     because their semantics don't fit the per-event predicate model
     cleanly:
@@ -647,6 +693,7 @@ def _fire_combat_damage_to_player_triggers(
             label="combat-damage-to-player",
             combat_damage_amount=amount,
             combat_damage_source_controller_id=attacker_controller_id,
+            fixed_targets=(("player", target_player),),
             source=source,
             target=target_player_obj,
         )

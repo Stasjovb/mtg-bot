@@ -2280,9 +2280,24 @@ def _activate_station(
     from mtg_bot.turn import tap_permanent
 
     from mtg_bot.game import add_charge_counters
-    crew_power = effective_power(state, crew)
+    crew_base_power = effective_power(state, crew)
+    # Check if any permanent the crew's controller controls has
+    # ``grants_toughness_as_station_power_for_creatures_you_control``
+    # AND the crew has toughness > power — if so, use toughness.
+    from mtg_bot.game import effective_toughness as _eff_t
+    crew_station_power = crew_base_power
+    controller_id = crew.controller_id
+    for permanent in state.battlefield:
+        if permanent.controller_id != controller_id:
+            continue
+        if not permanent.printing.grants_toughness_as_station_power_for_creatures_you_control:
+            continue
+        t = _eff_t(state, crew)
+        if t > crew_base_power:
+            crew_station_power = t
+        break
     tap_permanent(state, crew)
-    added = add_charge_counters(state, spacecraft, crew_power)
+    added = add_charge_counters(state, spacecraft, crew_station_power)
     state.log.append(
         f"{crew.printing.name} stations {spacecraft.printing.name} "
         f"(+{added} counters, now {spacecraft.charge_counters})"

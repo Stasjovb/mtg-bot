@@ -727,3 +727,49 @@ def _parse_combat_damage_cant_be_prevented_line(line: str) -> bool:
     ``state.prevent_combat_damage_this_turn`` is set.
     """
     return line.strip() == _COMBAT_DAMAGE_CANT_BE_PREVENTED_LINE
+
+
+# ``Each creature you control with toughness greater than its power assigns
+# combat damage equal to its toughness rather than its power.`` — CR 510.1b
+# replacement effect printed on Tapestry Warden. Matched as a literal string
+# — Tapestry Warden is the only card in the parser pool with this exact
+# surface today; broader grammar (parameterizing subject/comparison/
+# assignment) deferred until a second example exists.
+_TOUGHNESS_AS_DAMAGE_LINE = (
+    "Each creature you control with toughness greater than its power "
+    "assigns combat damage equal to its toughness rather than its power."
+)
+
+
+def _parse_toughness_as_damage_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the toughness-as-damage clause, else
+    ``False``. Flips the
+    ``grants_toughness_as_damage_for_creatures_you_control`` kwarg on
+    ``make_creature``; the engine checks the flag in
+    ``combat._effective_combat_damage_amount`` when computing how much
+    damage a creature assigns.
+    """
+    return line.strip() == _TOUGHNESS_AS_DAMAGE_LINE
+
+
+# ``Each creature you control with toughness greater than its power stations
+# permanents using its toughness rather than its power.`` — CR 502.30-adjacent
+# station-power replacement effect printed on Tapestry Warden. Matched as a
+# literal string — Tapestry Warden is the only card in the parser pool with
+# this exact surface today; broader grammar deferred until a second example
+# exists.
+_TOUGHNESS_AS_STATION_POWER_LINE = (
+    "Each creature you control with toughness greater than its power "
+    "stations permanents using its toughness rather than its power."
+)
+
+
+def _parse_toughness_as_station_power_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the toughness-as-station-power clause,
+    else ``False``. Flips the
+    ``grants_toughness_as_station_power_for_creatures_you_control`` kwarg on
+    ``make_creature``; the engine checks the flag in
+    ``actions._station_spacecraft`` when computing how many charge counters
+    a stationing creature contributes.
+    """
+    return line.strip() == _TOUGHNESS_AS_STATION_POWER_LINE

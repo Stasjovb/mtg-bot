@@ -857,6 +857,21 @@ class CardPrinting:
     # per-blocker in ``combat._resolve_damage_step``. Matches Frenzied
     # Baloth's fourth line.
     combat_damage_cant_be_prevented: bool = False
+    # "Each creature you control with toughness greater than its power assigns
+    # combat damage equal to its toughness rather than its power." When True
+    # on a permanent's printing, ``combat._effective_combat_damage_amount``
+    # checks this flag on all permanents the attacking/blocking creature's
+    # controller controls and uses toughness instead of power when the
+    # creature's toughness exceeds its power. CR 510.1b replacement effect.
+    # Matches Tapestry Warden's second oracle line.
+    grants_toughness_as_damage_for_creatures_you_control: bool = False
+    # "Each creature you control with toughness greater than its power stations
+    # permanents using its toughness rather than its power." When True on a
+    # permanent's printing, ``actions._station_spacecraft`` checks this flag
+    # and uses toughness instead of effective_power when adding charge counters
+    # for a qualifying crew creature. Matches Tapestry Warden's third oracle
+    # line.
+    grants_toughness_as_station_power_for_creatures_you_control: bool = False
     # Protection from a single color (CR 702.16). When set on a
     # creature's printing, ``combat.can_block`` rejects any block
     # declared by an attacker (or against an attacker) whose
@@ -1072,6 +1087,8 @@ def make_creature(
     enters_with_minus_one_counters_from_hand_cast: int = 0,
     spell_is_uncounterable: bool = False,
     combat_damage_cant_be_prevented: bool = False,
+    grants_toughness_as_damage_for_creatures_you_control: bool = False,
+    grants_toughness_as_station_power_for_creatures_you_control: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -1144,6 +1161,12 @@ def make_creature(
         ),
         spell_is_uncounterable=spell_is_uncounterable,
         combat_damage_cant_be_prevented=combat_damage_cant_be_prevented,
+        grants_toughness_as_damage_for_creatures_you_control=(
+            grants_toughness_as_damage_for_creatures_you_control
+        ),
+        grants_toughness_as_station_power_for_creatures_you_control=(
+            grants_toughness_as_station_power_for_creatures_you_control
+        ),
     )
 
 
