@@ -158,6 +158,11 @@ from mtg_bot.cards.base import (
     BiosynthicBurstEffect,
     VengefulPossessionEffect,
     SystemsOverrideEffect,
+    CutPropulsionEffect,
+    DiplomaticRelationsEffect,
+    ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    MutinousMassacreEffect,
+    CoordinatedClobberingEffect,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -3465,6 +3470,126 @@ def _parse_effect(phrase: str) -> Effect | None:
         "beginning of the next end step"
     ):
         return SystemsOverrideEffect()
+    # Cut Propulsion's two-sentence body — target creature self-damages by
+    # its power; if it has flying, it self-damages twice that much instead.
+    # The second sentence is anaphoric ("If that creature has flying" refers
+    # to the creature targeted in sentence 1) so the sentence-splitting
+    # compound parser can't model them as two independent effects. Matched
+    # here as a single literal dispatching to the bespoke engine class that
+    # handles both the base-damage and the flying-doubling branch in one
+    # resolve step. Only Cut Propulsion (EoE) has this exact surface;
+    # broader grammar deferred until a second card with a varying factor
+    # or condition ships.
+    if phrase == (
+        "target creature deals damage to itself equal to its power. "
+        "If that creature has flying, "
+        "it deals twice that much damage to itself instead"
+    ):
+        return CutPropulsionEffect()
+    # Diplomatic Relations' two-sentence body — pump-and-vigilance on a
+    # creature you control, then it deals power damage to a creature an
+    # opponent controls. The second sentence's anaphoric "It" refers to
+    # the pumped creature from sentence 1; the two must stay coupled so
+    # the engine reads the post-pump power when resolving the damage step.
+    # Only Diplomatic Relations (EoE) has this exact two-target shape
+    # (my creature + opp creature) with a pump-then-deal sequence; broader
+    # grammar deferred until a second card with a varying bonus or damage
+    # expression ships.
+    if phrase == (
+        "target creature you control gets +1/+0 and gains vigilance "
+        "until end of turn. It deals damage equal to its power to "
+        "target creature an opponent controls"
+    ):
+        return DiplomaticRelationsEffect()
+    # Desculpting Blast's two-sentence body — bounce any nonland permanent,
+    # plus create a 1/1 Drone token if the bounced permanent was attacking.
+    # The second sentence's "it" is anaphoric to the target chosen in
+    # sentence 1 (the bounce target), and the Drone-creation rider is
+    # conditional on that permanent's attacking status at resolution time.
+    # Matched as a single literal so the engine class can inspect the
+    # attacking state before the permanent has left the battlefield. Only
+    # Desculpting Blast (EoE) has this exact bounce-plus-drone-if-attacking
+    # surface; deferred until a second card with a different token type or
+    # condition ships.
+    if phrase == (
+        "return target nonland permanent to its owner's hand. "
+        "If it was attacking, create a 1/1 colorless Drone artifact "
+        "creature token with flying and \"This token can block only "
+        "creatures with flying.\""
+    ):
+        return ReturnTargetCreatureToOwnersHand(
+            allow_nonland_permanent=True,
+            create_drone_if_was_attacking=True,
+        )
+    # Scout for Survivors' two-sentence body — return up to three creature
+    # cards from your graveyard to the battlefield, where the total mana
+    # value of the chosen cards is 3 or less, and put a +1/+1 counter on
+    # each. The second sentence ("Put a +1/+1 counter on each of them")
+    # is anaphoric to the creatures returned in sentence 1; both halves
+    # belong to the same ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters``
+    # resolve step. Only Scout for Survivors (EoE) has this exact
+    # total-MV-bounded graveyard-return-with-counters surface; deferred
+    # until a second card with varying N or MV bound ships.
+    if phrase == (
+        "return up to three target creature cards with total mana "
+        "value 3 or less from your graveyard to the battlefield. "
+        "Put a +1/+1 counter on each of them"
+    ):
+        return ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+            max_n=3, max_total_mv=3,
+        )
+    # Mutinous Massacre's five-sentence body — choose odd or even parity,
+    # destroy each creature with a mana value of the chosen quality, then
+    # gain control of all creatures UEOT, untap them, and grant haste UEOT.
+    # The "Then" connective, the untap, and the haste clauses are all
+    # anaphoric to the mass-wrath step (the creatures that survived);
+    # sentence-splitting would produce five disconnected clauses, none
+    # of which parse individually as standalone effects. Matched as a
+    # single literal dispatching to the bespoke engine class that handles
+    # the parity-wrath + mass-steal + untap + haste in one resolve step.
+    # Only Mutinous Massacre (EoE) has this exact five-sentence shape;
+    # broader grammar deferred until a second card with a varying parity
+    # condition or steal target ships.
+    if phrase == (
+        "choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creatures until end of turn. "
+        "Untap them. They gain haste until end of turn"
+    ):
+        return MutinousMassacreEffect()
+    # Coordinated Clobbering's two-sentence body — tap 1–2 untapped
+    # creatures you control, and they each deal damage equal to their
+    # power to one target creature an opponent controls. The "They each"
+    # in sentence 2 is anaphoric to the 1–2 creatures tapped in sentence 1;
+    # the engine class threads both target groups through one resolve step
+    # (tap slot-1 and optional slot-2, then both deal damage to slot-0).
+    # Only Coordinated Clobbering (DSK) has this exact multi-tapper
+    # power-damage surface; broader grammar deferred until a second card
+    # with a varying tap count or damage expression ships.
+    if phrase == (
+        "tap one or two target untapped creatures you control. "
+        "They each deal damage equal to their power to target "
+        "creature an opponent controls"
+    ):
+        return CoordinatedClobberingEffect()
+    # Trial of Agony's three-sentence body — choose two opponent creatures,
+    # that player picks one which takes 5 damage, and the other can't block
+    # this turn. The engine simplifies to bare DealDamageToTargetCreature(5)
+    # because: (1) no "opp_pair" two-target slot-kind exists; (2) no
+    # opponent-side mode-pick hook exists for selecting which of the two
+    # chosen targets takes the burn; (3) no per-creature "can't block this
+    # turn" flag exists. Parser-is-right precedent: Unravel / Divert Disaster
+    # / Scorching Dragonfire — claim the bare base mechanic and drop the
+    # unimplementable riders. Only Trial of Agony (DSK) has this exact
+    # opponent-chooses-target surface; deferred until the engine grows
+    # opponent-side target-choice hooks.
+    if phrase == (
+        "choose two target creatures controlled by the same opponent. "
+        "That player chooses one of those creatures. "
+        "Trial of Agony deals 5 damage to that creature, "
+        "and the other can't block this turn"
+    ):
+        return DealDamageToTargetCreature(amount=5)
     # Kavaron Harrier's "create ... that's tapped and attacking. Sacrifice
     # that token at end of combat." two-sentence phrase. The second
     # sentence is anaphoric ("that token" refers to the token created in

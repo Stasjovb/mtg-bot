@@ -182,12 +182,28 @@ def test_dispatch_focus_fire_returns_engine_class():
     assert p.spell_effect == FocusFireEffect(base=2)
 
 
-def test_dispatch_diplomatic_relations_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_diplomatic_relations_no_bespoke_entry():
+    # Diplomatic Relations migrated from the whole-spell exact-text tier
+    # to the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Target creature you control gets +1/+0 and gains vigilance "
+        "until end of turn. It deals damage equal to its power to "
+        "target creature an opponent controls."
+    ) is None
+
+
+def test_diplomatic_relations_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the full two-sentence body
+    # (pump + vigilance UEOT on your creature; anaphoric "It" deals
+    # power damage to opp creature) as ``DiplomaticRelationsEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Target creature you control gets +1/+0 and gains vigilance "
         "until end of turn. It deals damage equal to its power to "
         "target creature an opponent controls."
     )
+    eff = _parse_spell_effect_phrase(body, "Diplomatic Relations")
     assert eff == DiplomaticRelationsEffect()
 
 
@@ -547,13 +563,31 @@ def test_full_bore_claimed_by_parser():
     assert "Full Bore" in _claimed_names()
 
 
-def test_dispatch_desculpting_blast_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_desculpting_blast_no_bespoke_entry():
+    # Desculpting Blast migrated from the whole-spell exact-text tier to
+    # the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Return target nonland permanent to its owner's hand. "
+        "If it was attacking, create a 1/1 colorless Drone artifact "
+        "creature token with flying and \"This token can block only "
+        "creatures with flying.\""
+    ) is None
+
+
+def test_desculpting_blast_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the two-sentence body (bounce
+    # nonland permanent; create Drone token if it was attacking) as
+    # ``ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True,
+    # create_drone_if_was_attacking=True)``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Return target nonland permanent to its owner's hand. "
         "If it was attacking, create a 1/1 colorless Drone artifact "
         "creature token with flying and \"This token can block only "
         "creatures with flying.\""
     )
+    eff = _parse_spell_effect_phrase(body, "Desculpting Blast")
     assert eff == ReturnTargetCreatureToOwnersHand(
         allow_nonland_permanent=True,
         create_drone_if_was_attacking=True,
@@ -620,13 +654,30 @@ def test_dispatch_seedship_impact_returns_engine_class():
     assert si.spell_effect == SeedshipImpactEffect()
 
 
-def test_dispatch_scout_for_survivors_returns_engine_class():
-    # ``max_n=3`` and ``max_total_mv=3`` from the printed bounds.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_scout_for_survivors_no_bespoke_entry():
+    # Scout for Survivors migrated from the whole-spell exact-text tier
+    # to the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Return up to three target creature cards with total mana "
+        "value 3 or less from your graveyard to the battlefield. "
+        "Put a +1/+1 counter on each of them."
+    ) is None
+
+
+def test_scout_for_survivors_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the two-sentence body (return up
+    # to three creature cards with total MV ≤ 3 from GY to battlefield;
+    # put a +1/+1 counter on each) as
+    # ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n=3,
+    # max_total_mv=3)``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Return up to three target creature cards with total mana "
         "value 3 or less from your graveyard to the battlefield. "
         "Put a +1/+1 counter on each of them."
     )
+    eff = _parse_spell_effect_phrase(body, "Scout for Survivors")
     assert eff == ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
         max_n=3, max_total_mv=3,
     )

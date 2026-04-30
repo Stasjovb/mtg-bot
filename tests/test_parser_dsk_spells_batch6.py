@@ -92,11 +92,11 @@ def _claimed_names() -> frozenset[str]:
 # ---------- Trial of Agony ----------
 
 def test_trial_of_agony_claimed_by_parser():
-    # Trial of Agony ``{R}`` Sorcery — claimed via the new whole-spell
-    # exact-text dispatch entry that simplifies the printed text
-    # (multi-target opp-choice 5-damage burn + can't-block rider on
-    # the unhit creature) to bare
-    # ``DealDamageToTargetCreature(amount=5)``.
+    # Trial of Agony ``{R}`` Sorcery — migrated from the whole-spell
+    # exact-text tier to the per-clause grammar: the new multi-sentence
+    # literal in ``effects.py`` claims the three-sentence body and
+    # simplifies to ``DealDamageToTargetCreature(amount=5)``
+    # (parser-is-right: opp-choice targeting and can't-block rider dropped).
     assert "Trial of Agony" in _claimed_names()
 
 
@@ -110,6 +110,34 @@ def test_trial_of_agony_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Trial of Agony"]
     assert p.spell_effect == DealDamageToTargetCreature(amount=5)
+
+
+def test_dispatch_trial_of_agony_no_bespoke_entry():
+    # Trial of Agony migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Choose two target creatures controlled by the same opponent. "
+        "That player chooses one of those creatures. Trial of Agony "
+        "deals 5 damage to that creature, and the other can't block "
+        "this turn."
+    ) is None
+
+
+def test_trial_of_agony_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the three-sentence body as
+    # ``DealDamageToTargetCreature(amount=5)``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.cards.base import DealDamageToTargetCreature
+    body = (
+        "Choose two target creatures controlled by the same opponent. "
+        "That player chooses one of those creatures. Trial of Agony "
+        "deals 5 damage to that creature, and the other can't block "
+        "this turn."
+    )
+    eff = _parse_spell_effect_phrase(body, "Trial of Agony")
+    assert eff == DealDamageToTargetCreature(amount=5)
 
 
 def test_trial_of_agony_is_sorcery():

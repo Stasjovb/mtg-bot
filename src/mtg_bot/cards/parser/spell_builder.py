@@ -45,34 +45,27 @@ from mtg_bot.cards.base import (
     CommuneWithEvilEffect,
     ConditionalIfVoid,
     ConsultTheStarChartsEffect,
-    CoordinatedClobberingEffect,
     CostReduction,
     CounterTargetSpell,
     CreateToken,
     ExileTargetCreature,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
-    CutPropulsionEffect,
     DealDamageAnyTarget,
-    DealDamageToTargetCreature,
     DealNDamageToEachCreature,
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
-    DiplomaticRelationsEffect,
     DrawCards,
     EachOpponentLosesLife,
     Effect,
     LoseLife,
     ManifestDread,
     ModalChooseOne,
-    MutinousMassacreEffect,
     OptionalSacArtifactForEffect,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
-    ReturnTargetCreatureToOwnersHand,
-    ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     Sequence,
     TerminalVelocityEffect,
     ZeroPointBalladEffect,
@@ -902,22 +895,20 @@ def _parse_modal_choose_one(
 # one character won't match — by design, since this tier is for
 # named one-offs, not a reusable shape.
 _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
-    # Cut Propulsion: target creature self-damages by its power; if
-    # it has flying, it self-damages twice that amount instead.
-    (
-        "Target creature deals damage to itself equal to its power. "
-        "If that creature has flying, "
-        "it deals twice that much damage to itself instead."
-    ): CutPropulsionEffect(),
-    # Mutinous Massacre: parity-of-mana-value wrath + steal-and-haste
-    # all-creatures rider. Reminder tail ``(Zero is even.)`` is
-    # stripped before lookup.
-    (
-        "Choose odd or even. "
-        "Destroy each creature with mana value of the chosen quality. "
-        "Then gain control of all creatures until end of turn. "
-        "Untap them. They gain haste until end of turn."
-    ): MutinousMassacreEffect(),
+    # Cut Propulsion — "Target creature deals damage to itself equal to
+    # its power. If that creature has flying, it deals twice that much
+    # damage to itself instead." — migrated to per-clause grammar: the
+    # new multi-sentence literal in ``effects.py`` matches the full
+    # two-sentence body (the flying-conditional is anaphoric to the
+    # target of sentence 1) and returns ``CutPropulsionEffect()``.
+    # Mutinous Massacre — "Choose odd or even. Destroy each creature
+    # with mana value of the chosen quality. Then gain control of all
+    # creatures until end of turn. Untap them. They gain haste until end
+    # of turn." (reminder tail ``(Zero is even.)`` stripped before lookup)
+    # — migrated to per-clause grammar: the new multi-sentence literal in
+    # ``effects.py`` matches the full five-sentence body (all clauses are
+    # anaphoric to the parity choice from sentence 1) and returns
+    # ``MutinousMassacreEffect()``.
     # Depressurize — "Target creature gets -3/-0 until end of turn. Then
     # if that creature's power is 0 or less, destroy it." — migrated to
     # per-clause grammar: the new ``_DEPRESSURIZE`` recognizer in
@@ -925,16 +916,13 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # multi-sentence literal (the second sentence's "that creature" is
     # anaphoric to the debuff target) and returns
     # ``DepressurizeEffect(power_penalty=3)``.
-    # Diplomatic Relations: pump-and-grant-vigilance on your creature
-    # plus a fight-shaped damage rider where the chosen first target
-    # deals damage equal to its (post-pump) power to a chosen second
-    # target an opponent controls. Two-target spell — the bespoke
-    # class threads both targets through one resolve step.
-    (
-        "Target creature you control gets +1/+0 and gains vigilance "
-        "until end of turn. It deals damage equal to its power to "
-        "target creature an opponent controls."
-    ): DiplomaticRelationsEffect(),
+    # Diplomatic Relations — "Target creature you control gets +1/+0 and
+    # gains vigilance until end of turn. It deals damage equal to its
+    # power to target creature an opponent controls." — migrated to
+    # per-clause grammar: the new multi-sentence literal in ``effects.py``
+    # matches the two-sentence body (the anaphoric "It" in sentence 2
+    # refers to the pumped creature from sentence 1) and returns
+    # ``DiplomaticRelationsEffect()``.
     # Biosynthic Burst — "Put a +1/+1 counter on target creature you
     # control. It gains reach, trample, and indestructible until end of
     # turn. Untap it." — migrated to per-clause grammar: the new
@@ -948,30 +936,30 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``Surveil(amount=1, use_artifact_count=True)`` and ``_DRAW_N_CARDS``
     # claims "draw three cards" (after ``_split_effect_sentences`` strips
     # the leading "then "); the Sequence combinator assembles the pair.
-    # Desculpting Blast: bounce-target-permanent + a Drone-token
-    # rider for the attacking-permanent branch. The bespoke engine
-    # class folds the rider into one resolve step.
-    (
-        "Return target nonland permanent to its owner's hand. "
-        "If it was attacking, create a 1/1 colorless Drone artifact "
-        "creature token with flying and \"This token can block only "
-        "creatures with flying.\""
-    ): ReturnTargetCreatureToOwnersHand(
-        allow_nonland_permanent=True,
-        create_drone_if_was_attacking=True,
-    ),
-    # Scout for Survivors: return up to three small creature cards
-    # from graveyard to battlefield, each with a +1/+1 counter.
-    (
-        "Return up to three target creature cards with total mana "
-        "value 3 or less from your graveyard to the battlefield. "
-        "Put a +1/+1 counter on each of them."
-    ): ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
-        max_n=3, max_total_mv=3,
-    ),
-    # Zero Point Ballad: variable-X wrath + life-pay + reanimation
-    # rider. The bespoke engine class folds all three into one
-    # resolve step.
+    # Desculpting Blast — "Return target nonland permanent to its owner's
+    # hand. If it was attacking, create a 1/1 colorless Drone artifact
+    # creature token with flying and "This token can block only creatures
+    # with flying."" — migrated to per-clause grammar: the new
+    # multi-sentence literal in ``effects.py`` matches the two-sentence
+    # body (the attacking-status rider is anaphoric to the bounce target)
+    # and returns ``ReturnTargetCreatureToOwnersHand(
+    # allow_nonland_permanent=True, create_drone_if_was_attacking=True)``.
+    # Scout for Survivors — "Return up to three target creature cards with
+    # total mana value 3 or less from your graveyard to the battlefield.
+    # Put a +1/+1 counter on each of them." — migrated to per-clause
+    # grammar: the new multi-sentence literal in ``effects.py`` matches
+    # the two-sentence body and returns
+    # ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n=3,
+    # max_total_mv=3)``.
+    # Zero Point Ballad — "Destroy all creatures with toughness X or
+    # less. You lose X life. If X is 6 or more, return a creature card
+    # put into a graveyard this way to the battlefield under your
+    # control." — Blocker: the body text contains the literal letter
+    # "X" (not a numeral) as a runtime value bound at cast time. The
+    # per-clause grammar has no shape for X-parametric wrath or X-gated
+    # conditional reanimate; adding them would require new recognizers
+    # that produce parameterless X-reading classes, which isn't
+    # worthwhile for one card. Stays in whole-spell tier.
     (
         "Destroy all creatures with toughness X or less. You lose "
         "X life. If X is 6 or more, return a creature card put into "
@@ -985,10 +973,18 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # literal recognizer in ``effects.py`` claims the full five-sentence
     # body (Threaten core + Spacecraft charge-counter rider) as
     # ``SystemsOverrideEffect()``.
-    # Devastating Onslaught: variable-X token-copy spell with haste
-    # and end-step sac. The X-formula sits on the spell's mana cost
-    # ({X}{X}{R}) and is resolved through the engine class at cast
-    # time.
+    # Devastating Onslaught — "Create X tokens that are copies of target
+    # artifact or creature you control. Those tokens gain haste until end
+    # of turn. Sacrifice them at the beginning of the next end step." —
+    # Blocker: the body text contains the literal letter "X" for the
+    # token count (cast-time X from {X}{X}{R} cost). The per-clause
+    # grammar has no "create X token-copies" shape, and the target-copy
+    # + haste + end-step-sac three-step combination is already handled
+    # by the dedicated engine class. A multi-sentence literal in
+    # ``effects.py`` would work syntactically but the normalized phrase
+    # has literal "X" in "create x tokens that are copies…" — matching
+    # that as a literal is fragile (any variation breaks it). Stays in
+    # whole-spell tier mapping to the parameterless bespoke class.
     (
         "Create X tokens that are copies of target artifact or "
         "creature you control. Those tokens gain haste until end "
@@ -1015,17 +1011,20 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``_split_sentences``) is dropped by ``_is_self_shuffle_clause``, and
     # the ``shuffles_into_library_instead_of_graveyard`` printing flag is
     # wired separately by ``_detect_shuffle_self_flags``.
-    # Consult the Star Charts: variable-X library look + kicker-gated
-    # extra card kept. The static ships ``ConsultTheStarChartsEffect()``
-    # (no parameters; the bespoke class handles the X-formula and the
-    # kicked vs unkicked branch by reading ``state.resolving_kicked``).
-    # The leading Kicker preamble line is detected separately by
-    # ``_detect_kicker_cost`` and threaded onto the printing via the
-    # ``kicker`` kwarg; the dispatcher returns only the spell-effect.
-    # The dispatch key carries the full text including the Kicker
-    # preamble — the dispatcher hits BEFORE the per-clause preamble-
-    # stripping pass, so the key has to mirror the printed text
-    # verbatim.
+    # Consult the Star Charts — "Kicker {1}{U}\n Look at the top X cards
+    # of your library, where X is the number of lands you control. Put
+    # one of those cards into your hand. If this spell was kicked, put
+    # two of those cards into your hand instead. Put the rest on the
+    # bottom of your library in a random order." — Blocker: the dispatch
+    # key INCLUDES the Kicker preamble because ``_try_whole_spell_exact_text``
+    # is called with the full reminder-stripped oracle text BEFORE per-
+    # clause preamble stripping runs. The per-clause grammar would see
+    # only the body after stripping the Kicker line; a multi-sentence
+    # literal in ``effects.py`` would therefore match only the body text
+    # (no Kicker preamble) — but the body itself contains "X" as the
+    # land-count variable AND a kicked-branch conditional that the per-
+    # clause grammar has no recognizer for. Both blockers must be lifted
+    # before migration is possible.
     (
         "Kicker {1}{U}\n"
         "Look at the top X cards of your library, where X is the "
@@ -1034,17 +1033,23 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "into your hand instead. Put the rest on the bottom of your "
         "library in a random order."
     ): ConsultTheStarChartsEffect(),
-    # Close Encounter: directed power-as-damage burn whose source-of-
-    # power is chosen as an additional cost to casting (a creature you
-    # control or a warped creature card you own in exile). The static
-    # ships ``CloseEncounterEffect()`` with the
-    # ``additional_cost_choose_your_creature`` printing flag; the flag
-    # is detected separately via ``_detect_additional_cost_flags``,
-    # which routes the body phrase through ``_ADDITIONAL_COST_BODY_
-    # FLAGS``. The dispatch key includes the full additional-cost
-    # preamble line — the dispatcher hits BEFORE the per-clause
-    # preamble-stripping pass, so the key has to mirror the printed
-    # text verbatim.
+    # Close Encounter — "As an additional cost to cast this spell,
+    # choose a creature you control or a warped creature card you own
+    # in exile.\n Close Encounter deals damage equal to the power of
+    # the chosen creature or card to target creature." — Blocker: same
+    # preamble-key issue as Consult the Star Charts: the dispatch key
+    # includes the additional-cost preamble because ``_try_whole_spell_
+    # exact_text`` is called before per-clause preamble stripping. After
+    # preamble stripping, the body "Close Encounter deals damage equal
+    # to the power of the chosen creature or card to target creature."
+    # normalizes to "deals damage equal to the power of the chosen
+    # creature or card to target creature" — which has no per-clause
+    # recognizer (the existing ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_
+    # ANY_TARGET`` matches "deals damage equal to its power to any
+    # target", not the "chosen creature or card" phrasing). Migration
+    # requires a new recognizer for that surface AND a resolution
+    # mechanism that reads power from the chosen additional-cost
+    # creature/card rather than the resolving spell's source object.
     (
         "As an additional cost to cast this spell, choose a creature "
         "you control or a warped creature card you own in exile.\n"
@@ -1097,24 +1102,25 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # stripped by ``_normalize_spell_effect_phrase``, then parsed via
     # ``_CREATE_BARE_NAME_TOKEN`` → ``CreateToken(Lander, 1)``).
     # The two clauses combine as a Sequence.
-    # Terminal Velocity: "You may put an artifact or creature card from
-    # your hand onto the battlefield. That permanent gains haste,
-    # \"When this permanent leaves the battlefield, it deals damage
-    # equal to its mana value to each creature,\" and \"At the beginning
-    # of your end step, sacrifice this permanent.\"
-    #
-    # Three-part composite:
-    # 1. Put-from-hand (choice + move, "you may").
-    # 2. Grant haste UEOT via state.grant_keywords_ueot.
-    # 3. Grant a LEAVES_BATTLEFIELD predicate trigger UEOT (fires
-    #    DealSelfMVDamageToEachCreature) via
-    #    state.grant_triggered_ability_ueot.
-    # 4. Schedule end-step sac via state.delayed_triggers
-    #    (SacrificeSourceDelayed).
-    # The per-clause grammar can't parse this oracle text: clause 1
-    # ("You may put...") has no recognizer, and clauses 2-4 are
-    # quoted abilities granted to the put permanent, not standalone
-    # spell-effect phrases. The whole-spell tier is the right place.
+    # Terminal Velocity — "You may put an artifact or creature card from
+    # your hand onto the battlefield. That permanent gains haste, \"When
+    # this permanent leaves the battlefield, it deals damage equal to its
+    # mana value to each creature,\" and \"At the beginning of your end
+    # step, sacrifice this permanent.\"" — Blocker: the oracle text embeds
+    # two full quoted activated/triggered abilities inside the second
+    # sentence's grant expression. These quoted abilities (the LTB damage
+    # trigger and the end-step-sac trigger) are NOT standalone effect
+    # phrases — they are printed as string-quoted content inside the "gains
+    # ..., ..., and ..." clause, and no per-clause recognizer can decompose
+    # that structure. Additionally, sentence 1 ("You may put...") has no
+    # "put from hand to battlefield" per-clause recognizer today. Both
+    # blockers require non-trivial new grammar:
+    # (1) A "you may put an artifact or creature card from your hand onto
+    #     the battlefield" recognizer in ``effects.py``.
+    # (2) A "grants haste + quoted-LTB-trigger + quoted-end-step-sac-trigger"
+    #     parser that walks the quoted ability bodies recursively.
+    # Until those land, ``TerminalVelocityEffect`` in the whole-spell tier
+    # is the correct placement.
     (
         "You may put an artifact or creature card from your hand onto "
         "the battlefield. That permanent gains haste, \"When this "
@@ -1171,56 +1177,22 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # + optional-looter rider) as ``VengefulPossessionEffect()``,
     # matching the parser-is-right simplification the old bespoke entry
     # made (optional-looter dropped; engine models only the Threaten core).
-    # Coordinated Clobbering (Duskmourn) — two-clause multi-target
-    # spell: tap 1-2 friendly untapped creatures, then each deals
-    # power-as-damage to one target opp creature. The static ships
-    # ``CoordinatedClobberingEffect()`` which uses the cast-pipeline
-    # ``target_count_range=(2, 3)`` + ``target_slot_kinds=("creature",
-    # "my_creature", "my_creature")`` skeleton — opp creature first
-    # (mandatory slot 0), then 1-2 friendlies (slot 1 mandatory,
-    # slot 2 optional via min_t-gate). The whole-spell tier is the
-    # right place because the per-clause grammar has no two-target-
-    # group multi-attacker shape; the existing
-    # ``DiplomaticRelationsEffect`` precedent uses the same
-    # ``my_creature`` slot kind for a fixed 2-slot spell, and
-    # extending the per-clause grammar would over-engineer for one
-    # card.
-    (
-        "Tap one or two target untapped creatures you control. "
-        "They each deal damage equal to their power to target "
-        "creature an opponent controls."
-    ): CoordinatedClobberingEffect(),
-    # Trial of Agony (Duskmourn) ``{R}`` Sorcery — single-line spell
-    # with a multi-target opp-choice burn shape: caster picks two
-    # creatures controlled by the same opponent; that opponent chooses
-    # which of the two takes 5 damage; the other "can't block this
-    # turn" rider applies UEOT. The static side simplifies to bare
-    # ``DealDamageToTargetCreature(amount=5)`` because:
-    # (1) the engine has no two-target same-controller slot-kind
-    #     ("opp_pair") nor an opponent-side mode-pick hook for picking
-    #     which of two chosen targets the burn lands on (the existing
-    #     ``my_creature`` / ``creature`` slot kinds and modal-mode
-    #     picks both run on the SPELL's controller, not the opp);
-    # (2) the engine has no per-creature ``cant_block_this_turn`` flag
-    #     to set on the unhit target — wiring one would require new
-    #     fields on ``GameObject`` and a guard in combat's declare-
-    #     blockers step, beyond the parser's scope.
-    # Same parser-is-right precedent as Unravel / Divert Disaster /
-    # Scorching Dragonfire — claim the bare base mechanic (5-damage
-    # burn) and drop the multi-target opp-choice + can't-block riders
-    # rather than leaving the spell unclaimed for unmodeled riders.
-    # The per-clause grammar can't claim this spell either: the first
-    # sentence ``Choose two target creatures controlled by the same
-    # opponent.`` doesn't match any spell-effect shape in the unified
-    # grammar (no other card uses the "choose two creatures controlled
-    # by the same opponent" target framing), so the whole-spell tier is
-    # the right place to land the simplification.
-    (
-        "Choose two target creatures controlled by the same opponent. "
-        "That player chooses one of those creatures. Trial of Agony "
-        "deals 5 damage to that creature, and the other can't block "
-        "this turn."
-    ): DealDamageToTargetCreature(amount=5),
+    # Coordinated Clobbering (Duskmourn) — "Tap one or two target
+    # untapped creatures you control. They each deal damage equal to
+    # their power to target creature an opponent controls." — migrated
+    # to per-clause grammar: the new multi-sentence literal in
+    # ``effects.py`` matches the two-sentence body (the anaphoric
+    # "They each" in sentence 2 refers to the 1–2 creatures tapped in
+    # sentence 1) and returns ``CoordinatedClobberingEffect()``.
+    # Trial of Agony (Duskmourn) — "Choose two target creatures
+    # controlled by the same opponent. That player chooses one of those
+    # creatures. Trial of Agony deals 5 damage to that creature, and
+    # the other can't block this turn." — migrated to per-clause
+    # grammar: the new multi-sentence literal in ``effects.py`` matches
+    # the three-sentence body and returns
+    # ``DealDamageToTargetCreature(amount=5)`` (parser-is-right
+    # simplification: opponent-choice targeting and can't-block rider
+    # are unimplemented; the engine models only the 5-damage burn).
     # Under the Skin (Duskmourn) — "Manifest dread.\nYou may return a
     # permanent card from your graveyard to your hand." — migrated to
     # per-clause grammar: ``ManifestDread()`` claims the first

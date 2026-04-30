@@ -583,19 +583,75 @@ def test_parse_effect_does_not_collide_with_bare_destroy_creature():
 
 def test_cut_propulsion_claimed_by_parser():
     # Cut Propulsion `{2}{R}` Instant — target creature self-damages
-    # by its power; flying targets self-damage twice. The whole oracle
-    # text is one sentence-block that the static models with the
-    # dedicated ``CutPropulsionEffect`` engine class. Unlocked by the
-    # whole-spell exact-text dispatcher.
+    # by its power; flying targets self-damage twice. Migrated from the
+    # whole-spell exact-text tier to the per-clause grammar: the new
+    # multi-sentence literal in ``effects.py`` claims the full
+    # two-sentence body as ``CutPropulsionEffect()``.
     assert "Cut Propulsion" in _claimed_names()
+
+
+def test_dispatch_cut_propulsion_no_bespoke_entry():
+    # Cut Propulsion migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Target creature deals damage to itself equal to its power. "
+        "If that creature has flying, "
+        "it deals twice that much damage to itself instead."
+    ) is None
+
+
+def test_cut_propulsion_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the two-sentence body (self-damage
+    # by power; flying doubles the damage) as ``CutPropulsionEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.cards.base import CutPropulsionEffect
+    body = (
+        "Target creature deals damage to itself equal to its power. "
+        "If that creature has flying, "
+        "it deals twice that much damage to itself instead."
+    )
+    eff = _parse_spell_effect_phrase(body, "Cut Propulsion")
+    assert eff == CutPropulsionEffect()
 
 
 def test_mutinous_massacre_claimed_by_parser():
     # Mutinous Massacre `{3}{B}{B}{R}{R}` Sorcery — odd/even parity
     # wrath + steal-and-haste-all-creatures rider. The reminder tail
-    # ``(Zero is even.)`` is stripped before lookup. Unlocked by the
-    # whole-spell exact-text dispatcher.
+    # ``(Zero is even.)`` is stripped before lookup. Migrated from the
+    # whole-spell exact-text tier to the per-clause grammar: the new
+    # multi-sentence literal in ``effects.py`` claims the full
+    # five-sentence body as ``MutinousMassacreEffect()``.
     assert "Mutinous Massacre" in _claimed_names()
+
+
+def test_dispatch_mutinous_massacre_no_bespoke_entry():
+    # Mutinous Massacre migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creatures until end of turn. "
+        "Untap them. They gain haste until end of turn."
+    ) is None
+
+
+def test_mutinous_massacre_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the five-sentence body
+    # as ``MutinousMassacreEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.cards.base import MutinousMassacreEffect
+    body = (
+        "Choose odd or even. "
+        "Destroy each creature with mana value of the chosen quality. "
+        "Then gain control of all creatures until end of turn. "
+        "Untap them. They gain haste until end of turn."
+    )
+    eff = _parse_spell_effect_phrase(body, "Mutinous Massacre")
+    assert eff == MutinousMassacreEffect()
 
 
 def test_singularity_rupture_claimed_by_parser():

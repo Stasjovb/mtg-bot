@@ -780,10 +780,38 @@ def test_coordinated_clobbering_skip_opp_lost_control():
 # ---------- Coordinated Clobbering parser claim ----------
 
 def test_coordinated_clobbering_claimed_by_parser():
-    # Coordinated Clobbering ``{G}`` Sorcery — claimed via the new
-    # whole-spell exact-text dispatch entry mapping to the new
-    # ``CoordinatedClobberingEffect`` engine class.
+    # Coordinated Clobbering ``{G}`` Sorcery — migrated from the
+    # whole-spell exact-text tier to the per-clause grammar: the new
+    # multi-sentence literal in ``effects.py`` claims the two-sentence
+    # body as ``CoordinatedClobberingEffect()``.
     assert "Coordinated Clobbering" in _claimed_names()
+
+
+def test_dispatch_coordinated_clobbering_no_bespoke_entry():
+    # Coordinated Clobbering migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Tap one or two target untapped creatures you control. "
+        "They each deal damage equal to their power to target "
+        "creature an opponent controls."
+    ) is None
+
+
+def test_coordinated_clobbering_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the two-sentence body (tap 1-2
+    # friendly creatures; they each deal power damage to an opp creature)
+    # as ``CoordinatedClobberingEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.effects import CoordinatedClobberingEffect
+    body = (
+        "Tap one or two target untapped creatures you control. "
+        "They each deal damage equal to their power to target "
+        "creature an opponent controls."
+    )
+    eff = _parse_spell_effect_phrase(body, "Coordinated Clobbering")
+    assert eff == CoordinatedClobberingEffect()
 
 
 def test_coordinated_clobbering_engine_class():
