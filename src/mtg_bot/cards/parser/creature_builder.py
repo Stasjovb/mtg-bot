@@ -519,41 +519,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             ),
         ),
         # ── DSK creatures batch 7 ─────────────────────────────────────
-        # Boilerbilges Ripper {4}{R} 4/4 Human Assassin (DSK).
-        # ETB: "When this creature enters, you may sacrifice another
-        # creature or enchantment. When you do, this creature deals 2
-        # damage to any target." The optional sacrifice and the
-        # reflexive 2-damage rider are bound together in a single
-        # bespoke effect — declining the sacrifice (or having no legal
-        # candidate) skips the entire damage rider, matching the
-        # printed "When you do" gating. The damage target is selected
-        # via the standard target-selection pipeline against the same
-        # legal pool as ``DealDamageAnyTarget``.
-        "Boilerbilges Ripper": make_creature(
-            "Boilerbilges Ripper", "{4}{R}", 4, 4,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=BoilerbilgesRipperETBEffect(),
-                ),
-            ),
-        ),
-        # Fanatic of the Harrowing {3}{B} 2/2 Human Cleric (DSK).
-        # ETB: "When this creature enters, each player discards a card.
-        # If you discarded a card this way, draw a card." The reflexive
-        # draw is gated specifically on the controller having actually
-        # discarded — a controller with an empty hand at resolve gets
-        # no draw. Each player's own ``choose_discard`` agent hook
-        # picks which card to discard.
-        "Fanatic of the Harrowing": make_creature(
-            "Fanatic of the Harrowing", "{3}{B}", 2, 2,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=FanaticOfTheHarrowingETBEffect(),
-                ),
-            ),
-        ),
     }
 
 

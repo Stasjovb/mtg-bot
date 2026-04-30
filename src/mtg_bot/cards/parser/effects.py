@@ -61,7 +61,9 @@ from mtg_bot.cards.base import (
     ExileTargetCreature,
     ExileTargetCreatureUntilSourceLeaves,
     ExileOpponentsNonlandPermanentUntilLeaves,
+    BoilerbilgesRipperETBEffect,
     ExorciseEffect,
+    FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
     GainLife,
     GrantUnblockableUEOT,
@@ -2392,6 +2394,28 @@ def _parse_effect(phrase: str) -> Effect | None:
         "in a random order"
     ):
         return HouseCartographerSurvivalEffect()
+    # Fanatic of the Harrowing's ETB body (only DSK card with the
+    # "each player discards + reflexive draw if you did" shape; broader
+    # grammar deferred until a second example exists). The reflexive
+    # "If you discarded a card this way" gate is an anaphoric reference
+    # to the discard step that the sentence-splitting grammar can't
+    # model as a standalone clause.
+    if phrase == (
+        "each player discards a card. "
+        "If you discarded a card this way, draw a card"
+    ):
+        return FanaticOfTheHarrowingETBEffect()
+    # Boilerbilges Ripper's ETB body (only DSK card with the
+    # "optional sac creature/enchantment + reflexive 2-damage to any
+    # target" shape; broader grammar deferred until a second example
+    # exists). The "When you do" reflexive gate is an anaphoric reference
+    # to the sacrifice step that the sentence-splitting grammar can't
+    # model as a standalone clause.
+    if phrase == (
+        "you may sacrifice another creature or enchantment. "
+        "When you do, this creature deals 2 damage to any target"
+    ):
+        return BoilerbilgesRipperETBEffect()
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
