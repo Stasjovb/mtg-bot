@@ -19,11 +19,14 @@ from mtg_bot.effects.object_predicates import (
     HasPowerAtMost,
     HasSubtype,
     IsArtifact,
+    IsAttacking,
+    IsBattle,
     IsBlocking,
     IsCreature,
     IsEnchantment,
     IsLand,
     IsNontoken,
+    IsPlaneswalker,
     IsPlayer,
     IsTapped,
     ObjectAnd,
@@ -62,6 +65,7 @@ class FakeObject:
     loyalty_counters: int = 0
     tapped: bool = False
     blocking: int | None = None
+    attacking: bool = False
     # Read by ``effective_subtypes`` (face-down permanents have no
     # subtypes per CR 701.34) and by the Magus / Dryad timestamp walks.
     face_down: bool = False
@@ -153,6 +157,50 @@ def test_is_player_false_for_permanent():
 def test_is_player_false_for_none():
     """Defensive: a missing object reads as not-a-player."""
     assert IsPlayer().test(None, FakeState()) is False
+
+
+def test_is_planeswalker_true_for_planeswalker():
+    obj = FakeObject(printing=FakePrinting(card_types=("Planeswalker",)))
+    assert IsPlaneswalker().test(obj, FakeState()) is True
+
+
+def test_is_planeswalker_false_for_creature():
+    obj = FakeObject(printing=FakePrinting(card_types=("Creature",)))
+    assert IsPlaneswalker().test(obj, FakeState()) is False
+
+
+def test_is_planeswalker_false_for_player():
+    assert IsPlaneswalker().test(FakePlayer(id=1), FakeState()) is False
+
+
+def test_is_battle_true_for_battle():
+    obj = FakeObject(printing=FakePrinting(card_types=("Battle",)))
+    assert IsBattle().test(obj, FakeState()) is True
+
+
+def test_is_battle_false_for_creature():
+    obj = FakeObject(printing=FakePrinting(card_types=("Creature",)))
+    assert IsBattle().test(obj, FakeState()) is False
+
+
+def test_is_battle_false_for_player():
+    assert IsBattle().test(FakePlayer(id=1), FakeState()) is False
+
+
+def test_is_attacking_true_when_attacking():
+    obj = FakeObject(attacking=True)
+    assert IsAttacking().test(obj, FakeState()) is True
+
+
+def test_is_attacking_false_when_not_attacking():
+    obj = FakeObject(attacking=False)
+    assert IsAttacking().test(obj, FakeState()) is False
+
+
+def test_is_attacking_false_for_player():
+    """Players don't attack — the ``attacking`` attribute is missing
+    so the predicate evaluates false."""
+    assert IsAttacking().test(FakePlayer(id=1), FakeState()) is False
 
 
 # ---------- nontoken / subtype ----------

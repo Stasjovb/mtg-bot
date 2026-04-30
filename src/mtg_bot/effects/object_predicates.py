@@ -145,6 +145,39 @@ class IsPlayer(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsPlaneswalker(ObjectPredicate):
+    """The object is a planeswalker (``"Planeswalker"`` in its
+    card_types).
+
+    Models the planeswalker arm of the "any target" expansion (CR 115:
+    a planeswalker is one of the legal kinds for damage-targeting
+    effects whose printed phrasing is "any target"). Players evaluate
+    false.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Planeswalker" in obj.printing.card_types
+
+
+@dataclass(frozen=True)
+class IsBattle(ObjectPredicate):
+    """The object is a Battle (``"Battle"`` in its card_types).
+
+    Models the battle arm of the "any target" expansion. The current
+    EoE pool ships no Battles, so this atom never matches today, but
+    it's part of the structural target-filter vocabulary so a future
+    printing wired to "any target" picks Battles up automatically.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Battle" in obj.printing.card_types
+
+
+@dataclass(frozen=True)
 class IsNontoken(ObjectPredicate):
     """The object is NOT a token.
 
@@ -200,6 +233,20 @@ class IsTapped(ObjectPredicate):
 
     def test(self, obj, state):
         return bool(getattr(obj, "tapped", False))
+
+
+@dataclass(frozen=True)
+class IsAttacking(ObjectPredicate):
+    """The object is currently attacking — ``obj.attacking`` is True.
+
+    Models the "attacking creature" qualifier on filters like Focus
+    Fire's "target attacking or blocking creature" (composed as
+    ``IsCreature() & (IsAttacking() | IsBlocking())``). Players and
+    lands have no ``attacking`` attribute and evaluate false.
+    """
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "attacking", False))
 
 
 @dataclass(frozen=True)
