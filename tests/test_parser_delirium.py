@@ -12,19 +12,25 @@ support lands as:
   Planeswalker, Battle, Tribal). Subject-independent, mirrors
   ``VoidActive`` and ``OpponentControlsMoreLandsThanYou``.
 
-* New ``_INTERVENING_IF_PHRASES`` entry: the canonical printed
-  gate ``"there are four or more card types among cards in your
-  graveyard"`` maps to ``StateBound(Delirium())``. The Delirium ability-word
-  prefix (``Delirium — ``) carries no rules consequence — it strips
-  through the existing generic ``_strip_ability_word_prefix`` helper
-  with no Delirium-specific code path needed.
+* ``_INTERVENING_IF_PHRASES`` entry: the canonical printed gate
+  ``"there are four or more card types among cards in your graveyard"``
+  maps to ``StateBound(Delirium())``. The Delirium ability-word prefix
+  (``Delirium — ``) carries no rules consequence — it strips through
+  the existing generic ``_strip_ability_word_prefix`` helper with no
+  Delirium-specific code path needed for ``When``/``Whenever`` triggers.
 
-End-to-end card claims: no DSK Delirium card claims end-to-end on
-this branch — every printing carries at least one other clause
-(complex effect bodies, ``while``-shape trigger conditions, or
-static ``as long as`` riders) that the parser doesn't yet handle.
-This batch ships the predicate + intervening-if plumbing so those
-claims unblock as the surrounding grammar grows.
+* ``_DELIRIUM_PREFIX`` / ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` in
+  ``triggers.py`` (bespoke-delirium) — handles the distinct surface
+  ``Delirium — At the beginning of <when>, if there are four or more
+  card types among cards in your graveyard, <effect>.`` by stripping
+  the prefix, consuming the gate clause, and AND-ing
+  ``StateBound(Delirium())`` onto the trigger's base predicate (same
+  predicate-compose pattern as ``Survival — At the beginning of``).
+  The ``_strip_ability_word_prefix`` lookahead guards against
+  ``Delirium — At …`` being parsed as a generic ability-word strip
+  (it only strips in front of ``When``/``Whenever``), so the prefix is
+  detected explicitly here mirroring the ``_VOID_PREFIX`` /
+  ``_SURVIVAL_PREFIX`` precedent.
 """
 
 from __future__ import annotations
@@ -457,3 +463,86 @@ def test_delirium_false_when_source_controller_unknown():
     ])
     src = _StubSource(controller_id=99)
     assert StateBound(Delirium()).matches(state, {}, src) is False
+
+
+# ---------- Delirium — At the beginning of <when> parser support ----------
+#
+# bespoke-delirium adds ``_DELIRIUM_PREFIX`` / ``_DELIRIUM_AT_BEGINNING_
+# GATE_PREFIX`` to ``triggers.py`` so any ``Delirium — At the beginning of
+# <when>, if there are four or more card types..., <effect>.`` line whose
+# effect body is expressible by the unified grammar can claim end-to-end.
+# The three DSK cards whose trigger bodies are bespoke (Osseous Sticktwister)
+# still land via ``_BESPOKE_TRIGGER_LINES``, but the new grammar path is
+# tested here with a synthetic parseable effect.
+
+
+def test_delirium_at_beginning_of_end_step_parses_with_draw_effect():
+    """``Delirium — At the beginning of your end step, if there are four
+    or more card types among cards in your graveyard, draw a card.``
+    claims end-to-end through the unified grammar:
+    - ``Delirium — `` is detected as a prefix in ``_parse_triggered_ability_line``
+    - ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` is stripped in
+      ``_parse_at_the_beginning_of_line``
+    - ``StateBound(Delirium())`` is AND-ed onto ``Controlled(YOU)``
+    - ``draw a card`` parses via the standard effect grammar.
+    """
+    from mtg_bot.cards.base import DrawCards, TriggeredAbility
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    from mtg_bot.effects.predicates import Controlled, Event, YOU
+
+    line = (
+        "Delirium — At the beginning of your end step, if there are "
+        "four or more card types among cards in your graveyard, draw a card."
+    )
+    result = _parse_triggered_ability_line(line)
+    assert result == TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU) & StateBound(Delirium()),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_delirium_at_beginning_of_upkeep_parses_with_draw_effect():
+    """Same shape on ``At the beginning of your upkeep`` — the Delirium
+    gate wires correctly for any ``_AT_BEGINNING_OF_PHRASES`` time phrase."""
+    from mtg_bot.cards.base import DrawCards, TriggeredAbility
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    from mtg_bot.effects.predicates import Controlled, Event, YOU
+
+    line = (
+        "Delirium — At the beginning of your upkeep, if there are "
+        "four or more card types among cards in your graveyard, draw a card."
+    )
+    result = _parse_triggered_ability_line(line)
+    assert result == TriggeredAbility(
+        event=Event.BEGINNING_OF_UPKEEP,
+        predicate=Controlled(YOU) & StateBound(Delirium()),
+        effect=DrawCards(amount=1),
+    )
+
+
+def test_delirium_at_beginning_rejected_when_gate_missing():
+    """A ``Delirium — At the beginning of your end step, <effect>.`` line
+    that does NOT carry the Delirium gate phrase is rejected outright —
+    the parser must not silently drop the gate."""
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+
+    # Body starts directly with the effect, no gate clause.
+    line = (
+        "Delirium — At the beginning of your end step, draw a card."
+    )
+    assert _parse_triggered_ability_line(line) is None
+
+
+def test_delirium_at_beginning_rejected_when_effect_unparseable():
+    """``Delirium — At the beginning of your end step, if there are four
+    or more card types..., <bespoke-body>.`` is rejected when the body
+    isn't expressible by the unified effect grammar."""
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+
+    line = (
+        "Delirium — At the beginning of your end step, if there are "
+        "four or more card types among cards in your graveyard, do something "
+        "completely undefined."
+    )
+    assert _parse_triggered_ability_line(line) is None

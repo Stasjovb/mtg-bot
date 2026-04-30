@@ -339,6 +339,32 @@ _VOID_GATE_PREFIX = (
 )
 
 
+# Duskmourn "Delirium — " ability-word prefix on ``At the beginning of
+# <when>, if there are four or more card types among cards in your
+# graveyard, <effect>.`` lines (e.g. Osseous Sticktwister). The
+# ``_strip_ability_word_prefix`` helper only strips prefixes in front of
+# ``When``/``Whenever`` bodies; the ``Delirium — At the beginning of``
+# shape doesn't flow through it, so we detect the prefix explicitly
+# here. Mirrors the ``_VOID_PREFIX`` / ``_SURVIVAL_PREFIX`` precedent —
+# same structural shape, different predicate semantics: Void sets a
+# ``requires_void`` flag, Survival ANDs ``IsSelf() & IsTapped()`` onto
+# the predicate, and Delirium ANDs ``StateBound(Delirium())`` onto it.
+_DELIRIUM_PREFIX = "Delirium — "
+
+# Delirium intervening-if gate clause on ``At the beginning of <when>``
+# trigger lines. The body parser strips this prefix and AND-s
+# ``StateBound(Delirium())`` onto the trigger's base predicate so the
+# resulting ``TriggeredAbility`` fires only when the source's controller
+# has four or more distinct card types in their graveyard at the
+# beginning of the relevant step (CR 603.4 intervening-if check).
+# Mirrors the ``_VOID_GATE_PREFIX`` / ``_SURVIVAL_GATE_PREFIX``
+# precedent — same strip-and-compose pattern, different predicate.
+_DELIRIUM_AT_BEGINNING_GATE_PREFIX = (
+    "if there are four or more card types among cards in "
+    "your graveyard, "
+)
+
+
 # Trailing "if you've gained N or more life this turn" suffix on the
 # body of an ``At the beginning of <when>, <inner-effect> if
 # you've gained N or more life this turn.`` line. When the body
@@ -1420,6 +1446,7 @@ def _parse_at_the_beginning_of_line(
     match: "re.Match[str]",
     requires_void: bool = False,
     is_survival: bool = False,
+    is_delirium: bool = False,
 ) -> TriggeredAbility | None:
     """Body parser for ``At the beginning of <when>, <effect>.`` lines.
 
@@ -1442,6 +1469,17 @@ def _parse_at_the_beginning_of_line(
     line whose body does NOT carry the matching gate is rejected
     outright: the printed Void rider is always paired with the gate
     phrase, and a missing gate would mean we're misreading the line.
+
+    ``is_delirium`` is True when the calling site already detected a
+    leading ``Delirium — `` ability-word prefix on the original line.
+    In that case the body MUST start with the verbatim
+    ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` middle clause — the gate
+    phrase is stripped and ``StateBound(Delirium())`` is AND-ed onto
+    the trigger's base predicate so the ability fires only when the
+    source's controller has four or more distinct card types in their
+    graveyard (CR 603.4 intervening-if check). Mirrors the Survival
+    predicate-compose precedent: the gate becomes a trigger-time
+    predicate component rather than an engine flag.
 
     Returns ``None`` if any piece doesn't parse — the line has no
     other valid interpretation (unlike the When/Whenever shape, which
@@ -1499,6 +1537,29 @@ def _parse_at_the_beginning_of_line(
         return TriggeredAbility(
             event=event,
             predicate=predicate & IsSelf() & Source(IsTapped()),
+            effect=inner,
+        )
+    # Delirium — At the beginning of <when> rider: the body must start
+    # with the canonical Delirium intervening-if gate phrase. Strip the
+    # gate clause and AND ``StateBound(Delirium())`` onto the trigger's
+    # base predicate so the ability fires only when the source's
+    # controller has four or more distinct card types in their graveyard
+    # (CR 603.4 trigger-time check). Mirrors the Survival predicate-
+    # compose precedent: no engine flag, just a composed predicate.
+    # The gate is required on every ``Delirium — At the beginning of``
+    # line in print today; a delirium-prefixed line whose body does NOT
+    # carry the matching gate is rejected outright (same discipline as
+    # Survival).
+    if is_delirium:
+        if not body.startswith(_DELIRIUM_AT_BEGINNING_GATE_PREFIX):
+            return None
+        inner_phrase = body[len(_DELIRIUM_AT_BEGINNING_GATE_PREFIX):]
+        inner = _parse_effect_phrase(inner_phrase)
+        if inner is None:
+            return None
+        return TriggeredAbility(
+            event=event,
+            predicate=predicate & StateBound(Delirium()),
             effect=inner,
         )
     # Tapped-creatures effect-wrapper variant: ``if you control two or
@@ -1678,12 +1739,30 @@ def _parse_triggered_ability_line(
     ):
         at_line = at_line[len(_SURVIVAL_PREFIX):]
         is_survival = True
+    # ``Delirium — `` ability-word prefix on an ``At the beginning of``
+    # body. Strip the prefix and thread the flag through to the body
+    # parser, which will then expect the canonical Delirium gate clause
+    # ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` and AND
+    # ``StateBound(Delirium())`` onto the trigger predicate. Mirrors
+    # the ``Survival —`` strip above structurally — both prefixes land
+    # their gates as predicate components (no engine flag). The
+    # ``_strip_ability_word_prefix`` lookahead is ``(?=When |Whenever )``
+    # so ``Delirium — At the beginning of`` doesn't flow through it;
+    # detecting the prefix explicitly here keeps the strip narrow.
+    is_delirium = False
+    if (
+        at_line.startswith(_DELIRIUM_PREFIX)
+        and at_line[len(_DELIRIUM_PREFIX):].startswith("At the beginning of ")
+    ):
+        at_line = at_line[len(_DELIRIUM_PREFIX):]
+        is_delirium = True
     at_match = _AT_THE_BEGINNING_OF_LINE.match(at_line)
     if at_match is not None:
         parsed = _parse_at_the_beginning_of_line(
             at_match,
             requires_void=requires_void,
             is_survival=is_survival,
+            is_delirium=is_delirium,
         )
         if parsed is not None:
             return parsed
