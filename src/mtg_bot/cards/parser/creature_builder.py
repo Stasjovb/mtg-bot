@@ -42,7 +42,6 @@ from mtg_bot.cards.base import (
     ActivationCost,
     AddManaToPool,
     AnticausalVestigeLeavesEffect,
-    ArabellaAttackEffect,
     AstelliReclaimerETBEffect,
     AttackInTheBoxAttackEffect,
     BoilerbilgesRipperETBEffect,
@@ -54,7 +53,6 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FanaticOfTheHarrowingETBEffect,
-    GainLife,
     HouseCartographerSurvivalEffect,
     KavaronHarrierAttackEffect,
     ModalChooseOne,
@@ -158,7 +156,6 @@ from mtg_bot.effects.state_predicates import (
 )
 from mtg_bot.effects.predicates import (
     YOU,
-    Always,
     Controlled,
     Event,
     IsSelf,
@@ -765,29 +762,14 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # ``_IF_GAINED_LIFE_GATE_BODY`` constant maps the full post-sub
         # body to ``IfGainedLifeThisTurnUntapSelf()``.
         # Removed from this table so the grammar path claims it.
-        # ── DSK artifacts batch 3 ─────────────────────────────────────
-        # Arabella, Abandoned Doll {R}{W} 1/3 Legendary Artifact Creature
-        # — Toy. "Whenever Arabella attacks, it deals X damage to each
-        # opponent and you gain X life, where X is the number of
-        # creatures you control with power 2 or less." Bespoke effect
-        # computes X at resolve time via ``effective_power`` so pump and
-        # counter-modifications are reflected.
-        # SKIP: ArabellaAttackEffect is a bespoke engine class for X-scaled
-        # damage+life-gain gated on a creature-count with power filter.
-        # There is no grammar primitive for this shape. Requires a new
-        # parameterized effect primitive.
-        "Arabella, Abandoned Doll": make_creature(
-            "Arabella, Abandoned Doll", "{R}{W}", 1, 3,
-            artifact=True,
-            legendary=True,
-            subtypes=("Toy",),
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=ArabellaAttackEffect(),
-                ),
-            ),
-        ),
+        # Arabella, Abandoned Doll migrated to parameterized grammar:
+        # "Whenever Arabella attacks, it deals X damage to each opponent
+        # and you gain X life, where X is the number of creatures you
+        # control with power 2 or less." — maps via the new
+        # ``ArabellaAttackEffect`` literal-line recognizer in
+        # ``effects.py`` to the existing engine class, which computes X
+        # at resolve time via ``effective_power``.
+        # Removed from this table so the grammar path claims it.
     }
 
 

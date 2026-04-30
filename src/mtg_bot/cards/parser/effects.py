@@ -152,6 +152,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.bespoke import ArabellaAttackEffect
 from mtg_bot.effects.generic import TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -2865,6 +2866,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         "in a random order"
     ):
         return HouseCartographerSurvivalEffect()
+    # Arabella, Abandoned Doll's attack-trigger body: "deals X damage to
+    # each opponent and you gain X life, where X is the number of
+    # creatures you control with power 2 or less". Literal-line recognizer
+    # — only card in the pool with this X-scaled damage+life-gain where X
+    # is a power-filtered creature count; broader grammar deferred until a
+    # second example exists. Maps to ``ArabellaAttackEffect`` which
+    # computes X at resolve time via ``effective_power`` so pump and
+    # counter-modifications are reflected. The normalizer strips the
+    # leading ``it `` before this lookup runs, matching Arabella's
+    # creature-trigger surface.
+    if phrase == (
+        "deals X damage to each opponent and you gain X life, "
+        "where X is the number of creatures you control with power 2 or less"
+    ):
+        return ArabellaAttackEffect()
     # Anticausal Vestige's LTB body (only EoE card with the
     # "draw + may put permanent MV ≤ lands from hand onto BF tapped"
     # shape; broader grammar deferred until a second example exists).
