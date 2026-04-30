@@ -450,27 +450,20 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # so target selection works correctly at trigger-resolution time.
         # Removed from this table so the oracle parser claims it directly.
         # Survey Mechan {4} 1/3.
-        # Real oracle: "Flying. Hexproof. {10}, Sacrifice this creature:
-        # It deals 3 damage to any target. Target player draws three
-        # cards and gains 3 life. This ability costs {X} less to
-        # activate, where X is the number of differently named lands you
-        # control."
-        # Flying and Hexproof are both keyword lines the grammar
-        # recognizes; both are now retained faithfully per oracle text.
-        # SKIP (activation): the activated-ability body is a three-part
-        # sequence (deal 3 damage to any target, target player draws
-        # three cards, gains 3 life) with an X-based dynamic cost-
-        # reduction rider ("costs {X} less to activate where X is the
-        # number of differently named lands you control"). The X formula
-        # is not a static Condition in _ACTIVATED_COST_REDUCTION_CONDITIONS
-        # — it requires a new "count-N-differently-named-permanents"
-        # evaluator that doesn't exist in the engine. The activation is
-        # skipped until that evaluator is implemented.
-        "Survey Mechan": make_creature(
-            "Survey Mechan", "{4}", 1, 3,
-            artifact=True,
-            keywords={"flying", "hexproof"},
-        ),
+        # Migrated to the oracle-text grammar (bespoke-survey-mechan).
+        # "Flying. Hexproof. {10}, Sacrifice this creature: It deals 3
+        # damage to any target. Target player draws three cards and gains
+        # 3 life. This ability costs {X} less to activate, where X is
+        # the number of differently named lands you control."
+        # Flying + Hexproof parse as keyword lines. The activated ability
+        # cost ({10} + sacrifice_self) and effect
+        # (SurveyMechanActivationEffect — two distinct targets: any target
+        # for damage; target player for draw+gain) now parse via a literal
+        # recognizer in ``_parse_effect``. The X-based cost-reduction rider
+        # is handled by ``_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_
+        # LAND`` in ``activated.py``, which maps to
+        # ``CostReduction(amount=1, condition=PerDifferentlyNamedLand())``.
+        # Removed from this table so the oracle parser claims it directly.
         # ── DSK artifacts batch 3 ─────────────────────────────────────
         # Splitskin Doll {1}{W} 2/1 Toy.
         # Migrated to ``_BESPOKE_TRIGGER_LINES`` (bespoke-splitskin-monoist).

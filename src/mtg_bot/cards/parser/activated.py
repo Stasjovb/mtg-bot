@@ -91,6 +91,7 @@ from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
     Condition,
     ControlPermanent,
+    PerDifferentlyNamedLand,
 )
 from mtg_bot.effects.object_predicates import (
     HasCounter,
@@ -445,6 +446,25 @@ _INLINE_COST_REDUCTION_RIDER = re.compile(
     r" This ability costs \{(\d+)\} less to activate if (.+)\.$"
 )
 
+# Variable-amount X-based cost-reduction rider for activated abilities:
+# ``This ability costs {X} less to activate, where X is the number of
+# differently named lands you control.``
+# Mirrors the spell-side literal in
+# ``mtg_bot.cards.parser.cost_reduction._COST_REDUCTION_LINE_X_PER_
+# DIFFERENTLY_NAMED_LAND`` but adapts the surface to the activated-
+# ability wording ("to activate" instead of "to cast"). Survey Mechan
+# is the only EoE printing with this exact surface; broader grammar
+# deferred until a second activation with a varying piece ships.
+# Maps to ``CostReduction(amount=1, condition=PerDifferentlyNamedLand
+# ())`` — the engine's ``apply_cost_reductions`` multiplies the unit
+# amount by the condition's ``multiplier`` (the count of distinctly
+# named lands the controller controls at activation time), giving the
+# correct X-based discount.
+_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND = (
+    " This ability costs {X} less to activate, where X is the number "
+    "of differently named lands you control."
+)
+
 
 # Surface phrase → structural ``Condition`` mapping for the activated-
 # ability cost-reduction rider. Each phrase decomposes to a tree of
@@ -533,6 +553,20 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         stripped = stripped[: -len(_INLINE_SORCERY_RIDER_SUFFIX)]
         sorcery_speed = True
     cost_reductions: tuple[CostReduction, ...] = ()
+    # Variable-amount X-based differently-named-land rider — checked
+    # BEFORE the numeric ``{N}`` rider because ``{X}`` can't be captured
+    # by the ``\{(\d+)\}`` regex, so the two regexes are disjoint; the
+    # literal check is an exact suffix match and runs in O(1).
+    if stripped.endswith(_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND):
+        cost_reductions = (
+            CostReduction(
+                amount=1,
+                condition=PerDifferentlyNamedLand(),
+            ),
+        )
+        stripped = stripped[
+            : -len(_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND)
+        ]
     rider_match = _INLINE_COST_REDUCTION_RIDER.search(stripped)
     if rider_match is not None:
         condition_phrase = rider_match.group(2).strip()

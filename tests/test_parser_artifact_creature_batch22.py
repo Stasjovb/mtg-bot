@@ -61,11 +61,15 @@ Migrated to ``_BESPOKE_TRIGGER_LINES`` in bespoke-splitskin-monoist:
     ``MonoistCircuitFeederETBEffect``; ``Flying`` keyword and all other
     oracle lines parse via the unified grammar.
 
-Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
-  1. Emissary Escort — dynamic P/T formula (emissary_escort)
-  2. Interceptor Mechan — flying + ETB return + void end-step counter
-  3. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
-  4. Survey Mechan — flying + hexproof; activated ability needs differently-named-land cost reduction
+Migrated to grammar in bespoke-survey-mechan:
+  - Survey Mechan — ``SurveyMechanActivationEffect`` bespoke class
+    models the two-target activated ability body; literal recognizer in
+    ``_parse_effect`` claims the exact two-sentence surface.
+    ``_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND`` in
+    ``activated.py`` maps the land-count cost reduction.
+
+All EoE/DSK artifact creatures from this batch are now migrated.
+Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``): none.
 """
 
 from __future__ import annotations
@@ -291,6 +295,197 @@ def test_survey_mechan_claimed_by_parser():
     assert "Survey Mechan" in _PARSER_PRINTINGS
 
 
+def test_survey_mechan_grammar_structure():
+    """Grammar-claimed Survey Mechan has flying + hexproof, the
+    {10}/sacrifice-self activated ability with SurveyMechanActivationEffect,
+    and a PerDifferentlyNamedLand cost reduction."""
+    from mtg_bot.cards.base import CostReduction
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+
+    sm = _parser("Survey Mechan")
+    assert sm.is_artifact
+    assert "flying" in sm.keywords
+    assert "hexproof" in sm.keywords
+    assert len(sm.activated_abilities) == 1
+    ab = sm.activated_abilities[0]
+    # Cost: {10} + sacrifice self.
+    assert ab.cost.mana_str == "{10}"
+    assert ab.cost.sacrifice_self is True
+    # Effect: SurveyMechanActivationEffect (two-target bespoke class).
+    assert isinstance(ab.effect, SurveyMechanActivationEffect)
+    assert ab.effect.requires_target()
+    assert ab.effect.target_count_range() == (2, 2)
+    assert ab.effect.target_slot_kinds() == ("any_damage_target", "player")
+    # Cost reduction: PerDifferentlyNamedLand, amount=1.
+    assert len(ab.cost_reductions) == 1
+    cr = ab.cost_reductions[0]
+    assert cr.amount == 1
+    assert isinstance(cr.condition, PerDifferentlyNamedLand)
+
+
+def test_survey_mechan_cost_reduction_reduces_effectively():
+    """A 10-cost ability in a game where the controller has 4 differently
+    named lands costs 6 to activate (10 - 4 = 6)."""
+    from mtg_bot.actions import _evaluate_cost_reduction
+    from mtg_bot.cards.base import CostReduction, make_basic_land
+    from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    state.active_player_idx = 0
+
+    # Add 4 differently named lands for player 0.
+    for name, color in (
+        ("Plains", "W"), ("Island", "U"), ("Swamp", "B"), ("Forest", "G"),
+    ):
+        land = state.new_object(
+            make_basic_land(name, color), 0, Zone.BATTLEFIELD,
+        )
+        state.battlefield.append(land)
+
+    rule = CostReduction(amount=1, condition=PerDifferentlyNamedLand())
+    reduction = _evaluate_cost_reduction(rule, state, caster_id=0)
+    # 4 differently named lands → multiplier=4 → reduction=1*4=4
+    assert reduction == 4
+    # Ability base cost is {10} generic; after reduction: 10 - 4 = 6.
+    from mtg_bot.cards import parse_mana_cost
+    base = parse_mana_cost("{10}")
+    effective = base.reduced(reduction)
+    assert effective.generic == 6
+
+
+def test_survey_mechan_effect_resolve_damage_and_draw():
+    """SurveyMechanActivationEffect.resolve deals 3 damage to the
+    any_damage_target slot and draws 3 + gains 3 for the player slot."""
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    state.active_player_idx = 0
+    # Give player 1 a library so they can draw cards.
+    sm_printing = make_creature("Dummy", "{1}", 1, 1)
+    for _ in range(5):
+        card = state.new_object(sm_printing, 1, Zone.LIBRARY)
+        state.players[1].library.append(card)
+
+    # Put a creature on the battlefield to be the damage target.
+    creature_printing = make_creature("Target Dummy", "{1}", 1, 1)
+    target_creature = state.new_object(creature_printing, 1, Zone.BATTLEFIELD)
+    state.battlefield.append(target_creature)
+
+    effect = SurveyMechanActivationEffect()
+    # Slot 0: damage goes to the creature (tagged any_damage_target).
+    # Slot 1: player 1 draws and gains life.
+    targets = (
+        ("any_damage_target", target_creature.id),
+        ("player", 1),
+    )
+    p1_life_before = state.players[1].life
+    p1_lib_before = len(state.players[1].library)
+    effect.resolve(state, controller_id=0, targets=targets)
+    # The creature took 3 damage.
+    assert target_creature.damage == 3
+    # Player 1 drew 3 cards.
+    assert len(state.players[1].library) == p1_lib_before - 3
+    # Player 1 gained 3 life.
+    assert state.players[1].life == p1_life_before + 3
+
+
+def test_survey_mechan_effect_damage_to_player():
+    """SurveyMechanActivationEffect can target a player in the damage
+    slot (any target includes players) — the damage is applied directly
+    to that player's life."""
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards.base import make_creature
+
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    state.active_player_idx = 0
+    # Give player 1 a library for the draw step.
+    dummy = make_creature("Dummy", "{1}", 1, 1)
+    for _ in range(5):
+        card = state.new_object(dummy, 1, Zone.LIBRARY)
+        state.players[1].library.append(card)
+
+    effect = SurveyMechanActivationEffect()
+    # Damage slot: player 1 (tagged any_damage_target).
+    # Draw/gain slot: player 1 (tagged player).
+    targets = (
+        ("any_damage_target", 1),
+        ("player", 1),
+    )
+    effect.resolve(state, controller_id=0, targets=targets)
+    # Player 1 took 3 damage (life drops by 3) then gained 3 (net 0),
+    # minus/plus the draw (no life change from draw).
+    # So net life = 20 - 3 + 3 = 20.
+    assert state.players[1].life == 20
+
+
+def test_survey_mechan_legal_targets_includes_creature_and_players():
+    """SurveyMechanActivationEffect.legal_targets returns the combined
+    pool of any_damage_target (creature + players) and player slots."""
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, life=20))
+    state.players.append(Player(id=1, life=20))
+    state.active_player_idx = 0
+
+    # Put a creature on the battlefield.
+    creature_printing = make_creature("Test Creature", "{1}", 1, 1)
+    creature = state.new_object(creature_printing, 1, Zone.BATTLEFIELD)
+    state.battlefield.append(creature)
+
+    effect = SurveyMechanActivationEffect()
+    targets = effect.legal_targets(state, controller_id=0)
+    # any_damage_target pool: creature + 2 players
+    any_pool = [t for t in targets if t[0] == "any_damage_target"]
+    assert ("any_damage_target", creature.id) in any_pool
+    assert ("any_damage_target", 0) in any_pool
+    assert ("any_damage_target", 1) in any_pool
+    # player pool: 2 players
+    player_pool = [t for t in targets if t[0] == "player"]
+    assert ("player", 0) in player_pool
+    assert ("player", 1) in player_pool
+
+
+def test_survey_mechan_legal_targets_empty_when_no_players():
+    """SurveyMechanActivationEffect.legal_targets returns [] if there
+    are no living players (the player-draw slot can't be satisfied)."""
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    from mtg_bot.game import GameState, Player
+
+    state = GameState()
+    p = Player(id=0, life=20)
+    p.has_lost = True
+    state.players.append(p)
+    p2 = Player(id=1, life=20)
+    p2.has_lost = True
+    state.players.append(p2)
+    state.active_player_idx = 0
+
+    effect = SurveyMechanActivationEffect()
+    assert effect.legal_targets(state, controller_id=0) == []
+
+
+def test_survey_mechan_effect_describe():
+    """SurveyMechanActivationEffect.describe returns the expected string."""
+    from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+    effect = SurveyMechanActivationEffect()
+    desc = effect.describe()
+    assert "3 damage" in desc
+    assert "draws three cards" in desc
+    assert "gains 3 life" in desc
 
 
 def test_tapestry_warden_claimed_by_parser():

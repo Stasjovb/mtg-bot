@@ -3312,6 +3312,23 @@ def _parse_effect(phrase: str) -> Effect | None:
         "If they don't, put two +1/+1 counters on this creature"
     ):
         return TerrapactIntimidatorETBEffect()
+    # Survey Mechan's activated-ability body — two sentences with two
+    # independent targets (any target for damage; target player for draw
+    # + gain life). The Sequence combinator can't model this because it
+    # enforces at most one targeting sub-effect across all sub-effects.
+    # Matched as a single literal dispatching to the bespoke
+    # ``SurveyMechanActivationEffect`` engine class, which handles both
+    # target slots in its own ``target_count_range``/``legal_targets``/
+    # ``resolve`` overrides. Only Survey Mechan in the EoE pool has this
+    # exact two-target "deal 3 + target player draws 3 + gains 3" shape;
+    # broader grammar deferred until a second card with a varying amount
+    # (different damage count, different draw count) ships.
+    if phrase == (
+        "it deals 3 damage to any target. "
+        "Target player draws three cards and gains 3 life"
+    ):
+        from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+        return SurveyMechanActivationEffect()
     # Entropic Battlecruiser's attack-trigger body — a two-sentence
     # multi-sentence effect whose second sentence is anaphoric to the
     # first ("Each opponent who can't" refers to those who couldn't

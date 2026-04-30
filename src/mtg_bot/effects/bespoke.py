@@ -4370,3 +4370,142 @@ class TerminalVelocityEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class SurveyMechanActivationEffect(Effect):
+    """Survey Mechan's activated ability body:
+    "It deals 3 damage to any target. Target player draws three cards
+    and gains 3 life."
+
+    Two REQUIRED targets (CR 601.2c — both slots must be filled to
+    activate):
+
+    - Slot 0: ``("any_damage_target", id)`` — the target for 3 damage.
+      Legal kinds at cast time: creature, planeswalker, battle, player.
+    - Slot 1: ``("player", id)`` — the player who draws 3 cards and
+      gains 3 life.
+
+    The two slots are deliberately distinct tag kinds so the targeting
+    pipeline can present both pools separately. If either pool is
+    empty, ``legal_targets`` returns ``[]`` so the ability can't be
+    legally activated (no legal-target set for the mandatory slot).
+
+    At resolve time each sub-effect re-checks independently per
+    CR 608.2b: if the damage target is gone, damage fizzles; if the
+    player target is gone (has already lost), the draw+life fizzles —
+    the other sub-effect still applies.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        # Slot 0: any damage target. Slot 1: target player.
+        return ("any_damage_target", "player")
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+
+        # Slot 0: any target (creature, planeswalker, battle, player) —
+        # tagged "any_damage_target" so the agent pipeline can pick one
+        # independently of the "player" slot below.
+        any_pool: list[Target] = []
+        for o in state.battlefield:
+            if is_creature_now(o):
+                any_pool.append(("any_damage_target", o.id))
+            elif "Planeswalker" in o.printing.card_types:
+                any_pool.append(("any_damage_target", o.id))
+            elif "Battle" in o.printing.card_types:
+                any_pool.append(("any_damage_target", o.id))
+        for p in state.players:
+            if not p.has_lost:
+                any_pool.append(("any_damage_target", p.id))
+
+        # Slot 1: any living player — tagged "player" so the agent
+        # picks the draw+gain recipient separately from the damage slot.
+        player_pool: list[Target] = [
+            ("player", p.id)
+            for p in state.players
+            if not p.has_lost
+        ]
+        # Both slots must be satisfiable for the ability to be legally
+        # activated. If either pool is empty, return [] so legal_actions
+        # sees no valid activation.
+        if not any_pool or not player_pool:
+            return []
+        return any_pool + player_pool
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_n_cards
+        from mtg_bot.game import gain_life
+
+        # Find each slot in the committed target tuple by kind.
+        damage_target = next(
+            (t for t in targets if t[0] == "any_damage_target"), None
+        )
+        player_target = next(
+            (t for t in targets if t[0] == "player"), None
+        )
+
+        # Sub-effect 1: deal 3 damage to any target.
+        if damage_target is not None:
+            # The damage slot uses the "any_damage_target" tag, which
+            # needs remapping to the canonical ("creature"|"player",
+            # id) tuple that _apply_damage expects.
+            _kind, _id = damage_target
+            # Check if the target is a battlefield permanent or a player.
+            bf_obj = next(
+                (o for o in state.battlefield if o.id == _id), None
+            )
+            if bf_obj is not None:
+                _apply_damage(state, ("creature", _id), 3)
+            else:
+                # Must be a player target inside the any_damage_target
+                # pool (legal_targets includes players there too).
+                try:
+                    _p = state.player_by_id(_id)
+                    _p.life -= 3
+                    state.log.append(
+                        f"P{_id} takes 3 damage from Survey Mechan "
+                        f"(life: {_p.life})"
+                    )
+                except KeyError:
+                    state.log.append(
+                        f"Survey Mechan damage target P{_id} not found"
+                    )
+
+        # Sub-effect 2: target player draws 3 and gains 3 life.
+        if player_target is not None:
+            _pkind, _pid = player_target
+            try:
+                _p = state.player_by_id(_pid)
+                if not _p.has_lost:
+                    drawn = draw_n_cards(state, _pid, 3)
+                    state.log.append(
+                        f"P{_pid} draws {drawn} card(s) "
+                        f"(Survey Mechan activation)"
+                    )
+                    gain_life(state, _pid, 3)
+                    state.log.append(
+                        f"P{_pid} gains 3 life "
+                        f"(Survey Mechan activation)"
+                    )
+            except KeyError:
+                state.log.append(
+                    f"Survey Mechan draw/life target P{_pid} not found"
+                )
+
+    def describe(self) -> str:
+        return (
+            "it deals 3 damage to any target; "
+            "target player draws three cards and gains 3 life"
+        )
+
+

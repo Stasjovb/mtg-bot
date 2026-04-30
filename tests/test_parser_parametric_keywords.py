@@ -12,13 +12,16 @@ Convoke are spell-side concerns handled by the spell builder).
 
 What this batch does add are the two missing single-word
 evergreens that *do* appear in EoE: ``Hexproof`` (Survey Mechan)
-and ``Indestructible`` (Nutrient Block). Neither claimable card
-falls within the current creature builder's reach (Survey Mechan
-has an unsupported activated ability; Nutrient Block is an
-artifact and there is no artifact builder), so the additions are
-defensive — they keep ``_KEYWORD_LINES`` aligned with the
-evergreen list so any future creature printing with these keywords
-is recognized without further parser work.
+and ``Indestructible`` (Nutrient Block). Nutrient Block is an
+artifact (no artifact builder yet at the time of this batch), so
+the addition is defensive — it keeps ``_KEYWORD_LINES`` aligned
+with the evergreen list so any future creature printing with
+indestructible is recognized without further parser work.
+Survey Mechan has since been fully migrated to the oracle-text
+grammar (bespoke-survey-mechan): the activated ability body and
+PerDifferentlyNamedLand cost-reduction rider now parse via grammar
+primitives, so the hexproof keyword addition is no longer the only
+claim avenue for this card.
 """
 
 from __future__ import annotations
@@ -226,12 +229,12 @@ def test_build_creature_printing_skips_qualified_hexproof():
 
 
 def test_source_claims_survey_mechan():
-    """Survey Mechan is claimed via ``_BESPOKE_ARTIFACT_CREATURES``
-    in ``creature_builder.py``. The printing now faithfully includes
-    both keyword lines: flying and hexproof. The {10}/Sacrifice
-    activated ability is still dropped because its X-based cost-
-    reduction formula ("costs {X} less where X is number of
-    differently named lands you control") has no grammar primitive.
+    """Survey Mechan is now claimed by the oracle parser grammar
+    (migrated from ``_BESPOKE_ARTIFACT_CREATURES`` in
+    bespoke-survey-mechan). The printing faithfully includes both
+    keyword lines (flying and hexproof) and the {10}/Sacrifice
+    activated ability with SurveyMechanActivationEffect plus the
+    PerDifferentlyNamedLand cost reduction.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     source = OracleParserCardSource()
@@ -240,6 +243,7 @@ def test_source_claims_survey_mechan():
     sm = printings["Survey Mechan"]
     assert "flying" in sm.keywords
     assert "hexproof" in sm.keywords
+    assert len(sm.activated_abilities) == 1
 
 
 def test_source_claims_nutrient_block():
