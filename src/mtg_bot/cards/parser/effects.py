@@ -1543,6 +1543,30 @@ _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
 _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
     r"^return up to one target creature to its owner's hand$"
 )
+# "Return up to one target nonland permanent to its owner's hand." —
+# Unnerving Grasp ``{2}{U}`` Sorcery (Duskmourn). Optional-target bounce
+# against any nonland permanent (friend or foe, any controller). Maps to
+# ``ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True,
+# optional=True)`` — the ``allow_nonland_permanent=True`` widens the
+# legal-target pool from creature-only to any nonland permanent (the same
+# flag Desculpting Blast uses for the mandatory variant); ``optional=True``
+# flips ``count_min=0`` so a no-target resolution is a clean no-op.
+#
+# The ``Sequence.target_count_range()`` fix (bespoke-spells3) ensures the
+# cast pipeline OFFERS a target for this effect when it appears in a
+# Sequence (even though ``requires_target()`` returns False due to
+# ``count_min=0``), so ``Sequence(ReturnTargetCreatureToOwnersHand(
+# allow_nonland_permanent=True, optional=True), ManifestDread())``
+# correctly prompts for an optional bounce target before manifesting.
+#
+# Literal-line recognizer with no capture groups — Unnerving Grasp is the
+# only EoE/DSK printing today with this exact "up to one nonland permanent"
+# surface; generalization (parameterizing the ``up to one`` count or the
+# ``nonland`` qualifier) is deferred until a second example with a varying
+# piece exists.
+_RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND = re.compile(
+    r"^return up to one target nonland permanent to its owner's hand$"
+)
 # "Return up to N target non-Spacecraft creatures to their owners'
 # hands" — Specimen Freighter's ETB body. Maps to
 # ``ReturnUpToNTargetCreaturesToOwnersHands(max_n=N,
@@ -4401,6 +4425,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         # via ``state.resolving_source``).
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
+        )
+    if _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND.match(
+        phrase
+    ) is not None:
+        # ``return up to one target nonland permanent to its owner's
+        # hand`` — Unnerving Grasp's first clause. More specific than
+        # the bare creature form below (``allow_nonland_permanent=True``
+        # widens to any nonland permanent; ``optional=True`` keeps the
+        # ``count_min=0`` "up to one" fizzle-clean semantics).
+        # Tried BEFORE the bare creature form so the nonland-permanent
+        # widening wins when present.
+        return ReturnTargetCreatureToOwnersHand(
+            allow_nonland_permanent=True, optional=True
         )
     if _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(
         phrase

@@ -279,24 +279,29 @@ def test_untimely_malfunction_mana_cost():
 # ---------- Unnerving Grasp ----------
 
 def test_unnerving_grasp_claimed_by_parser():
-    # Unnerving Grasp ``{2}{U}`` Sorcery — claimed via the new whole-
-    # spell exact-text dispatch entry that simplifies the printed
-    # text (up-to-one bounce + manifest dread) to bare
-    # ``ManifestDread(count=1)``. Reminder text inside the manifest
-    # parenthetical is stripped before dispatch.
+    # Unnerving Grasp ``{2}{U}`` Sorcery — now claimed via the per-clause
+    # grammar (migrated from the whole-spell exact-text table in
+    # bespoke-spells3).
     assert "Unnerving Grasp" in _claimed_names()
 
 
 def test_unnerving_grasp_engine_class():
-    # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the simplified ``ManifestDread(count=1)`` engine class — base
-    # mechanic preserved (manifest dread), optional up-to-one bounce
-    # dropped (parser-is-right precedent: Under the Skin).
-    from mtg_bot.cards.base import ManifestDread
+    # In bespoke-spells3, Unnerving Grasp was migrated from the whole-spell
+    # exact-text table to the per-clause grammar. The new
+    # ``_RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND`` recognizer
+    # and the ``Sequence.target_count_range()`` fix produce
+    # ``Sequence(ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True,
+    # optional=True), ManifestDread(count=1))`` — more faithful than the
+    # previous ``ManifestDread(count=1)`` simplification (which dropped the
+    # optional bounce entirely).
+    from mtg_bot.cards.base import ManifestDread, ReturnTargetCreatureToOwnersHand, Sequence
 
     parser = OracleParserCardSource()
     p = parser.get_printings()["Unnerving Grasp"]
-    assert p.spell_effect == ManifestDread(count=1)
+    assert p.spell_effect == Sequence(effects=(
+        ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True, optional=True),
+        ManifestDread(count=1),
+    ))
 
 
 def test_unnerving_grasp_is_sorcery():

@@ -1119,11 +1119,49 @@ class Sequence(Effect):
     def requires_target(self) -> bool:
         return any(e.requires_target() for e in self.effects)
 
+    def target_count_range(self) -> tuple[int, int]:
+        """Return the combined (min, max) target range from sub-effects.
+
+        The base ``Effect.target_count_range()`` uses ``self.targets``
+        (which ``Sequence`` doesn't carry) and falls back to
+        ``(1, 1) if self.requires_target() else (0, 0)``.  That
+        fallback misses the ``count_min=0, count_max=1`` case produced
+        by optional sub-effects (e.g. ``ReturnTargetCreatureToOwnersHand
+        (optional=True)`` in a Sequence with ``ManifestDread()``): the
+        old fallback returns ``(0, 0)`` because ``requires_target()``
+        is False, causing the cast pipeline to pick zero targets even
+        though the printed "up to one" text says the player may choose.
+
+        This override walks the sub-effects directly, summing their
+        counts from ``target_count_range()``.  New-shape effects expose
+        accurate (min, max) values; old-shape effects whose
+        ``requires_target()`` returns True contribute (1, 1).  Because
+        ``Sequence.__post_init__`` enforces at most one targeting sub-
+        effect, the sum is still at most (1, 1) for mandatory targets
+        or (0, 1) for optional ones — no multi-target ambiguity is
+        introduced.
+        """
+        total_min = 0
+        total_max = 0
+        for e in self.effects:
+            lo, hi = e.target_count_range()
+            total_min += lo
+            total_max += hi
+        return (total_min, total_max)
+
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        # Iterate sub-effects in order, returning the first one that
+        # can take targets (count_max > 0). This covers both mandatory
+        # sub-effects (requires_target() = True → count_max >= 1) and
+        # optional sub-effects (count_min=0, count_max=1 — the
+        # "up to one" family). The existing constraint (at most one
+        # targeting sub-effect per Sequence, enforced by __post_init__)
+        # means at most one sub-effect has count_max > 0.
         for e in self.effects:
-            if e.requires_target():
+            lo, hi = e.target_count_range()
+            if hi > 0:
                 return e.legal_targets(state, controller_id)
         return []
 
@@ -1132,7 +1170,8 @@ class Sequence(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         for e in self.effects:
-            if e.requires_target():
+            lo, hi = e.target_count_range()
+            if hi > 0:
                 e.resolve(state, controller_id, targets)
             else:
                 e.resolve(state, controller_id, ())

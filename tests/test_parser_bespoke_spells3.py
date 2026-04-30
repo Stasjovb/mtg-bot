@@ -1,7 +1,7 @@
 """Tests for the bespoke-spells3 migration batch.
 
-This batch migrates three entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
-``parser.spell_builder`` by introducing five grammar extensions:
+This batch migrates five entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
+``parser.spell_builder`` by introducing seven grammar extensions:
 
 1. **``_SENTENCE_BOUNDARY_RE`` lookahead extension** — the negative
    lookahead in ``spell_builder._split_sentences`` is widened from
@@ -80,11 +80,13 @@ from mtg_bot.cards.base import (
     ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     Sequence,
 )
+from mtg_bot.cards.base import ManifestDread, ReturnTargetCreatureToOwnersHand
 from mtg_bot.cards.parser.effects import (
     _YOU_MAY_SAC_ARTIFACT_WHEN_YOU_DO,
     _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE,
     _RETURN_TARGET_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_BATTLEFIELD_WITH_MV,
     _RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED,
+    _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND,
     _normalize_spell_effect_phrase,
     _parse_effect,
     _parse_spell_effect_phrase,
@@ -111,9 +113,9 @@ def _claimed_names() -> frozenset[str]:
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
     # bespoke-spells2 removes 5 more → 22 remaining;
-    # bespoke-spells3 removes 4 more (Lithobraking, Scrounge for Eternity,
-    # Pull Through the Weft, Commune with Evil) → 18 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 18
+    # bespoke-spells3 removes 5 more (Lithobraking, Scrounge for Eternity,
+    # Pull Through the Weft, Commune with Evil, Unnerving Grasp) → 17 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 17
 
 
 # ------------------------------------------------------------------ #
@@ -629,4 +631,95 @@ def test_commune_with_evil_parses_via_per_clause_grammar():
     assert eff == Sequence(effects=(
         LookTopNPutOneInHandRestToGraveyard(n=4),
         GainLife(amount=3),
+    ))
+
+
+# ------------------------------------------------------------------ #
+# Sequence.target_count_range() fix + _RETURN_UP_TO_ONE_NONLAND fix  #
+# ------------------------------------------------------------------ #
+
+def test_sequence_target_count_range_optional_subeffect():
+    # Regression: Sequence with an optional sub-effect (count_min=0,
+    # count_max=1) must return (0, 1) from target_count_range() so the
+    # cast pipeline offers an optional target.
+    eff = Sequence(effects=(
+        ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True, optional=True),
+        ManifestDread(count=1),
+    ))
+    assert eff.target_count_range() == (0, 1)
+
+
+def test_sequence_target_count_range_mandatory_subeffect():
+    # Regression: Sequence with a mandatory sub-effect (count_min=1,
+    # count_max=1) must still return (1, 1) — no change in behavior.
+    from mtg_bot.cards.base import DestroyTargetCreature
+    eff = Sequence(effects=(
+        DestroyTargetCreature(),
+        ManifestDread(count=1),
+    ))
+    assert eff.target_count_range() == (1, 1)
+
+
+def test_return_up_to_one_nonland_permanent_regex_matches():
+    m = _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND.match(
+        "return up to one target nonland permanent to its owner's hand"
+    )
+    assert m is not None
+
+
+def test_return_up_to_one_nonland_permanent_parses_as_effect():
+    eff = _parse_effect(
+        "return up to one target nonland permanent to its owner's hand"
+    )
+    assert eff == ReturnTargetCreatureToOwnersHand(
+        allow_nonland_permanent=True, optional=True
+    )
+
+
+def test_return_up_to_one_nonland_permanent_does_not_match_creature():
+    # The bare creature form must NOT match this regex — disjoint.
+    m = _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND.match(
+        "return up to one target creature to its owner's hand"
+    )
+    assert m is None
+
+
+# ------------------------------------------------------------------ #
+# Unnerving Grasp migration                                           #
+# ------------------------------------------------------------------ #
+
+def test_unnerving_grasp_claimed_by_parser():
+    assert "Unnerving Grasp" in _claimed_names()
+
+
+def test_unnerving_grasp_no_bespoke_entry():
+    # After migration, the whole-spell table no longer has a key for
+    # Unnerving Grasp's text.
+    assert _try_whole_spell_exact_text(
+        "Return up to one target nonland permanent to its owner's "
+        "hand. Manifest dread."
+    ) is None
+
+
+def test_unnerving_grasp_engine_class_more_faithful():
+    # The per-clause parse preserves the optional bounce — more faithful
+    # than the previous ManifestDread(count=1) simplification that
+    # dropped the bounce entirely.
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Unnerving Grasp"]
+    assert p.spell_effect == Sequence(effects=(
+        ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True, optional=True),
+        ManifestDread(count=1),
+    ))
+
+
+def test_unnerving_grasp_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Return up to one target nonland permanent to its owner's "
+        "hand. Manifest dread.",
+        "Unnerving Grasp",
+    )
+    assert eff == Sequence(effects=(
+        ReturnTargetCreatureToOwnersHand(allow_nonland_permanent=True, optional=True),
+        ManifestDread(count=1),
     ))
