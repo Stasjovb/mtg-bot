@@ -112,29 +112,35 @@ def _slot_target_still_legal(state, slot, chosen):
     return slot.filter.test(obj, state)
 
 
-def _fizzle_message(state, chosen):
+def _fizzle_message(state, chosen, action: str = "damage"):
     """Produce the user-visible log line for a target whose at-resolve
     legality re-check failed. Names the target where possible so the
     log entry reads like the legacy per-class fizzle messages without
-    each effect having to compose its own string."""
+    each effect having to compose its own string. ``action`` slots into
+    the trailing "...fizzles" phrase ("damage fizzles", "destroy
+    fizzles", "exile fizzles") so cross-family migrations can share
+    the helper."""
     kind, target_id = chosen
     if kind == "player":
         return (
-            f"P{target_id} is no longer a legal target — damage fizzles"
+            f"P{target_id} is no longer a legal target — {action} fizzles"
         )
     obj = next(
         (o for o in state.battlefield if o.id == target_id), None
     )
     if obj is None:
-        return "target is no longer on the battlefield — damage fizzles"
+        return (
+            f"target is no longer on the battlefield — {action} fizzles"
+        )
     name = obj.printing.name
-    if not getattr(obj, "tapped", False):
-        # Common case: the slot's filter was IsCreature() & IsTapped()
-        # and the creature untapped between target-pick and resolve.
-        # Naming the specific change reads cleanest in the log; falls
-        # back to the generic phrasing for other re-check failures.
+    if action == "damage" and not getattr(obj, "tapped", False):
+        # Common case for damage targeting tapped creatures: the slot's
+        # filter was IsCreature() & IsTapped() and the creature
+        # untapped between target-pick and resolve. Naming the specific
+        # change reads cleanest in the log; falls back to the generic
+        # phrasing for other re-check failures.
         return f"{name} is no longer tapped — damage fizzles"
-    return f"{name} is no longer a legal target — damage fizzles"
+    return f"{name} is no longer a legal target — {action} fizzles"
 
 
 def _describe_targets(targets) -> str:
@@ -161,8 +167,9 @@ def _describe_filter(target_filter) -> str:
     parser's phrasebook on the way in."""
     from mtg_bot.effects.object_predicates import (
         ControlledByOpponent, ControlledByYou,
-        IsAttacking, IsBlocking, IsCreature, IsPlayer, IsTapped,
-        ObjectAnd, ObjectOr,
+        IsArtifact, IsAttacking, IsBasic, IsBlocking, IsCreature,
+        IsEnchantment, IsLand, IsPlayer, IsTapped, ObjectAnd,
+        ObjectNot, ObjectOr,
     )
     from mtg_bot.effects.target_filter import OneOf
     from mtg_bot.effects.targets import any_target_filter
@@ -172,6 +179,12 @@ def _describe_filter(target_filter) -> str:
         return "target creature"
     if isinstance(target_filter, IsPlayer):
         return "target player"
+    if isinstance(target_filter, IsArtifact):
+        return "target artifact"
+    if isinstance(target_filter, IsLand):
+        return "target land"
+    if isinstance(target_filter, IsEnchantment):
+        return "target enchantment"
     if isinstance(target_filter, ObjectAnd):
         l = target_filter.left
         r = target_filter.right
@@ -183,6 +196,10 @@ def _describe_filter(target_filter) -> str:
             return "target creature you control"
         if isinstance(l, IsPlayer) and isinstance(r, ControlledByOpponent):
             return "target opponent"
+        if isinstance(l, IsLand) and isinstance(r, ObjectNot) and isinstance(
+            r.inner, IsBasic
+        ):
+            return "target nonbasic land"
         if isinstance(l, IsCreature) and isinstance(r, ObjectOr):
             inner_l, inner_r = r.left, r.right
             if (isinstance(inner_l, IsAttacking)
@@ -191,6 +208,69 @@ def _describe_filter(target_filter) -> str:
     if isinstance(target_filter, OneOf):
         return "any target"  # default rendering for OneOf disjuncts
     return "target"
+
+
+@dataclass(frozen=True)
+class Destroy(Effect):
+    """Unified destroy primitive driven by ``targets``.
+
+    Replaces the per-class ``legal_targets`` / ``resolve`` overrides
+    on the simple destroy variants (``DestroyTargetArtifact``,
+    ``DestroyTargetLand``, ``DestroyTargetNoncreaturePermanent``,
+    ``DestroyTargetNonlandPermanent``, ``DestroyTargetArtifactOrTappedCreature``,
+    ``DestroyTargetArtifactEnchantmentOrFlyingCreature``). The
+    ``targets`` field declares legal-target shape via the
+    ``TargetFilter`` grammar; the resolve walk re-verifies legality
+    at fire time per CR 608.2b and destroys whichever slots survive
+    the recheck.
+
+    ``DestroyTargetCreature`` keeps its rider-class shape (Faller's
+    Faithful's "if it wasn't dealt damage this turn, draws N") because
+    the rider isn't expressible in the bare-grammar model — the rider
+    semantically belongs to a sibling effect that pronouns "that
+    creature". When the EffectSequence + SlotRef pillar lands the
+    rider can move out into a follow-up effect; for now it's a
+    ``Destroy`` subclass with extra fields.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.turn import destroy
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="destroy")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                state.log.append(f"{obj.printing.name} is destroyed")
+                destroy(state, obj)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"destroy {_describe_targets(self.targets)}"
 
 
 
@@ -4648,95 +4728,106 @@ class CreateToken(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetCreature(Effect):
-    """Destroy any target creature on the battlefield.
+class DestroyTargetCreature(Destroy):
+    """``Destroy`` constructor sugar for "destroy target creature" with
+    flag-driven filter widening and a Faller's-Faithful-style draw
+    rider.
 
-    Matches oracle text like "destroy target creature" (Vote Out). The
-    creature is moved to its owner's graveyard (tokens cease to exist).
+    Filter composition:
+      - base: ``IsCreature()``
+      - ``or_spacecraft=True``: union with ``HasSubtype("Spacecraft")``
+        (Embrace Oblivion's "creature or Spacecraft")
+      - ``or_enchantment=True``: union with ``IsEnchantment()``
+        (Withering Torment's "creature or enchantment")
+      - ``exclude_self=True``: intersect with ``~IsSource()`` so the
+        trigger source isn't its own legal target ("another target")
 
-    Optional rider: ``draw_if_undamaged_amount`` adds a Faller's-Faithful-
-    style "if that creature wasn't dealt damage this turn, its controller
-    draws N cards" follow-up. The check is made BEFORE destruction because
-    leaving the battlefield clears the damaged_this_turn flag. The drawing
-    player is the destroyed creature's controller (per oracle text).
+    Rider: ``draw_if_undamaged_amount > 0`` adds a "if it wasn't dealt
+    damage this turn, its controller draws N" follow-up — Faller's
+    Faithful. The check snapshots ``obj.damaged_this_turn`` BEFORE the
+    destroy because leaving the battlefield clears the flag. The
+    drawing player is the destroyed creature's controller per the
+    printed text. The custom resolve overrides ``Destroy.resolve``
+    so the rider runs alongside the destruction; future migration
+    will lift the rider into a sibling effect with a ``SlotRef`` back-
+    reference once the EffectSequence consumer pillar lands.
+
+    ``optional=True`` flips the slot's ``count_min`` to 0 ("up to one
+    other target" / Faller's Faithful's optional shape).
     """
 
     draw_if_undamaged_amount: int = 0
-    # When True, Spacecraft are also legal targets (regardless of
-    # whether they're currently animated as creatures). Matches oracle
-    # text "destroy target creature or Spacecraft" — Embrace Oblivion.
     or_spacecraft: bool = False
-    # When True, Enchantments (any subtype, Aura or otherwise) are also
-    # legal targets. Matches oracle text "destroy target creature or
-    # enchantment" — Withering Torment (Duskmourn). The enchantment
-    # branch emits ("enchantment", id) target tuples; the resolve
-    # accepts either kind and dispatches by id. Distinct from
-    # ``or_spacecraft`` (which extends the creature pool with
-    # Spacecraft) — both flags can in principle co-exist if a future
-    # printing widens to all three subtypes.
     or_enchantment: bool = False
-    # When True, "up to one target creature" semantics — the destroy
-    # is optional and the spell/ability resolves silently if no target
-    # is chosen. Matches Faller's Faithful's "up to one other target".
     optional: bool = False
-    # When True, the trigger source is excluded from its own legal
-    # targets — needed for "another target" / "other target" oracle
-    # phrasings. Reads state.resolving_source.
     exclude_self: bool = False
 
-    def requires_target(self) -> bool:
-        return not self.optional
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, 1) if self.optional else (1, 1)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        source = state.resolving_source if self.exclude_self else None
-        legal: list[Target] = []
-        for o in state.battlefield:
-            if source is not None and o.id == source.id:
-                continue
-            if o.printing.is_creature:
-                legal.append(("creature", o.id))
-            elif self.or_spacecraft and o.printing.is_spacecraft:
-                legal.append(("creature", o.id))
-            elif self.or_enchantment and "Enchantment" in o.printing.card_types:
-                legal.append(("enchantment", o.id))
-        return legal
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            HasSubtype, IsCreature, IsEnchantment, IsSource,
+        )
+        from mtg_bot.effects.target_filter import OneOf
+        from mtg_bot.effects.targets import TargetSpec
+        arms: list = [IsCreature()]
+        if self.or_spacecraft:
+            arms.append(HasSubtype("Spacecraft"))
+        if self.or_enchantment:
+            arms.append(IsEnchantment())
+        f = arms[0] if len(arms) == 1 else OneOf(*arms)
+        if self.exclude_self:
+            f = f & ~IsSource()
+        spec = TargetSpec(
+            f,
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.turn import destroy, draw_n_cards
-
         if not targets:
             return
-        kind, target_id = targets[0]
-        if kind not in ("creature", "enchantment"):
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None:
-            return
-        # Snapshot the rider condition BEFORE destruction (move_off_
-        # battlefield clears damaged_this_turn).
-        was_undamaged = not obj.damaged_this_turn
-        victim_controller_id = obj.controller_id
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
-        if self.draw_if_undamaged_amount > 0 and was_undamaged:
-            draw_n_cards(
-                state, victim_controller_id, self.draw_if_undamaged_amount,
-            )
-            state.log.append(
-                f"P{victim_controller_id} draws "
-                f"{self.draw_if_undamaged_amount} "
-                f"(target wasn't dealt damage this turn)"
-            )
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.turn import destroy, draw_n_cards
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="destroy")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                was_undamaged = not obj.damaged_this_turn
+                victim_controller_id = obj.controller_id
+                state.log.append(f"{obj.printing.name} is destroyed")
+                destroy(state, obj)
+                if self.draw_if_undamaged_amount > 0 and was_undamaged:
+                    draw_n_cards(
+                        state, victim_controller_id,
+                        self.draw_if_undamaged_amount,
+                    )
+                    state.log.append(
+                        f"P{victim_controller_id} draws "
+                        f"{self.draw_if_undamaged_amount} "
+                        f"(target wasn't dealt damage this turn)"
+                    )
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         suffix_parts: list[str] = []
@@ -4797,42 +4888,19 @@ class DestroyEnchantedPermanent(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetArtifact(Effect):
-    """Destroy target artifact. Tokens cease to exist."""
+class DestroyTargetArtifact(Destroy):
+    """``Destroy`` constructor sugar for "destroy target artifact".
 
-    def requires_target(self) -> bool:
-        return True
+    Filter is :class:`IsArtifact`. The unified ``Destroy.resolve``
+    re-verifies the slot's filter at resolution per CR 608.2b — a
+    target that lost the Artifact card type between cast and resolve
+    fails the recheck and the destruction is skipped.
+    """
 
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if o.printing.is_artifact
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import destroy
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None or not obj.printing.is_artifact:
-            return
-        state.log.append(f"{obj.printing.name} is destroyed (artifact)")
-        destroy(state, obj)
-
-    def describe(self) -> str:
-        return "destroy target artifact"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsArtifact
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(self, "targets", (TargetSpec(IsArtifact()),))
 
 
 
@@ -4994,48 +5062,24 @@ class ExileOpponentsNonlandPermanentUntilLeaves(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetNoncreaturePermanent(Effect):
-    """Destroy target noncreature permanent. Includes lands, non-
-    creature artifacts, enchantments, and planeswalkers — anything
-    on the battlefield that isn't a creature. Indestructible
-    permanents are unaffected.
+class DestroyTargetNoncreaturePermanent(Destroy):
+    """``Destroy`` constructor sugar for "destroy target noncreature
+    permanent".
 
-    Matches Extinguisher Battleship's ETB first clause.
+    Filter is ``~IsCreature() & ~IsPlayer()``. ``IsCreature`` reads
+    ``is_creature_now``, so an Impending-suppressed Overlord (which
+    is currently an enchantment, not a creature) IS a legal target —
+    matches the legacy ``not is_creature_now(o)`` enumeration.
+    Players are excluded by the ``~IsPlayer()`` arm.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        from mtg_bot.game import is_creature_now
-
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if not is_creature_now(o)
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import is_creature_now
-        from mtg_bot.turn import destroy
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature, IsPlayer
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(~IsCreature() & ~IsPlayer()),),
         )
-        if obj is None or is_creature_now(obj):
-            return
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
 
     def describe(self) -> str:
         return "destroy target noncreature permanent"
@@ -5606,50 +5650,23 @@ class ExileAllGraveyards(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetLand(Effect):
-    """Destroy target land. Matches Strip Mine's activated ability.
+class DestroyTargetLand(Destroy):
+    """``Destroy`` constructor sugar for "destroy target land" /
+    "destroy target nonbasic land".
 
-    ``nonbasic_only=True`` models "destroy target nonbasic land"
-    (Dust Bowl).
+    ``nonbasic_only=True`` narrows the filter from ``IsLand()`` to
+    ``IsLand() & ~IsBasic()`` — Strip Mine's bare form vs Dust Bowl's
+    nonbasic-restricted form. The unified ``Destroy.resolve`` re-
+    verifies the slot's filter at resolution.
     """
 
     nonbasic_only: bool = False
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        out: list[Target] = []
-        for o in state.battlefield:
-            if not o.printing.is_land:
-                continue
-            if self.nonbasic_only and "Basic" in o.printing.supertypes:
-                continue
-            out.append(("permanent", o.id))
-        return out
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import destroy
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None or not obj.printing.is_land:
-            return
-        if self.nonbasic_only and "Basic" in obj.printing.supertypes:
-            return
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsBasic, IsLand
+        from mtg_bot.effects.targets import TargetSpec
+        f = IsLand() & ~IsBasic() if self.nonbasic_only else IsLand()
+        object.__setattr__(self, "targets", (TargetSpec(f),))
 
     def describe(self) -> str:
         return (
@@ -5819,41 +5836,24 @@ class GrantLifeToEachOpponent(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetNonlandPermanent(Effect):
-    """Destroy target nonland permanent. Indestructible permanents are
-    unaffected. Tokens cease to exist normally.
+class DestroyTargetNonlandPermanent(Destroy):
+    """``Destroy`` constructor sugar for "destroy target nonland
+    permanent".
+
+    Filter is ``~IsLand() & ~IsPlayer()`` so the target pool covers
+    every battlefield permanent that isn't a land while excluding
+    players (which the unified target pipeline walks alongside the
+    battlefield). Indestructible permanents survive at resolve time
+    via the ``destroy`` helper's indestructible check.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if not o.printing.is_land
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import destroy
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsLand, IsPlayer
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(~IsLand() & ~IsPlayer()),),
         )
-        if obj is None or obj.printing.is_land:
-            return
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
 
     def describe(self) -> str:
         return "destroy target nonland permanent"
@@ -6295,54 +6295,25 @@ class DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetArtifactOrTappedCreature(Effect):
-    """Destroy target artifact, or tapped creature.
+class DestroyTargetArtifactOrTappedCreature(Destroy):
+    """``Destroy`` constructor sugar for "destroy target artifact, or
+    tapped creature".
 
-    Matches Radiant Strike's destroy clause. Uses the "permanent" target kind
-    since either artifacts or creatures can be hit; legality is filtered by
-    the more specific "artifact OR tapped creature" predicate.
+    Filter is ``IsArtifact() | (IsCreature() & IsTapped())``. The
+    unified ``Destroy.resolve`` re-verifies the slot's filter at
+    resolution per CR 608.2b — a creature that untapped between cast
+    and resolve fails the recheck (an artifact target is unaffected
+    by the untap and stays legal). Matches Radiant Strike's destroy
+    clause.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        out: list[Target] = []
-        for o in state.battlefield:
-            if o.printing.is_artifact:
-                out.append(("permanent", o.id))
-            elif o.printing.is_creature and o.tapped:
-                out.append(("permanent", o.id))
-        return out
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import move_off_battlefield
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            IsArtifact, IsCreature, IsTapped,
         )
-        if obj is None:
-            return
-        # Re-verify legality at resolution (target may have untapped).
-        if not (
-            obj.printing.is_artifact
-            or (obj.printing.is_creature and obj.tapped)
-        ):
-            return
-        from mtg_bot.turn import destroy
-
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
+        from mtg_bot.effects.targets import TargetSpec
+        f = IsArtifact() | (IsCreature() & IsTapped())
+        object.__setattr__(self, "targets", (TargetSpec(f),))
 
     def describe(self) -> str:
         return "destroy target artifact or tapped creature"
@@ -6703,57 +6674,27 @@ class UntapTargetOtherPermanent(Effect):
 
 
 @dataclass(frozen=True)
-class DestroyTargetArtifactEnchantmentOrFlyingCreature(Effect):
-    """Destroy target artifact, enchantment, or creature with flying.
+class DestroyTargetArtifactEnchantmentOrFlyingCreature(Destroy):
+    """``Destroy`` constructor sugar for "destroy target artifact,
+    enchantment, or creature with flying".
 
-    Matches Shattered Wings' destroy clause. Uses the "permanent" target
-    kind. Flying check uses effective_keywords so anthem-granted flying
-    (if ever implemented) and temp_keywords both count.
+    Filter is ``IsArtifact() | IsEnchantment() | (IsCreature() &
+    HasKeyword("flying"))``. ``HasKeyword`` reads
+    ``effective_keywords`` so anthem-granted / temp-granted flying
+    counts toward legality. Matches Shattered Wings' destroy clause.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def _is_legal(self, state: "GameState", obj: "GameObject") -> bool:
-        from mtg_bot.game import effective_keywords
-
-        if obj.printing.is_artifact:
-            return True
-        if "Enchantment" in obj.printing.card_types:
-            return True
-        if obj.printing.is_creature and "flying" in effective_keywords(state, obj):
-            return True
-        return False
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if self._is_legal(state, o)
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import destroy
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            HasKeyword, IsArtifact, IsCreature, IsEnchantment,
         )
-        if obj is None:
-            return
-        if not self._is_legal(state, obj):
-            return
-        state.log.append(f"{obj.printing.name} is destroyed")
-        destroy(state, obj)
+        from mtg_bot.effects.targets import TargetSpec
+        f = (
+            IsArtifact()
+            | IsEnchantment()
+            | (IsCreature() & HasKeyword("flying"))
+        )
+        object.__setattr__(self, "targets", (TargetSpec(f),))
 
     def describe(self) -> str:
         return (

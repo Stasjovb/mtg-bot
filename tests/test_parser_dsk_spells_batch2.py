@@ -89,10 +89,13 @@ def test_destroy_target_creature_or_enchantment_legal_targets_widening():
     )
     eff = DestroyTargetCreature(or_enchantment=True)
     legal = eff.legal_targets(state, controller_id=0)
-    # Both should be legal: creature kind for the creature, enchantment
-    # kind for the enchantment.
+    # Both should be legal. After the unified ``Destroy`` migration,
+    # ``Effect._enumerate_for_filter`` tags non-creature non-
+    # planeswalker non-battle objects as the generic ``"permanent"``
+    # kind — the resolve no longer dispatches on kind, just looks up
+    # the object by id, so the tag flattening is safe.
     assert ("creature", 1) in legal
-    assert ("enchantment", 2) in legal
+    assert ("permanent", 2) in legal
 
 
 def test_destroy_target_creature_default_excludes_enchantment():
