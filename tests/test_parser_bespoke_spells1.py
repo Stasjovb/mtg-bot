@@ -67,10 +67,11 @@ def _claimed_names() -> frozenset[str]:
 # Table-size regression                                               #
 # ------------------------------------------------------------------ #
 
-def test_bespoke_table_shrank_by_five():
-    # The five Delirium-bearing entries were removed from the table.
-    # Previous count was 50; after this batch it should be 45.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 45
+def test_bespoke_table_shrank_by_six():
+    # Five Delirium-bearing entries plus Temporal Intervention were
+    # removed from the table. Previous count was 50; after this batch
+    # it should be 44.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 44
 
 
 # ------------------------------------------------------------------ #

@@ -230,18 +230,16 @@ def test_temporal_intervention_claimed_by_parser():
     # Temporal Intervention ``{2}{B}`` Sorcery — 3-sentence directed
     # discard plus a Void-prefixed cost-reduction rider. The
     # cost-reduction parser's Void-prefix variant emits
-    # ``CostReduction(2, "void_active")``; the body effect is claimed
-    # via the whole-spell exact-text dispatcher
-    # (``TargetOpponentDiscardsCasterChoice``).
+    # ``CostReduction(2, "void_active")``; the body effect is now
+    # claimed via the per-clause grammar
+    # (``TargetOpponentDiscardsCasterChoice``) after the Void
+    # cost-reduction line is dropped by ``_parse_spell_oracle_text``.
     assert "Temporal Intervention" in _claimed_names()
 
 
-def test_dispatch_temporal_intervention_returns_engine_class():
-    # The dispatch key includes BOTH the leading Void-rider line and
-    # the trailing 3-sentence directed-discard line, separated by a
-    # literal newline. The dispatcher returns only the spell-effect
-    # engine class; the cost-reduction rider is detected separately
-    # via ``_detect_cost_reductions``.
+def test_temporal_intervention_no_bespoke_entry():
+    # After migration, the whole-spell exact-text dispatcher no longer
+    # has an entry for Temporal Intervention's full oracle text.
     eff = _try_whole_spell_exact_text(
         "Void — This spell costs {2} less to cast "
         "if a nonland permanent left the battlefield this turn "
@@ -250,6 +248,22 @@ def test_dispatch_temporal_intervention_returns_engine_class():
         "You choose a nonland card from it. "
         "That player discards that card."
     )
+    assert eff is None
+
+
+def test_directed_discard_body_parses_via_per_clause_grammar():
+    # The 3-sentence directed-discard body now parses directly via the
+    # per-clause effect grammar (``_parse_spell_effect_phrase``).  The
+    # normalizer strips the card-name prefix; since Temporal
+    # Intervention's body uses no name prefix, the body is passed
+    # verbatim as a single oracle line.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
+        "Target opponent reveals their hand. "
+        "You choose a nonland card from it. "
+        "That player discards that card."
+    )
+    eff = _parse_spell_effect_phrase(body, "Temporal Intervention")
     assert eff == TargetOpponentDiscardsCasterChoice()
 
 

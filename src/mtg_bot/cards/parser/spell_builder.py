@@ -84,7 +84,6 @@ from mtg_bot.cards.base import (
     Surveil,
     SystemsOverrideEffect,
     TakeExtraTurnAfterThisOne,
-    TargetOpponentDiscardsCasterChoice,
     VengefulPossessionEffect,
     ZeroPointBalladEffect,
     make_instant,
@@ -760,27 +759,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
             else_effect=None,
         ),
     )),
-    # Temporal Intervention: 3-sentence directed-discard plus a Void-
-    # prefixed cost-reduction rider on its own line. The static ships
-    # the discard via ``TargetOpponentDiscardsCasterChoice`` and wires
-    # the cost reduction via ``cost_reductions=(CostReduction(amount=2,
-    # condition="void_active"),)`` on the printing. The cost-reduction
-    # rider is detected and threaded separately by ``_detect_cost_
-    # reductions`` (which now recognizes the ``Void — `` prefix);
-    # the dispatcher returns only the spell-effect engine class.
-    # The leading Void-rider line stays in the dispatch key — the
-    # cost-reduction stripping pass that runs LATER (per-clause, in
-    # ``_parse_spell_oracle_text``) is bypassed by hitting the
-    # whole-spell tier first, so the key must include every line of
-    # the printed text.
-    (
-        "Void — This spell costs {2} less to cast "
-        "if a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn.\n"
-        "Target opponent reveals their hand. "
-        "You choose a nonland card from it. "
-        "That player discards that card."
-    ): TargetOpponentDiscardsCasterChoice(),
     # Consult the Star Charts: variable-X library look + kicker-gated
     # extra card kept. The static ships ``ConsultTheStarChartsEffect()``
     # (no parameters; the bespoke class handles the X-formula and the

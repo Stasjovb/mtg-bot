@@ -130,6 +130,7 @@ from mtg_bot.cards.base import (
     TapAnotherTargetCreature,
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
+    TargetOpponentDiscardsCasterChoice,
     TargetOpponentLosesLife,
     UntapTargetOtherPermanent,
 )
@@ -1719,6 +1720,31 @@ _EACH_OPPONENT_SACRIFICES_CREATURE = re.compile(
 _DEFENDING_PLAYER_LOSES_HALF_LIFE_ROUNDED_UP = re.compile(
     r"^defending player loses half their life, rounded up$"
 )
+# "Target opponent reveals their hand. You choose a nonland card from
+# it. That player discards that card." — directed discard where the
+# CASTER picks which card is discarded (Temporal Intervention in EoE).
+# Three-sentence multi-sentence recognizer: the three sentences cannot
+# be parsed individually because the second and third sentences are
+# riders that presuppose the reveal context of the first. Matched as
+# a single multi-sentence phrase so ``_parse_spell_oracle_text``'s
+# clause-splitter doesn't break it apart before the unified primitive
+# can claim it.
+#
+# Currently only Temporal Intervention in the EoE/DSK pool fits this
+# exact three-sentence surface form; the recognizer is a literal-line
+# match (no captured groups) since no second card with a varying piece
+# (e.g. different filter or reveal restriction) exists today. Per
+# parser CLAUDE.md, a literal is acceptable when exactly one card in
+# the pool fits and the docstring notes why generalization is deferred.
+# A future "Target opponent reveals their hand. You choose a card with
+# mana value 2 or less from it. That player discards that card." would
+# share the underlying directed-discard shape; at that point, replace
+# this literal with a parameterized regex capturing the filter clause.
+_TARGET_OPPONENT_REVEALS_HAND_CASTER_CHOICE_DISCARD = re.compile(
+    r"^target opponent reveals their hand\. "
+    r"You choose a nonland card from it\. "
+    r"That player discards that card$"
+)
 # "Defending player mills N cards" — Specimen Freighter's attack
 # trigger body. The defending-player surface is the multiplayer-aware
 # wording for an attack-trigger mill; the engine simplifies this to
@@ -3068,6 +3094,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         # 2-player, documented approximation in multiplayer. See
         # the regex comment for the deferred-generalization plan.
         return DefendingPlayerLosesHalfLifeRoundedUp()
+    if _TARGET_OPPONENT_REVEALS_HAND_CASTER_CHOICE_DISCARD.match(
+        phrase
+    ) is not None:
+        # ``target opponent reveals their hand. You choose a nonland
+        # card from it. That player discards that card`` — Temporal
+        # Intervention's directed-discard body (caster picks which
+        # card the opponent discards). The three sentences are matched
+        # as a single literal-line recognizer because they form one
+        # coupled primitive; see the regex comment for the deferred-
+        # generalization plan when a second card with a varying piece
+        # ships. Target selection (which opponent) is handled by the
+        # engine class's ``legal_targets``; card selection (which
+        # nonland card in that opponent's hand) is handled by the
+        # engine class's ``resolve`` via the caster's
+        # ``choose_card_from_opponents_hand`` hook.
+        return TargetOpponentDiscardsCasterChoice()
     m = _DEFENDING_PLAYER_MILLS_N_CARDS.match(phrase)
     if m is not None:
         # ``defending player mills N cards`` — Specimen Freighter's
