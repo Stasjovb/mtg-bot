@@ -376,9 +376,18 @@ def test_quantum_riddler_replacement_adds_one_per_event_not_per_card():
     assert drawn == 4
 
 
-def test_quantum_riddler_replacement_does_not_stack_with_multiple_copies():
-    """Two Riddlers add one card per event, not two — the replacement
-    is binary "is any Riddler active", not multiplicative."""
+def test_quantum_riddler_replacement_stacks_with_multiple_copies():
+    """Two Riddlers each contribute their own AddToCount(1) replacement
+    — under the unified ``dispatch_replacement`` path, additive
+    replacements compound (CR 614, two replacements both apply unless
+    ordering chooses to skip one). 1 base draw + 2 Riddlers → 3 cards.
+
+    The legacy implementation collapsed the check to "is any Riddler
+    active" (binary), which capped the draw bonus at +1 regardless of
+    Riddler count — that was a simplification, not the rules-correct
+    behavior. The unified dispatcher now reflects how multiple
+    independent replacements compose per CR 614 / 616.1.
+    """
     from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.turn import draw_n_cards
 
@@ -391,7 +400,7 @@ def test_quantum_riddler_replacement_does_not_stack_with_multiple_copies():
         obj = state.new_object(BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY)
         state.players[0].library.append(obj)
     drawn = draw_n_cards(state, 0, 1)
-    assert drawn == 2
+    assert drawn == 3
 
 
 def test_quantum_riddler_has_warp_cost_and_flying():

@@ -2412,17 +2412,31 @@ def _declare_blockers(
 
 
 def _send_to_graveyard_or_library(state: GameState, card) -> None:
-    """Route a non-permanent spell (or failed-cost / countered card) to
-    its owner's graveyard — unless the card's printing has
-    ``shuffles_into_library_instead_of_graveyard`` set, in which case
-    it's shuffled into the owner's library instead.
+    """Route a non-permanent spell (or failed-cost / countered card)
+    to its owner's graveyard, honouring CR 614 zone-redirect
+    replacement effects.
 
-    Nexus of Fate + Green Sun's Zenith both use this redirect. Shuffle
-    draws from ``state.rng`` so the run is reproducible from the
-    caller-supplied seed.
+    Routes through :func:`mtg_bot.effects.modifiers
+    .dispatch_replacement` on ``WOULD_GO_TO_GRAVEYARD`` with a base
+    ``destination="graveyard"`` payload. Nexus-of-Fate-shape
+    printings (``shuffles_into_library_instead_of_graveyard``) carry
+    a ``Replace(new_destination="library")`` synthesis in
+    :func:`_collect_replacement_effects`; the dispatcher applies it
+    and this site reads the post-replacement destination off the
+    payload to route the card.
     """
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
     owner = state.player_by_id(card.owner_id)
-    if card.printing.shuffles_into_library_instead_of_graveyard:
+    out = dispatch_replacement(
+        state, Event.WOULD_GO_TO_GRAVEYARD,
+        affected_player_id=card.owner_id,
+        subjects={"card": card},
+        payload={"destination": "graveyard"},
+    )
+    destination = out.get("destination", "graveyard")
+    if destination == "library":
         from mtg_bot.game import shuffle_library
         card.zone = Zone.LIBRARY
         owner.library.append(card)

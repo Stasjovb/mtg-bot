@@ -394,13 +394,12 @@ def _collect_replacement_effects(
     ``event_pattern`` matches and whose subject filters accept the
     firing.
 
-    PR A's first consumer is the token-doubler family — the legacy
-    ``CardPrinting.is_token_doubler: bool`` flag synthesizes a
-    ``ReplacementEffect(EventPattern(WOULD_CREATE_TOKEN),
-    MultiplyCount(2))`` for each carrier on the battlefield. Future
-    PRs will replace the synthesis with native
-    ``ReplacementEffect`` declarations on each printing's static
-    abilities.
+    Legacy printing-level boolean flags synthesise matching
+    ``ReplacementEffect`` instances — this keeps existing parser
+    output working unchanged while the per-card boolean-flag anti-
+    pattern collapses behind a single dispatcher. Native
+    declarations on each printing's static abilities replace the
+    synthesis paths in PR D.
     """
     from mtg_bot.effects.predicates import Event
 
@@ -423,18 +422,110 @@ def _collect_replacement_effects(
             ):
                 continue
             out.append((obj.id, re))
-        # Legacy synthesis: token-doubler flag on the printing →
-        # ReplacementEffect(WOULD_CREATE_TOKEN, MultiplyCount(2)).
+        # ── Legacy synthesis paths ─────────────────────────────────
+        # Token-doubler flag → MultiplyCount(2) on WOULD_CREATE_TOKEN.
         if event == Event.WOULD_CREATE_TOKEN and getattr(
             obj.printing, "is_token_doubler", False,
         ):
             controller_id = subjects.get("controller_id")
             if controller_id is None or obj.controller_id == controller_id:
-                synth = ReplacementEffect(
-                    event_pattern=EventPattern(event=Event.WOULD_CREATE_TOKEN),
-                    transform=MultiplyCount(factor=2),
-                )
-                out.append((obj.id, synth))
+                out.append((
+                    obj.id,
+                    ReplacementEffect(
+                        event_pattern=EventPattern(
+                            event=Event.WOULD_CREATE_TOKEN,
+                        ),
+                        transform=MultiplyCount(factor=2),
+                    ),
+                ))
+        # Loading-Zone-shape counter-doubler →
+        # MultiplyCount(2) on WOULD_PLACE_COUNTER. Scope: counter
+        # recipient is a creature or Spacecraft the doubler's
+        # controller controls. The recipient passes through subjects
+        # ``"obj"``; the doubler reads its controller_id off that.
+        if event == Event.WOULD_PLACE_COUNTER and getattr(
+            obj.printing, "is_counter_doubler", False,
+        ):
+            recipient = subjects.get("obj")
+            if (
+                recipient is not None
+                and getattr(recipient, "controller_id", None)
+                == obj.controller_id
+            ):
+                out.append((
+                    obj.id,
+                    ReplacementEffect(
+                        event_pattern=EventPattern(
+                            event=Event.WOULD_PLACE_COUNTER,
+                        ),
+                        transform=MultiplyCount(factor=2),
+                    ),
+                ))
+        # Quantum-Riddler-shape draw replacement →
+        # AddToCount(1) on WOULD_DRAW_CARDS, gated on the drawing
+        # player having ≤ 1 card in hand AND being the carrier's
+        # controller.
+        if event == Event.WOULD_DRAW_CARDS and getattr(
+            obj.printing,
+            "replaces_draw_with_extra_when_hand_at_most_one",
+            False,
+        ):
+            drawer = subjects.get("player")
+            if (
+                drawer is not None
+                and getattr(drawer, "id", None) == obj.controller_id
+                and len(getattr(drawer, "hand", [])) <= 1
+            ):
+                out.append((
+                    obj.id,
+                    ReplacementEffect(
+                        event_pattern=EventPattern(
+                            event=Event.WOULD_DRAW_CARDS,
+                        ),
+                        transform=AddToCount(delta=1),
+                    ),
+                ))
+        # Starfield-Vocalist-shape extra-ETB-trigger replacement →
+        # AddInstances(extra) on TRIGGERED_ABILITY_TRIGGERS. Scope:
+        # the triggering ETB is on a permanent the carrier's
+        # controller controls.
+        extra_etb = getattr(obj.printing, "extra_etb_trigger", 0)
+        if event == Event.TRIGGERED_ABILITY_TRIGGERS and extra_etb > 0:
+            ability_source = subjects.get("ability_source")
+            if (
+                ability_source is not None
+                and getattr(ability_source, "controller_id", None)
+                == obj.controller_id
+            ):
+                out.append((
+                    obj.id,
+                    ReplacementEffect(
+                        event_pattern=EventPattern(
+                            event=Event.TRIGGERED_ABILITY_TRIGGERS,
+                        ),
+                        transform=AddInstances(delta=extra_etb),
+                    ),
+                ))
+    # Out-of-band synthesis: WOULD_GO_TO_GRAVEYARD reads a flag on
+    # the moving CARD's printing, not on a battlefield permanent
+    # (the card is mid-flight at dispatch). The dispatch site
+    # passes the card via ``subjects["card"]``.
+    if event == Event.WOULD_GO_TO_GRAVEYARD:
+        card = subjects.get("card")
+        if card is not None and getattr(
+            getattr(card, "printing", None),
+            "shuffles_into_library_instead_of_graveyard",
+            False,
+        ):
+            out.append((
+                getattr(card, "id", -1),
+                ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.WOULD_GO_TO_GRAVEYARD,
+                    ),
+                    transform=Replace(new_destination="library"),
+                ),
+            ))
     return out
 
 
