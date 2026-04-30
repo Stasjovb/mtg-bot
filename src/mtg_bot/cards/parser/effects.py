@@ -1869,6 +1869,33 @@ _YOU_MAY_PAY_THEN_EFFECT = re.compile(
 # forms in print today, but the regex doesn't enforce that pairing
 # because the engine's ``exclude_self=True`` flag is meaningful even on
 # bare-target effects.
+# "Until end of turn, target creature gets +N/+M, gains <kw>, and becomes
+# <type-change> in addition to its other types." — Jump Scare (Duskmourn
+# ``{W}`` Instant). A leading-UEOT pump with a keyword grant AND an
+# unimplemented type-change rider ("becomes a Horror enchantment creature
+# in addition to its other types"). The type-change is dropped because the
+# engine has no UEOT-scoped type-line addition on targeted creatures; the
+# resulting effect is the pure pump + keyword-grant (same simplification
+# the static registry ships). Three capture groups:
+#   1. power bonus
+#   2. toughness bonus
+#   3. keyword grant body (the part between "gains " and ", and becomes")
+#
+# The "and becomes … in addition to its other types" tail anchors the
+# regex; a future "until end of turn, target creature gets +N/+M, gains
+# <kw>" card WITHOUT a type-change rider would NOT match this regex and
+# would instead need a sibling for the bare leading-UEOT shape (none in
+# the current pool, so deferred until a second example exists).
+#
+# Tried BEFORE the bare-trailing-UEOT ``_PUMP_AND_GAIN_KEYWORDS_UEOT``
+# regex so the more-specific leading-UEOT + type-change-rider form wins;
+# the trailing-UEOT regex's ``until end of turn$`` anchor would never
+# match this leading-UEOT surface anyway, but ordering more-specific
+# before more-general is the convention here.
+_PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE = re.compile(
+    r"^until end of turn, target creature gets ([+-]\d+)/([+-]\d+), "
+    r"gains (.+?), and becomes .+ in addition to its other types$"
+)
 _PUMP_AND_GAIN_KEYWORDS_UEOT = re.compile(
     r"^(another )?target (attacking )?creature (you control )?"
     r"gets ([+-]\d+)/([+-]\d+) and gains "
@@ -4123,6 +4150,26 @@ def _parse_effect(phrase: str) -> Effect | None:
     # consumer of that linkage today).
     if _EXILE_CARD_FROM_GRAVEYARD.match(phrase) is not None:
         return ExileTargetCardFromGraveyard()
+    # ``until end of turn, target creature gets +N/+M, gains <kw>, and
+    # becomes <type-change> in addition to its other types`` — Jump
+    # Scare's leading-UEOT pump + keyword-grant + dropped type-change
+    # rider.  Tried BEFORE both the bare-pump regex and the standard
+    # ``target creature gets ... and gains ... UEOT`` shape because the
+    # leading ``until end of turn, `` adverb means neither trailing-UEOT
+    # regex would ever match. The type-change rider is dropped because the
+    # engine has no UEOT-scoped type-line addition on targeted creatures.
+    m = _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE.match(phrase)
+    if m is not None:
+        # Groups: 1=power, 2=toughness, 3=keyword-grant body
+        # (everything between "gains " and ", and becomes").
+        keywords = _parse_keyword_grant_body(m.group(3))
+        if keywords is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=int(m.group(1)),
+            toughness_bonus=int(m.group(2)),
+            granted_keywords=keywords,
+        )
     # Pump + grant-keywords compound is tried BEFORE the bare-pump
     # regex so a phrase like ``+3/+0 and gains first strike and reach
     # until end of turn`` produces the keyword-bearing

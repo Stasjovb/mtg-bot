@@ -1,7 +1,7 @@
 """Tests for the bespoke-spells2 migration batch.
 
-This batch migrates three entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
-``parser.spell_builder`` by introducing four grammar extensions:
+This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
+``parser.spell_builder`` by introducing five grammar extensions:
 
 1. **Self-shuffle rider dropper** (``_is_self_shuffle_clause``) — recognizes
    the two printed self-shuffle surface forms and drops them from the
@@ -34,8 +34,15 @@ This batch migrates three entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    ``Sequence(Surveil(...), DrawCards(3))`` the static side ships.
    Migrates: **Cerebral Download**.
 
-Total migration: 3 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
-Table shrinks from 27 to 24.
+5. **``_PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE`` recognizer** (effects.py) —
+   maps "until end of turn, target creature gets +N/+M, gains <kw>, and
+   becomes <type-change> in addition to its other types" to
+   ``PumpTargetCreatureUntilEOT(power, toughness, granted_keywords)``,
+   dropping the unimplemented type-change rider.
+   Migrates: **Jump Scare**.
+
+Total migration: 4 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 27 to 23.
 """
 
 from __future__ import annotations
@@ -44,12 +51,17 @@ import pytest
 
 from mtg_bot.cards.base import (
     DrawCards,
+    PumpTargetCreatureUntilEOT,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     Sequence,
     Surveil,
     TakeExtraTurnAfterThisOne,
 )
-from mtg_bot.cards.parser.effects import _parse_effect, _parse_spell_effect_phrase
+from mtg_bot.cards.parser.effects import (
+    _parse_effect,
+    _parse_spell_effect_phrase,
+    _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE,
+)
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.spell_builder import (
     _is_self_shuffle_clause,
@@ -71,10 +83,10 @@ def _claimed_names() -> frozenset[str]:
 
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
-    # bespoke-spells2 removes 3 more (Nexus of Fate, Green Sun's Zenith,
-    # Cerebral Download).
-    # 50 - 26 = 24 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 24
+    # bespoke-spells2 removes 4 more (Nexus of Fate, Green Sun's Zenith,
+    # Cerebral Download, Jump Scare).
+    # 50 - 27 = 23 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 23
 
 
 # ------------------------------------------------------------------ #
@@ -362,6 +374,102 @@ def test_cerebral_download_parses_via_per_clause_grammar():
         Surveil(amount=1, use_artifact_count=True),
         DrawCards(amount=3),
     ))
+
+
+# ------------------------------------------------------------------ #
+# Jump Scare migration                                                #
+# ------------------------------------------------------------------ #
+
+def test_jump_scare_leading_ueot_regex_matches():
+    # The leading-UEOT + type-change-rider regex must match Jump Scare's
+    # normalized oracle text verbatim.
+    m = _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE.match(
+        "until end of turn, target creature gets +2/+2, gains flying, "
+        "and becomes a Horror enchantment creature in addition to its "
+        "other types"
+    )
+    assert m is not None
+    assert m.group(1) == "+2"
+    assert m.group(2) == "+2"
+    assert m.group(3) == "flying"
+
+
+def test_jump_scare_leading_ueot_regex_no_false_positive_bare_pump():
+    # The trailing-UEOT bare pump must NOT be claimed by this regex.
+    assert _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE.match(
+        "target creature gets +2/+2 until end of turn"
+    ) is None
+
+
+def test_jump_scare_leading_ueot_regex_no_false_positive_trailing_ueot_kw():
+    # The trailing-UEOT pump-and-gain-keywords shape must NOT match.
+    assert _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE.match(
+        "target creature gets +2/+2 and gains flying until end of turn"
+    ) is None
+
+
+def test_jump_scare_parses_as_effect():
+    eff = _parse_effect(
+        "until end of turn, target creature gets +2/+2, gains flying, "
+        "and becomes a Horror enchantment creature in addition to its "
+        "other types"
+    )
+    assert eff == PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"flying"}),
+    )
+
+
+def test_jump_scare_parses_as_spell_effect_phrase():
+    eff = _parse_spell_effect_phrase(
+        "Until end of turn, target creature gets +2/+2, gains flying, "
+        "and becomes a Horror enchantment creature in addition to its "
+        "other types.",
+        "Jump Scare",
+    )
+    assert eff == PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"flying"}),
+    )
+
+
+def test_jump_scare_claimed_by_parser():
+    assert "Jump Scare" in _claimed_names()
+
+
+def test_jump_scare_engine_class():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Jump Scare"]
+    assert p.spell_effect == PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"flying"}),
+    )
+
+
+def test_jump_scare_no_bespoke_entry():
+    # The whole-spell tier no longer has a key for this text.
+    assert _try_whole_spell_exact_text(
+        "Until end of turn, target creature gets +2/+2, gains "
+        "flying, and becomes a Horror enchantment creature in "
+        "addition to its other types."
+    ) is None
+
+
+def test_jump_scare_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Until end of turn, target creature gets +2/+2, gains "
+        "flying, and becomes a Horror enchantment creature in "
+        "addition to its other types.",
+        "Jump Scare",
+    )
+    assert eff == PumpTargetCreatureUntilEOT(
+        power_bonus=2,
+        toughness_bonus=2,
+        granted_keywords=frozenset({"flying"}),
+    )
 
 
 # ------------------------------------------------------------------ #

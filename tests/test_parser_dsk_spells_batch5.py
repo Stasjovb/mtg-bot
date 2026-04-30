@@ -108,12 +108,13 @@ def test_unwanted_remake_is_instant():
 # ---------- Jump Scare ----------
 
 def test_jump_scare_claimed_by_parser():
-    # Jump Scare ``{W}`` Instant — claimed via the new whole-spell
-    # exact-text dispatch entry that simplifies the printed text
-    # (+2/+2 with flying + becomes-Horror-enchantment-creature
-    # type-change rider) to bare ``PumpTargetCreatureUntilEOT(power=
-    # 2, toughness=2, granted_keywords={"flying"})``. Type-change
-    # rider dropped per parser-is-right precedent.
+    # Jump Scare ``{W}`` Instant — originally claimed via whole-spell
+    # exact-text dispatch; migrated to per-clause grammar in
+    # bespoke-spells2 via the new ``_PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE``
+    # recognizer in ``effects.py``. The leading "Until end of turn,"
+    # adverb is handled by the new regex; the type-change rider
+    # ("becomes a Horror enchantment creature in addition to its other
+    # types") is dropped per parser-is-right precedent.
     assert "Jump Scare" in _claimed_names()
 
 

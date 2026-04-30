@@ -1129,32 +1129,16 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``ManifestDread`` primitive resolves for the CASTER's hand, not
     # the destroyed permanent's controller's hand; the back-reference
     # plumbing required is a non-trivial engine widening).
-    # Jump Scare (Duskmourn) — pump-target-creature plus a type-
-    # change rider ("becomes a Horror enchantment creature in
-    # addition to its other types"). The static side simplifies to
-    # bare ``PumpTargetCreatureUntilEOT(power_bonus=2,
-    # toughness_bonus=2, granted_keywords={"flying"})`` because the
-    # engine doesn't model UEOT type-line additions on targeted
-    # creatures — the closest aura plumbing
-    # (``attached_grants_subtype``) is single-subtype Aura-only and
-    # doesn't add a card type (Enchantment) on top of the target.
-    # Same parser-is-right simplification as Unravel / Divert
-    # Disaster: claim the bare base mechanic (pump UEOT + flying
-    # grant) and drop the type-change rider. The leading
-    # ``Until end of turn,`` adverb is part of the dispatch key so
-    # the surface form matches verbatim — the per-clause grammar
-    # parses ``target creature gets +2/+2 and gains flying until
-    # end of turn`` (trailing UEOT) but not the leading-UEOT shape,
-    # so the whole-spell tier is the right place.
-    (
-        "Until end of turn, target creature gets +2/+2, gains "
-        "flying, and becomes a Horror enchantment creature in "
-        "addition to its other types."
-    ): PumpTargetCreatureUntilEOT(
-        power_bonus=2,
-        toughness_bonus=2,
-        granted_keywords=frozenset({"flying"}),
-    ),
+    # Jump Scare (Duskmourn) — "Until end of turn, target creature
+    # gets +2/+2, gains flying, and becomes a Horror enchantment
+    # creature in addition to its other types." — migrated to per-
+    # clause grammar: the new ``_PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE``
+    # recognizer in ``effects.py`` claims the full sentence as
+    # ``PumpTargetCreatureUntilEOT(power_bonus=2, toughness_bonus=2,
+    # granted_keywords={"flying"})``, dropping the unimplemented
+    # type-change rider ("becomes a Horror enchantment creature in
+    # addition to its other types") per the parser-is-right simplification
+    # precedent (Unravel, Divert Disaster).
     # Vengeful Possession (Duskmourn) — gain-control + untap +
     # haste UEOT plus an optional looter rider ("You may discard a
     # card. If you do, draw a card."). The static side ships

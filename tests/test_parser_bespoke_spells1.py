@@ -104,13 +104,14 @@ def test_bespoke_table_count():
     #   + Don't Make a Sound (same Mana-Leak + consequent dropper)
     #   + Come Back Wrong (conditional-reanimate + delayed-sac droppers,
     #     N-clause general rider-drop path)
-    # Additional removals in bespoke-spells2 branch (3 more, 24 remaining):
+    # Additional removals in bespoke-spells2 branch (4 more, 23 remaining):
     #   + Nexus of Fate (take-extra-turn primitive + self-shuffle dropper)
     #   + Green Sun's Zenith (GSZ battlefield-tutor primitive +
     #     self-shuffle dropper)
     #   + Cerebral Download (surveil-X-artifact-count primitive)
-    # 50 - 26 = 24 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 24
+    #   + Jump Scare (leading-UEOT + keywords + becomes-type-change dropper)
+    # 50 - 27 = 23 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 23
 
 
 # ------------------------------------------------------------------ #
