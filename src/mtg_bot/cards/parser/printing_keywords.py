@@ -654,3 +654,76 @@ def _parse_play_lands_from_graveyard_line(line: str) -> bool:
     ``grants_play_lands_from_graveyard`` kwarg on ``make_creature``.
     """
     return line.strip() == _PLAY_LANDS_FROM_GRAVEYARD_LINE
+
+
+# ``This spell can't be countered.`` — printing-level static immunity to
+# counter effects. The engine field ``spell_is_uncounterable: bool`` is
+# checked in ``CounterTargetSpell.legal_targets`` and
+# ``CounterTargetSpell.resolve``; spells with this flag don't appear in
+# the legal-target list and the counter fizzles if somehow targeted
+# between targeting and resolution. Matched as a literal string — Frenzied
+# Baloth is the only card in the parser pool with this exact surface
+# today; broader grammar deferred until a second example exists (a future
+# instant/sorcery with this clause would reuse the same field without any
+# grammar change needed since the surface is already parameterless).
+_SPELL_CANT_BE_COUNTERED_LINE = "This spell can't be countered."
+
+
+def _parse_spell_cant_be_countered_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``This spell can't be countered.``
+    clause, else ``False``. Flips the ``spell_is_uncounterable`` kwarg on
+    ``make_creature``; ``CounterTargetSpell`` checks the flag at targeting
+    and resolve time.
+    """
+    return line.strip() == _SPELL_CANT_BE_COUNTERED_LINE
+
+
+# ``Creature spells you control can't be countered.`` — static ability
+# printed on a permanent that grants uncounterability to all creature
+# spells the controller casts while this permanent is on the battlefield.
+# The engine checks for a ``StaticAbility`` with
+# ``grants_creature_spells_uncounterable=True`` on the controller's
+# battlefield permanents inside ``CounterTargetSpell``. Matched as a
+# literal string — Frenzied Baloth is the only card in the parser pool
+# with this exact surface today; broader grammar deferred until a second
+# example exists (a hypothetical "Noncreature spells you control can't be
+# countered." variant would need its own field and recognizer, making this
+# surface already a degenerate but specific shape).
+_CREATURE_SPELLS_UNCOUNTERABLE_LINE = (
+    "Creature spells you control can't be countered."
+)
+
+
+def _parse_creature_spells_uncounterable_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the
+    ``Creature spells you control can't be countered.`` clause, else
+    ``False``. The creature builder wires this as a ``StaticAbility``
+    with ``grants_creature_spells_uncounterable=True`` and scope
+    ``StaticScope.SELF`` (the ability doesn't buff permanents — it's
+    a spell-on-stack protection; ``SELF`` is used only so the existing
+    ``applies_to`` walk is a no-op and the static doesn't inadvertently
+    grant keywords to the source creature).
+    """
+    return line.strip() == _CREATURE_SPELLS_UNCOUNTERABLE_LINE
+
+
+# ``Combat damage can't be prevented.`` — printing-level static that
+# causes damage events from this creature to bypass global combat-damage
+# prevention effects (e.g. Darkness). The engine field
+# ``combat_damage_cant_be_prevented: bool`` is checked per-source in
+# ``combat._resolve_damage_step`` when ``state.prevent_combat_damage_this_turn``
+# is True. Matched as a literal string — Frenzied Baloth is the only card
+# in the parser pool with this exact surface today; broader grammar
+# deferred until a second example exists.
+_COMBAT_DAMAGE_CANT_BE_PREVENTED_LINE = "Combat damage can't be prevented."
+
+
+def _parse_combat_damage_cant_be_prevented_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the
+    ``Combat damage can't be prevented.`` clause, else ``False``. Flips the
+    ``combat_damage_cant_be_prevented`` kwarg on ``make_creature``; the
+    engine checks the flag in ``combat._source_bypasses_prevention`` to
+    let this creature's damage events through even when
+    ``state.prevent_combat_damage_this_turn`` is set.
+    """
+    return line.strip() == _COMBAT_DAMAGE_CANT_BE_PREVENTED_LINE

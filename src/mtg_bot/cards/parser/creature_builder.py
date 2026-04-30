@@ -105,6 +105,8 @@ from mtg_bot.cards.parser.cost_reduction import (
 from mtg_bot.cards.parser.printing_keywords import (
     _parse_additional_land_per_turn_line,
     _parse_attack_bypass_if_artifact_entered_line,
+    _parse_combat_damage_cant_be_prevented_line,
+    _parse_creature_spells_uncounterable_line,
     _parse_devour_line,
     _parse_dynamic_pt_formula_line,
     _parse_enters_tapped_line,
@@ -117,6 +119,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_nonbasic_lands_are_mountains_line,
     _parse_play_lands_from_graveyard_line,
     _parse_replaces_draw_when_hand_at_most_one_line,
+    _parse_spell_cant_be_countered_line,
     _parse_token_doubler_line,
     _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
@@ -271,16 +274,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     identical to the static registry so parity tests pass.
     """
     return {
-        # Frenzied Baloth {G}{G} 3/2 Beast.
-        # "This spell can't be countered. Trample, haste.
-        #  Creature spells you control can't be countered.
-        #  Combat damage can't be prevented."
-        # Static drops the un-counterable clauses and damage-prevention
-        # clause (no engine flag yet); ships trample + haste only.
-        "Frenzied Baloth": make_creature(
-            "Frenzied Baloth", "{G}{G}", 3, 2,
-            keywords={"trample", "haste"},
-        ),
         # ── Batch 22b ──────────────────────────────────────────────────
         # Lightstall Inquisitor {W} 2/1 Angel Wizard — vigilance.
         # Simplified: drops ETB "each opponent exiles a card" clause.
@@ -1115,6 +1108,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     enters_with_counters_from_x: str | None = None
     grants_additional_land_per_turn = 0
     grants_play_lands_from_graveyard = False
+    spell_is_uncounterable = False
+    combat_damage_cant_be_prevented = False
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -1365,6 +1360,35 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # Explorer's graveyard land-play static. Idempotent.
             grants_play_lands_from_graveyard = True
             continue
+        if _parse_spell_cant_be_countered_line(line):
+            # ``This spell can't be countered.`` — printing-level immunity
+            # to counter effects. Flips ``spell_is_uncounterable`` kwarg
+            # below; ``CounterTargetSpell`` excludes spells with this flag
+            # from its legal-target list and fizzles at resolve time.
+            spell_is_uncounterable = True
+            continue
+        if _parse_creature_spells_uncounterable_line(line):
+            # ``Creature spells you control can't be countered.`` —
+            # static ability granting uncounterability to all creature
+            # spells the controller casts while this permanent is on the
+            # battlefield. Wired as a SELF-scope ``StaticAbility`` with
+            # ``grants_creature_spells_uncounterable=True``; the flag is
+            # checked in ``CounterTargetSpell`` against the spell
+            # controller's battlefield.
+            statics.append(StaticAbility(
+                scope=StaticScope.SELF,
+                grants_creature_spells_uncounterable=True,
+            ))
+            continue
+        if _parse_combat_damage_cant_be_prevented_line(line):
+            # ``Combat damage can't be prevented.`` — printing-level
+            # static causing this creature's damage events to bypass
+            # global prevention (Darkness-style). Flips the
+            # ``combat_damage_cant_be_prevented`` kwarg below; the engine
+            # checks the flag per-source in
+            # ``combat._source_bypasses_prevention``.
+            combat_damage_cant_be_prevented = True
+            continue
         landcycling_match = _parse_landcycling_line(line)
         if landcycling_match is not None:
             # ``Plainscycling/Islandcycling/Swampcycling/Mountaincycling/
@@ -1470,4 +1494,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         enters_with_counters_from_x=enters_with_counters_from_x,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
+        spell_is_uncounterable=spell_is_uncounterable,
+        combat_damage_cant_be_prevented=combat_damage_cant_be_prevented,
     )
