@@ -152,6 +152,18 @@ class Agent:
         an id from ``option_ids`` to fetch that specific card."""
         raise NotImplementedError
 
+    def choose_card_from_hand(
+        self,
+        state: "GameState",
+        player_id: int,
+        option_ids: list[int],
+    ) -> int | None:
+        """For "you may put a card from your hand onto the battlefield"
+        effects (Terminal Velocity). ``option_ids`` is the list of
+        qualifying card object ids in the player's hand. Return None to
+        decline; return an id from ``option_ids`` to select that card."""
+        raise NotImplementedError
+
     def choose_x(
         self,
         state: "GameState",
@@ -389,6 +401,16 @@ class RandomAgent(Agent):
         return self.rng.choice(opponent_hand_ids)
 
     def choose_card_from_library(self, state, player_id, option_ids):
+        if not option_ids:
+            return None
+        return self.rng.choice(option_ids)
+
+    def choose_card_from_hand(self, state, player_id, option_ids):
+        """Terminal-Velocity-shaped "you may put a card from your hand onto
+        the battlefield" selection. ``option_ids`` is the list of card object
+        ids in the player's hand that qualify for the effect (e.g. artifact or
+        creature cards only). Returns a single id, or ``None`` to decline.
+        Default: pick the first qualifying card (deterministic baseline)."""
         if not option_ids:
             return None
         return self.rng.choice(option_ids)

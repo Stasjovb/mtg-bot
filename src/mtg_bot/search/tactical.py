@@ -99,6 +99,11 @@ class DefaultTacticalAgent(Agent):
     def choose_card_from_library(self, state, player_id, option_ids):
         return option_ids[0] if option_ids else None
 
+    def choose_card_from_hand(self, state, player_id, option_ids):
+        # Take the first qualifying card — deterministic for search.
+        # Preserves the "may → take the action" default.
+        return option_ids[0] if option_ids else None
+
     def choose_x(self, state, player_id, card_name, upper_bound):
         # Commit all available mana to X — same default RandomAgent
         # uses; matches the "use your resources" heuristic.

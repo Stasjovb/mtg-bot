@@ -4,7 +4,9 @@ Seven cards claimed across four builders:
 
 Sorceries (spell_builder ``_WHOLE_SPELL_EXACT_TEXT``):
 - Terminal Velocity ``{4}{R}{R}`` — whole-spell exact-text dispatch;
-  static ships ``CreateToken(Robot, count=2)``.
+  maps to ``TerminalVelocityEffect()`` (put artifact/creature from hand
+  onto battlefield with haste, LTB deal-MV-to-each-creature trigger, and
+  end-step-sac).
 - Pull Through the Weft ``{3}{G}{G}`` — whole-spell exact-text
   dispatch; static ships
   ``ReturnCreatureFromYourGraveyardToHand()``.
@@ -104,6 +106,16 @@ def test_terminal_velocity_is_sorcery():
     result = _build_spell_printing(card)
     assert result is not None
     assert "Sorcery" in result.card_types
+
+
+def test_terminal_velocity_engine_class():
+    from mtg_bot.effects import TerminalVelocityEffect
+
+    card = _spell_card("Terminal Velocity", "{4}{R}{R}",
+                       _TERMINAL_VELOCITY_ORACLE)
+    result = _build_spell_printing(card)
+    assert result is not None
+    assert result.spell_effect == TerminalVelocityEffect()
 
 
 

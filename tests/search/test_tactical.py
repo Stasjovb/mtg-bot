@@ -112,6 +112,18 @@ def test_choose_card_from_library_none_when_empty():
     assert agent.choose_card_from_library(s, 0, []) is None
 
 
+def test_choose_card_from_hand_picks_first():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_card_from_hand(s, 0, [3, 4, 5]) == 3
+
+
+def test_choose_card_from_hand_none_when_empty():
+    agent = DefaultTacticalAgent()
+    s = _state()
+    assert agent.choose_card_from_hand(s, 0, []) is None
+
+
 def test_choose_card_from_opponent_hand_picks_first():
     agent = DefaultTacticalAgent()
     s = _state()

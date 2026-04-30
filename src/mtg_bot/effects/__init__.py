@@ -272,6 +272,8 @@ from mtg_bot.effects.bespoke import (
     TerrapactIntimidatorETBEffect,
     TerritorialBruntarLandfallEffect,
     TractorBeamETBEffect,
+    TerminalVelocityEffect,
+    DealSelfMVDamageToEachCreature,
     VengefulPossessionEffect,
     WeftwalkingETBEffect,
     WickerfolkThresherAttackEffect,

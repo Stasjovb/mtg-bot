@@ -10,10 +10,12 @@ counterspell is still a counterspell once the rider's gone; a modal
 spell stays modal even if a per-mode sub-effect drops planeswalker
 targeting). When the static stand-in changes the spell's *intent*
 entirely (e.g. Pull Through the Weft's dual-target sequence becoming
-a single-target return; Terminal Velocity's put-from-hand composite
-becoming a token-creation spell), the parser stays unclaimed. The
+a single-target return), the parser stays unclaimed. The
 shared ``test_source_skips_cards_with_unsupported_clauses`` test
-guards that boundary on Pull Through the Weft.
+guards that boundary on Pull Through the Weft. Terminal Velocity was
+previously unclaimed (its whole-spell token-creation stand-in had
+wrong intent); it is now claimed via ``TerminalVelocityEffect()`` as of
+bespoke-spells5.
 
 Newly claimed spells:
 

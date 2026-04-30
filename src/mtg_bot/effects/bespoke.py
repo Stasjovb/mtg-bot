@@ -4197,3 +4197,176 @@ class OsseousSticktwisterEndStepEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class DealSelfMVDamageToEachCreature(Effect):
+    """LTB-trigger effect for Terminal Velocity: when the put permanent
+    leaves the battlefield, it deals damage equal to its own mana value
+    to each creature.
+
+    ``state.resolving_source`` is the departing permanent (set by the
+    LEAVES_BATTLEFIELD dispatcher via ``extra_observers``), so the MV
+    is read from there. Snapshot semantics: victim list is captured before
+    any damage is applied to avoid mid-pass iterator invalidation.
+
+    No-op if resolving_source is None (should not happen in practice).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        mv = source.printing.mana_cost.total
+        if mv <= 0:
+            state.log.append(
+                f"{source.printing.name} leaves the battlefield; "
+                f"MV is 0, no damage dealt (Terminal Velocity trigger)"
+            )
+            return
+        victims = [o for o in state.battlefield if o.printing.is_creature]
+        state.log.append(
+            f"{source.printing.name} leaves the battlefield; "
+            f"deals {mv} damage to each creature "
+            f"(Terminal Velocity trigger)"
+        )
+        for victim in victims:
+            _apply_damage(state, ("creature", victim.id), mv)
+
+    def describe(self) -> str:
+        return (
+            "when this permanent leaves the battlefield, it deals "
+            "damage equal to its mana value to each creature"
+        )
+
+
+
+@dataclass(frozen=True)
+class TerminalVelocityEffect(Effect):
+    """Terminal Velocity ``{4}{R}{R}`` Sorcery:
+    "You may put an artifact or creature card from your hand onto the
+    battlefield. That permanent gains haste, \"When this permanent
+    leaves the battlefield, it deals damage equal to its mana value to
+    each creature,\" and \"At the beginning of your end step, sacrifice
+    this permanent.\""
+
+    Resolution sequence:
+    1. Collect artifact/creature cards from the caster's hand.
+    2. Ask the agent via ``choose_card_from_hand`` which one to put
+       on the battlefield (returning None declines the "you may").
+    3. Move the chosen card from hand to the battlefield via
+       ``put_into_battlefield``.
+    4. Grant the card haste until end of turn via
+       ``state.grant_keywords_ueot``.
+    5. Grant the card a LEAVES_BATTLEFIELD predicate trigger (UEOT)
+       via ``state.grant_triggered_ability_ueot``; the trigger fires
+       ``DealSelfMVDamageToEachCreature``.
+    6. Schedule a ``SacrificeSourceDelayed`` delayed trigger at the
+       caster's current end step (``fire_at_turn = turn_number + 0``
+       if it's the caster's turn, or ``+1`` if it's the opponent's
+       turn — same end-step the sorcery resolves on, for the
+       "beginning of your end step" wording).
+
+    The UEOT LTB trigger (step 5) expires at end-of-turn cleanup, which
+    happens AFTER the end-step sac fires (step 6 → sac resolves → LTB
+    trigger placed on stack → LTB resolves), so the grant is still
+    active when the trigger needs to fire. Cleanup wipes it afterwards.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic import SacrificeSourceDelayed
+        from mtg_bot.effects.predicates import Event, IsSelf
+
+        p = state.player_by_id(controller_id)
+        # Collect qualifying cards: artifact or creature cards in hand.
+        qualifying = [
+            c for c in p.hand
+            if c.printing.is_artifact or c.printing.is_creature
+        ]
+        if not qualifying:
+            state.log.append(
+                f"P{controller_id} has no artifact or creature card "
+                f"in hand to put onto the battlefield (Terminal Velocity)"
+            )
+            return
+        agent = p.agent
+        if agent is None:
+            return
+        option_ids = [c.id for c in qualifying]
+        chosen_id = agent.choose_card_from_hand(state, controller_id, option_ids)
+        if chosen_id is None:
+            state.log.append(
+                f"P{controller_id} declines to put a card onto the "
+                f"battlefield (Terminal Velocity)"
+            )
+            return
+        card = next((c for c in p.hand if c.id == chosen_id), None)
+        if card is None:
+            return
+        # Move from hand to battlefield.
+        p.hand.remove(card)
+        put_into_battlefield(state, card, controller_id)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the "
+            f"battlefield via Terminal Velocity"
+        )
+        # Grant haste until end of turn.
+        spell_id = getattr(state.resolving_source, "id", card.id)
+        state.grant_keywords_ueot(
+            source_id=spell_id,
+            target_id=card.id,
+            keywords=frozenset({"haste"}),
+            log_source_name="Terminal Velocity",
+            log_target_name=card.printing.name,
+        )
+        # Grant LTB trigger (UEOT): when this permanent leaves, deal
+        # MV damage to each creature.
+        ltb_trigger = TriggeredAbility(
+            event=Event.LEAVES_BATTLEFIELD,
+            predicate=IsSelf(),
+            effect=DealSelfMVDamageToEachCreature(),
+        )
+        state.grant_triggered_ability_ueot(
+            source_id=spell_id,
+            target_id=card.id,
+            ability=ltb_trigger,
+            description=(
+                f"Terminal Velocity grants LTB trigger to "
+                f"{card.printing.name} UEOT"
+            ),
+        )
+        # Schedule end-step sac.
+        # "At the beginning of your end step" — the end step that
+        # belongs to the CASTER (controller_id). Turn offset: 0 if
+        # it's currently the caster's turn (the sorcery resolves in
+        # their main phase, so the end step is this same turn), 1 if
+        # it's the opponent's turn.
+        offset = 0 if state.active_player().id == controller_id else 1
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number + offset,
+            "controller_id": controller_id,
+            "source_id": card.id,
+            "effect": SacrificeSourceDelayed(),
+        })
+        state.log.append(
+            f"Terminal Velocity: {card.printing.name} will be sacrificed "
+            f"at the beginning of P{controller_id}'s end step "
+            f"(turn {state.turn_number + offset})"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you may put an artifact or creature card from your hand "
+            "onto the battlefield; it gains haste, a leaves-the-"
+            "battlefield deal-MV-damage-to-each-creature trigger, and "
+            "is sacrificed at the beginning of your end step"
+        )
+
+
+

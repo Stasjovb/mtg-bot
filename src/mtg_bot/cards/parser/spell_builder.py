@@ -74,6 +74,7 @@ from mtg_bot.cards.base import (
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     Sequence,
+    TerminalVelocityEffect,
     ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
@@ -1096,21 +1097,31 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # stripped by ``_normalize_spell_effect_phrase``, then parsed via
     # ``_CREATE_BARE_NAME_TOKEN`` → ``CreateToken(Lander, 1)``).
     # The two clauses combine as a Sequence.
-    # Terminal Velocity: put-card-from-hand onto battlefield + haste +
-    # death-trigger + end-step-sac. Complex triple-rider oracle text
-    # that the per-clause grammar can't parse; the static ships a
-    # ``CreateToken(Robot, count=2)`` simplification. Match the full
-    # printed oracle text verbatim; reminder text is stripped before
-    # dispatch so the outer parentheticals are already removed.
+    # Terminal Velocity: "You may put an artifact or creature card from
+    # your hand onto the battlefield. That permanent gains haste,
+    # \"When this permanent leaves the battlefield, it deals damage
+    # equal to its mana value to each creature,\" and \"At the beginning
+    # of your end step, sacrifice this permanent.\"
+    #
+    # Three-part composite:
+    # 1. Put-from-hand (choice + move, "you may").
+    # 2. Grant haste UEOT via state.grant_keywords_ueot.
+    # 3. Grant a LEAVES_BATTLEFIELD predicate trigger UEOT (fires
+    #    DealSelfMVDamageToEachCreature) via
+    #    state.grant_triggered_ability_ueot.
+    # 4. Schedule end-step sac via state.delayed_triggers
+    #    (SacrificeSourceDelayed).
+    # The per-clause grammar can't parse this oracle text: clause 1
+    # ("You may put...") has no recognizer, and clauses 2-4 are
+    # quoted abilities granted to the put permanent, not standalone
+    # spell-effect phrases. The whole-spell tier is the right place.
     (
         "You may put an artifact or creature card from your hand onto "
         "the battlefield. That permanent gains haste, \"When this "
         "permanent leaves the battlefield, it deals damage equal to "
         "its mana value to each creature,\" and \"At the beginning of "
         "your end step, sacrifice this permanent.\""
-    ): CreateToken(
-        token_printing=TOKEN_PRINTINGS["Robot"], count=2
-    ),
+    ): TerminalVelocityEffect(),
     # Pull Through the Weft — "Return up to two target nonland permanent
     # cards from your graveyard to your hand, then return up to two
     # target land cards from your graveyard to the battlefield tapped."

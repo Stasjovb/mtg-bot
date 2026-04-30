@@ -35,9 +35,11 @@ One whole-spell exact-text dispatch entry also lands in this batch
   simplified spell only when the printed effect's intent survives
   the simplification — Scrounge's base mechanic ("a graveyard
   return") survives, so the whole-spell tier matches; Pull Through
-  the Weft and Terminal Velocity stay unclaimed because the
-  static replaces their composites with effects of a different
-  intent.
+  the Weft stays unclaimed because the static replaces its composite
+  with an effect of a different intent. Terminal Velocity was previously
+  in this category but has since been claimed via ``TerminalVelocityEffect()``
+  (bespoke-spells5) — the new engine class faithfully models all three
+  printed sub-effects.
 
 The shared parametrized parity test in ``tests/test_parser_parity.py``
 enforces full ``CardPrinting`` parity, so this file focuses on the
