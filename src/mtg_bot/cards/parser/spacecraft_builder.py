@@ -80,6 +80,37 @@ This builder grew in several slices:
   doesn't apply because anthem scopes target *other* permanents and
   fire as soon as the Spacecraft has enough charge counters
   irrespective of whether the Spacecraft itself is animated.
+- **Slice 6** (this batch) migrates the three remaining ``_BESPOKE_SPACECRAFT``
+  entries whose effects were previously outside the unified grammar:
+  Entropic Battlecruiser, Synthesizer Labship, and Dawnsire, Sunstar
+  Dreadnought. Three effect-grammar additions unlock them:
+
+  1. ``"they lose N life"`` → ``TargetPlayerLosesLife(amount=N)`` (for
+     DISCARDS_CARD observer effects where "they" is the pre-wired target).
+  2. Multi-sentence literal for ``"each opponent discards a card. Each
+     opponent who can't loses N life"`` → ``EachOpponentDiscardsOrLosesLife``.
+  3. Parameterized regex for ``"up to one other target artifact you control
+     becomes an artifact creature with base power and toughness P/T and
+     gains <keywords> until end of turn"`` →
+     ``TargetArtifactBecomesCreatureUEOT``.
+
+  Additionally the trigger-condition phrasebook gains
+  ``"an opponent discards a card"`` → ``(Event.DISCARDS_CARD,
+  Controlled(OPPONENT))`` and the tier-gated trigger arm in this builder
+  is widened to accept three new (event, predicate) shapes:
+  ``DISCARDS_CARD + Controlled(OPPONENT)`` (Entropic Battlecruiser),
+  ``BEGINNING_OF_COMBAT + Controlled(YOU)`` (Synthesizer Labship), and
+  ``YOU_ATTACK + Controlled(YOU)`` (Dawnsire). The
+  ``_DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE`` regex is also extended
+  to accept a leading ``(?:this creature )?`` prefix and a trailing
+  ``(?: or planeswalker)?`` suffix so Dawnsire's
+  ``this creature deals 100 damage to up to one target creature or
+  planeswalker`` effect phrase claims correctly.
+
+  The Eternity Elevator remains in the bespoke table with a ``# SKIP``
+  comment: it lacks printed P/T, uses a Station line without the
+  ``"It's an artifact creature at N+."`` sub-clause, and carries a
+  tier-gated X-mana activated ability — all outside the current grammar.
 
 Anything outside the supported shape - lower-tier static/activated
 abilities, multiple tier-keyword lines (single-keyword-tier only is
@@ -114,16 +145,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.generic import (
-    DealDamageToTargetCreature,
-    EachOpponentDiscardsOrLosesLife,
-    EachOpponentMillsCards,
-    EachOpponentSacrificesCreature,
-    SearchLibraryForCard,
-    TargetArtifactBecomesCreatureUEOT,
-    TargetPlayerLosesLife,
-)
-from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
+from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU, Predicate
 
 
 # ---------------------------------------------------------------------------
@@ -140,64 +162,32 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # Entropic Battlecruiser: 1+ tier — whenever an opponent discards a
-        # card, that player loses 3 life. Attack trigger — each opponent
-        # discards a card or loses 3 life. Station 8+ flying + deathtouch.
-        make_spacecraft(
-            "Entropic Battlecruiser", "{3}{B}", 3, 10,
-            station_threshold=8,
-            stationed_keywords={"flying", "deathtouch"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.DISCARDS_CARD,
-                    predicate=Controlled(by=OPPONENT),
-                    effect=TargetPlayerLosesLife(amount=3),
-                    tier_threshold=1,
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=EachOpponentDiscardsOrLosesLife(life_if_cant=3),
-                ),
-            ),
-        ),
-        # Synthesizer Labship: 2+ tier — at the beginning of combat on your
-        # turn, target artifact becomes a 2/2 artifact creature with flying
-        # UEOT. Station 9+ flying.
-        make_spacecraft(
-            "Synthesizer Labship", "{U}", 4, 4,
-            station_threshold=9,
-            stationed_keywords={"flying"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_COMBAT,
-                    predicate=Controlled(YOU),
-                    effect=TargetArtifactBecomesCreatureUEOT(
-                        power=2, toughness=2,
-                        granted_keywords=frozenset({"flying"}),
-                    ),
-                    tier_threshold=2,
-                ),
-            ),
-        ),
-        # Dawnsire, Sunstar Dreadnought: Legendary. 10+ tier gated attack
-        # trigger deals 100 damage to target creature. Station 20+ flying.
-        make_spacecraft(
-            "Dawnsire, Sunstar Dreadnought", "{5}", 20, 20,
-            station_threshold=20,
-            stationed_keywords={"flying"},
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=DealDamageToTargetCreature(amount=100),
-                    tier_threshold=10,
-                ),
-            ),
-        ),
-        # The Eternity Elevator: Legendary Artifact — Spacecraft but has no
-        # printed P/T (never animates). The artifact_builder rejects
-        # Spacecraft-subtyped cards, so ship it here as a plain artifact
-        # using make_artifact to match the static registry.
+        # SKIP — The Eternity Elevator: Legendary Artifact — Spacecraft that
+        # has no printed P/T and never animates. Three grammar gaps prevent
+        # the unified builder from claiming it:
+        #   1. No P/T: the builder requires ``int(card["power"])`` /
+        #      ``int(card["toughness"])`` to succeed; The Eternity Elevator
+        #      has no P/T fields in the Scryfall record, so the try/except
+        #      returns None before the oracle-text parse begins.
+        #   2. Station line has no "It's an artifact creature" clause:
+        #      ``_STATION_LINE_RE`` requires the ``It's an artifact creature
+        #      at N+.`` sub-clause, but The Eternity Elevator's Station line
+        #      omits it (the card never animates). The regex match fails, so
+        #      no ``station_threshold`` is recorded and the builder bails.
+        #   3. Tier-gated activated ability: ``20+ | {T}: Add X mana of any
+        #      one color, where X is the number of charge counters on The
+        #      Eternity Elevator.`` is a tier-gated X-mana activated ability
+        #      the engine doesn't model (no tier-keyed ActivatedAbility +
+        #      no variable-X mana production).
+        #   4. Uses make_artifact not make_spacecraft: the artifact_builder
+        #      rejects Spacecraft-subtyped cards, so this entry ships as a
+        #      plain artifact to match the static registry.
+        # Modeling this card correctly needs: (a) engine-side support for
+        # Spacecraft that never animate (missing P/T grammar), (b) a
+        # Station-line variant regex without the animation clause, (c)
+        # tier-gated activated-ability support in the builder, and (d)
+        # variable-X mana production in the activated-ability grammar. All
+        # four are deferred to a future slice.
         make_artifact(
             "The Eternity Elevator", "{5}",
             legendary=True,
@@ -251,6 +241,50 @@ def _parse_tier_keyword_body(body: str) -> frozenset[str] | None:
     if not all(p in _KEYWORD_LINES for p in normalized):
         return None
     return frozenset(_KEYWORD_LINES[p] for p in normalized)
+
+
+# Valid (event, predicate) pairs for tier-gated trigger lines in the
+# Spacecraft body grammar. Self-ETB and self-attack share the ``IsSelf()``
+# predicate. Three player-scoped or opponent-observer variants:
+#
+# - ``DISCARDS_CARD + Controlled(OPPONENT)``: ``"Whenever an opponent
+#   discards a card"`` printed on Entropic Battlecruiser's 1+ tier line
+#   (fires once per card discarded by any opponent of the source's
+#   controller; the discarding player's id is pre-wired as a fixed target
+#   by ``fire_opponent_discards_triggers``).
+# - ``YOU_ATTACK + Controlled(YOU)``: ``"Whenever you attack"`` printed on
+#   Dawnsire, Sunstar Dreadnought's 10+ tier line (fires once per declare-
+#   attackers step when you attack with any creature).
+# - ``BEGINNING_OF_COMBAT + Controlled(YOU)``: ``"At the beginning of
+#   combat on your turn"`` printed on Synthesizer Labship's 2+ tier line
+#   (fires at the beginning of the active player's combat step).
+_VALID_SPACECRAFT_TIER_TRIGGER_EVENTS: tuple[
+    tuple[Event, Predicate], ...
+] = (
+    (Event.ENTERS, IsSelf()),
+    (Event.ATTACKS, IsSelf()),
+    (Event.DISCARDS_CARD, Controlled(by=OPPONENT)),
+    (Event.YOU_ATTACK, Controlled(YOU)),
+    (Event.BEGINNING_OF_COMBAT, Controlled(YOU)),
+)
+
+
+def _is_valid_spacecraft_tier_trigger(trig: "TriggeredAbility") -> bool:
+    """Return True when ``trig`` is a trigger type this builder claims
+    on tier-gated lines: self-ETB, self-attack, opponent-discards-observer,
+    player-attack, or beginning-of-combat-on-your-turn.
+
+    The non-``IsSelf()`` shapes are added in this batch to support
+    Entropic Battlecruiser's ``1+ | Whenever an opponent discards a card, …``
+    (DISCARDS_CARD + Controlled(OPPONENT)), Dawnsire's
+    ``10+ | Whenever you attack, …`` (YOU_ATTACK + Controlled(YOU)), and
+    Synthesizer Labship's ``2+ | At the beginning of combat on your turn, …``
+    (BEGINNING_OF_COMBAT + Controlled(YOU)) tier lines respectively.
+    """
+    return any(
+        trig.event == event and trig.predicate == predicate
+        for event, predicate in _VALID_SPACECRAFT_TIER_TRIGGER_EVENTS
+    )
 
 
 def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
@@ -413,13 +447,15 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                 # yet — skip rather than silently drop the ability.
                 return None
             trig = clause.trigger
-            if trig.predicate != IsSelf():
-                # Defensive: only self-targeted predicates make sense
-                # for tier-gated Spacecraft body shapes we claim.
-                return None
-            if trig.event not in (Event.ENTERS, Event.ATTACKS):
-                # Same restriction as the standalone trigger-line arm
-                # — only the two events we explicitly claim.
+            if not _is_valid_spacecraft_tier_trigger(trig):
+                # Defensive: only the three trigger shapes we claim in
+                # tier-gated lines are accepted:
+                # - ENTERS + IsSelf() (self-ETB tier line)
+                # - ATTACKS + IsSelf() (self-attack tier line)
+                # - YOU_ATTACK + Controlled(YOU) (player-attack tier line;
+                #   Dawnsire's "Whenever you attack" which is oracle-text
+                #   faithful to the YOU_ATTACK event rather than the
+                #   ATTACKS+IsSelf shape the bespoke table used)
                 return None
             if any(
                 t.event == trig.event and t.tier_threshold == tier_n

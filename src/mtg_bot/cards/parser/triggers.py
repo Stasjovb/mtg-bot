@@ -843,6 +843,18 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # attacker count, so the per-pass dispatch is the right semantic
     # for the printed phrasing.
     "you attack": (Event.YOU_ATTACK, Controlled(YOU)),
+    # ``Whenever an opponent discards a card`` — Entropic Battlecruiser's
+    # 1+ tier trigger. ``Event.DISCARDS_CARD`` carries a single subject
+    # ``"player"`` (the discarding player); ``Controlled(by=OPPONENT)``
+    # gates on the subject being an opponent of the source's controller
+    # so the trigger only fires when an OPPONENT discards. The discarding
+    # player's id is pre-wired as ``fixed_targets`` by
+    # ``fire_opponent_discards_triggers`` so the resolving effect
+    # (``TargetPlayerLosesLife``) can damage them without cast-time
+    # target selection.
+    "an opponent discards a card": (
+        Event.DISCARDS_CARD, Controlled(by=OPPONENT),
+    ),
     # ``Whenever another creature you control with power 2 or less
     # enters`` — Vicious Clown's pump-self trigger and Irreverent
     # Gremlin's discard-and-draw trigger both print this exact

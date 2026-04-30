@@ -499,12 +499,11 @@ def test_source_still_claims_existing_spacecraft():
 
 def test_source_claims_real_multi_tier_spacecraft():
     """Lumen-Class Frigate, Synthesizer Labship, Entropic Battlecruiser,
-    and Dawnsire, Sunstar Dreadnought were previously unclaimed because
-    each carried either a static-tier-gated body or an effect outside
-    the unified effect grammar. Batch 22 claims all four via the
-    ``_BESPOKE_SPACECRAFT`` dispatch table, so they must now be present
-    in ``claimed_names`` — and the parametrized parity gate asserts the
-    parser-built printing equals the static registry for each."""
+    and Dawnsire, Sunstar Dreadnought are all claimed by the unified
+    oracle-text grammar (not via the bespoke dispatch table). Lumen-Class
+    Frigate was claimed by slice 5 (tier-gated anthem static); the other
+    three were migrated from the bespoke table by the current batch after
+    the effect grammar was extended to cover their respective shapes."""
     source = OracleParserCardSource()
     claimed = set(source.claimed_names)
     assert "Lumen-Class Frigate" in claimed

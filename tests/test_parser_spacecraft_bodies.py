@@ -350,9 +350,10 @@ def test_build_spacecraft_printing_claims_attack_trigger_spacecraft():
     """Specimen Freighter, Sledge-Class Seedship, Entropic Battlecruiser,
     Infinite Guideline Station, and Dawnsire, Sunstar Dreadnought all
     carry attack triggers whose effect phrases were outside the unified
-    effect grammar in earlier batches. Batch 22 claims all five via the
-    ``_BESPOKE_SPACECRAFT`` dispatch table, so they must now be present
-    in ``claimed_names``."""
+    effect grammar in earlier batches. All five are now claimed by the
+    unified oracle-text grammar (Entropic Battlecruiser and Dawnsire via
+    the current batch's grammar extensions; the others via earlier slices),
+    so they must be present in ``claimed_names``."""
     source = OracleParserCardSource()
     claimed = set(source.claimed_names)
     assert "Specimen Freighter" in claimed

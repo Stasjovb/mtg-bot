@@ -135,7 +135,10 @@ from mtg_bot.cards.base import (
     TapTargetArtifactOrCreature,
     TapTargetOpponentPermanentAndStunIt,
     TargetOpponentDiscardsCasterChoice,
+    TargetArtifactBecomesCreatureUEOT,
+    EachOpponentDiscardsOrLosesLife,
     TargetOpponentLosesLife,
+    TargetPlayerLosesLife,
     UntapTargetOtherPermanent,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
@@ -258,19 +261,31 @@ _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     # planeswalker``).
     r"^(?:it )?deals (\d+) damage to target creature(?: or planeswalker)?$"
 )
-# "<source> deals N damage to up to one target creature" — Pinnacle
-# Kill-Ship's ETB body (``it deals 10 damage to up to one target
-# creature``). Mirror of the bare ``deals N damage to target creature``
-# shape with the ``up to one`` qualifier promoting the target count
-# range from 1..1 to 0..1; maps to ``DealDamageToTargetCreature(amount=N,
-# optional=True)`` whose engine class flips ``requires_target`` /
-# ``target_count_range`` accordingly and resolves as a no-op when no
-# target is chosen. The ``it `` prefix is the same source-pronoun the
-# bare regex accepts; the creature-trigger normalizer doesn't strip it
-# from this phrase because the phrase starts with the pronoun (the
-# ``deals`` verb is right after).
+# "<source> deals N damage to up to one target creature [or planeswalker]"
+# — Pinnacle Kill-Ship's ETB body (``it deals 10 damage to up to one
+# target creature``) and Dawnsire's tier-gated attack trigger (``this
+# creature deals 100 damage to up to one target creature or planeswalker``).
+# Mirror of the bare ``deals N damage to target creature`` shape with the
+# ``up to one`` qualifier promoting the target count range from 1..1 to
+# 0..1; maps to ``DealDamageToTargetCreature(amount=N, optional=True)``
+# whose engine class flips ``requires_target`` / ``target_count_range``
+# accordingly and resolves as a no-op when no target is chosen.
+#
+# The ``(?:it )?`` prefix is the creature-trigger source-pronoun;
+# the ``(?:this creature )?`` prefix accepts the surface where the trigger
+# body names the source explicitly (e.g. after
+# ``_substitute_self_name`` rewrites ``Dawnsire`` to ``this creature``
+# — the normalizer only strips the two-character ``it `` pronoun, not
+# the longer ``this creature`` form).
+#
+# The ``(?: or planeswalker)?`` tail follows the same parser-is-right
+# precedent as the bare ``deals N damage to target creature`` regex:
+# planeswalkers aren't modeled by the engine today, so the scope
+# widening is accepted syntactically but resolved against creature-only
+# targets via ``DealDamageToTargetCreature``.
 _DEAL_DAMAGE_UP_TO_ONE_TARGET_CREATURE = re.compile(
-    r"^(?:it )?deals (\d+) damage to up to one target creature$"
+    r"^(?:it |this creature )?deals (\d+) damage to up to one target creature"
+    r"(?: or planeswalker)?$"
 )
 # "<source> deals N damage to target creature an opponent controls" —
 # Nova Hellkite's ETB. Maps to ``DealDamageToOpponentCreature(amount=N)``
@@ -1254,6 +1269,19 @@ _SPEND_RESTRICTION_BY_PHRASE: dict[str, str] = {
 _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
     r"^target opponent loses (\d+) life$"
 )
+# "They lose N life" — effect body on an opponent-discards observer
+# trigger (Entropic Battlecruiser's ``1+ | Whenever an opponent discards
+# a card, they lose 3 life.``). The pronoun ``they`` refers to the
+# discarding player, who is threaded through as
+# ``fixed_targets=(("player", id),)`` by
+# ``fire_opponent_discards_triggers``. Maps to
+# ``TargetPlayerLosesLife(amount=N)`` which reads that pre-wired target
+# from ``targets[0]`` at resolve time — same engine class the bespoke
+# table used. The ``N life`` tail accepts bare digits; no EoE printing
+# uses a non-integer life-loss amount in this shape today.
+_THEY_LOSE_N_LIFE = re.compile(
+    r"^they lose (\d+) life$"
+)
 # "Return up to one other target permanent you control to its owner's
 # hand" — Exosuit Savior's ETB. Maps to
 # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
@@ -1918,6 +1946,29 @@ _TARGET_OPPONENT_REVEALS_HAND_CASTER_CHOICE_DISCARD = re.compile(
 # Freighter) plus bare digits for any future printing.
 _DEFENDING_PLAYER_MILLS_N_CARDS = re.compile(
     rf"^defending player mills (\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
+)
+# "Up to one other target artifact you control becomes an artifact
+# creature with base power and toughness P/T and gains <keywords>
+# until end of turn" — Synthesizer Labship's 2+ tier trigger body.
+# Parameterized over power (group 1), toughness (group 2), and
+# the keyword body (group 3) so a future printing with different
+# stats or keywords claims via the same recognizer. Maps to
+# ``TargetArtifactBecomesCreatureUEOT(power=P, toughness=T,
+# granted_keywords=frozenset({...}))`` — same engine class the
+# bespoke table built directly.
+#
+# The ``and gains <keywords> until end of turn`` clause is optional so
+# a future printing that animates an artifact without keyword grants
+# also parses; when the clause is absent the
+# ``TargetArtifactBecomesCreatureUEOT`` is constructed with
+# ``granted_keywords=frozenset()`` (the class default). The keyword
+# body is validated via ``_parse_keyword_grant_body`` and rejection
+# returns ``None`` so a card with an unrecognized keyword isn't
+# silently misfiled.
+_TARGET_ARTIFACT_BECOMES_CREATURE_UEOT = re.compile(
+    r"^up to one other target artifact you control becomes an artifact "
+    r"creature with base power and toughness (\d+)/(\d+)"
+    r"(?: and gains (.+))? until end of turn$"
 )
 # ETB exile-until-source-leaves family — Oblivion Ring / Banishing
 # Light shape.  Two regexes cover the two engine classes:
@@ -2784,6 +2835,27 @@ def _parse_effect(phrase: str) -> Effect | None:
         "If they don't, put two +1/+1 counters on this creature"
     ):
         return TerrapactIntimidatorETBEffect()
+    # Entropic Battlecruiser's attack-trigger body — a two-sentence
+    # multi-sentence effect whose second sentence is anaphoric to the
+    # first ("Each opponent who can't" refers to those who couldn't
+    # discard in sentence 1). The sentence-splitting compound parser
+    # would carve at the ``. `` boundary and try to parse
+    # "Each opponent who can't loses 3 life" as a standalone effect —
+    # which fails because "who can't" is an anaphoric qualifier. Matched
+    # as a single literal here so the two sentences stay coupled.
+    # The phrase arrives here in raw normalized form (no leading pronoun
+    # stripped; the trigger regex extracts everything after the comma
+    # verbatim, preserving the internal sentence boundary and its
+    # capital-letter continuation). Currently only Entropic Battlecruiser
+    # in the EoE pool fits this exact surface; broader grammar deferred
+    # until a second card with a varying piece (different life amount or
+    # different discard count) ships. At that point, replace this literal
+    # with a parameterized regex capturing the life amount.
+    if phrase == (
+        "each opponent discards a card. "
+        "Each opponent who can't loses 3 life"
+    ):
+        return EachOpponentDiscardsOrLosesLife(life_if_cant=3)
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
@@ -3371,6 +3443,29 @@ def _parse_effect(phrase: str) -> Effect | None:
         # in multiplayer (per the engine class docstring). Amount
         # accepts digits and spelled-out small cardinals.
         return EachOpponentMillsCards(amount=_parse_amount(m.group(1)))
+    m = _TARGET_ARTIFACT_BECOMES_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        # ``up to one other target artifact you control becomes an
+        # artifact creature with base power and toughness P/T and gains
+        # <keywords> until end of turn`` — Synthesizer Labship's 2+
+        # tier trigger body. Maps to
+        # ``TargetArtifactBecomesCreatureUEOT(power=P, toughness=T,
+        # granted_keywords=frozenset({...}))`` — same engine class the
+        # bespoke table used directly.
+        power = int(m.group(1))
+        toughness = int(m.group(2))
+        keyword_body = m.group(3)
+        if keyword_body is not None:
+            keywords = _parse_keyword_grant_body(keyword_body)
+            if keywords is None:
+                return None
+        else:
+            keywords = frozenset()
+        return TargetArtifactBecomesCreatureUEOT(
+            power=power,
+            toughness=toughness,
+            granted_keywords=keywords,
+        )
     # ``create a Lander token. At the beginning of the end step on
     # your next turn, sacrifice that token`` — Kav Landseeker's ETB.
     # Tried BEFORE the bare token-creation dispatcher because the
@@ -3636,6 +3731,16 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _TARGET_OPPONENT_LOSES_N_LIFE.match(phrase)
     if m is not None:
         return TargetOpponentLosesLife(amount=int(m.group(1)))
+    m = _THEY_LOSE_N_LIFE.match(phrase)
+    if m is not None:
+        # ``they lose N life`` — effect body on an opponent-discards
+        # observer trigger (Entropic Battlecruiser's 1+ tier trigger).
+        # The "they" pronoun refers to the discarding player, who is
+        # pre-wired as ``fixed_targets=(("player", id),)`` by
+        # ``fire_opponent_discards_triggers``. ``TargetPlayerLosesLife``
+        # reads that pre-wired target from ``targets[0]`` at resolve
+        # time — same engine class the bespoke table used directly.
+        return TargetPlayerLosesLife(amount=int(m.group(1)))
     if _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND.match(
         phrase
     ) is not None:
