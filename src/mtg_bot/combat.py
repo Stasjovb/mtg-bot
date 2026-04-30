@@ -621,6 +621,62 @@ def _fire_enchanted_dealt_damage_triggers(
             state.resolving_combat_damage_amount = 0
 
 
+def _is_counter_creature_combat_damage_observer(ability) -> bool:
+    """Return True when ``ability`` is the aggregated "one or more creatures
+    you control with +1/+1 counters on them deal combat damage to a player"
+    observer — either the legacy string-key form or the parser-produced
+    predicate form.
+
+    The legacy form carries ``trigger == "your_counter_creature_combat_
+    damage_to_player_aggregated"`` (built by the static-card registry).
+    The grammar form carries ``event == Event.DEALS_COMBAT_DAMAGE``,
+    ``once_per_turn == True``, and a ``Subject("source", …)`` predicate
+    whose inner ObjectPredicate includes both ``IsCreature()`` and
+    ``HasCounter("+1/+1")`` — the distinguishing marker vs. the non-
+    counter-filtered "one or more creatures you control" Locker Room
+    variant (whose source filter is ``IsCreature()`` alone).
+    """
+    # Legacy string-key path (static-card registry for Haliya, Ascendant Cadet).
+    if ability.trigger == (
+        "your_counter_creature_combat_damage_"
+        "to_player_aggregated"
+    ):
+        return True
+    # Grammar-produced predicate path (parser-claimed Haliya after migration).
+    from mtg_bot.effects.predicates import Event, Subject
+    from mtg_bot.effects.object_predicates import HasCounter, IsCreature, ObjectAnd
+    if ability.event is not Event.DEALS_COMBAT_DAMAGE:
+        return False
+    if not ability.once_per_turn:
+        return False
+    # Walk the predicate tree looking for Subject("source", …) with both
+    # IsCreature and HasCounter("+1/+1") in the inner ObjectPredicate.
+    pred = ability.predicate
+    if pred is None:
+        return False
+    def _has_counter_creature_source(p) -> bool:
+        from mtg_bot.effects.predicates import And
+        if isinstance(p, And):
+            return _has_counter_creature_source(p.left) or _has_counter_creature_source(p.right)
+        if not isinstance(p, Subject):
+            return False
+        if p.slot != "source":
+            return False
+        inner = p.inner
+        def _atoms(obj_pred):
+            if isinstance(obj_pred, ObjectAnd):
+                return _atoms(obj_pred.left) + _atoms(obj_pred.right)
+            return [obj_pred]
+        atoms = _atoms(inner)
+        has_creature = any(isinstance(a, IsCreature) for a in atoms)
+        has_counter = any(
+            isinstance(a, HasCounter) and a.kind == "+1/+1"
+            for a in atoms
+        )
+        return has_creature and has_counter
+    return _has_counter_creature_source(pred)
+
+
 def _fire_combat_damage_to_player_triggers(
     state: GameState, sources_hit_player: list[tuple[int, int, int]]
 ) -> None:
@@ -649,18 +705,14 @@ def _fire_combat_damage_to_player_triggers(
     ``DrawCardsEqualToResolvingCombatDamage``) silently ignore the
     pre-wired tuple.
 
-    One specialty observer key remains on the legacy string-key path
-    because its semantics don't fit the per-event predicate model
-    cleanly:
-
-    - ``your_counter_creature_combat_damage_to_player_aggregated``
-      (Haliya, Ascendant Cadet): fires ONCE per (controller,
-      target_player) pair regardless of how many qualifying sources
-      damaged the player. The deduplication is fundamentally
-      cross-event aggregation, not a per-event predicate.
-
-    It stays as a legacy walk below; it has its own dedicated fire path
-    and is not migrated by phase 9.
+    The counter-creature-combat-damage aggregated observer (Haliya,
+    Ascendant Cadet: "whenever one or more creatures you control with
+    +1/+1 counters on them deal combat damage to a player") fires ONCE
+    per (controller, target_player) pair regardless of how many qualifying
+    sources damaged the player. Detection is via
+    ``_is_counter_creature_combat_damage_observer``, which recognizes both
+    the legacy string-key form (static registry) and the grammar-produced
+    predicate form (parser-claimed after migration).
     """
     from mtg_bot.actions import dispatch_event
     from mtg_bot.turn import should_fire_trigger
@@ -703,7 +755,9 @@ def _fire_combat_damage_to_player_triggers(
     # many qualifying sources damaged the player). Source-with-counter
     # state is snapshotted at lookup time from the live battlefield
     # entry, matching how the per-source observers above resolve.
-    # Stays on the legacy string-key path; see docstring above.
+    # Observer detection via ``_is_counter_creature_combat_damage_observer``
+    # handles both the legacy string-key shape and the grammar-produced
+    # predicate shape.
     aggregated_pairs: set[tuple[int, int]] = set()
     for source_id, target_player, _amount in sources_hit_player:
         source = next(
@@ -719,12 +773,17 @@ def _fire_combat_damage_to_player_triggers(
             if obs.controller_id != controller_id:
                 continue
             for i, ability in enumerate(obs.printing.triggered_abilities):
-                if ability.trigger != (
-                    "your_counter_creature_combat_damage_"
-                    "to_player_aggregated"
-                ):
+                if not _is_counter_creature_combat_damage_observer(ability):
                     continue
-                if not should_fire_trigger(state, obs.id, i, ability):
+                # Skip the ``once_per_turn`` gate from ``should_fire_trigger``
+                # for the aggregated path: the ``aggregated_pairs`` set is
+                # already the correct deduplication mechanism (one fire per
+                # (controller, target_player) pair). Using the per-ability
+                # once_per_turn ledger here would incorrectly prevent the
+                # second (controller, target_player) pair from firing.
+                if not should_fire_trigger(
+                    state, obs.id, i, ability, skip_once_per_turn=True,
+                ):
                     continue
                 state.log.append(
                     f"{obs.printing.name}'s aggregated counter-creature-"

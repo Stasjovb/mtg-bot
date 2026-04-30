@@ -479,6 +479,11 @@ def _legacy_key_for_deals_combat_damage(ability) -> str | None:
 
     - ``IsSelf(subject="source") & Subject("target", IsPlayer())`` →
       ``combat_damage_to_player`` (Illvoi Infiltrator).
+    - ``Subject("source", IsCreature() & HasCounter("+1/+1")) &
+      Controlled(YOU, "source") & Subject("target", IsPlayer())``
+      with ``once_per_turn=True`` →
+      ``your_counter_creature_combat_damage_to_player_aggregated``
+      (Haliya, Ascendant Cadet — grammar-produced predicate form).
     - ``Subject("source", IsCreature()) & Controlled(YOU, "source") &
       Subject("target", IsPlayer())`` →
       ``your_creature_combat_damage_to_player`` (Starwinder).
@@ -494,6 +499,15 @@ def _legacy_key_for_deals_combat_damage(ability) -> str | None:
         isinstance(leaf, Subject)
         and leaf.slot == "source"
         and any(isinstance(a, IsCreature) for a in _object_atoms_in(leaf.inner))
+        for leaf in leaves
+    )
+    has_counter_source = any(
+        isinstance(leaf, Subject)
+        and leaf.slot == "source"
+        and any(
+            isinstance(a, HasCounter) and a.kind == "+1/+1"
+            for a in _object_atoms_in(leaf.inner)
+        )
         for leaf in leaves
     )
     has_controlled_you_source = any(
@@ -516,6 +530,19 @@ def _legacy_key_for_deals_combat_damage(ability) -> str | None:
     )
     if has_self_source and has_player_target:
         return "combat_damage_to_player"
+    # Counter-creature-aggregated: once_per_turn + counter filter (Haliya
+    # grammar form). Checked before the generic your-creature shape to
+    # avoid the more-specific counter shape accidentally claiming the
+    # generic key (the counter filter is additive — every counter-creature
+    # trigger also satisfies IsCreature, so specificity must win here).
+    if (
+        has_creature_source
+        and has_counter_source
+        and has_controlled_you_source
+        and has_player_target
+        and ability.once_per_turn
+    ):
+        return "your_counter_creature_combat_damage_to_player_aggregated"
     if (
         has_creature_source
         and has_controlled_you_source

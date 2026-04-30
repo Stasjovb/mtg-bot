@@ -753,6 +753,27 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         & Controlled(YOU, subject="source")
         & Subject("target", IsPlayer()),
     ),
+    # ``Whenever one or more creatures you control with +1/+1 counters
+    # on them deal combat damage to a player`` (Haliya, Ascendant Cadet).
+    # Counter-filtered variant of the "one or more creatures you control
+    # deal combat damage to a player" shape below. The "one or more"
+    # wording carries an implicit aggregated semantic: one fire per
+    # (controller, target_player) pair per combat regardless of how many
+    # qualifying sources damaged the player. Modeled by the existing
+    # aggregated fire path in ``combat._fire_combat_damage_to_player_
+    # triggers`` — the per-source ``DEALS_COMBAT_DAMAGE`` event iterates
+    # all connecting sources, builds the deduplicated set of
+    # (controller, target_player) pairs where the source carried a +1/+1
+    # counter, then fires once per pair on each matching observer. The
+    # 3-tuple value form threads ``once_per_turn=True`` so the aggregated
+    # path can distinguish this shape from the non-counter variant.
+    "one or more creatures you control with +1/+1 counters on them deal combat damage to a player": (
+        Event.DEALS_COMBAT_DAMAGE,
+        Subject("source", IsCreature() & HasCounter("+1/+1"))
+        & Controlled(YOU, subject="source")
+        & Subject("target", IsPlayer()),
+        True,
+    ),
     # ``Whenever one or more creatures you control deal combat damage
     # to a player`` (Locker Room — DSK Room half). Same per-event
     # predicate as the ``a creature you control deals combat damage

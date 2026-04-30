@@ -422,7 +422,12 @@ def fire_opponent_discards_triggers(
 
 
 def should_fire_trigger(
-    state: GameState, source_id: int, ability_index: int, ability
+    state: GameState,
+    source_id: int,
+    ability_index: int,
+    ability,
+    *,
+    skip_once_per_turn: bool = False,
 ) -> bool:
     """True if ``ability`` on the permanent with id ``source_id`` may fire.
 
@@ -438,6 +443,12 @@ def should_fire_trigger(
       per turn. Eager record matches MTG semantics: the ability has
       "triggered" the moment its event happens, even if it later fails
       to find legal targets and fizzles off the stack.
+
+    ``skip_once_per_turn`` suppresses the once_per_turn ledger check when
+    the caller provides its own deduplication (e.g. the aggregated
+    counter-creature-combat-damage fire path in ``combat.py`` uses the
+    ``aggregated_pairs`` set for deduplication and must not be constrained
+    by the per-ability once_per_turn gate).
     """
     from mtg_bot.game import is_void_active
 
@@ -448,7 +459,7 @@ def should_fire_trigger(
         source = next((o for o in state.battlefield if o.id == source_id), None)
         if source is None or source.charge_counters < tier:
             return False
-    if not getattr(ability, "once_per_turn", False):
+    if skip_once_per_turn or not getattr(ability, "once_per_turn", False):
         return True
     key = (source_id, ability_index)
     if key in state.once_per_turn_fired:

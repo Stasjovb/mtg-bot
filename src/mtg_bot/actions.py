@@ -3247,6 +3247,18 @@ def dispatch_event(
         ):
             if not ability.matches_event(event, subjects, source, state):
                 continue
+            # Counter-creature-combat-damage aggregated observer: fired by
+            # the dedicated aggregated path in
+            # ``combat._fire_combat_damage_to_player_triggers``, not by the
+            # per-source dispatch here. Skip it so it doesn't double-fire
+            # (once via dispatch_event per connecting source, and again via
+            # the aggregated path per (controller, target_player) pair).
+            if event is _Event.DEALS_COMBAT_DAMAGE:
+                from mtg_bot.combat import (
+                    _is_counter_creature_combat_damage_observer,
+                )
+                if _is_counter_creature_combat_damage_observer(ability):
+                    continue
             # DSK Rooms: an ability tagged with a room_half is only
             # active when that half is in the source's
             # ``unlocked_halves``. Locked halves' triggers never

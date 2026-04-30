@@ -728,37 +728,21 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Haliya, Ascendant Cadet `{2}{G}{W}{W}` 3/3 Legendary Creature
-        # — Human Soldier.
-        # Whenever Haliya enters or attacks, put a +1/+1 counter on target
-        # creature you control. Whenever one or more creatures you control
-        # with +1/+1 counters deal combat damage to a player, draw a card.
-        # SKIP: Line 2 uses the legacy string-key trigger
-        # "your_counter_creature_combat_damage_to_player_aggregated" which
-        # has a specialized aggregated fire path in combat.py and no
-        # predicate-trigger grammar entry. Migrating requires promoting the
-        # aggregated trigger to the predicate path.
-        "Haliya, Ascendant Cadet": make_creature(
-            "Haliya, Ascendant Cadet", "{2}{G}{W}{W}", 3, 3,
-            legendary=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
-                ),
-                TriggeredAbility(
-                    event=Event.ATTACKS, predicate=IsSelf(),
-                    effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
-                ),
-                TriggeredAbility(
-                    trigger=(
-                        "your_counter_creature_combat_damage_"
-                        "to_player_aggregated"
-                    ),
-                    effect=DrawCards(amount=1),
-                ),
-            ),
-        ),
+        # Haliya, Ascendant Cadet migrated to parameterized grammar:
+        # Line 1 — "Whenever Haliya enters or attacks, put a +1/+1 counter
+        # on target creature you control." maps to
+        # ``_COMPOUND_PREDICATE_TRIGGER_PHRASES["this creature enters or
+        # attacks"]`` (name substituted to "this creature" by
+        # ``_substitute_self_name``), effect parsed as
+        # ``PutPlusOneCounterOnCreatureYouControl(amount=1)``.
+        # Line 2 — "Whenever one or more creatures you control with +1/+1
+        # counters on them deal combat damage to a player, draw a card."
+        # maps to the new
+        # ``_PREDICATE_TRIGGER_PHRASES["one or more creatures you control
+        # with +1/+1 counters on them deal combat damage to a player"]``
+        # entry (once_per_turn=True); combat.py's aggregated fire path
+        # detects it via ``_is_counter_creature_combat_damage_observer``.
+        # Removed from this table so the grammar path claims it.
         # Haliya, Guided by Light migrated to parameterized grammar:
         # Line 1 — "this creature or another creature or artifact you
         # control enters" maps to a new _COLLAPSED_PREDICATE_TRIGGER_PHRASES
