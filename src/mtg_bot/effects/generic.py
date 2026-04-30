@@ -211,6 +211,96 @@ def _describe_filter(target_filter) -> str:
 
 
 @dataclass(frozen=True)
+class Pump(Effect):
+    """Unified pump primitive — target gets ``+power_bonus/+toughness_bonus``
+    and gains ``granted_keywords`` until end of turn.
+
+    Sibling of :class:`Destroy` / :class:`Exile` / :class:`Tap` for the
+    pump family. The unified resolve walks each slot, re-verifies
+    legality at resolution per CR 608.2b, and stamps the bonus +
+    keywords onto each surviving target's ``temp_*`` fields (cleared
+    at cleanup). The pump amount and granted keywords are uniform
+    across slots — multi-slot pumps with per-slot bonuses would need
+    a different shape.
+
+    Variants with bespoke amount (Spacecraft-power-X, draw-rider) or
+    extra side effects (granted UEOT triggered ability, warp-cost
+    rider, draw-if-counter rider) override ``resolve``; the bare
+    ``Pump.resolve`` covers the simplest "target X gets +N/+M and
+    gains KW UEOT" oracle shape.
+    """
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: frozenset[str] = frozenset()
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="pump")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                obj.temp_power_bonus += self.power_bonus
+                obj.temp_toughness_bonus += self.toughness_bonus
+                if self.granted_keywords:
+                    obj.temp_keywords = (
+                        obj.temp_keywords | self.granted_keywords
+                    )
+                kw_note = (
+                    f" and gains "
+                    f"{', '.join(sorted(self.granted_keywords))}"
+                    if self.granted_keywords else ""
+                )
+                state.log.append(
+                    f"{obj.printing.name} gets "
+                    f"+{self.power_bonus}/+{self.toughness_bonus}"
+                    f"{kw_note} until end of turn"
+                )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        parts: list[str] = []
+        if self.power_bonus or self.toughness_bonus:
+            parts.append(
+                f"{_describe_targets(self.targets)} gets "
+                f"+{self.power_bonus}/+{self.toughness_bonus}"
+            )
+        if self.granted_keywords:
+            kw = ", ".join(sorted(self.granted_keywords))
+            if parts:
+                parts.append(f"gains {kw}")
+            else:
+                parts.append(
+                    f"{_describe_targets(self.targets)} gains {kw}"
+                )
+        return " and ".join(parts) + " until end of turn."
+
+
+@dataclass(frozen=True)
 class Tap(Effect):
     """Unified tap primitive driven by ``targets``.
 
@@ -8419,61 +8509,23 @@ class TargetOpponentDiscards(Effect):
 
 
 @dataclass(frozen=True)
-class PumpTargetArtifactOrCreatureUntilEOT(Effect):
-    """Target artifact or creature gets +power/+toughness and optionally gains
-    keywords until end of turn.
+class PumpTargetArtifactOrCreatureUntilEOT(Pump):
+    """``Pump`` constructor sugar for "target artifact or creature gets
+    +N/+M and gains KW UEOT" (Reroute Systems mode 1, Mental
+    Modulation's pump arm, …).
 
-    Matches oracle text like "Target artifact or creature gains indestructible
-    until end of turn" (Reroute Systems mode 1). Uses the ``("permanent", id)``
-    target kind because either an artifact or a creature can be hit. The same
-    ``temp_keywords`` / ``temp_*_bonus`` plumbing as
-    ``PumpTargetCreatureUntilEOT`` — bonuses clear at cleanup.
+    Filter is ``IsArtifact() | IsCreature()``. The unified
+    ``Pump.resolve`` re-verifies the slot's filter at resolution per
+    CR 608.2b — a target that lost both relevant card types between
+    cast and resolve fails the recheck and the pump is skipped.
     """
 
-    power_bonus: int = 0
-    toughness_bonus: int = 0
-    granted_keywords: frozenset[str] = frozenset()
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if o.printing.is_artifact or o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None:
-            return
-        if not (obj.printing.is_artifact or obj.printing.is_creature):
-            return
-        obj.temp_power_bonus += self.power_bonus
-        obj.temp_toughness_bonus += self.toughness_bonus
-        if self.granted_keywords:
-            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
-        keyword_text = (
-            f" and gains {', '.join(sorted(self.granted_keywords))}"
-            if self.granted_keywords else ""
-        )
-        state.log.append(
-            f"{obj.printing.name} gets "
-            f"+{self.power_bonus}/+{self.toughness_bonus}"
-            f"{keyword_text} until end of turn"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        object.__setattr__(
+            self, "targets",
+            (TargetSpec(IsArtifact() | IsCreature()),),
         )
 
     def describe(self) -> str:
@@ -8484,7 +8536,7 @@ class PumpTargetArtifactOrCreatureUntilEOT(Effect):
                 f"+{self.power_bonus}/+{self.toughness_bonus}"
             )
         if self.granted_keywords:
-            kw = ', '.join(sorted(self.granted_keywords))
+            kw = ", ".join(sorted(self.granted_keywords))
             if parts:
                 parts.append(f"gains {kw}")
             else:

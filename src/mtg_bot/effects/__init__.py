@@ -166,6 +166,7 @@ from mtg_bot.effects.generic import (
     SelfMill,
     SetLifeToHalfStartingRoundedUp,
     Surveil,
+    Pump,
     SwitchSourcePowerToughnessUEOT,
     Tap,
     TapAndStunUpToOneTargetCreature,
