@@ -87,6 +87,7 @@ from mtg_bot.cards.base import (
     OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    PossibilityTechnicianETBEffect,
     TerrapactIntimidatorETBEffect,
     PreventAllCombatDamageThisTurn,
     PumpCreaturesOpponentsControlUntilEOT,
@@ -2433,6 +2434,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         "nonland card. You may cast that card this turn"
     ):
         return TerritorialBruntarLandfallEffect()
+    # Possibility Technician's ENTERS body (only EoE card with the
+    # "exile top card + may play it while controlling a Kavu" shape;
+    # broader grammar deferred until a second example exists). The
+    # "for as long as that card remains exiled" duration and the
+    # "if you control a Kavu" play-condition are anaphoric references
+    # that the sentence-splitting grammar can't model as standalone
+    # clauses.
+    if phrase == (
+        "exile the top card of your library. "
+        "For as long as that card remains exiled, you may play it "
+        "if you control a Kavu"
+    ):
+        return PossibilityTechnicianETBEffect()
     # Starfield Shepherd's ETB body (only EoE card with the
     # "search for basic Plains OR creature MV≤1" shape; broader grammar
     # deferred until a second example exists). The "or" clause is a

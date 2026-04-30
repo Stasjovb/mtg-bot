@@ -318,27 +318,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             "Genemorph Imago", "{G}{U}", 1, 3,
             keywords={"flying"},
         ),
-        # Possibility Technician {2}{R} 3/3 Kavu Artificer. Warp {R}.
-        # Whenever this or another Kavu you control enters: exile top
-        # card, may play it while controlling a Kavu.
-        "Possibility Technician": make_creature(
-            "Possibility Technician", "{2}{R}", 3, 3,
-            warp="{R}",
-            subtypes=("Kavu", "Artificer"),
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=PossibilityTechnicianETBEffect(),
-                ),
-                TriggeredAbility(
-                    event=Event.ENTERS,
-                    predicate=(
-                        Subject(None, HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()
-                    ),
-                    effect=PossibilityTechnicianETBEffect(),
-                ),
-            ),
-        ),
         # Famished Worldsire {5}{G}{G}{G} 6/6 Leviathan. Ward {3}.
         # Devour land 3 (enters with 3× sacrificed lands as +1/+1
         # counters). ETB: look at top X cards (X = power), put land

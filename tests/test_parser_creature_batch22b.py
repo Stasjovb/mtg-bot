@@ -13,7 +13,7 @@ Covered creatures:
   5.  Genemorph Imago — flying only (simplified)
   6.  Broodguard Elite — Insect Knight, warp {X}{G}, enters_with_counters_from_x, leaves trigger
   7.  Icetill Explorer — grants_additional_land_per_turn + graveyard lands + landfall mill
-  8.  Possibility Technician — warp {R}, Kavu Artificer, two ETB exile triggers
+  8.  Possibility Technician — warp {1}{R}, Kavu Artificer, two ETB exile triggers
   9.  Terrapact Intimidator — ETB TerrapactIntimidatorETBEffect
  10.  Famished Worldsire — Leviathan, ward {3}, devour land 3, ETB FamishedWorldsireETBEffect
  11.  Ouroboroid — beginning-of-combat pump equal to power

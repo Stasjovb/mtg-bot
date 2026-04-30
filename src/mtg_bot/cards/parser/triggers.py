@@ -82,6 +82,7 @@ from mtg_bot.effects.object_predicates import (
     HasCounter,
     HasKeyword,
     HasPowerAtMost,
+    HasSubtype,
     IsArtifact,
     IsCreature,
     IsEnchantment,
@@ -904,6 +905,16 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
         (Event.ENTERS, Subject(None, IsEnchantment()) & Controlled(YOU)),
         (Event.ROOM_FULLY_UNLOCKED, Controlled(YOU, subject="room")),
     ),
+    # ``Whenever this creature or another Kavu you control enters``
+    # (Possibility Technician). Two arms — self-ETB and Kavu-observer
+    # — both fire ENTERS with different predicates but the same effect.
+    # Produces two ``TriggeredAbility`` entries mirroring the bespoke's
+    # two-entry layout so the legacy ``"etb"`` / ``"kavu_you_control_
+    # enters"`` test keys both apply.
+    "this creature or another Kavu you control enters": (
+        (Event.ENTERS, IsSelf()),
+        (Event.ENTERS, Subject(None, HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()),
+    ),
 }
 
 
@@ -936,6 +947,15 @@ _COLLAPSED_PREDICATE_TRIGGER_PHRASES: dict[
         Event.DIES,
         Subject(None, IsCreature() | IsArtifact()) & Controlled(YOU),
     ),
+    # ``Whenever this creature or another Kavu you control enters``
+    # (Possibility Technician). The two arms (``this creature`` +
+    # ``another Kavu you control``) collapse to a single
+    # ``Subject(None, HasSubtype("Kavu")) & Controlled(YOU)`` predicate
+    # — the source is itself a Kavu, so ``IsSelf()`` is subsumed by the
+    # Kavu subtype check; no ``~IsSelf()`` because ``this creature``
+    # explicitly includes self. The bespoke modeled this as two separate
+    # ``TriggeredAbility`` entries with identical effects; the collapsed
+    # form produces one, firing once per entering Kavu you control.
 }
 
 

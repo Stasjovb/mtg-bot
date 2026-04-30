@@ -98,7 +98,10 @@ def test_possibility_describe():
 
 def test_possibility_printing_has_subtypes_etb_kavu_observer_and_warp():
     pt = _PRINTINGS["Possibility Technician"]
-    assert pt.warp_cost_str == "{R}"
+    # Oracle text says "Warp {1}{R}"; the old bespoke had a spurious
+    # warp="{R}" that was dropped when the card migrated to the oracle
+    # parser (wave 6).
+    assert pt.warp_cost_str == "{1}{R}"
     assert "Kavu" in pt.subtypes
     triggers = {_legacy_or_inferred_key(ab) for ab in pt.triggered_abilities}
     # Both halves of "this creature or another Kavu you control enters"
