@@ -5,8 +5,10 @@ for one of the 13 non-legendary Artifact Creatures originally in the
 bespoke table. Pinnacle Emissary was migrated OUT of
 ``_BESPOKE_ARTIFACT_CREATURES`` when hybrid-mana support landed — it
 is now claimed by the grammar directly (warp cost ``{U/R}`` parses
-correctly). Tapestry Warden was migrated when the toughness-as-damage/
-station feature landed. The remaining 11 cards are still bespoke.
+correctly). Tapestry Warden and Virulent Silencer were migrated out
+when the toughness-as-damage/station and predicate-dispatch
+combat-damage-to-player features landed. The remaining 10 cards are
+still bespoke.
 
 Covered cards:
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
@@ -21,7 +23,7 @@ Covered cards:
  10. Selfcraft Mechan — ETB (SelfcraftMechanETBEffect)
  11. Survey Mechan — flying only (simplified vanilla)
  12. Tapestry Warden — grammar-claimed; vigilance + toughness-as-damage + toughness-as-station
- 13. Virulent Silencer — observer trigger + PutPoisonCountersOnTargetPlayer (legacy path)
+ 13. Virulent Silencer — grammar-claimed; predicate-dispatch poison trigger
 """
 
 from __future__ import annotations

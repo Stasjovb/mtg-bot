@@ -735,6 +735,24 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         & Controlled(YOU, subject="source")
         & Subject("target", IsPlayer()),
     ),
+    # ``Whenever a nontoken artifact creature you control deals combat
+    # damage to a player`` (Virulent Silencer). Batch 13. Stricter
+    # variant of the existing ``a creature you control deals combat
+    # damage to a player`` (Starwinder) — adds ``IsArtifact()`` and
+    # ``IsNontoken()`` to the source filter so only nontoken artifact
+    # creatures the controller controls satisfy the trigger. The
+    # predicate fires once per connecting source via
+    # ``Event.DEALS_COMBAT_DAMAGE``; the effect gives the target
+    # player two poison counters. The damaged player is pre-wired as
+    # ``fixed_targets`` by ``_fire_combat_damage_to_player_triggers``
+    # so ``PutPoisonCountersOnTargetPlayer`` can read ``targets[0]``
+    # at resolve time without a target-selection prompt.
+    "a nontoken artifact creature you control deals combat damage to a player": (
+        Event.DEALS_COMBAT_DAMAGE,
+        Subject("source", IsCreature() & IsArtifact() & IsNontoken())
+        & Controlled(YOU, subject="source")
+        & Subject("target", IsPlayer()),
+    ),
     # ``Whenever one or more creatures you control deal combat damage
     # to a player`` (Locker Room — DSK Room half). Same per-event
     # predicate as the ``a creature you control deals combat damage

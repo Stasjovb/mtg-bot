@@ -112,6 +112,7 @@ from mtg_bot.cards.base import (
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+    PutPoisonCountersOnTargetPlayer,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
@@ -1281,6 +1282,20 @@ _TARGET_OPPONENT_LOSES_N_LIFE = re.compile(
 # uses a non-integer life-loss amount in this shape today.
 _THEY_LOSE_N_LIFE = re.compile(
     r"^they lose (\d+) life$"
+)
+# "That player gets N poison counters" — effect body on a combat-damage
+# observer trigger (Virulent Silencer's ``Whenever a nontoken artifact
+# creature you control deals combat damage to a player, that player gets
+# two poison counters.``). The pronoun ``that player`` refers to the
+# damaged player, who is pre-wired as
+# ``fixed_targets=(("player", id),)`` by the
+# ``DEALS_COMBAT_DAMAGE`` dispatch in
+# ``combat._fire_combat_damage_to_player_triggers``. Maps to
+# ``PutPoisonCountersOnTargetPlayer(amount=N)`` which reads the pre-wired
+# target from ``targets[0]`` at resolve time. The ``N`` tail accepts
+# spelled-out small cardinals (``two``) and bare digits.
+_THAT_PLAYER_GETS_N_POISON_COUNTERS = re.compile(
+    rf"^that player gets (\d+|{_SMALL_CARDINAL_PATTERN}) poison counters?$"
 )
 # "Return up to one other target permanent you control to its owner's
 # hand" — Exosuit Savior's ETB. Maps to
@@ -3741,6 +3756,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # reads that pre-wired target from ``targets[0]`` at resolve
         # time — same engine class the bespoke table used directly.
         return TargetPlayerLosesLife(amount=int(m.group(1)))
+    m = _THAT_PLAYER_GETS_N_POISON_COUNTERS.match(phrase)
+    if m is not None:
+        # ``that player gets N poison counters`` — effect body on a
+        # combat-damage observer trigger (Virulent Silencer). The "that
+        # player" pronoun refers to the damaged player, who is pre-wired
+        # as ``fixed_targets=(("player", id),)`` by the
+        # ``DEALS_COMBAT_DAMAGE`` dispatch.
+        # ``PutPoisonCountersOnTargetPlayer`` reads the pre-wired target
+        # from ``targets[0]`` at resolve time.
+        return PutPoisonCountersOnTargetPlayer(amount=_parse_amount(m.group(1)))
     if _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND.match(
         phrase
     ) is not None:

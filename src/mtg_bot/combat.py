@@ -629,47 +629,40 @@ def _fire_combat_damage_to_player_triggers(
     player.
 
     The single-source / your-creature / creature-deals-to-you families
-    (Illvoi Infiltrator, Starwinder, Contested War Zone) flow through
-    the predicate-trigger dispatcher (phase 9); see the
-    ``Event.DEALS_COMBAT_DAMAGE`` dispatch below. The dispatcher
-    walks every battlefield permanent, evaluates each one's
-    predicate against the ``(source, target)`` subject mapping, and
-    pushes a StackItem when the predicate matches. The attacker's
-    controller is threaded via
-    ``combat_damage_source_controller_id`` (mirrored to
+    (Illvoi Infiltrator, Starwinder, Contested War Zone, Virulent
+    Silencer) flow through the predicate-trigger dispatcher (phase 9);
+    see the ``Event.DEALS_COMBAT_DAMAGE`` dispatch below. The dispatcher
+    walks every battlefield permanent, evaluates each one's predicate
+    against the ``(source, target)`` subject mapping, and pushes a
+    StackItem when the predicate matches. The attacker's controller is
+    threaded via ``combat_damage_source_controller_id`` (mirrored to
     ``state.resolving_combat_damage_source_controller_id`` at resolve
     time) so observer effects like Contested War Zone's
-    ``ChangeControllerToCombatDamageSource`` can read the new
-    controller without having to thread it through ``fixed_targets``.
+    ``ChangeControllerToCombatDamageSource`` can read the new controller
+    without having to thread it through ``fixed_targets``.
 
     The target player is pre-wired as ``fixed_targets=(("player", id),)``
-    on every push so effects that read ``targets[0]`` at resolve time
-    can identify the damaged player. Effects that don't use ``targets``
-    (``DrawCards``, ``DrawCardsEqualToResolvingCombatDamage``) silently
-    ignore the pre-wired tuple.
+    on every push so effects like Virulent Silencer's
+    ``PutPoisonCountersOnTargetPlayer`` can read ``targets[0]`` at
+    resolve time without needing a separate target-selection prompt.
+    Effects that don't use ``targets`` (``DrawCards``,
+    ``DrawCardsEqualToResolvingCombatDamage``) silently ignore the
+    pre-wired tuple.
 
-    Two specialty observer keys remain on the legacy string-key path
-    because their semantics don't fit the per-event predicate model
+    One specialty observer key remains on the legacy string-key path
+    because its semantics don't fit the per-event predicate model
     cleanly:
 
-    - ``your_nontoken_artifact_creature_combat_damage_to_player``
-      (Virulent Silencer): the source-side qualifier filters on the
-      attacker being a nontoken artifact creature, but the
-      registration also targets the damaged player as a fixed target
-      slot — encoding "fire as observer on permanents controlled by
-      the attacker's controller" with the predicate vocabulary would
-      need an OBSERVER_CONTROLLED-style predicate that we haven't
-      added yet.
     - ``your_counter_creature_combat_damage_to_player_aggregated``
       (Haliya, Ascendant Cadet): fires ONCE per (controller,
       target_player) pair regardless of how many qualifying sources
       damaged the player. The deduplication is fundamentally
       cross-event aggregation, not a per-event predicate.
 
-    Both stay as legacy walks below; they have their own dedicated
-    fire paths and are not migrated by phase 9.
+    It stays as a legacy walk below; it has its own dedicated fire path
+    and is not migrated by phase 9.
     """
-    from mtg_bot.actions import dispatch_event, push_triggered_ability
+    from mtg_bot.actions import dispatch_event
     from mtg_bot.turn import should_fire_trigger
     from mtg_bot.effects.predicates import Event
 
@@ -683,9 +676,12 @@ def _fire_combat_damage_to_player_triggers(
         # Subsumes Illvoi Infiltrator
         # (``IsSelf(subject="source") & IsPlayer(subject="target")``),
         # Starwinder (``IsCreature(subject="source") & Controlled(YOU,
-        # subject="source") & IsPlayer(subject="target")``), and
+        # subject="source") & IsPlayer(subject="target")``),
         # Contested War Zone (``IsCreature(subject="source") &
-        # Controlled(YOU, subject="target")``).
+        # Controlled(YOU, subject="target")``), and Virulent Silencer
+        # (``IsCreature(subject="source") & IsArtifact(subject="source")
+        # & IsNontoken(subject="source") & Controlled(YOU,
+        # subject="source") & IsPlayer(subject="target")``).
         target_player_obj = state.player_by_id(target_player)
         attacker_controller_id = source.controller_id
         dispatch_event(
@@ -697,34 +693,6 @@ def _fire_combat_damage_to_player_triggers(
             source=source,
             target=target_player_obj,
         )
-
-        # Observer: "whenever a nontoken artifact creature you control
-        # deals combat damage to a player" — Virulent Silencer.
-        # Stays on the legacy string-key path; see docstring above.
-        if (
-            source.printing.is_artifact
-            and source.printing.is_creature
-            and not source.printing.is_token
-        ):
-            for obs in list(state.battlefield):
-                if obs.controller_id != source.controller_id:
-                    continue
-                for i, ability in enumerate(obs.printing.triggered_abilities):
-                    if ability.trigger != (
-                        "your_nontoken_artifact_creature_"
-                        "combat_damage_to_player"
-                    ):
-                        continue
-                    push_triggered_ability(
-                        state,
-                        source=obs,
-                        ability=ability,
-                        ability_index=i,
-                        controller_id=obs.controller_id,
-                        label="artifact-creature-damage",
-                        combat_damage_amount=amount,
-                        fixed_targets=(("player", target_player),),
-                    )
 
     # Aggregated observer: "whenever one or more creatures you control
     # with +1/+1 counters on them deal combat damage to a player"

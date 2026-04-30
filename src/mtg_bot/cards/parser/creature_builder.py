@@ -495,23 +495,6 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
             artifact=True,
             keywords={"flying"},
         ),
-        # Virulent Silencer {3} 2/3 Robot Assassin.
-        # Migrated to grammar in Feature 2 (predicate-dispatch
-        # combat-damage-to-player trigger).
-        "Virulent Silencer": make_creature(
-            "Virulent Silencer", "{3}", 2, 3,
-            artifact=True,
-            subtypes=("Robot", "Assassin"),
-            triggered_abilities=(
-                TriggeredAbility(
-                    trigger=(
-                        "your_nontoken_artifact_creature_"
-                        "combat_damage_to_player"
-                    ),
-                    effect=PutPoisonCountersOnTargetPlayer(amount=2),
-                ),
-            ),
-        ),
         # ── DSK artifacts batch 3 ─────────────────────────────────────
         # Splitskin Doll {1}{W} 2/1 Toy.
         # "When this creature enters, draw a card. Then discard a card
