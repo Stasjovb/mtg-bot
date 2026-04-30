@@ -210,6 +210,100 @@ def _describe_filter(target_filter) -> str:
     return "target"
 
 
+def _bounce_to_hand(state: "GameState", obj) -> None:
+    """Common bounce-side-effects helper. Removes ``obj`` from the
+    battlefield, resets combat / counters / temp_* state, marks the
+    Void-tracking flag, and either lets a token cease to exist or
+    moves the card to its owner's hand and reveals it. Pure helper —
+    used by every variant of the bounce family so each subclass
+    needs only the per-card filter and any rider snapshot logic.
+    """
+    from mtg_bot.game import Zone, reveal_to_all
+
+    state.battlefield.remove(obj)
+    obj.damage = 0
+    obj.marked_lethal = False
+    obj.damaged_this_turn = False
+    obj.tapped = False
+    obj.attacking = False
+    obj.blocking = None
+    obj.blocked_by = []
+    obj.plus_one_counters = 0
+    obj.charge_counters = 0
+    obj.temp_power_bonus = 0
+    obj.temp_toughness_bonus = 0
+    obj.temp_keywords = frozenset()
+    if not obj.printing.is_land:
+        state.permanent_left_battlefield_this_turn = True
+    if obj.printing.is_token:
+        state.log.append(
+            f"{obj.printing.name} token ceases to exist (bounced)"
+        )
+        return
+    obj.zone = Zone.HAND
+    state.player_by_id(obj.owner_id).hand.append(obj)
+    reveal_to_all(state, obj)
+    state.log.append(
+        f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
+    )
+
+
+@dataclass(frozen=True)
+class Bounce(Effect):
+    """Unified return-to-owner's-hand primitive driven by ``targets``.
+
+    Sibling of :class:`Destroy` / :class:`Exile` / :class:`Tap` /
+    :class:`Pump` for the bounce family. The unified resolve walks
+    each slot, re-verifies legality at resolution per CR 608.2b, and
+    bounces each surviving target via :func:`_bounce_to_hand` (which
+    handles token cease-to-exist, hand placement, reveal, and the
+    permanent-left-battlefield-this-turn bookkeeping for Void).
+
+    Variants with riders that need to snapshot battlefield state
+    BEFORE the bounce (e.g., the "if it was attacking, create a
+    Drone token" rider on Desculpting Blast) override ``resolve`` so
+    they can capture ``obj.attacking`` before ``_bounce_to_hand``
+    clears it.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="bounce")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                _bounce_to_hand(state, obj)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"return {_describe_targets(self.targets)} to its owner's hand"
+
+
 @dataclass(frozen=True)
 class Pump(Effect):
     """Unified pump primitive — target gets ``+power_bonus/+toughness_bonus``
@@ -719,105 +813,91 @@ class DiscardSelf(Effect):
 
 
 @dataclass(frozen=True)
-class ReturnTargetCreatureToOwnersHand(Effect):
-    """Target creature on the battlefield returns to its owner's hand.
+class ReturnTargetCreatureToOwnersHand(Bounce):
+    """``Bounce`` constructor sugar for "return target creature to its
+    owner's hand" with optional widening / rider flags.
 
-    Tokens cease to exist when bounced (they'd briefly be in hand, then
-    rule 704.5d kicks in). Matches oracle text like "Return target
-    creature to its owner's hand."
+    Filter composition:
+      - default: ``IsCreature()``
+      - ``allow_nonland_permanent=True``: ``~IsLand() & ~IsPlayer()``
+        (Desculpting Blast — broadens to any nonland permanent)
+      - ``optional=True``: slot ``count_min=0`` ("up to one target")
 
-    Set ``allow_nonland_permanent=True`` to broaden legal targets to any
-    nonland permanent (Desculpting Blast). Set
-    ``create_drone_if_was_attacking=True`` to add the
-    "if it was attacking, create a 1/1 colorless Drone artifact creature
-    token..." rider — checked at resolve time before the target leaves
-    the battlefield (which clears the attacking flag).
-
-    ``optional=True`` for "up to one target creature" oracle text
-    (Bottomless Pool half) — the effect resolves as a no-op when no
-    target is chosen / available. ``target_count_range`` flips to
-    ``(0, 1)`` and ``requires_target`` flips to ``False`` so the cast-
-    site target-selection pipeline allows zero-target casts.
+    Rider: ``create_drone_if_was_attacking=True`` snapshots
+    ``obj.attacking`` BEFORE the unified ``_bounce_to_hand`` clears
+    it, then creates a Drone token after the bounce — needs a custom
+    resolve since the snapshot can't happen inside the bare base.
     """
 
     allow_nonland_permanent: bool = False
     create_drone_if_was_attacking: bool = False
     optional: bool = False
 
-    def requires_target(self) -> bool:
-        return not self.optional
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, 1) if self.optional else (1, 1)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            IsCreature, IsLand, IsPlayer,
+        )
+        from mtg_bot.effects.targets import TargetSpec
         if self.allow_nonland_permanent:
-            return [
-                ("permanent", o.id)
-                for o in state.battlefield
-                if not o.printing.is_land
-            ]
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
+            f = ~IsLand() & ~IsPlayer()
+        else:
+            f = IsCreature()
+        spec = TargetSpec(
+            f,
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
-
+        if not self.create_drone_if_was_attacking:
+            super().resolve(state, controller_id, targets)
+            return
+        # Drone-rider variant: snapshot ``obj.attacking`` before the
+        # unified bounce clears it, then create the token after the
+        # bounce settles.
         if not targets:
             return
-        kind, target_id = targets[0]
-        if kind not in ("creature", "permanent"):
-            return
-        obj = next((o for o in state.battlefield if o.id == target_id), None)
-        if obj is None:
-            return
-        # Snapshot rider conditions BEFORE the bounce (which clears flags).
-        was_attacking = obj.attacking
-        state.battlefield.remove(obj)
-        # Reset combat/damage state on the way off the battlefield
-        obj.damage = 0
-        obj.marked_lethal = False
-        obj.damaged_this_turn = False
-        obj.tapped = False
-        obj.attacking = False
-        obj.blocking = None
-        obj.blocked_by = []
-        obj.plus_one_counters = 0
-        obj.charge_counters = 0
-        obj.temp_power_bonus = 0
-        obj.temp_toughness_bonus = 0
-        obj.temp_keywords = frozenset()
-        # Track the leave-BF for Void
-        if not obj.printing.is_land:
-            state.permanent_left_battlefield_this_turn = True
-        if obj.printing.is_token:
-            state.log.append(
-                f"{obj.printing.name} token ceases to exist (bounced)"
-            )
-            return
-        from mtg_bot.game import reveal_to_all
-        obj.zone = Zone.HAND
-        state.player_by_id(obj.owner_id).hand.append(obj)
-        reveal_to_all(state, obj)
-        state.log.append(
-            f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
-        )
-        if self.create_drone_if_was_attacking and was_attacking:
-            from mtg_bot.actions import put_into_battlefield
-            from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-            drone_printing = TOKEN_PRINTINGS["Drone"]
-            drone = state.new_object(
-                drone_printing, owner_id=controller_id, zone=Zone.STACK,
-            )
-            put_into_battlefield(state, drone, controller_id)
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.game import Zone
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="bounce")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                was_attacking = obj.attacking
+                _bounce_to_hand(state, obj)
+                if was_attacking:
+                    drone_printing = TOKEN_PRINTINGS["Drone"]
+                    drone = state.new_object(
+                        drone_printing,
+                        owner_id=controller_id,
+                        zone=Zone.STACK,
+                    )
+                    put_into_battlefield(state, drone, controller_id)
+        finally:
+            state.resolving_controller_id = prior
 
     def describe(self) -> str:
         scope = "nonland permanent" if self.allow_nonland_permanent else "creature"
@@ -829,77 +909,34 @@ class ReturnTargetCreatureToOwnersHand(Effect):
 
 
 @dataclass(frozen=True)
-class ReturnTargetPermanentYouControlToOwnersHand(Effect):
-    """Target permanent you control goes back to its owner's hand.
+class ReturnTargetPermanentYouControlToOwnersHand(Bounce):
+    """``Bounce`` constructor sugar for "return target permanent you
+    control to its owner's hand" (Exosuit Savior's bounce arm).
 
-    Matches Exosuit Savior's "return up to one other target permanent you
-    control to its owner's hand". Set ``optional=True`` for "up to one"
-    semantics (resolves as no-op if no target chosen). Set
-    ``exclude_self=True`` for the "other" half (filters out the trigger
-    source via state.resolving_source). Lands are legal targets.
+    Filter is ``ControlledByYou() & ~IsPlayer()`` — covers any
+    battlefield permanent (lands too) the controller controls.
+    ``exclude_self=True`` adds ``& ~IsSource()`` for the "other
+    target" qualifier. ``optional=True`` flips the slot's
+    ``count_min`` to 0 for "up to one target" semantics.
     """
 
     optional: bool = False
     exclude_self: bool = False
 
-    def requires_target(self) -> bool:
-        return not self.optional
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, 1) if self.optional else (1, 1)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        source = state.resolving_source if self.exclude_self else None
-        return [
-            ("permanent", o.id)
-            for o in state.battlefield
-            if o.controller_id == controller_id
-            and (source is None or o.id != source.id)
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "permanent":
-            return
-        obj = next((o for o in state.battlefield if o.id == target_id), None)
-        if obj is None or obj.controller_id != controller_id:
-            return
-        state.battlefield.remove(obj)
-        obj.damage = 0
-        obj.marked_lethal = False
-        obj.damaged_this_turn = False
-        obj.tapped = False
-        obj.attacking = False
-        obj.blocking = None
-        obj.blocked_by = []
-        obj.plus_one_counters = 0
-        obj.charge_counters = 0
-        obj.temp_power_bonus = 0
-        obj.temp_toughness_bonus = 0
-        obj.temp_keywords = frozenset()
-        if not obj.printing.is_land:
-            state.permanent_left_battlefield_this_turn = True
-        if obj.printing.is_token:
-            state.log.append(
-                f"{obj.printing.name} token ceases to exist (bounced)"
-            )
-            return
-        from mtg_bot.game import reveal_to_all
-        obj.zone = Zone.HAND
-        state.player_by_id(obj.owner_id).hand.append(obj)
-        reveal_to_all(state, obj)
-        state.log.append(
-            f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByYou, IsPlayer, IsSource,
         )
+        from mtg_bot.effects.targets import TargetSpec
+        f = ControlledByYou() & ~IsPlayer()
+        if self.exclude_self:
+            f = f & ~IsSource()
+        spec = TargetSpec(
+            f,
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
 
     def describe(self) -> str:
         return "return target permanent you control to its owner's hand"

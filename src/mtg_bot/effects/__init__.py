@@ -32,6 +32,7 @@ from mtg_bot.effects.generic import (
     AddOneManaOfChosenPermanentColor,
     AttachToTargetCreatureYouControl,
     BecomeLandCreatureUEOT,
+    Bounce,
     BecomesCopyOfTargetLand,
     ChangeControllerToCombatDamageSource,
     ControlTargetOpponentNextTurn,
