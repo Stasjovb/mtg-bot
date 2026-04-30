@@ -4,8 +4,8 @@ Oracle text:
     This spell costs {1} less to cast if it targets a blocking creature.
     Target creature gets +2/+0 and gains indestructible until end of turn.
 
-Modeled as a ``CostReduction(amount=1, condition=
-"target_is_blocking_creature")``.  Evaluated against the chosen target
+Modeled as a ``CostReduction(amount=1, condition=TargetMatches
+(IsCreature() & IsBlocking()))``.  Evaluated against the chosen target
 in the cast pipeline (and optimistically — "is there ANY blocker that
 could be picked?" — in ``legal_actions`` so the affordability gate
 doesn't reject the spell when the discount could legally apply).
@@ -81,11 +81,14 @@ def _give_dark_endurance(state: GameState, controller_id: int):
 
 
 def test_dark_endurance_printing_carries_blocking_cost_reduction():
+    from mtg_bot.effects.conditions import TargetMatches
+    from mtg_bot.effects.object_predicates import IsBlocking, IsCreature
+
     p = _PRINTINGS["Dark Endurance"]
     assert p.mana_cost == ManaCost(generic=1, colored=(("B", 1),))
     assert len(p.cost_reductions) == 1
     rule = p.cost_reductions[0]
-    assert rule.condition == "target_is_blocking_creature"
+    assert rule.condition == TargetMatches(IsCreature() & IsBlocking())
     assert rule.amount == 1
 
 
@@ -176,8 +179,10 @@ def test_cast_targeting_blocker_pays_one_less():
         if o.printing.name == "Swamp" and o.controller_id == 0
     ]
     assert len(swamps) == 1 and swamps[0].tapped
+    # Log line tags the reduction with the ``Condition`` class name
+    # so the dispatcher's structural identity surfaces in transcripts.
     assert any(
-        "cost reduced by 1 (target_is_blocking_creature)" in line
+        "cost reduced by 1 (TargetMatches)" in line
         for line in state.log
     )
     # And the spell is on the stack with the blocker as the target.

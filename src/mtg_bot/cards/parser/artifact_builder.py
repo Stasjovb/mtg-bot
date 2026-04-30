@@ -138,7 +138,9 @@ from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.combinators import Sequence
+from mtg_bot.effects.conditions import PerControlled
 from mtg_bot.effects.generic import CreateToken, Surveil
+from mtg_bot.effects.object_predicates import HasSubtype
 from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
 
@@ -543,7 +545,8 @@ def _build_thrumming_hivepool() -> CardPrinting:
         "Thrumming Hivepool", "{6}",
         cost_reductions=(
             CostReduction(
-                amount=1, condition="affinity_for_slivers",
+                amount=1,
+                condition=PerControlled(HasSubtype("Sliver")),
             ),
         ),
         static_abilities=(

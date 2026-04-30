@@ -87,6 +87,16 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
+from mtg_bot.effects.conditions import (
+    AttackedWithThisTurn,
+    Condition,
+    ControlPermanent,
+)
+from mtg_bot.effects.object_predicates import (
+    HasCounter,
+    HasSubtype,
+    IsCreature,
+)
 
 
 _ACTIVATED_ABILITY_LINE = re.compile(
@@ -388,28 +398,29 @@ _INLINE_COST_REDUCTION_RIDER = re.compile(
 )
 
 
-# Surface phrase → engine condition-key mapping for the activated-
-# ability cost-reduction rider. Each engine key MUST have a matching
-# branch in ``mtg_bot.actions.apply_cost_reductions`` /
-# ``_evaluate_cost_reduction``; otherwise the parser would silently
-# produce a rule the engine ignores, diverging from the static side.
+# Surface phrase → structural ``Condition`` mapping for the activated-
+# ability cost-reduction rider. Each phrase decomposes to a tree of
+# ``ObjectPredicate`` atoms wrapped in a ``Condition`` variant; the
+# engine consumes the ``Condition`` directly via the single-dispatch
+# path in ``apply_cost_reductions`` / ``_evaluate_cost_reduction``.
 # Mirrors the per-spell whitelist in
 # ``mtg_bot.cards.parser.cost_reduction`` but lives here because the
 # activated-ability rider has its own surface shape (``... to activate
 # if ...`` rather than ``... to cast if ...``) and condition vocabulary
 # (no overlap with EoE printings observed today).
-_ACTIVATED_COST_REDUCTION_CONDITIONS: dict[str, str] = {
+_ACTIVATED_COST_REDUCTION_CONDITIONS: dict[str, "Condition"] = {
+    # Starport Security — "you control a creature with a +1/+1 counter
+    # on it" decomposes to a ``ControlPermanent(...)`` over the
+    # battlefield filtered to creatures with a ``+1/+1`` counter.
     "you control a creature with a +1/+1 counter on it": (
-        "control_creature_with_plus_one_counter"
+        ControlPermanent(IsCreature() & HasCounter("+1/+1"))
     ),
-    # Thaumaton Torpedo's ``This ability costs {3} less to activate if
-    # you attacked with a Spacecraft this turn.`` rider. The engine key
-    # ``"attacked_with_spacecraft_this_turn"`` is already wired in
-    # ``apply_cost_reductions`` / ``_evaluate_cost_reduction`` and
-    # latches via the ``Player.attacked_with_spacecraft_this_turn`` flag
-    # set in ``combat.py``.
+    # Thaumaton Torpedo — "you attacked with a Spacecraft this turn"
+    # reads through the generalized ``Player.attacked_this_turn`` latch
+    # (every declared attacker is appended; the ``Spacecraft`` filter
+    # is applied at evaluation time by the condition).
     "you attacked with a Spacecraft this turn": (
-        "attacked_with_spacecraft_this_turn"
+        AttackedWithThisTurn(HasSubtype("Spacecraft"))
     ),
 }
 
@@ -477,10 +488,10 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     rider_match = _INLINE_COST_REDUCTION_RIDER.search(stripped)
     if rider_match is not None:
         condition_phrase = rider_match.group(2).strip()
-        engine_key = _ACTIVATED_COST_REDUCTION_CONDITIONS.get(
+        condition = _ACTIVATED_COST_REDUCTION_CONDITIONS.get(
             condition_phrase
         )
-        if engine_key is None:
+        if condition is None:
             # Unknown condition phrase — reject the whole line rather
             # than silently dropping a gate the static registry does
             # honor. A future EoE printing with a new condition phrase
@@ -489,7 +500,7 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         cost_reductions = (
             CostReduction(
                 amount=int(rider_match.group(1)),
-                condition=engine_key,
+                condition=condition,
             ),
         )
         # Strip the rider — the rider regex's leading literal space

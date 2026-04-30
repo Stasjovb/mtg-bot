@@ -43,7 +43,9 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.conditions import TargetMatches
 from mtg_bot.effects.generic import CreateToken, GrantUnblockableUEOT
+from mtg_bot.effects.object_predicates import IsCreature, IsTapped
 
 
 def _claimed_names() -> frozenset[str]:
@@ -447,7 +449,7 @@ def test_parse_cost_reduction_targets_tapped_creature():
         "This spell costs {3} less to cast if it targets a tapped creature."
     )
     assert rule == CostReduction(
-        amount=3, condition="target_is_tapped_creature",
+        amount=3, condition=TargetMatches(IsCreature() & IsTapped()),
     )
 
 
@@ -469,7 +471,7 @@ def test_seized_from_slumber_carries_cost_reduction_rule():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Seized from Slumber"]
     assert p.cost_reductions == (
-        CostReduction(amount=3, condition="target_is_tapped_creature"),
+        CostReduction(amount=3, condition=TargetMatches(IsCreature() & IsTapped())),
     )
     assert p.spell_effect == DestroyTargetCreature()
 
@@ -484,7 +486,7 @@ def test_target_is_tapped_creature_evaluator_optimistic_when_no_targets():
     from mtg_bot.cards.base import CostReduction, make_creature
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
-    rule = CostReduction(amount=3, condition="target_is_tapped_creature")
+    rule = CostReduction(amount=3, condition=TargetMatches(IsCreature() & IsTapped()))
     bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
     bear_obj = GameObject(
         id=1, printing=bear_pr, owner_id=0, controller_id=0,
@@ -514,7 +516,7 @@ def test_target_is_tapped_creature_evaluator_committed_target():
     from mtg_bot.cards.base import CostReduction, make_creature
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
-    rule = CostReduction(amount=3, condition="target_is_tapped_creature")
+    rule = CostReduction(amount=3, condition=TargetMatches(IsCreature() & IsTapped()))
     tapped_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
     untapped_pr = make_creature("Bird", "{U}", power=1, toughness=1)
     tapped_obj = GameObject(

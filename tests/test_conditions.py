@@ -116,6 +116,29 @@ def test_default_multiplier_is_one():
     assert cond.multiplier(object(), 0) == 1
 
 
+def test_or_condition_default_multiplier_is_one():
+    """OR doesn't override ``multiplier`` (only AND does, multiplying
+    children); inheriting the base Condition default of 1 means the
+    OR of two boolean conditions still yields a flat-amount
+    reduction at the engine level."""
+    cond = OrCondition(_Static(True), _Static(False))
+    assert cond.multiplier(object(), 0) == 1
+
+
+def test_not_condition_default_multiplier_is_one():
+    cond = NotCondition(_Static(False))
+    assert cond.multiplier(object(), 0) == 1
+
+
+def test_condition_subclass_must_implement_matches():
+    """Concrete ``Condition`` subclasses must implement ``matches`` —
+    the ABC will refuse to instantiate a subclass that doesn't."""
+    class _Bare(Condition):
+        pass
+    with pytest.raises(TypeError):
+        _Bare()
+
+
 # ---------- ControlPermanent ----------
 
 

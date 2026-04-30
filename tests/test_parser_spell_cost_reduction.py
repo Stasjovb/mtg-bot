@@ -47,6 +47,18 @@ from mtg_bot.cards.parser.cost_reduction import (
     _COST_REDUCTION_CONDITIONS,
     _parse_cost_reduction_line,
 )
+from mtg_bot.effects.conditions import (
+    AnotherSpellCastThisTurn,
+    Condition,
+    OpponentsControlAtLeast,
+    PerDifferentlyNamedLand,
+    TargetMatches,
+    VoidActiveCondition,
+)
+from mtg_bot.effects.object_predicates import (
+    IsBlocking,
+    IsCreature,
+)
 from mtg_bot.cards.parser.creature_builder import _build_creature_printing
 from mtg_bot.cards.parser.spell_builder import (
     _build_spell_printing,
@@ -80,7 +92,7 @@ def test_recognizer_extracts_another_spell_cast_this_turn():
         "spell this turn."
     )
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=3, condition="another_spell_cast_this_turn",
+        amount=3, condition=AnotherSpellCastThisTurn(),
     )
 
 
@@ -90,7 +102,7 @@ def test_recognizer_extracts_opponents_control_three_or_more_creatures():
         "three or more creatures."
     )
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=2, condition="opponents_control_three_or_more_creatures",
+        amount=2, condition=OpponentsControlAtLeast(IsCreature(), 3),
     )
 
 
@@ -106,7 +118,7 @@ def test_recognizer_extracts_target_is_blocking_creature():
         "creature."
     )
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=1, condition="target_is_blocking_creature",
+        amount=1, condition=TargetMatches(IsCreature() & IsBlocking()),
     )
 
 
@@ -119,7 +131,7 @@ def test_recognizer_handles_surrounding_whitespace():
         "three or more creatures.  "
     )
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=2, condition="opponents_control_three_or_more_creatures",
+        amount=2, condition=OpponentsControlAtLeast(IsCreature(), 3),
     )
 
 
@@ -135,7 +147,7 @@ def test_recognizer_extracts_each_integer_amount(amount):
     rule = _parse_cost_reduction_line(line)
     assert rule is not None
     assert rule.amount == int(amount)
-    assert rule.condition == "another_spell_cast_this_turn"
+    assert rule.condition == AnotherSpellCastThisTurn()
 
 
 # ---------- _parse_cost_reduction_line: negative cases ----------
@@ -181,9 +193,7 @@ def test_recognizer_accepts_x_amount_per_differently_named_land_shape():
     )
     rule = _parse_cost_reduction_line(line)
     assert rule == CostReduction(
-        amount=1,
-        condition="per_differently_named_land",
-        per_land_group=True,
+        amount=1, condition=PerDifferentlyNamedLand(),
     )
 
 
@@ -222,7 +232,7 @@ def test_recognizer_accepts_void_em_dash_prefix():
         "warped this turn."
     )
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=2, condition="void_active",
+        amount=2, condition=VoidActiveCondition(),
     )
 
 
@@ -258,14 +268,13 @@ def test_recognizer_rejects_typo_in_amount():
 
 # ---------- map sanity ----------
 
-def test_every_recognized_condition_resolves_to_known_engine_key():
+def test_every_recognized_condition_resolves_to_a_condition_object():
     # Belt-and-suspenders: each phrase in the recognizer's whitelist
-    # must map to a non-empty engine-condition string. A typo or
-    # accidental empty value would produce silently broken rules.
-    for phrase, key in _COST_REDUCTION_CONDITIONS.items():
+    # must map to a structural ``Condition`` instance. A typo or
+    # accidental ``None`` would produce silently broken rules.
+    for phrase, condition in _COST_REDUCTION_CONDITIONS.items():
         assert phrase
-        assert isinstance(key, str)
-        assert key
+        assert isinstance(condition, Condition)
 
 
 # ---------- end-to-end on the EoE pool: creatures ----------
@@ -308,7 +317,7 @@ def test_spell_builder_drops_rider_clause_and_passes_via_kwarg():
     assert parsed.cost_reductions == (
         CostReduction(
             amount=2,
-            condition="opponents_control_three_or_more_creatures",
+            condition=OpponentsControlAtLeast(IsCreature(), 3),
         ),
     )
 
@@ -340,8 +349,8 @@ def test_detect_cost_reductions_picks_up_every_supported_clause():
         "creature."
     )
     assert _detect_cost_reductions(text) == (
-        CostReduction(amount=1, condition="another_spell_cast_this_turn"),
-        CostReduction(amount=2, condition="target_is_blocking_creature"),
+        CostReduction(amount=1, condition=AnotherSpellCastThisTurn()),
+        CostReduction(amount=2, condition=TargetMatches(IsCreature() & IsBlocking())),
     )
 
 
@@ -386,7 +395,7 @@ def test_spell_builder_round_trips_via_make_sorcery():
         cost_reductions=(
             CostReduction(
                 amount=2,
-                condition="opponents_control_three_or_more_creatures",
+                condition=OpponentsControlAtLeast(IsCreature(), 3),
             ),
         ),
     )
@@ -414,7 +423,7 @@ def test_make_instant_round_trip_with_cost_reduction():
         effect=DestroyTargetCreature(),
         cost_reductions=(
             CostReduction(
-                amount=1, condition="target_is_blocking_creature",
+                amount=1, condition=TargetMatches(IsCreature() & IsBlocking()),
             ),
         ),
     )
@@ -472,7 +481,7 @@ def test_dark_endurance_now_fully_claimed_with_pump_and_gains_body():
     assert printing is not None
     assert printing.name == "Dark Endurance"
     assert printing.cost_reductions == (
-        CostReduction(amount=1, condition="target_is_blocking_creature"),
+        CostReduction(amount=1, condition=TargetMatches(IsCreature() & IsBlocking())),
     )
 
 
@@ -488,7 +497,7 @@ def test_temporal_intervention_claimed_via_void_prefix_and_whole_spell():
     assert printing is not None
     assert printing.name == "Temporal Intervention"
     assert printing.cost_reductions == (
-        CostReduction(amount=2, condition="void_active"),
+        CostReduction(amount=2, condition=VoidActiveCondition()),
     )
 
 
@@ -504,8 +513,6 @@ def test_fungal_colossus_claimed_via_grammar():
     assert printing.name == "Fungal Colossus"
     assert printing.cost_reductions == (
         CostReduction(
-            amount=1,
-            condition="per_differently_named_land",
-            per_land_group=True,
+            amount=1, condition=PerDifferentlyNamedLand(),
         ),
     )

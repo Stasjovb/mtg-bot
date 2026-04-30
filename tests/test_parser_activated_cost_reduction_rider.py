@@ -34,6 +34,8 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.effects import _parse_effect
+from mtg_bot.effects.conditions import ControlPermanent
+from mtg_bot.effects.object_predicates import HasCounter, IsCreature
 
 
 # --- Effect-grammar level tests ---------------------------------------------
@@ -73,7 +75,9 @@ def test_starport_security_activated_ability_line():
         cost_reductions=(
             CostReduction(
                 amount=2,
-                condition="control_creature_with_plus_one_counter",
+                condition=ControlPermanent(
+                    IsCreature() & HasCounter("+1/+1"),
+                ),
             ),
         ),
     )

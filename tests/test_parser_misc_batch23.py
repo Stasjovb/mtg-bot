@@ -160,13 +160,16 @@ def test_thrumming_hivepool_is_artifact():
 
 
 def test_thrumming_hivepool_has_cost_reduction():
+    from mtg_bot.effects.conditions import PerControlled
+    from mtg_bot.effects.object_predicates import HasSubtype
+
     card = _artifact_card("Thrumming Hivepool", "{6}", _THRUMMING_ORACLE)
     result = _build_artifact_printing(card)
     assert result is not None
     assert len(result.cost_reductions) == 1
     cr = result.cost_reductions[0]
     assert cr.amount == 1
-    assert cr.condition == "affinity_for_slivers"
+    assert cr.condition == PerControlled(HasSubtype("Sliver"))
 
 
 def test_thrumming_hivepool_has_anthem_static():
