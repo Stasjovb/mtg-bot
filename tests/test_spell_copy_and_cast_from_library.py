@@ -136,11 +136,23 @@ def test_roving_actuator_etb_fires_with_void_active():
 
 
 def test_roving_actuator_printing_has_void_gated_etb():
+    from mtg_bot.effects.predicates import Event
+
+    # Oracle text has no Warp line; the former bespoke entry carried a
+    # spurious warp="{1}{R}" not in the printed text. The grammar-claimed
+    # printing faithfully omits warp (oracle-text fidelity per CLAUDE.md).
     ra = _PRINTINGS["Roving Actuator"]
-    assert ra.warp_cost_str == "{1}{R}"
-    etb_abilities = [a for a in ra.triggered_abilities if _matches_legacy_key(a, "etb")]
+    assert ra.warp_cost_str == ""
+    # Grammar path: the trigger has event=ENTERS and the Void gate is encoded
+    # as a composed predicate (IsSelf() & StateBound(VoidActive())) rather
+    # than the ``requires_void`` flag used by the former static bespoke entry.
+    # Check by event directly — ``_matches_legacy_key`` doesn't handle the
+    # gated IsSelf() & StateBound() predicate shape today.
+    etb_abilities = [
+        a for a in ra.triggered_abilities if a.event == Event.ENTERS
+    ]
     assert len(etb_abilities) == 1
-    assert etb_abilities[0].requires_void is True
+    assert "VoidActive" in repr(etb_abilities[0].predicate)
 
 
 # -----------------------

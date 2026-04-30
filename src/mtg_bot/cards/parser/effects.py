@@ -161,7 +161,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.bespoke import ArabellaAttackEffect
+from mtg_bot.effects.bespoke import ArabellaAttackEffect, RovingActuatorETBEffect
 from mtg_bot.effects.generic import TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -3393,6 +3393,24 @@ def _parse_effect(phrase: str) -> Effect | None:
         "Untap it"
     ):
         return BiosynthicBurstEffect()
+    # Roving Actuator's Void ETB body — a three-sentence chain:
+    # "Exile up to one target instant or sorcery card with mana value 2
+    # or less from your graveyard. Copy it. You may cast the copy without
+    # paying its mana cost." The second and third sentences are anaphoric
+    # to the card exiled in sentence 1 ("it" and "the copy"), so the three
+    # sentences must be kept together; the sentence-splitting grammar can't
+    # model them as independent clauses. Matched here as a single literal
+    # so the whole body dispatches to ``RovingActuatorETBEffect``. Only
+    # Roving Actuator in the EoE pool has this exact three-sentence exile-
+    # from-graveyard + copy + cast-free shape; broader grammar deferred
+    # until a second example exists (e.g. a card with a different MV cap
+    # or a different target type).
+    if phrase == (
+        "exile up to one target instant or sorcery card with mana value "
+        "2 or less from your graveyard. Copy it. You may cast the copy "
+        "without paying its mana cost"
+    ):
+        return RovingActuatorETBEffect(max_mv=2)
     # Vengeful Possession's four-sentence body — the Threaten core (gain
     # control + untap + haste UEOT on the same target creature) plus a
     # trailing optional-looter rider ("You may discard a card. If you do,

@@ -46,14 +46,20 @@ Migrated to grammar in engine-kavaron-elevator:
     end-of-combat sac schedule). The trigger fires via the unified
     ``_YOU_MAY_PAY_THEN_EFFECT`` grammar.
 
+Migrated to grammar in bespoke-roving-actuator:
+  - Roving Actuator — Void-gated ETB trigger parses via
+    ``_TRIGGERED_ABILITY_INTERVENING_IF_LINE`` with ``VoidActive()``
+    gate predicate; three-sentence effect body (exile-from-GY + copy +
+    cast-free) claimed by a literal multi-sentence recognizer in
+    ``_parse_effect`` → ``RovingActuatorETBEffect(max_mv=2)``.
+
 Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
   2. Interceptor Mechan — flying + ETB return + void end-step counter
   3. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
   4. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
-  5. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
-  6. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
-  7. Splitskin Doll — draw + source-relative conditional discard (DSK)
+  5. Survey Mechan — flying + hexproof (large activated body dropped; X cost-reduction not modeled)
+  6. Splitskin Doll — draw + source-relative conditional discard (DSK)
 """
 
 from __future__ import annotations
@@ -164,6 +170,38 @@ def test_pinnacle_emissary_claimed_by_parser():
 
 def test_roving_actuator_claimed_by_parser():
     assert "Roving Actuator" in _PARSER_PRINTINGS
+
+
+def test_roving_actuator_grammar_structure():
+    """Grammar-claimed Roving Actuator has a Void-gated ETB trigger
+    whose effect is ``RovingActuatorETBEffect(max_mv=2)``.
+
+    Migration from ``_BESPOKE_ARTIFACT_CREATURES``: the Void-gated ETB
+    trigger parses via ``_TRIGGERED_ABILITY_INTERVENING_IF_LINE`` with the
+    ``VoidActive()`` gate predicate AND-ed onto ``IsSelf()``. The three-
+    sentence effect body (exile-from-GY + copy + cast-free) is claimed by
+    a literal multi-sentence recognizer in ``_parse_effect``. The bespoke
+    entry carried a spurious ``warp="{1}{R}"`` not in the oracle text;
+    the grammar-claimed card faithfully omits warp.
+    """
+    from mtg_bot.effects import RovingActuatorETBEffect
+    from mtg_bot.effects.predicates import Event
+
+    ra = _parser("Roving Actuator")
+    assert ra.is_artifact
+    assert ra.power == 3
+    assert ra.toughness == 4
+    assert ra.warp_cost_str == ""
+    assert len(ra.triggered_abilities) == 1
+    ta = ra.triggered_abilities[0]
+    assert ta.event == Event.ENTERS
+    # Grammar path encodes the Void gate as a composed predicate (IsSelf() &
+    # StateBound(VoidActive())) rather than the ``requires_void`` flag used
+    # by the static bespoke registry. The engine's dispatch_event evaluates
+    # the composed predicate at trigger time — functionally equivalent gate.
+    assert "VoidActive" in repr(ta.predicate)
+    assert isinstance(ta.effect, RovingActuatorETBEffect)
+    assert ta.effect.max_mv == 2
 
 
 

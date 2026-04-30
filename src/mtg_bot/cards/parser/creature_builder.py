@@ -70,7 +70,6 @@ from mtg_bot.cards.base import (
     PutPoisonCountersOnTargetPlayer,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
-    RovingActuatorETBEffect,
     SearchLibraryForCard,
     SelfMill,
     Sequence,
@@ -404,32 +403,23 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # Pinnacle Emissary {1}{U}{R} 3/3 Artifact Creature — migrated to
         # the oracle-text grammar. The warp cost "{U/R}" is now handled by
         # parse_mana_cost (hybrid mana support added in engine-hybrid-mana).
-        # Roving Actuator {3}{R} 3/4. Warp {1}{R}.
+        # Roving Actuator {3}{R} 3/4 Artifact Creature — Robot.
+        # Migrated to the oracle-text grammar (bespoke-roving-actuator).
         # "Void — When this creature enters, if a nonland permanent left
         # the battlefield this turn or a spell was warped this turn, exile
         # up to one target instant or sorcery card with mana value 2 or
         # less from your graveyard. Copy it. You may cast the copy without
         # paying its mana cost."
-        # SKIP (wave7): The ETB body is exile-from-graveyard + copy +
-        # free-cast — a three-part chain encoded in ``RovingActuatorETBEffect``.
-        # This is NOT the exile-until-source-leaves shape (Oblivion Ring
-        # pattern) supported by ``_EXILE_OPPONENTS_NONLAND_UNTIL_LEAVES``
-        # and ``_EXILE_CREATURE_UNTIL_LEAVES``; the Void gate is correctly
-        # recognized (``requires_void=True``) but the effect body has no
-        # grammar primitive.  Requires a copy-from-graveyard-and-cast-free
-        # effect primitive before the grammar can claim this card.
-        "Roving Actuator": make_creature(
-            "Roving Actuator", "{3}{R}", 3, 4,
-            artifact=True,
-            warp="{1}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=RovingActuatorETBEffect(max_mv=2),
-                    requires_void=True,
-                ),
-            ),
-        ),
+        # The Void-gated ETB trigger parses via
+        # ``_TRIGGERED_ABILITY_INTERVENING_IF_LINE`` with the
+        # ``VoidActive()`` gate predicate AND-ed onto ``IsSelf()``.
+        # The three-sentence effect body (exile-from-GY + copy + cast-
+        # free) is claimed by a literal multi-sentence recognizer in
+        # ``_parse_effect`` that maps it to ``RovingActuatorETBEffect``.
+        # Note: the bespoke entry carried a spurious ``warp="{1}{R}"``
+        # not present in the oracle text; the grammar-claimed card omits
+        # it (oracle-text fidelity per CLAUDE.md).
+        # Removed from this table so the grammar claims it directly.
         # Rust Harvester {R} 1/1 Robot.
         # Migrated to the oracle-text grammar (bespoke-creature-wave7).
         # The three-atom cost ``{2}, {T}, Exile an artifact card from
