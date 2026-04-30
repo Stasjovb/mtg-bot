@@ -61,7 +61,6 @@ from mtg_bot.cards.base import (
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
-    DestroyTargetNonlandPermanentWithLanderForController,
     DiplomaticRelationsEffect,
     DrawCards,
     EachOpponentLosesLife,
@@ -625,14 +624,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         allow_nonland_permanent=True,
         create_drone_if_was_attacking=True,
     ),
-    # Emergency Eject: destroy + Lander-for-controller rider. The
-    # Lander goes to the destroyed permanent's CONTROLLER (not the
-    # spell's caster), which the bespoke engine class threads
-    # through resolution.
-    (
-        "Destroy target nonland permanent. "
-        "Its controller creates a Lander token."
-    ): DestroyTargetNonlandPermanentWithLanderForController(),
     # Scout for Survivors: return up to three small creature cards
     # from graveyard to battlefield, each with a +1/+1 counter.
     (

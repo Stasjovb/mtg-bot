@@ -75,8 +75,9 @@ def test_bespoke_table_count():
     #   + Dual-Sun Technique (keyword-grant-with-draw recognizer)
     #   + Full Bore (warp-conditional keyword-rider recognizer)
     #   + Zealous Display (anthem-untap-if-not-your-turn recognizer)
-    # 50 - 9 = 41 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 41
+    #   + Emergency Eject (destroy + Lander-for-controller recognizer)
+    # 50 - 10 = 40 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 40
 
 
 # ------------------------------------------------------------------ #

@@ -427,8 +427,10 @@ def test_desculpting_blast_claimed_by_parser():
 
 
 def test_emergency_eject_claimed_by_parser():
-    # Emergency Eject ``{2}{W}`` Instant — destroy + a Lander-for-
-    # the-destroyed-permanent's-controller rider.
+    # Emergency Eject ``{2}{W}`` Instant — destroy + Lander-for-
+    # the-destroyed-permanent's-controller rider. Migrated from the
+    # whole-spell exact-text tier to the per-clause grammar (effects.py's
+    # ``_DESTROY_TARGET_NONLAND_PERMANENT_ITS_CONTROLLER_CREATES_LANDER``).
     assert "Emergency Eject" in _claimed_names()
 
 
@@ -497,11 +499,24 @@ def test_dispatch_desculpting_blast_returns_engine_class():
     )
 
 
-def test_dispatch_emergency_eject_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_emergency_eject_no_bespoke_entry():
+    # Emergency Eject migrated to per-clause grammar; whole-spell
+    # dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Destroy target nonland permanent. "
+        "Its controller creates a Lander token."
+    ) is None
+
+
+def test_emergency_eject_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar claims the 2-sentence
+    # body with the Lander-for-controller rider.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Destroy target nonland permanent. "
         "Its controller creates a Lander token."
     )
+    eff = _parse_spell_effect_phrase(body, "Emergency Eject")
     assert eff == DestroyTargetNonlandPermanentWithLanderForController()
 
 

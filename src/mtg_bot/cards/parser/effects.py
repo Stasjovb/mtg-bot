@@ -44,6 +44,7 @@ from mtg_bot.cards.base import (
     DestroyTargetLand,
     DestroyTargetNoncreaturePermanent,
     DestroyTargetNonlandPermanent,
+    DestroyTargetNonlandPermanentWithLanderForController,
     DiscardHandThenDrawN,
     DiscardSelf,
     DoubleTargetCreaturesPowerUEOT,
@@ -1044,6 +1045,27 @@ _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
 _DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
+)
+# "Destroy target nonland permanent. Its controller creates a Lander
+# token." — Emergency Eject's 2-sentence body. The Lander is created
+# by the CONTROLLER OF THE TARGET permanent (not the spell's caster),
+# which is the distinguishing feature of the bespoke engine class
+# ``DestroyTargetNonlandPermanentWithLanderForController``. Two-sentence
+# recognizer: both sentences must be kept together because splitting
+# would lose the "its controller" back-reference.
+#
+# Currently only Emergency Eject in the EoE/DSK pool has this exact
+# surface; the recognizer is a literal-line match (no captured groups)
+# since no second card with a varying piece (e.g. different permanent
+# type, different token) exists today. Per parser CLAUDE.md, a literal
+# is acceptable when exactly one card fits and the docstring notes why
+# generalization is deferred. A future "Destroy target creature. Its
+# controller creates a Lander token." would share the "its controller
+# gets the Lander" structure; at that point replace this with a
+# parameterized regex capturing the permanent type.
+_DESTROY_TARGET_NONLAND_PERMANENT_ITS_CONTROLLER_CREATES_LANDER = re.compile(
+    r"^destroy target nonland permanent\. "
+    r"Its controller creates a Lander token$"
 )
 # "Destroy target nonland permanent." — Thaumaton Torpedo's activated
 # ability. Maps to the existing ``DestroyTargetNonlandPermanent`` engine
@@ -3283,6 +3305,20 @@ def _parse_effect(phrase: str) -> Effect | None:
         return DestroyTargetLand()
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
+    if (
+        _DESTROY_TARGET_NONLAND_PERMANENT_ITS_CONTROLLER_CREATES_LANDER.match(
+            phrase
+        ) is not None
+    ):
+        # ``destroy target nonland permanent. Its controller creates a
+        # Lander token`` — Emergency Eject's 2-sentence body. The Lander
+        # goes to the CONTROLLER OF THE TARGET, not the spell's caster.
+        # Tried BEFORE the bare ``destroy target nonland permanent``
+        # regex so this more-specific 2-sentence form wins on phrases
+        # that carry the Lander rider; the bare regex's ``$`` anchor
+        # would never match the rider tail anyway, but ordering
+        # more-specific before more-general is the convention here.
+        return DestroyTargetNonlandPermanentWithLanderForController()
     if _DESTROY_TARGET_NONLAND_PERMANENT.match(phrase) is not None:
         # ``destroy target nonland permanent`` — Thaumaton Torpedo's
         # activated ability. Tried after ``destroy target noncreature
