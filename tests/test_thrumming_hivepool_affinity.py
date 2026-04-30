@@ -2,9 +2,11 @@
 
 Audit-found bug: pre-fix the Affinity rider was silently dropped with a
 comment claiming the cost reduction was unmodeled. Now wired via a
-``CostReduction(amount=1, condition="affinity_for_slivers")`` on the
-printing, evaluated by the spell-side ``_evaluate_cost_reduction``
-helper and multiplied by the count of Slivers the caster controls.
+``CostReduction(amount=1, condition=PerControlled(HasSubtype
+("Sliver")))`` on the printing — the structural ``Condition`` grammar
+evaluates ``PerControlled``'s ``multiplier`` (the count of Slivers the
+caster controls) and the engine's ``_evaluate_cost_reduction``
+multiplies the unit amount by it.
 
 Per CR 702.41 (Affinity), the spell on the stack does not count
 toward its own discount — it isn't on the battlefield yet.
@@ -12,6 +14,8 @@ toward its own discount — it isn't on the battlefield yet.
 
 from mtg_bot.actions import apply_cost_reductions
 from mtg_bot.cards import TOKEN_PRINTINGS, CostReduction
+from mtg_bot.effects.conditions import PerControlled
+from mtg_bot.effects.object_predicates import HasSubtype
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
 
@@ -49,7 +53,10 @@ def test_thrumming_hivepool_has_affinity_cost_reduction():
     p = _PRINTINGS["Thrumming Hivepool"]
     assert p.is_artifact is True
     assert p.cost_reductions == (
-        CostReduction(amount=1, condition="affinity_for_slivers"),
+        CostReduction(
+            amount=1,
+            condition=PerControlled(HasSubtype("Sliver")),
+        ),
     )
     # Other oracle clauses still wired.
     assert len(p.static_abilities) == 1
@@ -124,7 +131,7 @@ def test_describe_text():
     pin the shape.)"""
     p = _PRINTINGS["Thrumming Hivepool"]
     rule = p.cost_reductions[0]
-    assert rule.condition == "affinity_for_slivers"
+    assert rule.condition == PerControlled(HasSubtype("Sliver"))
     assert rule.amount == 1
 
 

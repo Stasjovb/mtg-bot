@@ -197,6 +197,22 @@ class IsTapped(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsBlocking(ObjectPredicate):
+    """The object is currently blocking — ``obj.blocking is not None``.
+
+    Models the "blocking creature" qualifier on cost-reduction gates
+    like Dark Endurance ("This spell costs {1} less to cast if it
+    targets a blocking creature."). Players and lands have no
+    ``blocking`` attribute and evaluate false; declared-blocker state
+    on a creature ``GameObject`` is the integer id of the attacker it
+    was assigned to (or ``None`` when not blocking).
+    """
+
+    def test(self, obj, state):
+        return getattr(obj, "blocking", None) is not None
+
+
+@dataclass(frozen=True)
 class HasKeyword(ObjectPredicate):
     """The object currently has the given keyword.
 

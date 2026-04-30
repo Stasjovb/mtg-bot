@@ -38,6 +38,8 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.effects import _parse_effect
+from mtg_bot.effects.conditions import AttackedWithThisTurn
+from mtg_bot.effects.object_predicates import HasSubtype
 
 
 # --- Effect-grammar level ------------------------------------------------
@@ -90,7 +92,7 @@ def test_thaumaton_torpedo_activated_line_parses_with_cost_reduction():
         cost_reductions=(
             CostReduction(
                 amount=3,
-                condition="attacked_with_spacecraft_this_turn",
+                condition=AttackedWithThisTurn(HasSubtype("Spacecraft")),
             ),
         ),
     )
@@ -129,7 +131,7 @@ def test_build_artifact_printing_claims_thaumaton_torpedo():
     assert ability.cost_reductions == (
         CostReduction(
             amount=3,
-            condition="attacked_with_spacecraft_this_turn",
+            condition=AttackedWithThisTurn(HasSubtype("Spacecraft")),
         ),
     )
 

@@ -372,40 +372,18 @@ def apply_cost_reductions(
     chosen_targets: "tuple[tuple[str, int], ...] | None" = None,
 ) -> ManaCost:
     """Walk ``printing.cost_reductions`` and return a ManaCost with
-    generic mana reduced accordingly. Unknown conditions are treated as
-    False (no reduction), which is safe and warns via a log entry.
+    generic mana reduced accordingly. Each rule's
+    :class:`mtg_bot.effects.conditions.Condition` is evaluated via its
+    ``matches`` method; when matched, the rule's unit ``amount`` is
+    multiplied by ``condition.multiplier`` (default 1) so variable-
+    amount rules (Affinity, ``PerDifferentlyNamedLand``) scale.
 
-    Spell-local conditions:
-      - ``another_spell_cast_this_turn``: caster's spells_cast_this_turn
-        is already ≥ 1 (this spell will be their 2nd or later).
-      - ``attacked_with_spacecraft_this_turn``: caster attacked with any
-        Spacecraft earlier this turn.
-      - ``per_differently_named_land`` (with ``per_land_group=True``):
-        amount is multiplied by the number of distinct basic-land names
-        the caster controls.
-      - ``target_is_blocking_creature``: the spell's chosen target is a
-        creature whose ``blocking`` attribute is set (Dark Endurance).
-        When ``chosen_targets`` is None — the legal_actions
-        affordability probe before the cast actually starts — this is
-        evaluated optimistically: the discount applies if any creature
-        on the battlefield is currently blocking, since the caster
-        could pick it as the target. ``_cast_spell`` passes the actual
-        chosen targets, so the discount only sticks if the caster
-        commits to a blocker at cast time.
-      - ``target_is_tapped_creature``: parallel to
-        ``target_is_blocking_creature`` but reads ``obj.tapped`` instead
-        of ``obj.blocking``. Seized from Slumber (Duskmourn): "This
-        spell costs {3} less to cast if it targets a tapped creature."
-      - ``during_your_turn``: the caster is the active player (Mental
-        Modulation's ``"This spell costs {1} less to cast during your
-        turn."`` rider).
-
-    External reductions: also walks every permanent the caster controls
-    on the battlefield and applies any ``external_cost_reductions``
-    that match (Uthros Psionicist's "your second spell costs {2} less"
-    lives here). Externals stack with the spell's own reductions —
-    a 5-cost spell with a 3-less self-reduction and a 2-less external
-    ends up at 0 generic.
+    External reductions: also walks every permanent the caster
+    controls on the battlefield and applies any
+    ``external_cost_reductions`` that match (Uthros Psionicist, Sami).
+    Externals stack with the spell's own reductions — a 5-cost spell
+    with a 3-less self-reduction and a 2-less external ends up at 0
+    generic.
     """
     cost = base_cost
     cost = _apply_external_cost_reductions(state, caster_id, cost)
@@ -416,7 +394,7 @@ def apply_cost_reductions(
         if reduction > 0:
             cost = cost.reduced(reduction)
             state.log.append(
-                f"cost reduced by {reduction} ({rule.condition})"
+                f"cost reduced by {reduction} ({type(rule.condition).__name__})"
             )
     return cost
 
@@ -430,133 +408,23 @@ def _evaluate_cost_reduction(
     (``apply_cost_reductions``) and ability-cost reductions
     (``_effective_ability_mana_cost``).
 
-    ``chosen_targets`` is the spell's chosen targets when this is invoked
-    from the cast pipeline. ``None`` means the caller doesn't have target
-    context (e.g., ``legal_actions``' affordability probe before targets
-    are picked, or ability cost reductions that don't depend on targets).
-    Conditions that depend on the chosen target evaluate optimistically
-    against the battlefield when ``chosen_targets`` is None.
-    """
-    if rule.condition == "another_spell_cast_this_turn":
-        if state.player_by_id(caster_id).spells_cast_this_turn >= 1:
-            return rule.amount
-    elif rule.condition == "attacked_with_spacecraft_this_turn":
-        if state.player_by_id(
-            caster_id
-        ).attacked_with_spacecraft_this_turn:
-            return rule.amount
-    elif rule.condition == "void_active":
-        from mtg_bot.game import is_void_active
+    Single dispatch through the structural ``Condition`` API:
 
-        if is_void_active(state):
-            return rule.amount
-    elif rule.condition == "opponents_control_three_or_more_creatures":
-        opp_creatures = sum(
-            1 for o in state.battlefield
-            if o.controller_id != caster_id and o.printing.is_creature
-        )
-        if opp_creatures >= 3:
-            return rule.amount
-    elif rule.condition == "control_creature_with_plus_one_counter":
-        if any(
-            o.controller_id == caster_id
-            and o.printing.is_creature
-            and o.plus_one_counters > 0
-            for o in state.battlefield
-        ):
-            return rule.amount
-    elif rule.condition == "per_differently_named_land":
-        if rule.per_land_group:
-            names: set[str] = set()
-            for o in state.battlefield:
-                if (
-                    o.controller_id == caster_id
-                    and o.printing.is_land
-                ):
-                    names.add(o.printing.name)
-            return rule.amount * len(names)
-    elif rule.condition == "affinity_for_slivers":
-        # Thrumming Hivepool: "Affinity for Slivers (This spell costs
-        # {1} less to cast for each Sliver you control.)" — count
-        # Slivers the caster controls on the battlefield. The spell
-        # itself is on the stack, not the battlefield, so it isn't
-        # counted (matches MTG rules 702.41 for Affinity).
-        from mtg_bot.game import effective_subtypes
-        sliver_count = sum(
-            1 for o in state.battlefield
-            if o.controller_id == caster_id
-            and "Sliver" in effective_subtypes(state, o)
-        )
-        return rule.amount * sliver_count
-    elif rule.condition == "during_your_turn":
-        # Mental Modulation: "This spell costs {1} less to cast during
-        # your turn." — discount applies whenever the caster is the
-        # active player. Read off ``state.active_player_idx`` rather
-        # than spinning up a phase check; the discount is independent
-        # of which step/phase the spell is being cast in.
-        if state.active_player().id == caster_id:
-            return rule.amount
-    elif rule.condition == "target_is_blocking_creature":
-        # Dark Endurance: "this spell costs {1} less to cast if it
-        # targets a blocking creature." Cast-pipeline path passes the
-        # actual chosen targets; we apply the discount only when the
-        # picked creature is currently blocking. legal_actions'
-        # affordability probe (chosen_targets=None) evaluates
-        # optimistically — the discount applies if any blocker exists
-        # on the battlefield, since the caster could pick it.
-        if chosen_targets is None:
-            if any(
-                o.printing.is_creature and o.blocking is not None
-                for o in state.battlefield
-            ):
-                return rule.amount
-        else:
-            for kind, tid in chosen_targets:
-                if kind != "creature":
-                    continue
-                obj = next(
-                    (o for o in state.battlefield if o.id == tid),
-                    None,
-                )
-                if (
-                    obj is not None
-                    and obj.printing.is_creature
-                    and obj.blocking is not None
-                ):
-                    return rule.amount
-    elif rule.condition == "target_is_tapped_creature":
-        # Seized from Slumber (Duskmourn): "This spell costs {3} less
-        # to cast if it targets a tapped creature." Parallel to the
-        # ``target_is_blocking_creature`` branch above; the discount
-        # applies when the chosen target is tapped (or, optimistically
-        # at affordability-probe time when no targets are committed
-        # yet, when ANY tapped creature exists on the battlefield —
-        # the caster could pick it). Sami's Curiosity precedent for
-        # the same probe-time optimism.
-        if chosen_targets is None:
-            if any(
-                o.printing.is_creature and o.tapped
-                for o in state.battlefield
-            ):
-                return rule.amount
-        else:
-            for kind, tid in chosen_targets:
-                if kind != "creature":
-                    continue
-                obj = next(
-                    (o for o in state.battlefield if o.id == tid),
-                    None,
-                )
-                if (
-                    obj is not None
-                    and obj.printing.is_creature
-                    and obj.tapped
-                ):
-                    return rule.amount
-    else:
-        state.log.append(
-            f"unknown cost-reduction condition {rule.condition!r}; "
-            f"treating as no reduction"
+      - ``rule.condition.matches(state, caster_id, chosen_targets)``
+        gates the reduction.
+      - ``rule.condition.multiplier(state, caster_id, chosen_targets)``
+        scales the unit ``rule.amount`` for variable-amount rules
+        (default ``1`` for boolean conditions).
+
+    ``chosen_targets`` is the spell's chosen targets when invoked from
+    the cast pipeline. ``None`` means the caller doesn't have target
+    context (``legal_actions``' affordability probe; ability
+    activations); target-dependent conditions evaluate optimistically
+    against the battlefield in that mode.
+    """
+    if rule.condition.matches(state, caster_id, chosen_targets):
+        return rule.amount * rule.condition.multiplier(
+            state, caster_id, chosen_targets,
         )
     return 0
 
@@ -568,8 +436,14 @@ def _apply_external_cost_reductions(
     cost reductions to other spells. Each permanent's
     ``external_cost_reductions`` are evaluated against the same caster
     state used by spell-local reductions. Reductions stack (multiple
-    permanents granting the same reduction sum together)."""
-    caster = state.player_by_id(caster_id)
+    permanents granting the same reduction sum together).
+
+    Same structural dispatch as ``_evaluate_cost_reduction``: each
+    external rule's ``condition.matches`` gates the reduction and
+    ``condition.multiplier`` scales the unit amount (Sami's affinity
+    counts artifacts via ``PerControlled(IsArtifact()).multiplier``).
+    External rules don't read chosen targets — the spell hasn't been
+    cast yet — so ``chosen_targets`` is left at the default ``None``."""
     for permanent in state.battlefield:
         if permanent.controller_id != caster_id:
             continue
@@ -579,37 +453,17 @@ def _apply_external_cost_reductions(
             permanent.printing, "external_cost_reductions", ()
         )
         for ext in externals:
-            reduction = 0
-            if ext.condition == "second_spell_this_turn":
-                # The second spell is the one cast when
-                # spells_cast_this_turn is currently 1 (the spell-cast
-                # path increments AFTER cost is paid, so we check the
-                # pre-increment value here).
-                if caster.spells_cast_this_turn == 1:
-                    reduction = ext.amount
-            elif ext.condition == "affinity_for_artifacts":
-                # Sami, Wildcat Captain: "Spells you cast have affinity
-                # for artifacts. (They cost {1} less to cast for each
-                # artifact you control.)" — count artifacts the caster
-                # controls on the battlefield. The spell being cast is
-                # on the stack, not the battlefield, so it isn't
-                # counted (matches MTG rules 702.41).
-                artifact_count = sum(
-                    1 for o in state.battlefield
-                    if o.controller_id == caster_id
-                    and o.printing.is_artifact
-                )
-                reduction = ext.amount * artifact_count
-            else:
-                state.log.append(
-                    f"unknown external cost-reduction condition "
-                    f"{ext.condition!r}; treating as no reduction"
-                )
+            if not ext.condition.matches(state, caster_id):
+                continue
+            reduction = ext.amount * ext.condition.multiplier(
+                state, caster_id,
+            )
             if reduction > 0:
                 cost = cost.reduced(reduction)
                 state.log.append(
                     f"cost reduced by {reduction} from "
-                    f"{permanent.printing.name} ({ext.condition})"
+                    f"{permanent.printing.name} "
+                    f"({type(ext.condition).__name__})"
                 )
     return cost
 
@@ -1967,12 +1821,11 @@ def _effective_ability_mana_cost(
       - Conditional ``CostReduction`` rules attached to the ability via
         ``ActivatedAbility.cost_reductions``. Routed through the same
         ``_evaluate_cost_reduction`` helper that spell-cost reductions
-        use, so any condition value supported there works here too
-        (currently: ``"another_spell_cast_this_turn"``,
-        ``"attacked_with_spacecraft_this_turn"`` (Thaumaton Torpedo),
-        ``"void_active"``, ``"opponents_control_three_or_more_creatures"``,
-        ``"per_differently_named_land"``,
-        ``"control_creature_with_plus_one_counter"`` (Starport Security)).
+        use, so any structural ``Condition`` supported there works
+        here too — Starport Security's ``ControlPermanent(IsCreature
+        () & HasCounter("+1/+1"))`` and Thaumaton Torpedo's
+        ``AttackedWithThisTurn(HasSubtype("Spacecraft"))`` are the
+        live examples.
 
     Clamps the generic portion at zero.
     """
@@ -1992,7 +1845,8 @@ def _effective_ability_mana_cost(
         if reduction > 0:
             cost = cost.reduced(reduction)
             state.log.append(
-                f"ability cost reduced by {reduction} ({rule.condition})"
+                f"ability cost reduced by {reduction} "
+                f"({type(rule.condition).__name__})"
             )
     return cost
 

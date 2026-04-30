@@ -4,9 +4,9 @@ Recognizes a single oracle-text line of the shape::
 
     This spell costs {N} less to cast if <condition>.
 
-and produces a ``CostReduction(amount=N, condition=<engine-key>)``
-that callers attach to a ``CardPrinting`` via the ``cost_reductions``
-kwarg on ``make_creature`` / ``make_instant`` / ``make_sorcery``.
+and produces a ``CostReduction(amount=N, condition=<Condition>)`` that
+callers attach to a ``CardPrinting`` via the ``cost_reductions`` kwarg
+on ``make_creature`` / ``make_instant`` / ``make_sorcery``.
 
 The same rider appears on both creatures (Gigastorm Titan, Lashwhip
 Predator) and noncreature spells (Dark Endurance, Temporal
@@ -17,10 +17,11 @@ Variable-amount riders of the shape::
 
     This spell costs {X} less to cast, where X is <land-group-phrase>.
 
-are also recognized for the ``per_differently_named_land`` engine
-condition (Fungal Colossus). The reduction is computed at cast time by
-the engine's ``apply_cost_reductions`` per-land-group branch — see
-``actions.py``.
+are also recognized via the ``PerDifferentlyNamedLand`` condition
+(Fungal Colossus). The reduction is computed at cast time by the
+engine's ``apply_cost_reductions`` — the unit ``amount=1`` is
+multiplied by ``condition.multiplier`` (the count of distinctly named
+lands the controller controls).
 
 Out of scope this slice:
 
@@ -32,12 +33,11 @@ Out of scope this slice:
   those live on ``ActivatedAbility.cost_reductions``, parsed
   elsewhere.
 
-Adding a new condition: extend ``_COST_REDUCTION_CONDITIONS`` with
-the verbatim oracle phrase mapped to the engine condition key. The
-engine key must already be implemented in
-``mtg_bot.actions.apply_cost_reductions`` — otherwise the parser
-would silently produce a no-op rule that diverges from the static
-implementation.
+Adding a new condition: extend ``_COST_REDUCTION_CONDITIONS`` with the
+verbatim oracle phrase mapped to a structural ``Condition`` object.
+The ``Condition`` is consumed directly by
+``actions._evaluate_cost_reduction`` via the single-dispatch path —
+no engine-side entry needs to be added in lockstep.
 """
 
 from __future__ import annotations
@@ -45,6 +45,23 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import CostReduction, ExternalCostReduction
+from mtg_bot.effects.conditions import (
+    AnotherSpellCastThisTurn,
+    Condition,
+    DuringYourTurn,
+    NthSpellThisTurn,
+    OpponentsControlAtLeast,
+    PerControlled,
+    PerDifferentlyNamedLand,
+    TargetMatches,
+    VoidActiveCondition,
+)
+from mtg_bot.effects.object_predicates import (
+    IsArtifact,
+    IsBlocking,
+    IsCreature,
+    IsTapped,
+)
 
 
 # Surface form: ``This spell costs {N} less to cast if <condition>.``
@@ -60,12 +77,12 @@ from mtg_bot.cards.base import CostReduction, ExternalCostReduction
 # A leading ``Void — `` prefix on the rider (Temporal Intervention) is
 # stripped via a third regex variant; the body's ``if`` clause body is
 # the canonical Void-state phrase, which the recognizer maps to the
-# ``void_active`` engine condition key. The Void-prefix variant is its
-# own regex (rather than letting the ``if`` clause body match a
-# free-form Void description) because the prefix and the engine key
+# ``VoidActiveCondition`` ``Condition``. The Void-prefix variant is its
+# own regex (rather than letting the ``if`` clause body match a free-
+# form Void description) because the prefix and the engine condition
 # are tightly coupled — a future Void-prefixed cost-reduction with a
-# different body would still want the ``void_active`` mapping, since
-# every Void rider gates on the same state.
+# different body would still want the ``VoidActiveCondition`` mapping,
+# since every Void rider gates on the same state.
 _COST_REDUCTION_LINE = re.compile(
     r"^This spell costs \{(\d+)\} less to cast if (?P<condition>.+)\.$"
 )
@@ -83,16 +100,15 @@ _COST_REDUCTION_LINE_VOID_PREFIX = re.compile(
 #   ``This spell costs {X} less to cast, where X is the number of
 #     differently named lands you control.``
 #
-# Maps to ``CostReduction(amount=1, condition="per_differently_named_
-# land", per_land_group=True)`` — the engine's
-# ``apply_cost_reductions`` per-land-group branch (see
-# ``actions._evaluate_cost_reduction``) multiplies the unit amount by
-# the number of distinctly-named lands the controller controls at cast
-# time. Literal-line recognizer with no capture groups — the entire
-# surface is the parameter; broader grammar (parameterizing the land-
-# group counter on a different distinctness criterion, or pointing at
-# a different battlefield set such as creatures or artifacts) is
-# deferred until a second printing with a varying piece exists.
+# Maps to ``CostReduction(amount=1, condition=PerDifferentlyNamedLand
+# ())`` — the engine's ``apply_cost_reductions`` multiplies the unit
+# amount by the condition's ``multiplier`` (the count of distinctly
+# named lands the controller controls at cast time). Literal-line
+# recognizer with no capture groups — the entire surface is the
+# parameter; broader grammar (parameterizing the land-group counter on
+# a different distinctness criterion, or pointing at a different
+# battlefield set such as creatures or artifacts) is deferred until a
+# second printing with a varying piece exists.
 _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND = (
     "This spell costs {X} less to cast, where X is the number of "
     "differently named lands you control."
@@ -101,20 +117,23 @@ _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND = (
 
 # Conditions recognized as cost-reduction triggers. The mapping is from
 # the verbatim oracle-text phrase (after the ``if`` and before the
-# trailing period) to the engine condition key on
-# ``CostReduction.condition``. Each key MUST have a matching branch in
-# ``mtg_bot.actions.apply_cost_reductions``; if not, the parser would
-# silently produce a rule the engine ignores, diverging from the
-# static implementation.
-_COST_REDUCTION_CONDITIONS: dict[str, str] = {
-    "you've cast another spell this turn": "another_spell_cast_this_turn",
+# trailing period) to a structural ``Condition`` object. Each
+# ``Condition`` is consumed directly by
+# ``actions._evaluate_cost_reduction``; no engine-side string-key
+# entry is required.
+_COST_REDUCTION_CONDITIONS: dict[str, Condition] = {
+    "you've cast another spell this turn": AnotherSpellCastThisTurn(),
     "your opponents control three or more creatures": (
-        "opponents_control_three_or_more_creatures"
+        OpponentsControlAtLeast(IsCreature(), 3)
     ),
-    "it targets a blocking creature": "target_is_blocking_creature",
+    "it targets a blocking creature": (
+        TargetMatches(IsCreature() & IsBlocking())
+    ),
     # Seized from Slumber (Duskmourn) — parallel to ``it targets a
     # blocking creature`` shape but for the tapped state.
-    "it targets a tapped creature": "target_is_tapped_creature",
+    "it targets a tapped creature": (
+        TargetMatches(IsCreature() & IsTapped())
+    ),
 }
 
 
@@ -122,10 +141,10 @@ _COST_REDUCTION_CONDITIONS: dict[str, str] = {
 # mapping, but the surface text reads naturally without the ``if``
 # (e.g. ``"during your turn"`` rather than ``"if it's your turn"``).
 # Keys are the verbatim text between ``cast `` and the trailing
-# period. Each engine key MUST have a matching branch in
-# ``mtg_bot.actions._evaluate_cost_reduction``.
-_COST_REDUCTION_CONDITIONS_NO_IF: dict[str, str] = {
-    "during your turn": "during_your_turn",
+# period. Each value is a structural ``Condition`` consumed directly
+# by ``actions._evaluate_cost_reduction``.
+_COST_REDUCTION_CONDITIONS_NO_IF: dict[str, Condition] = {
+    "during your turn": DuringYourTurn(),
 }
 
 
@@ -140,19 +159,15 @@ _COST_REDUCTION_CONDITIONS_NO_IF: dict[str, str] = {
 #
 # * ``The second spell you cast each turn costs {N} less to cast.`` —
 #   Uthros Psionicist's static. Maps to
-#   ``ExternalCostReduction(amount=N, condition="second_spell_this_turn")``.
+#   ``ExternalCostReduction(amount=N, condition=NthSpellThisTurn(2))``.
 #
 # Adding a new surface: extend ``_EXTERNAL_COST_REDUCTION_LINES`` with
-# the verbatim oracle phrase mapped to the engine condition key. Each
-# key MUST already be implemented in
-# ``actions.apply_cost_reductions``'s external-scan branch — otherwise
-# the parser silently produces a no-op rule that diverges from the
-# static implementation.
-_EXTERNAL_COST_REDUCTION_LINES: dict[str, str] = {
+# the verbatim oracle phrase mapped to a structural ``Condition``.
+_EXTERNAL_COST_REDUCTION_LINES: dict[str, Condition] = {
     # Uthros Psionicist — fires when the controller is casting their
     # second spell of the turn.
     "The second spell you cast each turn costs {N} less to cast.": (
-        "second_spell_this_turn"
+        NthSpellThisTurn(2)
     ),
 }
 
@@ -160,28 +175,30 @@ _EXTERNAL_COST_REDUCTION_LINES: dict[str, str] = {
 # ``<Subject>. (<reminder>)`` printing-flag-style external cost-
 # reductions whose surface form is just a static-keyword sentence
 # (no embedded ``{N}`` template). The amount is implied by the
-# keyword's reminder text and is wired here to the engine condition
-# key directly. Reminder text is stripped before this lookup runs,
-# so the trailing parenthetical (``(They cost {1} less to cast for
-# each artifact you control.)``) is gone by the time we see the line.
-_EXTERNAL_COST_REDUCTION_KEYWORD_LINES: dict[str, tuple[int, str]] = {
+# keyword's reminder text and is wired here to a structural
+# ``Condition`` directly. Reminder text is stripped before this lookup
+# runs, so the trailing parenthetical (``(They cost {1} less to cast
+# for each artifact you control.)``) is gone by the time we see the
+# line.
+_EXTERNAL_COST_REDUCTION_KEYWORD_LINES: dict[str, tuple[int, Condition]] = {
     # Sami, Wildcat Captain — affinity-for-artifacts on every spell
-    # the controller casts. The engine's
-    # ``apply_cost_reductions`` scan multiplies ``amount`` (1) by the
-    # controller's artifact count at cast time.
+    # the controller casts. The ``PerControlled(IsArtifact())``
+    # condition's ``multiplier`` returns the artifact count; the
+    # engine's ``apply_cost_reductions`` scan multiplies ``amount``
+    # (1) by it.
     "Spells you cast have affinity for artifacts.": (
-        1, "affinity_for_artifacts",
+        1, PerControlled(IsArtifact()),
     ),
 }
 
 
 # Compiled lookup keyed on the integer-template form. We keep the
 # template as the dict key (with the literal ``{N}`` placeholder) so
-# the recognizer's surface→engine-key mapping reads next to the
+# the recognizer's surface→Condition mapping reads next to the
 # template; the regex is built off the keys so adding a new surface
 # is one entry rather than two.
 _EXTERNAL_COST_REDUCTION_RE_TO_CONDITION: dict[
-    "re.Pattern[str]", str
+    "re.Pattern[str]", Condition
 ] = {
     re.compile(
         "^" + re.escape(template).replace(r"\{N\}", r"\{(\d+)\}") + "$"
@@ -237,45 +254,43 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     # (Fungal Colossus). Tried first because the ``{X} less`` template
     # is a unique gate that can't be confused with the ``{N} less``
     # numeric-template shapes below; recognizing the whole rider in
-    # one shot keeps the canonical per-land-group mapping adjacent
-    # to the literal surface check.
+    # one shot keeps the canonical multiplier mapping adjacent to the
+    # literal surface check.
     if stripped == _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND:
         return CostReduction(
-            amount=1,
-            condition="per_differently_named_land",
-            per_land_group=True,
+            amount=1, condition=PerDifferentlyNamedLand(),
         )
     # Void-prefix shape (Temporal Intervention). Tried first because
     # the ``Void — `` prefix is a unique gate; recognizing the whole
     # rider in one shot keeps the canonical Void-state mapping
     # adjacent to the prefix detection. The ``if`` clause body is
     # part of the regex literal so a non-canonical body wouldn't
-    # silently map to ``void_active``.
+    # silently map to ``VoidActiveCondition``.
     m = _COST_REDUCTION_LINE_VOID_PREFIX.match(stripped)
     if m is not None:
         return CostReduction(
-            amount=int(m.group(1)), condition="void_active",
+            amount=int(m.group(1)), condition=VoidActiveCondition(),
         )
     m = _COST_REDUCTION_LINE.match(stripped)
     if m is not None:
         condition_phrase = m.group("condition").strip()
-        engine_condition = _COST_REDUCTION_CONDITIONS.get(condition_phrase)
-        if engine_condition is None:
+        condition = _COST_REDUCTION_CONDITIONS.get(condition_phrase)
+        if condition is None:
             return None
         return CostReduction(
-            amount=int(m.group(1)), condition=engine_condition,
+            amount=int(m.group(1)), condition=condition,
         )
     # No-``if`` shape (Mental Modulation): the closed connector list
     # gates which surface phrases qualify so an unknown trailing
     # phrase falls through and the spell is left unclaimed rather
-    # than silently mapping to a nonsense engine condition key.
+    # than silently mapping to a nonsense condition.
     m = _COST_REDUCTION_LINE_NO_IF.match(stripped)
     if m is None:
         return None
     condition_phrase = m.group("condition").strip()
-    engine_condition = _COST_REDUCTION_CONDITIONS_NO_IF.get(condition_phrase)
-    if engine_condition is None:
+    condition = _COST_REDUCTION_CONDITIONS_NO_IF.get(condition_phrase)
+    if condition is None:
         return None
     return CostReduction(
-        amount=int(m.group(1)), condition=engine_condition,
+        amount=int(m.group(1)), condition=condition,
     )

@@ -10,6 +10,10 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mtg_bot.effects.conditions import Condition
 
 from mtg_bot.effects import (
     ActivatedAbility,
@@ -278,18 +282,17 @@ class ManaCost:
 class CostReduction:
     """A rule that reduces the generic-mana portion of a spell's cost.
 
-    ``condition`` names a known predicate checked against game state
-    at cast time. ``amount`` is the flat generic reduction; when
-    ``per_land_group`` is True the amount is multiplied by the number
-    of differently-named lands the caster controls (Fungal Colossus).
-
-    Adding a new condition requires a matching branch in
-    ``apply_cost_reductions`` (actions.py).
+    ``condition`` is a structural :class:`mtg_bot.effects.conditions.
+    Condition` evaluated against game state at cast time. ``amount`` is
+    the unit generic reduction; the engine multiplies it by
+    ``condition.multiplier(state, caster_id, chosen_targets)`` so
+    variable-amount conditions (Fungal Colossus's
+    ``PerDifferentlyNamedLand``, Affinity-style ``PerControlled``) scale
+    automatically without a separate flag.
     """
 
     amount: int
-    condition: str
-    per_land_group: bool = False
+    condition: "Condition"
 
 
 @dataclass(frozen=True)
@@ -304,19 +307,15 @@ class ExternalCostReduction:
     different permanent than the spell, and apply to spells they
     don't share an id with.
 
-    Conditions:
-      - ``second_spell_this_turn``: the spell being cast is exactly
-        the controller's second spell of the turn (Uthros Psionicist).
-        Triggers when ``spells_cast_this_turn == 1`` (we're about to
-        increment to 2). Reduction is ``amount`` flat.
-      - ``affinity_for_artifacts``: the spell costs ``amount`` less for
-        each artifact the caster controls (Sami, Wildcat Captain's
-        "Spells you cast have affinity for artifacts"). Reduction is
-        ``amount * artifact_count``.
+    ``condition`` is a structural :class:`mtg_bot.effects.conditions.
+    Condition` — the same grammar the spell-local ``CostReduction``
+    uses. Variable-amount externals (Sami, Wildcat Captain's "Spells
+    you cast have affinity for artifacts" → ``PerControlled(IsArtifact
+    ())``) scale via the condition's ``multiplier``.
     """
 
     amount: int
-    condition: str
+    condition: "Condition"
 
 
 def parse_mana_cost(s: str) -> ManaCost:

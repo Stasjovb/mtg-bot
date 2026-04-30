@@ -13,6 +13,8 @@ discount).
 
 from mtg_bot.actions import apply_cost_reductions
 from mtg_bot.cards import ExternalCostReduction
+from mtg_bot.effects.conditions import PerControlled
+from mtg_bot.effects.object_predicates import IsArtifact
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step
 
@@ -48,7 +50,9 @@ def test_sami_printing_has_external_affinity_reduction():
     assert "double strike" in p.keywords
     assert "vigilance" in p.keywords
     assert p.external_cost_reductions == (
-        ExternalCostReduction(amount=1, condition="affinity_for_artifacts"),
+        ExternalCostReduction(
+            amount=1, condition=PerControlled(IsArtifact()),
+        ),
     )
 
 

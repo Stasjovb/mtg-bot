@@ -47,6 +47,7 @@ from mtg_bot.cards.parser.cost_reduction import (
     _COST_REDUCTION_CONDITIONS_NO_IF,
     _parse_cost_reduction_line,
 )
+from mtg_bot.effects.conditions import Condition, DuringYourTurn
 from mtg_bot.cards.parser.spell_builder import (
     _build_spell_printing,
     _detect_cost_reductions,
@@ -75,7 +76,7 @@ def _eoe_card(name: str) -> dict:
 def test_recognizer_extracts_during_your_turn():
     line = "This spell costs {1} less to cast during your turn."
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=1, condition="during_your_turn",
+        amount=1, condition=DuringYourTurn(),
     )
 
 
@@ -84,14 +85,14 @@ def test_recognizer_extracts_during_your_turn_higher_amount():
     # Synthetic since the only EoE printing ships at {1}.
     line = "This spell costs {3} less to cast during your turn."
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=3, condition="during_your_turn",
+        amount=3, condition=DuringYourTurn(),
     )
 
 
 def test_recognizer_handles_surrounding_whitespace_no_if_shape():
     line = "  This spell costs {1} less to cast during your turn.  "
     assert _parse_cost_reduction_line(line) == CostReduction(
-        amount=1, condition="during_your_turn",
+        amount=1, condition=DuringYourTurn(),
     )
 
 
@@ -105,7 +106,7 @@ def test_detect_cost_reductions_surfaces_during_your_turn():
         "Draw a card."
     )
     assert _detect_cost_reductions(text) == (
-        CostReduction(amount=1, condition="during_your_turn"),
+        CostReduction(amount=1, condition=DuringYourTurn()),
     )
 
 
@@ -118,7 +119,7 @@ def test_mental_modulation_now_claimed_with_during_your_turn_rider():
     assert parsed is not None
     assert parsed.name == "Mental Modulation"
     assert parsed.cost_reductions == (
-        CostReduction(amount=1, condition="during_your_turn"),
+        CostReduction(amount=1, condition=DuringYourTurn()),
     )
     # Body effect parses to the same Sequence the static side ships.
     assert parsed.spell_effect == Sequence(effects=(
@@ -147,14 +148,14 @@ def _two_player_state():
 
 def test_during_your_turn_reduces_when_caster_is_active_player():
     s = _two_player_state()
-    rule = CostReduction(amount=1, condition="during_your_turn")
+    rule = CostReduction(amount=1, condition=DuringYourTurn())
     # Active player (id=0) is the caster: reduction applies.
     assert _evaluate_cost_reduction(rule, s, caster_id=0) == 1
 
 
 def test_during_your_turn_no_reduction_when_caster_is_not_active():
     s = _two_player_state()
-    rule = CostReduction(amount=1, condition="during_your_turn")
+    rule = CostReduction(amount=1, condition=DuringYourTurn())
     # Caster is the non-active player (id=1): no reduction.
     assert _evaluate_cost_reduction(rule, s, caster_id=1) == 0
 
@@ -196,11 +197,11 @@ def test_during_your_turn_only_on_no_if_table():
     assert "during your turn" not in _COST_REDUCTION_CONDITIONS
 
 
-def test_no_if_table_keys_have_engine_condition_strings():
-    # Defensive — every entry maps to a non-empty engine-condition
-    # string (caught by the parity tests indirectly, but explicit
+def test_no_if_table_keys_map_to_condition_objects():
+    # Defensive — every entry maps to a structural ``Condition``
+    # instance (caught by the parity tests indirectly, but explicit
     # here so a typo localizes to this file).
-    for phrase, key in _COST_REDUCTION_CONDITIONS_NO_IF.items():
-        assert isinstance(key, str) and key, (
-            f"phrase {phrase!r} maps to empty engine key {key!r}"
+    for phrase, condition in _COST_REDUCTION_CONDITIONS_NO_IF.items():
+        assert isinstance(condition, Condition), (
+            f"phrase {phrase!r} maps to non-Condition {condition!r}"
         )

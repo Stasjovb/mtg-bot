@@ -19,6 +19,7 @@ from mtg_bot.effects.object_predicates import (
     HasPowerAtMost,
     HasSubtype,
     IsArtifact,
+    IsBlocking,
     IsCreature,
     IsEnchantment,
     IsLand,
@@ -49,6 +50,7 @@ class FakeObject:
     stun_counters: int = 0
     loyalty_counters: int = 0
     tapped: bool = False
+    blocking: int | None = None
 
 
 @dataclass
@@ -191,6 +193,26 @@ def test_is_tapped_false_for_player():
     (distinct from the legacy slot-aware predicate's source-fallback,
     which now lives at the trigger layer via ``Source(IsTapped())``)."""
     assert IsTapped().test(FakePlayer(id=1), FakeState()) is False
+
+
+# ---------- IsBlocking ----------
+
+
+def test_is_blocking_true_when_assigned_to_attacker():
+    """``obj.blocking`` carries the attacker id when blocking — any
+    non-None value is truthy."""
+    obj = FakeObject(blocking=42)
+    assert IsBlocking().test(obj, FakeState()) is True
+
+
+def test_is_blocking_false_when_not_blocking():
+    obj = FakeObject(blocking=None)
+    assert IsBlocking().test(obj, FakeState()) is False
+
+
+def test_is_blocking_false_for_player():
+    """Players have no ``blocking`` attribute and evaluate false."""
+    assert IsBlocking().test(FakePlayer(id=1), FakeState()) is False
 
 
 # ---------- HasKeyword (uses real GameState/effective_keywords) ----------

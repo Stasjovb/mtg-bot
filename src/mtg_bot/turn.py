@@ -1050,7 +1050,7 @@ def run_cleanup_step(state: GameState) -> None:
     for p in state.players:
         p.spells_cast_this_turn = 0
         p.noncreature_spells_cast_this_turn = 0
-        p.attacked_with_spacecraft_this_turn = False
+        p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0
         p.artifacts_entered_under_your_control_this_turn = 0

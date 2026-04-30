@@ -116,11 +116,14 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
         if "vigilance" not in effective_keywords(state, obj):
             tap_permanent(state, obj)
         state.log.append(f"{obj.printing.name} attacks")
-        # Track "attacked with a Spacecraft this turn" for cost reductions.
-        if obj.printing.is_spacecraft:
-            state.player_by_id(
-                obj.controller_id
-            ).attacked_with_spacecraft_this_turn = True
+        # Append to the per-player "attacked this turn" latch — read by
+        # ``effects.conditions.AttackedWithThisTurn(filter)`` to gate
+        # cost reductions like Thaumaton Torpedo's "if you attacked
+        # with a Spacecraft this turn". The latch records every
+        # attacker (not just Spacecraft) so a future filter can ask
+        # the same question against any subtype/predicate without a
+        # new latch.
+        state.player_by_id(obj.controller_id).attacked_this_turn.append(obj)
         # Fire "whenever this creature attacks" triggers on the attacker.
         _fire_attacks_triggers(state, obj)
     # After all attackers are declared, fire Exalted (rule 702.83):

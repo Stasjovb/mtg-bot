@@ -2951,7 +2951,7 @@ def test_thaumaton_torpedo_full_cost_when_no_spacecraft_attack():
     )
     state.battlefield.append(torpedo)
     ability = torpedo.printing.activated_abilities[0]
-    assert state.players[0].attacked_with_spacecraft_this_turn is False
+    assert state.players[0].attacked_this_turn == []
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 6
 
@@ -2968,7 +2968,12 @@ def test_thaumaton_torpedo_reduced_cost_after_spacecraft_attack():
     )
     state.battlefield.append(torpedo)
     ability = torpedo.printing.activated_abilities[0]
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    # Latch in a Spacecraft attacker — the AttackedWithThisTurn(filter)
+    # condition reads through the generalized list.
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 3
 
@@ -2979,6 +2984,8 @@ def test_thaumaton_torpedo_cost_reduction_floors_at_zero():
     from mtg_bot.actions import _effective_ability_mana_cost
     from mtg_bot.cards.base import ActivationCost, CostReduction, parse_mana_cost
     from mtg_bot.effects import ActivatedAbility, DestroyTargetNonlandPermanent
+    from mtg_bot.effects.conditions import AttackedWithThisTurn
+    from mtg_bot.effects.object_predicates import HasSubtype
 
     state = _arena()
     torpedo = state.new_object(
@@ -2996,11 +3003,15 @@ def test_thaumaton_torpedo_cost_reduction_floors_at_zero():
         effect=DestroyTargetNonlandPermanent(),
         cost_reductions=(
             CostReduction(
-                amount=3, condition="attacked_with_spacecraft_this_turn",
+                amount=3,
+                condition=AttackedWithThisTurn(HasSubtype("Spacecraft")),
             ),
         ),
     )
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     eff = _effective_ability_mana_cost(state, torpedo, ability)
     assert eff.generic == 0
 
@@ -4069,7 +4080,11 @@ def test_fungal_colossus_cost_reduction_per_land_group():
 
 
 def test_attacked_with_spacecraft_tracking_and_cleanup():
-    """declare_attackers sets the flag; cleanup clears it."""
+    """declare_attackers appends the attacker to ``attacked_this_turn``
+    (the generalized latch); cleanup clears it. The Spacecraft-subtype
+    filter is applied at read time by the
+    ``AttackedWithThisTurn(HasSubtype("Spacecraft"))`` condition rather
+    than baked into the latch."""
     from mtg_bot.combat import declare_attackers
     from mtg_bot.turn import run_cleanup_step
 
@@ -4081,28 +4096,17 @@ def test_attacked_with_spacecraft_tracking_and_cleanup():
     # Station it so it's a creature.
     ship.charge_counters = 10
     declare_attackers(state, [ship.id])
-    assert state.players[0].attacked_with_spacecraft_this_turn is True
+    assert state.players[0].attacked_this_turn == [ship]
     run_cleanup_step(state)
-    assert state.players[0].attacked_with_spacecraft_this_turn is False
+    assert state.players[0].attacked_this_turn == []
 
 
-def test_unknown_cost_reduction_condition_logged_and_ignored():
-    from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import CostReduction, make_instant
-    from mtg_bot.effects import GainLife
-
-    # Fabricate a card with an unknown condition.
-    bogus = make_instant(
-        "Bogus", "{3}",
-        effect=GainLife(amount=1),
-        cost_reductions=(
-            CostReduction(amount=2, condition="never_gonna_give_you_up"),
-        ),
-    )
-    state = _arena()
-    reduced = apply_cost_reductions(bogus, state, 0, bogus.mana_cost)
-    assert reduced.generic == 3  # unchanged
-    assert any("unknown cost-reduction" in l for l in state.log)
+# NOTE: ``test_unknown_cost_reduction_condition_logged_and_ignored``
+# was removed when the string-keyed cost-reduction whitelist was
+# replaced by the structural ``Condition`` grammar. The grammar makes
+# unknown-condition no-ops impossible to construct: every rule carries
+# a ``Condition`` instance whose ``matches`` method dispatches without
+# a string lookup, so there is no "unknown key" branch to exercise.
 
 
 def test_uthros_psionicist_external_reduction_kicks_in_for_second_spell():
@@ -4844,17 +4848,18 @@ def test_additional_costs_payable_returns_true_for_no_cost():
 
 
 def test_cost_reduction_void_condition_active():
-    """apply_cost_reductions with void_active condition fires when Void
-    is active (exercises that branch for coverage)."""
+    """apply_cost_reductions with the ``VoidActiveCondition`` fires
+    when Void is active (exercises that branch for coverage)."""
     from mtg_bot.actions import apply_cost_reductions
     from mtg_bot.cards import CostReduction, make_instant
     from mtg_bot.effects import GainLife
+    from mtg_bot.effects.conditions import VoidActiveCondition
 
     c = make_instant(
         "Voidy", "{3}",
         effect=GainLife(amount=1),
         cost_reductions=(
-            CostReduction(amount=2, condition="void_active"),
+            CostReduction(amount=2, condition=VoidActiveCondition()),
         ),
     )
     state = _arena()
@@ -5147,23 +5152,31 @@ def test_aura_fizzle_cleanup_covers_no_targets_branch():
 
 
 def test_cost_reduction_attacked_with_spacecraft_active():
-    """Exercise the attacked_with_spacecraft_this_turn branch in
-    apply_cost_reductions — dead without at least one test."""
+    """Exercise the AttackedWithThisTurn(HasSubtype("Spacecraft"))
+    condition in apply_cost_reductions — dead without at least one test."""
     from mtg_bot.actions import apply_cost_reductions
     from mtg_bot.cards import CostReduction, make_instant
     from mtg_bot.effects import GainLife
+    from mtg_bot.effects.conditions import AttackedWithThisTurn
+    from mtg_bot.effects.object_predicates import HasSubtype
 
     c = make_instant(
         "SpacecraftDiscount", "{3}",
         effect=GainLife(amount=1),
         cost_reductions=(
-            CostReduction(amount=2, condition="attacked_with_spacecraft_this_turn"),
+            CostReduction(
+                amount=2,
+                condition=AttackedWithThisTurn(HasSubtype("Spacecraft")),
+            ),
         ),
     )
     state = _arena()
-    # Flag off → full cost.
+    # Latch empty → full cost.
     assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
-    state.players[0].attacked_with_spacecraft_this_turn = True
+    skiff = state.new_object(
+        _PRINTINGS["Rescue Skiff"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.players[0].attacked_this_turn.append(skiff)
     assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 1
 
 
@@ -6068,34 +6081,14 @@ def test_effect_describe_coverage_2():
     assert "discard" in TargetOpponentDiscards(count=1).describe()
 
 
-def test_cost_reduction_per_land_not_scaled_noops():
-    """A CostReduction with per_land_group=False and the
-    per_differently_named_land condition is a no-op (no fixed amount
-    path for that condition). Exercises the else-branch."""
-    from mtg_bot.actions import apply_cost_reductions
-    from mtg_bot.cards import CostReduction, make_instant
-    from mtg_bot.effects import GainLife
-
-    c = make_instant(
-        "NonScaledLand", "{3}",
-        effect=GainLife(amount=1),
-        cost_reductions=(
-            CostReduction(
-                amount=1, condition="per_differently_named_land",
-                per_land_group=False,
-            ),
-        ),
-    )
-    state = _arena()
-    # Even with differently-named lands, per_land_group=False means no
-    # reduction applies.
-    from mtg_bot.cards import BASIC_LANDS
-    for name in ("Plains", "Forest"):
-        l = state.new_object(
-            BASIC_LANDS[name], owner_id=0, zone=Zone.BATTLEFIELD
-        )
-        state.battlefield.append(l)
-    assert apply_cost_reductions(c, state, 0, c.mana_cost).generic == 3
+# NOTE: ``test_cost_reduction_per_land_not_scaled_noops`` was removed
+# along with the ``per_land_group: bool`` flag on ``CostReduction``.
+# The flag's only purpose was distinguishing "this rule scales by
+# distinct-land-name count" from "this rule is a flat amount for the
+# same engine key", an awkward dual-meaning whose unscaled branch
+# never had a real card. The structural ``Condition`` grammar moves
+# the scaling intent into the ``PerDifferentlyNamedLand`` variant
+# directly — no flag, so no unscaled no-op to test.
 
 
 def test_codecracker_agent_chooses_to_mill_top():
