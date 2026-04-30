@@ -90,6 +90,22 @@ class IsLand(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsBasic(ObjectPredicate):
+    """The object's printing carries the ``"Basic"`` supertype.
+
+    Composes with :class:`IsLand` for "nonbasic land" filters
+    (``IsLand() & ~IsBasic()``) — Dust Bowl's "destroy target nonbasic
+    land" decomposes cleanly through this. Players have no
+    ``printing`` and evaluate False.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Basic" in obj.printing.supertypes
+
+
+@dataclass(frozen=True)
 class IsCreature(ObjectPredicate):
     """The object is a creature, in the rules-correct sense.
 
@@ -246,6 +262,30 @@ class IsTapped(ObjectPredicate):
 
     def test(self, obj, state):
         return bool(getattr(obj, "tapped", False))
+
+
+@dataclass(frozen=True)
+class IsSource(ObjectPredicate):
+    """The object IS the currently-resolving source.
+
+    Reads ``state.resolving_source`` — pinned by the trigger-firing /
+    spell-resolution path (``actions._fire_triggered_ability`` and
+    peers) for the duration of target enumeration and resolution.
+    Composes with ``~`` for "another / other target" qualifiers
+    ("destroy another target creature" → ``IsCreature() & ~IsSource()``).
+
+    Players have no ``id`` matching a permanent's source id, but
+    defensively ``ControlledByOpponent``-style: returns ``False`` if
+    the source isn't pinned, rather than over-accepting.
+    """
+
+    def test(self, obj, state):
+        source = getattr(state, "resolving_source", None)
+        if source is None:
+            return False
+        if not hasattr(obj, "printing"):
+            return False
+        return obj.id == source.id
 
 
 @dataclass(frozen=True)
