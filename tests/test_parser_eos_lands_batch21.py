@@ -2,19 +2,17 @@
 
 Each test verifies that ``OracleParserCardSource`` produces a
 ``CardPrinting`` identical to the one in the static registry
-(``_PRINTINGS``).  Failure means the bespoke dispatch table in
-``land_builder._BESPOKE_EOS_LANDS`` has drifted from the canonical
-``make_utility_land`` call in ``stellar_sights.py``.
+(``_PRINTINGS``).
 
-The seven lands covered here all require complex multi-ability shapes that
-don't map onto any single generic grammar arm:
+The seven lands covered here:
 
-- Cathedral of War   — enters-tapped + exalted keyword
+- Cathedral of War   — enters-tapped + exalted keyword (generic grammar)
 - Mutavault          — manland (all creature types, colorless)
 - Blinkmoth Nexus    — manland + explicit tap-for-C + Blinkmoth pump
 - Inkmoth Nexus      — manland with flying + infect
 - Grove of the Burnwillows — dual mana ability (C or R/G with life rider)
-- Swarmyard          — paid regenerate activation targeting typed creatures
+- Swarmyard          — {T}: Regenerate target typed creatures
+                       (``_try_build_tap_regenerate_land``)
 - Contested War Zone — combat-damage trigger + attacking-pump activation
 """
 
@@ -176,7 +174,7 @@ def test_grove_of_the_burnwillows_parity():
 
 
 def test_swarmyard_parity():
-    """{1},{T}: Regenerate typed creature (Insect/Rat/Spider/Squirrel/Snake)."""
+    """{T}: Regenerate typed creature (Insect/Rat/Spider/Squirrel)."""
     parsed = _build_land_printing(_swarmyard_card())
     assert parsed is not None, "Swarmyard was not claimed"
     assert parsed == _PRINTINGS["Swarmyard"]

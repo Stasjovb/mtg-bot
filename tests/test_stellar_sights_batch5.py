@@ -83,8 +83,9 @@ def test_endless_sands_has_two_activated_abilities():
 def test_endless_sands_exiles_your_creature():
     state = _new_state()
     sands = _put(state, _PRINTINGS["Endless Sands"])
-    # Give mana for {3}.
-    for _ in range(3):
+    # Give mana for {2} (oracle text: "{2}, {T}: Exile target creature
+    # you control." — the old bespoke incorrectly used {3}).
+    for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
     # A creature you control to be the target.
     bear = _put(
@@ -110,7 +111,7 @@ def test_endless_sands_cannot_target_opponents_creature():
 
     state = _new_state()
     sands = _put(state, _PRINTINGS["Endless Sands"])
-    for _ in range(3):
+    for _ in range(2):
         _put(state, BASIC_LANDS["Mountain"])
     # Only an opponent's creature exists — ability should have no legal
     # target so the activation isn't offered.
@@ -140,11 +141,15 @@ def test_endless_sands_cannot_target_opponents_creature():
 
 
 def test_endless_sands_sac_returns_exiled_creatures():
-    """Sacrificing Endless Sands releases all creatures it exiled."""
+    """Sacrificing Endless Sands releases all creatures it exiled.
+    Oracle costs: {2},{T} to exile + {4},{T},sac to return (total 6
+    generic mana needed — 2 Mountains more than the old bespoke {3}+{3}
+    that was incorrect)."""
     state = _new_state()
     sands = _put(state, _PRINTINGS["Endless Sands"])
     for _ in range(6):
         _put(state, BASIC_LANDS["Mountain"])
+    # (6 Mountains still sufficient: {2} exile + {4} sac = 6 total.)
     bear = _put(
         state,
         make_creature("Test Bear", "{1}{G}", 2, 2),
@@ -175,16 +180,28 @@ def test_endless_sands_sac_returns_exiled_creatures():
 # -----------------------
 
 
-def test_inventors_fair_is_legendary_and_enters_tapped():
+def test_inventors_fair_is_legendary():
+    """Inventors' Fair is a Legendary Land (no 'enters tapped' clause
+    in the oracle text; the old bespoke entry incorrectly set
+    enters_tapped=True)."""
     p = _PRINTINGS["Inventors' Fair"]
     assert "Legendary" in p.supertypes
-    assert p.enters_tapped is True
+    assert p.enters_tapped is False
 
 
 def test_inventors_fair_tutors_an_artifact():
+    """Activation costs {4},{T},Sacrifice Inventors' Fair and requires
+    controlling 3+ artifacts (oracle text). Give 4 Mountains for mana
+    and 3 artifact permanents to satisfy the activation condition."""
     state = _new_state()
     fair = _put(state, _PRINTINGS["Inventors' Fair"])
-    _put(state, BASIC_LANDS["Mountain"])
+    # 4 Mountains for the {4} activation cost.
+    for _ in range(4):
+        _put(state, BASIC_LANDS["Mountain"])
+    # 3 artifact permanents to satisfy "Activate only if you control
+    # three or more artifacts" (fair itself is a Land, not an artifact).
+    for _ in range(3):
+        _put(state, make_artifact("Test Scrap", "{0}"))
     # Stock library with an artifact and a non-artifact distractor.
     art_printing = make_artifact("Test Cog", "{0}")
     art_card = state.new_object(art_printing, 0, Zone.LIBRARY)

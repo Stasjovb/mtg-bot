@@ -377,6 +377,11 @@ class ActivationCost:
     # "Activate only if you control a creature with power 4 or
     # greater." Bonders' Enclave. Legal-actions gate only.
     requires_own_creature_power_at_least: int = 0
+    # "Activate only if you control three or more artifacts."
+    # Inventors' Fair's tutor activation. Legal-actions gate only:
+    # the activation is removed from legal moves when the activator
+    # controls fewer than N artifacts.
+    requires_own_artifact_count_at_least: int = 0
     # "Activate only if you control a <T1> or a <T2>." Duskmourn Verge
     # cycle (Blazemire Verge, Floodfarm Verge, …). The tuple holds the
     # land-subtype names (e.g. ``("Plains", "Island")``); legal-actions

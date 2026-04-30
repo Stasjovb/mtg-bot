@@ -285,89 +285,20 @@ _COLORLESS_TAP_LINE = "{T}: Add {C}."
 # ``card.get("set") in {"eos", "eoe", "spg"}`` so main-set cards with
 # the same name can't accidentally be claimed here.
 #
-# Each entry must exactly match the corresponding ``make_utility_land``
-# call in ``src/mtg_bot/cards/stellar_sights.py``.
+# Migrated to parameterized grammar arms (no longer bespoke):
+#   - Swarmyard          → _try_build_tap_regenerate_land
+#   - Endless Sands      → _try_build_desert_exile_return_land
+#   - Inventors' Fair    → _try_build_legendary_artifact_search_land
 # ---------------------------------------------------------------------------
 def _make_bespoke_eos_lands() -> dict[str, CardPrinting]:
     return {
-        # Swarmyard: {T}: Add {C}. {1},{T}: Regenerate target Insect, Rat,
-        # Spider, Squirrel, or Snake.
-        "Swarmyard": make_utility_land(
-            "Swarmyard",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                    ),
-                    effect=RegenerateTargetCreature(
-                        allowed_subtypes=frozenset({
-                            "Rat", "Spider", "Squirrel", "Insect", "Snake",
-                        }),
-                    ),
-                ),
-            ),
-        ),
-        # Endless Sands: {T}: Add {C}. {2},{T}: Exile target creature you
-        # control. {4},{T},Sac self: Return each creature card exiled with
-        # this land to the battlefield.
-        "Endless Sands": make_utility_land(
-            "Endless Sands", subtypes_str="Desert",
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{3}"),
-                        mana_str="{3}",
-                        tap_self=True,
-                    ),
-                    effect=ExileTargetCreatureUntilSourceLeaves(yours_only=True),
-                ),
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{3}"),
-                        mana_str="{3}",
-                        tap_self=True,
-                        sacrifice_self=True,
-                    ),
-                    effect=Sequence(effects=()),
-                ),
-            ),
-        ),
-        # Inventors' Fair: legendary, enters tapped. Upkeep trigger: if
-        # you control 3+ artifacts, gain 1 life. {1},{T},Sac self: Search
-        # library for artifact card (if you control 3+ artifacts).
-        "Inventors' Fair": make_utility_land(
-            "Inventors' Fair", legendary=True,
-            enters_tapped=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
-                    effect=ConditionalIfYouControlAtLeast(
-                        threshold=3,
-                        predicate="artifact",
-                        inner=GainLife(amount=1),
-                    ),
-                ),
-            ),
-            activated_abilities=(
-                ActivatedAbility(
-                    cost=ActivationCost(
-                        mana=parse_mana_cost("{1}"),
-                        mana_str="{1}",
-                        tap_self=True,
-                        sacrifice_self=True,
-                    ),
-                    effect=SearchLibraryForCard(
-                        filter_name="artifact", may_fail=False,
-                    ),
-                ),
-            ),
-        ),
-        # Plaza of Heroes: Legendary. {T}: Add {C}. {T}: any mana
-        # (legendary_spell). {T}: any mana among legendary permanents
-        # you control (legendary_permanent_ability). {3},{T},Exile self:
-        # target legendary creature gains hexproof and indestructible UEOT.
+        # SKIP — Plaza of Heroes: line 4 reads "{3}, {T}, Exile this land:
+        # Target legendary creature gains hexproof and indestructible until
+        # end of turn." Oracle text says "Exile this land" but
+        # ``ActivationCost`` has no ``exile_self`` field; the engine models
+        # it as ``sacrifice_self`` which is faithful to the engine's current
+        # zone-transfer semantics. Migrate when ``exile_self`` is added to
+        # ``ActivationCost`` and ``legal.py``.
         "Plaza of Heroes": make_utility_land(
             "Plaza of Heroes", legendary=True,
             activated_abilities=(
@@ -417,6 +348,309 @@ _BESPOKE_EOS_LANDS: dict[str, CardPrinting] = _make_bespoke_eos_lands()
 # we gate the bespoke table on the same set codes so only true reprints
 # are claimed here.
 _BESPOKE_EOS_SETS: frozenset[str] = frozenset({"eos", "eoe", "spg"})
+
+
+# ---------------------------------------------------------------------------
+# Tap-and-regenerate utility land.
+#
+# Plain ``Land`` (no supertypes, no subtypes), exactly two lines:
+#   1. ``{T}: Add {C}.``          (intentionally dropped — the engine's
+#      auto-tap-for-cost generic-mana fallback covers tapping for ``{C}``)
+#   2. ``{T}: Regenerate target <type-list>.``  (with optional reminder
+#      text stripped)
+# where <type-list> is a comma+or-separated list of creature-subtype
+# words (capitalized, e.g. "Insect, Rat, Spider, or Squirrel").
+#
+# The printed regenerate subtype list is captured as a frozenset and
+# passed to ``RegenerateTargetCreature(allowed_subtypes=...)``. Adding
+# a new card with the same two-line shape and a different subtype list
+# costs zero code — the regex captures the list and the parser splits
+# it at ", " and " or " boundaries.
+#
+# Currently the only EoS land in the pool matching this shape is
+# Swarmyard: ``{T}: Regenerate target Insect, Rat, Spider, or Squirrel.``
+# ---------------------------------------------------------------------------
+_REGENERATE_TAP_RE = re.compile(
+    r"^\{T\}: Regenerate target (?P<types>[A-Z][a-z]+(?:,\s*[A-Z][a-z]+)*"
+    r"(?:,?\s+or\s+[A-Z][a-z]+)?)\.$"
+)
+
+
+def _try_build_tap_regenerate_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a tap-and-regenerate ``CardPrinting`` if ``text`` matches
+    the strict two-line ``{T}: Add {C}.`` + ``{T}: Regenerate target
+    <type-list>.`` shape on a plain ``Land`` type line, else ``None``.
+
+    Plain ``Land`` only (no supertypes, no subtypes). The first line
+    ``{T}: Add {C}.`` is intentionally not modeled as an explicit
+    activated ability — the engine's auto-tap-for-cost generic-mana
+    fallback covers it. The regenerate type list is a comma+or-joined
+    sequence of capitalized creature-subtype words captured by regex
+    and split into the ``allowed_subtypes`` frozenset.
+
+    Currently claims Swarmyard (``Insect, Rat, Spider, or Squirrel``).
+    A future card with the same two-line shape and a different subtype
+    list claims automatically via the parameterized regex.
+    """
+    if supertypes:
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 2:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _TAP_FOR_C_LINE:
+        return None
+    regen_match = _REGENERATE_TAP_RE.match(lines[1])
+    if regen_match is None:
+        return None
+    # Parse the subtype list: split on ", " then strip a leading "or ".
+    raw_types = re.split(r",\s+", regen_match.group("types"))
+    allowed: list[str] = []
+    for t in raw_types:
+        word = re.sub(r"^or\s+", "", t).strip()
+        if not word or not word[0].isupper():
+            return None
+        allowed.append(word)
+    if not allowed:
+        return None
+    return make_utility_land(
+        card["name"],
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=RegenerateTargetCreature(
+                    allowed_subtypes=frozenset(allowed),
+                ),
+            ),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Desert exile-and-return land (Endless Sands shape).
+#
+# ``Land — Desert`` (no supertypes, single ``Desert`` subtype), exactly
+# three lines:
+#   1. ``{T}: Add {C}.``          (intentionally dropped)
+#   2. ``{N}, {T}: Exile target creature you control.``
+#   3. ``{M}, {T}, Sacrifice this land: Return each creature card
+#      exiled with this land to the battlefield under its owner's
+#      control.``
+# where N and M are all-generic mana costs (e.g. ``{2}`` and ``{4}``).
+#
+# The exile activation uses ``ExileTargetCreatureUntilSourceLeaves(
+# yours_only=True)``; the sac-and-return activation uses
+# ``Sequence(effects=())`` (the "return on leave" mechanic is driven
+# by the engine's ``_release_exiled_until_leaves`` hook fired when the
+# source permanent leaves the battlefield, not by the printed return
+# instruction). Adding a new Desert with the same three-line shape and
+# different mana costs claims automatically via the regex captures.
+#
+# Currently the only EoS land matching this shape is Endless Sands.
+# ---------------------------------------------------------------------------
+_DESERT_EXILE_LINE_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}: Exile target creature you "
+    r"control\.$"
+)
+_DESERT_SAC_RETURN_LINE_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}, Sacrifice this land: Return "
+    r"each creature card exiled with this land to the battlefield "
+    r"under its owner's control\.$"
+)
+
+
+def _try_build_desert_exile_return_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return a Desert exile-and-return ``CardPrinting`` if ``text``
+    matches the strict three-line Endless Sands shape on a
+    ``Land — Desert`` type line, else ``None``.
+
+    ``Land — Desert`` only (no supertypes, single ``Desert`` subtype).
+    The first line ``{T}: Add {C}.`` is intentionally dropped. The
+    second line's mana cost and ``Exile target creature you control``
+    body map to an ``ExileTargetCreatureUntilSourceLeaves(
+    yours_only=True)`` activation. The third line's mana cost and
+    ``Sacrifice this land: Return …`` body map to a ``Sequence(
+    effects=())`` activation — the actual creature return is driven by
+    the engine's ``_release_exiled_until_leaves`` hook (fired when the
+    source leaves the battlefield), so no explicit return effect is
+    needed in the ability.
+
+    Currently claims Endless Sands (exile cost ``{2}``, sac-return
+    cost ``{4}``). Any future Desert with the same shape but different
+    costs claims automatically.
+    """
+    if supertypes:
+        return None
+    if subtypes != ("Desert",):
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    if lines[0] != _TAP_FOR_C_LINE:
+        return None
+    exile_match = _DESERT_EXILE_LINE_RE.match(lines[1])
+    if exile_match is None:
+        return None
+    sac_match = _DESERT_SAC_RETURN_LINE_RE.match(lines[2])
+    if sac_match is None:
+        return None
+    exile_cost_str = exile_match.group("cost")
+    sac_cost_str = sac_match.group("cost")
+    return make_utility_land(
+        card["name"], subtypes_str="Desert",
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(exile_cost_str),
+                    mana_str=exile_cost_str,
+                    tap_self=True,
+                ),
+                effect=ExileTargetCreatureUntilSourceLeaves(yours_only=True),
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(sac_cost_str),
+                    mana_str=sac_cost_str,
+                    tap_self=True,
+                    sacrifice_self=True,
+                ),
+                effect=Sequence(effects=()),
+            ),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legendary upkeep-artifact-search land (Inventors' Fair shape).
+#
+# ``Legendary Land`` (legendary supertype, no subtypes), exactly three
+# lines:
+#   1. ``At the beginning of your upkeep, if you control <N> or more
+#      artifacts, you gain 1 life.``
+#   2. ``{T}: Add {C}.``          (intentionally dropped)
+#   3. ``{M}, {T}, Sacrifice <NAME>: Search your library for an
+#      artifact card, reveal it, put it into your hand, then shuffle.
+#      Activate only if you control <N> or more artifacts.``
+# where <N> is a spelled-out threshold number (three, four, …) and
+# <NAME> is the card's own name. Both thresholds must be equal.
+#
+# The upkeep trigger uses ``ConditionalIfYouControlAtLeast(threshold,
+# "artifact", GainLife(1))``. The search activation uses
+# ``SearchLibraryForCard(filter_name="artifact", may_fail=False)``
+# with ``requires_own_artifact_count_at_least=threshold`` on the cost
+# (so ``legal.py`` gates out the activation when the controller has
+# fewer than N artifacts). The ``{T}: Add {C}.`` line is intentionally
+# dropped — the engine's auto-tap-for-cost fallback covers it.
+#
+# Currently the only EoS land matching this shape is Inventors' Fair
+# (threshold=3, cost ``{4}``). A future card with the same shape and
+# different N or mana cost claims automatically.
+# ---------------------------------------------------------------------------
+_UPKEEP_ARTIFACT_THRESHOLD_LINE_RE = re.compile(
+    r"^At the beginning of your upkeep, if you control "
+    r"(?P<threshold>three|four|five|six|seven) or more artifacts, "
+    r"you gain 1 life\.$"
+)
+_ARTIFACT_SEARCH_SAC_NAME_RE = re.compile(
+    r"^(?P<cost>(?:\{[^}]+\})+), \{T\}, Sacrifice (?P<name>.+): "
+    r"Search your library for an artifact card, reveal it, put it "
+    r"into your hand, then shuffle\. "
+    r"Activate only if you control "
+    r"(?P<threshold2>three|four|five|six|seven) or more artifacts\.$"
+)
+_THRESHOLD_WORD_TO_INT: dict[str, int] = {
+    "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+}
+
+
+def _try_build_legendary_artifact_search_land(
+    card: dict,
+    text: str,
+    supertypes: tuple[str, ...],
+    subtypes: tuple[str, ...],
+) -> CardPrinting | None:
+    """Return an Inventors'-Fair-shape ``CardPrinting`` if ``text``
+    matches the strict three-line ``Legendary Land`` shape, else
+    ``None``.
+
+    ``Legendary Land`` only (legendary supertype, no subtypes). The
+    upkeep trigger threshold and the activation threshold must be equal,
+    and the activation sacrifice clause must name the card itself. The
+    ``{T}: Add {C}.`` line (line 2) is intentionally dropped. The
+    activation cost includes ``requires_own_artifact_count_at_least``
+    so that ``legal.py`` gates out the activation when the controller
+    controls fewer than N artifacts, faithful to the printed
+    ``Activate only if you control N or more artifacts.`` clause.
+
+    Currently claims Inventors' Fair (threshold=3, activation cost
+    ``{4}``). Any future Legendary Land with the same shape but
+    different thresholds or mana cost claims automatically.
+    """
+    if supertypes != ("Legendary",):
+        return None
+    if subtypes:
+        return None
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(raw_lines) != 3:
+        return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
+    upkeep_match = _UPKEEP_ARTIFACT_THRESHOLD_LINE_RE.match(lines[0])
+    if upkeep_match is None:
+        return None
+    if lines[1] != _TAP_FOR_C_LINE:
+        return None
+    search_match = _ARTIFACT_SEARCH_SAC_NAME_RE.match(lines[2])
+    if search_match is None:
+        return None
+    threshold_word = upkeep_match.group("threshold")
+    threshold2_word = search_match.group("threshold2")
+    if threshold_word != threshold2_word:
+        return None
+    sac_name = search_match.group("name")
+    if sac_name != card["name"]:
+        return None
+    threshold = _THRESHOLD_WORD_TO_INT[threshold_word]
+    cost_str = search_match.group("cost")
+    return make_utility_land(
+        card["name"], legendary=True,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
+                effect=ConditionalIfYouControlAtLeast(
+                    threshold=threshold,
+                    predicate="artifact",
+                    inner=GainLife(amount=1),
+                ),
+            ),
+        ),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost(cost_str),
+                    mana_str=cost_str,
+                    tap_self=True,
+                    sacrifice_self=True,
+                    requires_own_artifact_count_at_least=threshold,
+                ),
+                effect=SearchLibraryForCard(
+                    filter_name="artifact", may_fail=False,
+                ),
+            ),
+        ),
+    )
 
 
 # Planet lands (EoE).
@@ -584,6 +818,21 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
         if bespoke is not None:
             return bespoke
     # Non-basic land shapes follow.
+    tap_regen = _try_build_tap_regenerate_land(
+        card, text, supertypes, subtypes,
+    )
+    if tap_regen is not None:
+        return tap_regen
+    desert_exile = _try_build_desert_exile_return_land(
+        card, text, supertypes, subtypes,
+    )
+    if desert_exile is not None:
+        return desert_exile
+    legendary_artifact_search = _try_build_legendary_artifact_search_land(
+        card, text, supertypes, subtypes,
+    )
+    if legendary_artifact_search is not None:
+        return legendary_artifact_search
     planet = _try_build_planet_land(card, text, supertypes, subtypes)
     if planet is not None:
         return planet

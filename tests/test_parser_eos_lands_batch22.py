@@ -2,17 +2,16 @@
 
 Each test verifies that ``OracleParserCardSource`` produces a
 ``CardPrinting`` identical to the one in the static registry
-(``_PRINTINGS``).  Failure means the bespoke dispatch table in
-``land_builder._BESPOKE_EOS_LANDS`` has drifted from the canonical
-``make_utility_land`` / ``CardPrinting`` call in ``stellar_sights.py``.
+(``_PRINTINGS``).
 
-The six lands covered here all require complex multi-ability shapes that
-don't map onto any single generic grammar arm:
+The six lands covered here:
 
 - Blast Zone        — ETB charge counter + X counter placement + sac destroy
 - Nesting Grounds   — counter-move sorcery-speed activation
-- Endless Sands     — Desert: exile creature / sac-self return
-- Inventors' Fair   — legendary, tapped, upkeep gain-life trigger + sac search
+- Endless Sands     — Desert: {2},{T} exile / {4},{T},sac return
+                      (``_try_build_desert_exile_return_land``)
+- Inventors' Fair   — legendary, upkeep gain-life trigger + {4},{T},sac search
+                      gated on 3+ artifacts (``_try_build_legendary_artifact_search_land``)
 - Power Depot       — Artifact Land, tapped, restricted-any mana ability
 - Sunken Citadel    — Cave, tapped, any-color + land-activation restricted mana
 """
@@ -153,7 +152,8 @@ def test_endless_sands_parity():
 
 
 def test_inventors_fair_parity():
-    """Legendary, tapped, upkeep life-gain trigger + sac search activation."""
+    """Legendary, upkeep life-gain trigger + {4},{T},sac search activation
+    (gated on 3+ artifacts; enters_tapped=False per oracle text)."""
     parsed = _build_land_printing(_inventors_fair_card())
     assert parsed is not None, "Inventors' Fair was not claimed"
     assert parsed == _PRINTINGS["Inventors' Fair"]

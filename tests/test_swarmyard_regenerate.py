@@ -63,8 +63,9 @@ def test_skystinger_has_insect_subtype():
 
 def test_swarmyard_filter_accepts_skystinger():
     """Swarmyard's regenerate ability lists Skystinger as a legal
-    target via its allowed_subtypes filter (Insect ∈ {Rat, Spider,
-    Squirrel, Insect, Snake})."""
+    target via its allowed_subtypes filter (Insect ∈ {Insect, Rat,
+    Spider, Squirrel}). Note: the old bespoke incorrectly included
+    Snake; the oracle text only lists four types."""
     state = _new_state()
     _put(state, _PRINTINGS["Swarmyard"])
     sky = _put(state, _PRINTINGS["Skystinger"])
@@ -98,10 +99,13 @@ def test_swarmyard_activation_saves_skystinger_from_lethal_damage():
     """End-to-end: Skystinger has lethal damage marked, controller
     activates Swarmyard targeting it. After the ability resolves and
     state-based actions check, Skystinger survives — damage cleared,
-    creature tapped, shield consumed."""
+    creature tapped, shield consumed.
+
+    Oracle text: "{T}: Regenerate target Insect, Rat, Spider, or
+    Squirrel." — cost is tap only, no mana payment (the old bespoke
+    incorrectly required {1},{T})."""
     state = _new_state()
     swarm = _put(state, _PRINTINGS["Swarmyard"])
-    _put(state, BASIC_LANDS["Mountain"])  # untapped {1} mana source
     sky = _put(state, _PRINTINGS["Skystinger"])
     # Skystinger is a 3/3 — 5 damage is lethal.
     sky.damage = 5

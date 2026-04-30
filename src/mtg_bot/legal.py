@@ -597,6 +597,18 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_big:
                     continue
+            if ability.cost.requires_own_artifact_count_at_least:
+                # Inventors' Fair: "Activate only if you control three
+                # or more artifacts." Count artifacts the activator
+                # controls; skip the activation if below the threshold.
+                threshold = ability.cost.requires_own_artifact_count_at_least
+                artifact_count = sum(
+                    1 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Artifact" in o2.printing.card_types
+                )
+                if artifact_count < threshold:
+                    continue
             if ability.cost.requires_control_of_subtype:
                 # Duskmourn Verge cycle: "Activate only if you control
                 # a <T1> or a <T2>." The activator must control at

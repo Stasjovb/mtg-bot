@@ -234,10 +234,11 @@ def test_regenerate_shield_clears_at_cleanup_if_unused():
 
 def test_swarmyard_activation_on_synthetic_rat_regenerates_it():
     """End-to-end: play Swarmyard, summon a synthetic Rat, take
-    lethal damage, activate Swarmyard, confirm the Rat survives."""
+    lethal damage, activate Swarmyard, confirm the Rat survives.
+    Oracle text: "{T}: Regenerate target Insect, Rat, Spider, or
+    Squirrel." — cost is tap only, no mana needed."""
     state = _new_state()
     swarm = _put(state, _PRINTINGS["Swarmyard"])
-    _put(state, BASIC_LANDS["Mountain"])  # {1} mana source
     rat = _put(state, dataclasses.replace(
         make_creature("Rat", "{B}", 1, 1), subtypes=("Rat",),
     ))
