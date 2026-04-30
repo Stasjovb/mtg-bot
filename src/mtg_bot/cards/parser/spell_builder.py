@@ -291,6 +291,16 @@ def _is_delirium_drop_clause(clause: str) -> bool:
 #      ``PumpCreaturesYouControlUntilEOT`` applies to ALL your
 #      creatures; a subtype-filtered variant would need a new optional
 #      kwarg or a sibling primitive for one card's rider.
+#
+#   6. **Exile-on-death rider** — ``If that creature or planeswalker
+#      would die this turn, exile it instead.``  (entry: Scorching
+#      Dragonfire, "Scorching Dragonfire deals 3 damage to target
+#      creature or planeswalker. If that creature or planeswalker
+#      would die this turn, exile it instead." →
+#      DealDamageToTargetCreature(amount=3)).  The engine has no
+#      UEOT-scoped "exile-instead-of-die" replacement-effect registry
+#      for targeted permanents; adding one for a single card's rider
+#      is a non-trivial engine widening.
 _ITS_CONTROLLER_MANIFESTS_DREAD_RE = re.compile(
     r"^Its controller manifests dread\.$"
 )
@@ -316,13 +326,21 @@ _MANA_SPENT_CONDITIONAL_DRAW_RE = re.compile(
 _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE = re.compile(
     r"^(?!Creatures )[A-Z][a-z]+s you control gain .+ until end of turn\.$"
 )
+# Exile-on-death rider — ``If that creature or planeswalker would die
+# this turn, exile it instead.``  (Scorching Dragonfire).  The engine
+# has no UEOT-scoped "exile-instead-of-die" replacement-effect
+# registry for targeted permanents.
+_EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE = re.compile(
+    r"^If that creature(?: or planeswalker)? would die this turn, "
+    r"exile it instead\.$"
+)
 
 
 def _is_unimplemented_secondary_rider(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a second-sentence rider that the
     parser drops because the engine lacks the plumbing to model it.
 
-    Five shapes are recognized:
+    Six shapes are recognized:
       - ``Its controller manifests dread.`` (controller-manifest rider)
       - ``When it dies this turn, manifest dread.`` (death-trigger
         manifest rider)
@@ -332,6 +350,8 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         its mana value, you draw a card.`` (mana-spent conditional draw)
       - ``<Subtype>s you control gain <keywords> until end of turn.``
         (subtype-filtered UEOT keyword grant)
+      - ``If that creature or planeswalker would die this turn, exile it
+        instead.`` (exile-on-death rider)
 
     When the FIRST sentence of a two-clause spell parses cleanly and
     the second sentence matches one of these, the two-clause path in
@@ -345,6 +365,7 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
         or _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE.match(c) is not None
         or _MANA_SPENT_CONDITIONAL_DRAW_RE.match(c) is not None
         or _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE.match(c) is not None
+        or _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE.match(c) is not None
     )
 
 
@@ -1004,29 +1025,17 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "graveyard to your hand, then return up to two target land "
         "cards from your graveyard to the battlefield tapped."
     ): ReturnCreatureFromYourGraveyardToHand(),
-    # Scorching Dragonfire (Duskmourn) — 3-damage burn to creature/
-    # planeswalker plus an "if it would die this turn, exile it
-    # instead" replacement-effect rider. The static side simplifies
-    # to bare ``DealDamageToTargetCreature(amount=3)`` because:
-    # (1) the engine doesn't model planeswalkers as targets — every
-    # other DSK/EoE primitive that prints "creature or planeswalker"
-    # likewise drops the planeswalker scope (Archenemy's Charm,
-    # Warping Wail mode 1 precedent);
-    # (2) the engine doesn't model "if it would die this turn, exile
-    # it instead" replacement effects — there's no GameObject
-    # ``exile_if_dies_this_turn`` flag to set, and adding one would
-    # require touching ``game.py`` and the SBA / die-trigger pipeline
-    # (Mutinous Massacre / Singularity Rupture precedent: complex die-
-    # replacement riders are out of scope for whole-spell dispatch).
-    # Same parser-is-right precedent as Unravel / Divert Disaster —
-    # claim the bare base mechanic (3-damage burn) and drop the
-    # rider rather than leaving the spell unclaimed for an unmodeled
-    # rider.
-    (
-        "Scorching Dragonfire deals 3 damage to target creature or "
-        "planeswalker. If that creature or planeswalker would die "
-        "this turn, exile it instead."
-    ): DealDamageToTargetCreature(amount=3),
+    # Scorching Dragonfire (Duskmourn) — "Scorching Dragonfire deals 3
+    # damage to target creature or planeswalker. If that creature or
+    # planeswalker would die this turn, exile it instead." — migrated
+    # to per-clause grammar: ``DealDamageToTargetCreature(amount=3)``
+    # claims the first sentence (the ``_DEAL_DAMAGE_TARGET_CREATURE``
+    # regex now accepts the optional ``or planeswalker`` tail, dropping
+    # the planeswalker scope per the same precedent as Archenemy's
+    # Charm mode 1) and the ``_is_unimplemented_secondary_rider``
+    # dropper silently discards the exile-on-death rider (the engine
+    # has no UEOT-scoped exile-instead-of-die replacement-effect
+    # registry for targeted permanents).
     # Unwanted Remake (Duskmourn) — "Destroy target creature. Its
     # controller manifests dread." — migrated to per-clause grammar:
     # ``DestroyTargetCreature()`` claims the first sentence and the

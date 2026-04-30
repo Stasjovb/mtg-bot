@@ -54,6 +54,7 @@ from mtg_bot.cards.parser.spell_builder import (
     _DELIRIUM_COST_REDUCTION_RIDER_RE,
     _DELIRIUM_EFFECT_RIDER_RE,
     _DELIRIUM_MODAL_HEADER_RE,
+    _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE,
     _is_delirium_drop_clause,
     _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
     _is_unimplemented_secondary_rider,
@@ -93,8 +94,10 @@ def test_bespoke_table_count():
     #   + Turn Inside Out (death-trigger-manifest rider dropper)
     #   + Unravel (mana-spent-conditional-draw rider dropper)
     #   + Midnight Mayhem (subtype-filtered UEOT keyword-grant dropper)
-    # 50 - 19 = 31 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 31
+    #   + Scorching Dragonfire (exile-on-death rider dropper +
+    #     optional-planeswalker scope in damage recognizer)
+    # 50 - 20 = 30 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 30
 
 
 # ------------------------------------------------------------------ #
@@ -612,3 +615,56 @@ def test_midnight_mayhem_parses_via_per_clause_grammar():
         "Midnight Mayhem",
     )
     assert eff == CreateToken(token_printing=TOKEN_PRINTINGS["Gremlin"], count=3)
+
+
+# ------------------------------------------------------------------ #
+# Scorching Dragonfire                                                 #
+# (per-clause grammar: damage-to-creature-or-planeswalker +           #
+#  exile-on-death rider dropper)                                      #
+# ------------------------------------------------------------------ #
+
+def test_exile_on_death_this_turn_instead_re_matches():
+    assert _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE.match(
+        "If that creature or planeswalker would die this turn, "
+        "exile it instead."
+    ) is not None
+
+
+def test_exile_on_death_rider_is_dropped():
+    assert _is_unimplemented_secondary_rider(
+        "If that creature or planeswalker would die this turn, "
+        "exile it instead."
+    )
+
+
+def test_scorching_dragonfire_no_bespoke_entry():
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Scorching Dragonfire deals 3 damage to target creature or "
+        "planeswalker. If that creature or planeswalker would die "
+        "this turn, exile it instead."
+    ) is None
+
+
+def test_scorching_dragonfire_parses_via_per_clause_grammar():
+    from mtg_bot.cards.base import DealDamageToTargetCreature
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Scorching Dragonfire deals 3 damage to target creature or "
+        "planeswalker. If that creature or planeswalker would die "
+        "this turn, exile it instead.",
+        "Scorching Dragonfire",
+    )
+    assert eff == DealDamageToTargetCreature(amount=3)
+
+
+def test_deal_damage_target_creature_or_planeswalker_parses():
+    # Belt-and-suspenders: the extended _DEAL_DAMAGE_TARGET_CREATURE
+    # recognizer now accepts the ``or planeswalker`` widening.
+    from mtg_bot.cards.base import DealDamageToTargetCreature
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    eff = _parse_spell_effect_phrase(
+        "Scorching Dragonfire deals 3 damage to target creature or planeswalker.",
+        "Scorching Dragonfire",
+    )
+    assert eff == DealDamageToTargetCreature(amount=3)

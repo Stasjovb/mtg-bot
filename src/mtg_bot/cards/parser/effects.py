@@ -245,7 +245,17 @@ _DEAL_DAMAGE_TARGET_CREATURE = re.compile(
     # the ``(?:this creature )?`` prefix on
     # ``_DEAL_DAMAGE_TARGET_OPPONENT`` / ``_DEAL_N_DAMAGE_EACH_OPPONENT`` /
     # ``_DEAL_N_DAMAGE_EACH_CREATURE``.
-    r"^(?:it )?deals (\d+) damage to target creature$"
+    #
+    # The optional ``(?: or planeswalker)?`` tail accepts the surface
+    # ``deals N damage to target creature or planeswalker`` (Scorching
+    # Dragonfire) where the planeswalker scope is a printed widening
+    # the engine doesn't model separately yet — the planeswalker pool
+    # in EoE is sparse enough that creature-only targeting covers all
+    # engine-modeled permanents today. Dropping the planeswalker scope
+    # follows the same parser-is-right precedent as Archenemy's Charm
+    # mode 1 (``ExileTargetCreature()`` for ``Exile target creature or
+    # planeswalker``).
+    r"^(?:it )?deals (\d+) damage to target creature(?: or planeswalker)?$"
 )
 # "<source> deals N damage to up to one target creature" — Pinnacle
 # Kill-Ship's ETB body (``it deals 10 damage to up to one target
