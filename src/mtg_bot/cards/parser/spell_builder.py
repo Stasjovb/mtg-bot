@@ -56,7 +56,6 @@ from mtg_bot.cards.base import (
     DealDamageAnyTarget,
     DealDamageToTargetCreature,
     DealNDamageToEachCreature,
-    DepressurizeEffect,
     DestroyTargetArtifact,
     DestroyTargetCreature,
     DestroyTargetNonlandPermanent,
@@ -870,14 +869,13 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "Then gain control of all creatures until end of turn. "
         "Untap them. They gain haste until end of turn."
     ): MutinousMassacreEffect(),
-    # Depressurize: -3/-0 UEOT + state-based death check ("if power is 0
-    # or less, destroy it"). The engine class folds the pump and the
-    # conditional destroy into one resolve step, so the parser maps the
-    # full two-sentence text to the single bespoke class.
-    (
-        "Target creature gets -3/-0 until end of turn. "
-        "Then if that creature's power is 0 or less, destroy it."
-    ): DepressurizeEffect(power_penalty=3),
+    # Depressurize — "Target creature gets -3/-0 until end of turn. Then
+    # if that creature's power is 0 or less, destroy it." — migrated to
+    # per-clause grammar: the new ``_DEPRESSURIZE`` recognizer in
+    # ``effects.py`` matches the full two-sentence body verbatim as a
+    # multi-sentence literal (the second sentence's "that creature" is
+    # anaphoric to the debuff target) and returns
+    # ``DepressurizeEffect(power_penalty=3)``.
     # Diplomatic Relations: pump-and-grant-vigilance on your creature
     # plus a fight-shaped damage rider where the chosen first target
     # deals damage equal to its (post-pump) power to a chosen second

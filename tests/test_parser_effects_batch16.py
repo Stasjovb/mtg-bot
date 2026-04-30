@@ -91,8 +91,8 @@ def _claimed_names() -> frozenset[str]:
 def test_depressurize_claimed_by_parser():
     # Depressurize ``{1}{B}`` Instant — -3/-0 UEOT plus the
     # ``Then if that creature's power is 0 or less, destroy it.``
-    # rider. The rider doesn't parse as a standalone effect, so the
-    # spell is claimed via the whole-spell exact-text dispatcher.
+    # rider. Migrated to per-clause grammar in bespoke-spells2 via the
+    # new ``_DEPRESSURIZE`` multi-sentence literal in ``effects.py``.
     assert "Depressurize" in _claimed_names()
 
 
@@ -154,15 +154,14 @@ def test_invasive_maneuvers_claimed_by_parser():
 
 # ---------- dispatch tests (direct lookup) ----------
 
-def test_dispatch_depressurize_returns_engine_class():
-    # Direct lookup against the dispatcher with the verbatim
-    # Depressurize oracle text. Returns the static-side bespoke
-    # engine class with the printed power penalty (3).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_depressurize_no_bespoke_entry():
+    # Depressurize migrated to per-clause grammar in bespoke-spells2;
+    # the whole-spell exact-text dispatcher no longer has a key for
+    # this text.
+    assert _try_whole_spell_exact_text(
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or less, destroy it."
-    )
-    assert eff == DepressurizeEffect(power_penalty=3)
+    ) is None
 
 
 def test_dispatch_focus_fire_returns_engine_class():
@@ -279,14 +278,13 @@ def test_dispatch_invasive_maneuvers_returns_engine_class():
 
 # ---------- end-to-end through ``_parse_spell_oracle_text`` ----------
 
-def test_parse_spell_oracle_text_routes_depressurize_through_whole_spell():
-    # End-to-end: the spell-oracle-text parser MUST hit the whole-
-    # spell exact-text branch BEFORE the per-clause splitter, since
-    # Depressurize's second sentence (``Then if that creature's
-    # power is 0 or less, destroy it.``) doesn't parse as a
-    # standalone effect. If the dispatcher were tried after the
-    # splitter, the per-clause Sequence path would reject and
-    # leave the spell unclaimed.
+def test_parse_spell_oracle_text_depressurize_parses_via_per_clause_grammar():
+    # Depressurize migrated to per-clause grammar in bespoke-spells2:
+    # the new ``_DEPRESSURIZE`` multi-sentence literal in ``effects.py``
+    # claims the two-sentence body before the compound-effect splitter
+    # runs, because the splitter's second piece ("Then if that creature's
+    # power is 0 or less, destroy it") doesn't parse as a standalone
+    # effect and the compound would reject.
     text = (
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or less, destroy it."
@@ -313,13 +311,20 @@ def test_parse_spell_oracle_text_strips_biosynthic_burst_reminder():
     )
 
 
-def test_dispatch_returns_none_for_depressurize_with_typo():
-    # The dispatcher is exact-match, so a one-character paraphrase
-    # of the Depressurize key rejects. Sanity-check that the new
-    # entry doesn't accidentally fuzzy-match nearby surfaces.
+def test_parse_depressurize_typo_no_match():
+    # A one-word paraphrase of Depressurize's oracle text ("0 or fewer"
+    # vs "0 or less") must not be claimed by the per-clause grammar's
+    # ``_DEPRESSURIZE`` regex — verifying the recognizer is exact-match,
+    # not fuzzy.  Both the whole-spell tier and the per-clause grammar
+    # should return None for the malformed text.
     assert _try_whole_spell_exact_text(
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or fewer, destroy it."
+    ) is None
+    assert _parse_spell_oracle_text(
+        "Target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or fewer, destroy it.",
+        "Depressurize",
     ) is None
 
 

@@ -37,6 +37,7 @@ from mtg_bot.cards.base import (
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
     DefendingPlayerLosesHalfLifeRoundedUp,
+    DepressurizeEffect,
     DestroyAllCreatures,
     DestroyTargetArtifact,
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
@@ -584,6 +585,31 @@ _PUT_PLUS_ONE_COUNTER_ON_EACH_OF_UP_TO_N_TARGET_CREATURES = re.compile(
 # ``put``, not a pronoun subject — so the ``its`` here survives intact).
 _PUT_ITS_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL = re.compile(
     r"^put its counters on target creature you control$"
+)
+# "Target creature gets -N/-0 until end of turn. Then if that creature's
+# power is 0 or less, destroy it." — Depressurize `{1}{B}` Instant: a
+# -power UEOT debuff paired with a state-based conditional destroy on the
+# same target. The two-sentence shape is matched as a single literal regex
+# because the second sentence's ``that creature`` is anaphoric to the
+# debuff target, and the engine class ``DepressurizeEffect(power_penalty=N)``
+# folds the debuff and conditional destroy into one atomic resolve step.
+# The compound-effect splitter fails because "Then if that creature's
+# power is 0 or less, destroy it" doesn't parse as a standalone effect.
+#
+# Capture group 1 is the negative power bonus (e.g. ``-3`` for
+# Depressurize); the toughness bonus is always ``-0`` (no toughness
+# change), and the engine class ignores the toughness group. The captured
+# integer is negated to derive ``power_penalty``: Depressurize's
+# ``-3/-0`` → ``power_penalty=3``.
+#
+# Currently only Depressurize in the EoE/DSK pool fits this shape; the
+# regex captures the power penalty as a parameter so a future printing
+# with a different debuff value (e.g. ``-4/-0``) lands on the same
+# primitive without further grammar work — the parameterized-recognizer-
+# preferred form per parser CLAUDE.md.
+_DEPRESSURIZE = re.compile(
+    r"^target creature gets (-\d+)/(-0) until end of turn\. "
+    r"Then if that creature's power is 0 or less, destroy it$"
 )
 _DESTROY_TARGET_CREATURE = re.compile(r"^destroy target creature$")
 # "Destroy up to one other target creature. If that creature wasn't
@@ -3348,6 +3374,22 @@ def _parse_effect(phrase: str) -> Effect | None:
             exclude_self=True,
             draw_if_undamaged_amount=_parse_amount(m.group(1)),
         )
+    # ``target creature gets -N/-0 until end of turn. Then if that
+    # creature's power is 0 or less, destroy it`` — Depressurize's
+    # two-sentence body. The second sentence's ``that creature`` is
+    # anaphoric to the debuff target, so both sentences must be kept
+    # together; the compound-effect splitter fails because the rider
+    # doesn't parse as a standalone effect. Tried BEFORE the bare
+    # ``destroy target creature`` regex so the two-sentence form wins
+    # on phrases that carry the conditional-destroy tail; the bare
+    # regex's ``$`` anchor would never match this surface anyway, but
+    # ordering more-specific before more-general is the convention here.
+    # Group 1 is the negative power bonus (e.g. ``-3``); negate it to
+    # derive ``power_penalty``.
+    m = _DEPRESSURIZE.match(phrase)
+    if m is not None:
+        power_penalty = abs(int(m.group(1)))
+        return DepressurizeEffect(power_penalty=power_penalty)
     if _DESTROY_TARGET_CREATURE.match(phrase) is not None:
         return DestroyTargetCreature()
     # ``another target attacking creature can't be blocked this turn``

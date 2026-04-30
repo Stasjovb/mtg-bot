@@ -41,8 +41,14 @@ This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    dropping the unimplemented type-change rider.
    Migrates: **Jump Scare**.
 
-Total migration: 4 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
-Table shrinks from 27 to 23.
+6. **``_DEPRESSURIZE`` recognizer** (effects.py) — a parameterized multi-
+   sentence literal matching "target creature gets -N/-0 until end of turn.
+   Then if that creature's power is 0 or less, destroy it" and returning
+   ``DepressurizeEffect(power_penalty=N)``.
+   Migrates: **Depressurize**.
+
+Total migration: 5 entries removed from ``_WHOLE_SPELL_EXACT_TEXT``.
+Table shrinks from 27 to 22.
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.base import (
+    DepressurizeEffect,
     DrawCards,
     PumpTargetCreatureUntilEOT,
     SearchLibraryForGreenCreatureWithMVAtMostX,
@@ -60,6 +67,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.effects import (
     _parse_effect,
     _parse_spell_effect_phrase,
+    _DEPRESSURIZE,
     _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
@@ -83,10 +91,10 @@ def _claimed_names() -> frozenset[str]:
 
 def test_bespoke_table_count():
     # bespoke-spells1 removed 23 entries (27 remaining);
-    # bespoke-spells2 removes 4 more (Nexus of Fate, Green Sun's Zenith,
-    # Cerebral Download, Jump Scare).
-    # 50 - 27 = 23 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 23
+    # bespoke-spells2 removes 5 more (Nexus of Fate, Green Sun's Zenith,
+    # Cerebral Download, Jump Scare, Depressurize).
+    # 50 - 28 = 22 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 22
 
 
 # ------------------------------------------------------------------ #
@@ -470,6 +478,82 @@ def test_jump_scare_parses_via_per_clause_grammar():
         toughness_bonus=2,
         granted_keywords=frozenset({"flying"}),
     )
+
+
+# ------------------------------------------------------------------ #
+# Depressurize migration                                              #
+# ------------------------------------------------------------------ #
+
+def test_depressurize_regex_matches():
+    m = _DEPRESSURIZE.match(
+        "target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it"
+    )
+    assert m is not None
+    assert m.group(1) == "-3"
+    assert m.group(2) == "-0"
+
+
+def test_depressurize_regex_parameterized():
+    # A different power penalty should also match — verifying the
+    # recognizer is parameterized, not a fixed-value literal.
+    m = _DEPRESSURIZE.match(
+        "target creature gets -4/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it"
+    )
+    assert m is not None
+    assert m.group(1) == "-4"
+
+
+def test_depressurize_regex_no_false_positive_bare_pump():
+    # A bare -N/-0 pump (no conditional destroy) must NOT match.
+    assert _DEPRESSURIZE.match(
+        "target creature gets -3/-0 until end of turn"
+    ) is None
+
+
+def test_depressurize_parses_as_effect():
+    eff = _parse_effect(
+        "target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it"
+    )
+    assert eff == DepressurizeEffect(power_penalty=3)
+
+
+def test_depressurize_parses_as_spell_effect_phrase():
+    eff = _parse_spell_effect_phrase(
+        "Target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it.",
+        "Depressurize",
+    )
+    assert eff == DepressurizeEffect(power_penalty=3)
+
+
+def test_depressurize_claimed_by_parser():
+    assert "Depressurize" in _claimed_names()
+
+
+def test_depressurize_engine_class():
+    parser = OracleParserCardSource()
+    p = parser.get_printings()["Depressurize"]
+    assert p.spell_effect == DepressurizeEffect(power_penalty=3)
+
+
+def test_depressurize_no_bespoke_entry():
+    # The whole-spell tier no longer has a key for this text.
+    assert _try_whole_spell_exact_text(
+        "Target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it."
+    ) is None
+
+
+def test_depressurize_parses_via_per_clause_grammar():
+    eff = _parse_spell_oracle_text(
+        "Target creature gets -3/-0 until end of turn. "
+        "Then if that creature's power is 0 or less, destroy it.",
+        "Depressurize",
+    )
+    assert eff == DepressurizeEffect(power_penalty=3)
 
 
 # ------------------------------------------------------------------ #
