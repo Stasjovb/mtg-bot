@@ -65,6 +65,7 @@ from mtg_bot.cards.base import (
     FocusFireEffect,
     GainLife,
     GrantUnblockableUEOT,
+    HouseCartographerSurvivalEffect,
     LookAtTopNRevealOrCounter,
     LookAtTopTwoSplitHandGraveyard,
     LoseLife,
@@ -2366,6 +2367,31 @@ def _parse_effect(phrase: str) -> Effect | None:
     single-effect regex to match a phrase that happens to contain
     `` and ``.
     """
+    # Literal multi-sentence effect recognizers — tried BEFORE the
+    # single-sentence regex grammar because these phrases span two
+    # printed sentences (an internal period + uppercase continuation)
+    # that no single-sentence regex would tolerate. Each entry maps
+    # verbatim to a bespoke engine class; generalizing the shape would
+    # require carving the two sentences apart and recognizing an
+    # anaphoric continuation clause (``put that card …`` referring to
+    # the land revealed in the prior sentence), which the current
+    # sentence-splitting grammar can't model. A second card with the
+    # same shape (reveal-until-condition + put-result-elsewhere) would
+    # call for a parameterized recognizer at that point.
+    #
+    # House Cartographer's Survival body (only card in the pool with
+    # the "reveal until land" shape; broader grammar deferred until a
+    # second example exists).
+    # The trigger-line regex strips the outer trailing period before
+    # dispatching the effect body; the multi-sentence inner period is
+    # preserved, so the phrase here has no trailing period but the
+    # internal ". Put…" sentence boundary is intact.
+    if phrase == (
+        "reveal cards from the top of your library until you reveal a land card. "
+        "Put that card into your hand and the rest on the bottom of your library "
+        "in a random order"
+    ):
+        return HouseCartographerSurvivalEffect()
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
