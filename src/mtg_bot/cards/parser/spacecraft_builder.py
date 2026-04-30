@@ -135,16 +135,19 @@ import re
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
+    ActivationCost,
     CardPrinting,
     StaticAbility,
     StaticScope,
     TriggeredAbility,
     make_artifact,
     make_spacecraft,
+    parse_mana_cost,
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor, AddManaToPool
 from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU, Predicate
 
 
@@ -162,9 +165,10 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU,
 _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
     c.name: c
     for c in [
-        # SKIP — The Eternity Elevator: Legendary Artifact — Spacecraft that
-        # has no printed P/T and never animates. Three grammar gaps prevent
-        # the unified builder from claiming it:
+        # The Eternity Elevator {5} — Legendary Artifact — Spacecraft.
+        # Never animates: no printed P/T, Station line lacks "It's an
+        # artifact creature at N+." so it never becomes a creature.
+        # Three grammar gaps prevent the unified builder from claiming it:
         #   1. No P/T: the builder requires ``int(card["power"])`` /
         #      ``int(card["toughness"])`` to succeed; The Eternity Elevator
         #      has no P/T fields in the Scryfall record, so the try/except
@@ -172,25 +176,49 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
         #   2. Station line has no "It's an artifact creature" clause:
         #      ``_STATION_LINE_RE`` requires the ``It's an artifact creature
         #      at N+.`` sub-clause, but The Eternity Elevator's Station line
-        #      omits it (the card never animates). The regex match fails, so
-        #      no ``station_threshold`` is recorded and the builder bails.
+        #      omits it. The regex match fails and the builder bails.
         #   3. Tier-gated activated ability: ``20+ | {T}: Add X mana of any
         #      one color, where X is the number of charge counters on The
-        #      Eternity Elevator.`` is a tier-gated X-mana activated ability
-        #      the engine doesn't model (no tier-keyed ActivatedAbility +
-        #      no variable-X mana production).
-        #   4. Uses make_artifact not make_spacecraft: the artifact_builder
-        #      rejects Spacecraft-subtyped cards, so this entry ships as a
-        #      plain artifact to match the static registry.
-        # Modeling this card correctly needs: (a) engine-side support for
-        # Spacecraft that never animate (missing P/T grammar), (b) a
-        # Station-line variant regex without the animation clause, (c)
-        # tier-gated activated-ability support in the builder, and (d)
-        # variable-X mana production in the activated-ability grammar. All
-        # four are deferred to a future slice.
-        make_artifact(
+        #      Eternity Elevator.`` — dynamic X-mana tied to charge counters,
+        #      outside the current activated-ability grammar.
+        # Engine additions (engine-kavaron-elevator):
+        #   a. ``make_spacecraft`` now accepts ``station_threshold=None``
+        #      (no animation) and optional ``power``/``toughness`` (default
+        #      0), so a non-animating Spacecraft builds correctly.
+        #   b. ``ActivatedAbility(tier_threshold=N)`` gates the ability on
+        #      the source having N or more charge counters;
+        #      ``effective_activated_abilities`` filters gated abilities out
+        #      when the threshold isn't met.
+        #   c. ``AddChargeCounterManaOfChosenColor`` effect reads the source's
+        #      charge_counters at resolve time and delegates to
+        #      ``AddNManaOfChosenColor``.
+        # The bespoke entry uses ``make_spacecraft(station_threshold=None)``
+        # to produce the correct ``Legendary Artifact — Spacecraft`` type
+        # line and wires Station (charge-counter accumulation via
+        # ``ActivateStation``) and both activated abilities faithfully.
+        # The unified builder can't claim this card until a Station-line
+        # regex variant without the animation clause and a tier-gated
+        # activated-ability arm are added; deferred to a future slice.
+        make_spacecraft(
             "The Eternity Elevator", "{5}",
             legendary=True,
+            station_threshold=None,  # never animates
+            activated_abilities=(
+                # {T}: Add {C}{C}{C}.
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddManaToPool(produces=(("C", 3),)),
+                    is_mana_ability=True,
+                ),
+                # 20+ | {T}: Add X mana of any one color, where X is the
+                # number of charge counters on The Eternity Elevator.
+                ActivatedAbility(
+                    cost=ActivationCost(tap_self=True),
+                    effect=AddChargeCounterManaOfChosenColor(),
+                    is_mana_ability=True,
+                    tier_threshold=20,
+                ),
+            ),
         ),
     ]
 }

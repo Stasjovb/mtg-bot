@@ -26,6 +26,7 @@ from mtg_bot.effects.base import (
     _multicolored_permanents_count,
 )
 from mtg_bot.effects.generic import (
+    AddChargeCounterManaOfChosenColor,
     AddManaToPool,
     AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,

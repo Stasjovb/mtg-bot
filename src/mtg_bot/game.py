@@ -1358,6 +1358,14 @@ def effective_activated_abilities(
             base.clear()
         elif ce.kind == "grant_activated_ability" and ce.params:
             base.append(ce.params[0])
+    # Filter out tier-gated activated abilities (Spacecraft charge-counter
+    # gate, e.g. The Eternity Elevator's ``20+ | {T}: Add X mana``).
+    # An ability with ``tier_threshold=0`` is always usable (default).
+    base = [
+        a for a in base
+        if not getattr(a, "tier_threshold", 0)
+        or obj.charge_counters >= a.tier_threshold
+    ]
     return tuple(base)
 
 

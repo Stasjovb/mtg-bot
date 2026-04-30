@@ -483,6 +483,13 @@ class ActivatedAbility:
     # half is locked, so its abilities are inert. ``None`` for
     # non-Room abilities — they're always active.
     room_half: "str | None" = None
+    # EoE Spacecraft tier gate: this activated ability is only usable
+    # when the source has ``tier_threshold`` or more charge counters.
+    # 0 = always usable (default). Mirrors ``StaticAbility.tier_threshold``.
+    # ``effective_activated_abilities`` filters out gated abilities when
+    # the source doesn't meet the threshold. Used by The Eternity
+    # Elevator's ``20+ | {T}: Add X mana of any one color`` ability.
+    tier_threshold: int = 0
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"

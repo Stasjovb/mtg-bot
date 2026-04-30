@@ -1218,9 +1218,9 @@ def cost(
 def make_spacecraft(
     name: str,
     cost: str,
-    power: int,
-    toughness: int,
-    station_threshold: int,
+    power: int = 0,
+    toughness: int = 0,
+    station_threshold: int | None = None,
     stationed_keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
     legendary: bool = False,
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
@@ -1234,6 +1234,14 @@ def make_spacecraft(
     with the printed ``power``/``toughness`` and ``stationed_keywords``.
     Tier-gated static abilities (like Lumen-Class Frigate's "2+ anthem")
     use StaticAbility(tier_threshold=N).
+
+    ``station_threshold=None`` produces a Spacecraft that never animates
+    into a creature (charge counters accumulate but ``is_stationed``
+    always returns False). Used for The Eternity Elevator, which has no
+    printed P/T and is permanently a non-creature artifact.
+
+    ``power`` and ``toughness`` default to 0 for non-animating Spacecraft;
+    they have no game effect when ``station_threshold`` is None.
     """
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Artifact — Spacecraft"

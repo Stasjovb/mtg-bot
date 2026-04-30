@@ -2880,6 +2880,46 @@ class AddNManaOfChosenColor(Effect):
 
 
 @dataclass(frozen=True)
+class AddChargeCounterManaOfChosenColor(Effect):
+    """Add X mana of any one color, where X is the number of charge
+    counters on the source permanent.
+
+    Models The Eternity Elevator's tier-gated activated ability:
+    ``20+ | {T}: Add X mana of any one color, where X is the number of
+    charge counters on The Eternity Elevator.``
+
+    On resolution, reads ``state.resolving_source.charge_counters`` for
+    X; if the source object is unavailable (e.g. the ability was somehow
+    triggered off-battlefield), produces 0 mana. Delegates to
+    ``AddNManaOfChosenColor`` at resolve time so the controller's agent
+    picks the color via ``choose_mana_color``.
+
+    Literal-line recognizer: only The Eternity Elevator in the EoE pool
+    prints this "X mana of any one color where X is the charge counter
+    count" shape today; a second Spacecraft with the same shape would
+    call for a parameterized grammar arm in the spacecraft builder.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        amount = source.charge_counters
+        if amount <= 0:
+            return
+        AddNManaOfChosenColor(amount=amount).resolve(
+            state, controller_id, targets,
+        )
+
+    def describe(self) -> str:
+        return "add X mana of any one color, where X is the number of charge counters on this"
+
+
+
+@dataclass(frozen=True)
 class AddOneManaFromControlledLandsProductions(Effect):
     """Reflecting Pool: "{T}: Add one mana of any type that a land you
     control could produce."
