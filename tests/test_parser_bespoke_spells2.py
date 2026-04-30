@@ -96,7 +96,9 @@ def test_bespoke_table_count():
     # bespoke-spells3 removes 7 more (Lithobraking, Scrounge for Eternity,
     # Pull Through the Weft, Commune with Evil, Unnerving Grasp, Get Out,
     # Untimely Malfunction) → 15 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 15
+    # bespoke-spells4 removes 3 more (Biosynthic Burst, Systems Override,
+    # Vengeful Possession) → 12 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 12
 
 
 # ------------------------------------------------------------------ #

@@ -117,10 +117,10 @@ def test_diplomatic_relations_claimed_by_parser():
 
 def test_biosynthic_burst_claimed_by_parser():
     # Biosynthic Burst ``{1}{G}`` Instant — counter + grant three
-    # keywords + untap on a creature you control. The compound
-    # spans more than the per-clause Sequence combinator handles
-    # (the carry-over ``it`` subject across three sentences), so
-    # the spell is claimed via the whole-spell exact-text dispatcher.
+    # keywords + untap on a creature you control. Migrated from the
+    # whole-spell exact-text tier to the per-clause grammar: the new
+    # multi-sentence literal recognizer in ``effects.py`` claims the
+    # full three-sentence body as ``BiosynthicBurstEffect()``.
     assert "Biosynthic Burst" in _claimed_names()
 
 
@@ -191,12 +191,27 @@ def test_dispatch_diplomatic_relations_returns_engine_class():
     assert eff == DiplomaticRelationsEffect()
 
 
-def test_dispatch_biosynthic_burst_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_biosynthic_burst_no_bespoke_entry():
+    # Biosynthic Burst migrated from the whole-spell exact-text tier to
+    # the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Put a +1/+1 counter on target creature you control. "
+        "It gains reach, trample, and indestructible until end of "
+        "turn. Untap it."
+    ) is None
+
+
+def test_biosynthic_burst_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the full three-sentence body
+    # as ``BiosynthicBurstEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Put a +1/+1 counter on target creature you control. "
         "It gains reach, trample, and indestructible until end of "
         "turn. Untap it."
     )
+    eff = _parse_spell_effect_phrase(body, "Biosynthic Burst")
     assert eff == BiosynthicBurstEffect()
 
 
@@ -297,9 +312,10 @@ def test_parse_spell_oracle_text_depressurize_parses_via_per_clause_grammar():
 def test_parse_spell_oracle_text_strips_biosynthic_burst_reminder():
     # Biosynthic Burst's printed oracle text carries a parenthesized
     # reminder tail describing indestructible (``(Damage and effects
-    # that say "destroy" don't destroy it.)``). The parser must
-    # strip that reminder BEFORE the dispatcher lookup, since the
-    # dispatcher is exact-match.
+    # that say "destroy" don't destroy it.)``). The parser must strip
+    # that reminder before the per-clause recognizer fires. Now claimed
+    # via the per-clause multi-sentence literal in ``effects.py`` rather
+    # than the whole-spell exact-text tier (migrated in bespoke-spells4).
     text = (
         "Put a +1/+1 counter on target creature you control. "
         "It gains reach, trample, and indestructible until end of "
@@ -509,7 +525,10 @@ def test_zero_point_ballad_claimed_by_parser():
 
 def test_systems_override_claimed_by_parser():
     # Systems Override ``{2}{R}`` Sorcery — gain-control + untap +
-    # haste plus a Spacecraft-only ten-charge-counter rider.
+    # haste plus a Spacecraft-only ten-charge-counter rider. Migrated
+    # from the whole-spell exact-text tier to the per-clause grammar:
+    # the new multi-sentence literal recognizer in ``effects.py`` claims
+    # the full five-sentence body as ``SystemsOverrideEffect()``.
     assert "Systems Override" in _claimed_names()
 
 
@@ -622,14 +641,32 @@ def test_dispatch_zero_point_ballad_returns_engine_class():
     assert eff == ZeroPointBalladEffect()
 
 
-def test_dispatch_systems_override_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_systems_override_no_bespoke_entry():
+    # Systems Override migrated from the whole-spell exact-text tier to
+    # the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Gain control of target artifact or creature until end of "
+        "turn. Untap that permanent. It gains haste until end of "
+        "turn. If it's a Spacecraft, put ten charge counters on it. "
+        "If you do, remove ten charge counters from it at the "
+        "beginning of the next end step."
+    ) is None
+
+
+def test_systems_override_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the full five-sentence body
+    # (Threaten core + Spacecraft charge-counter rider) as
+    # ``SystemsOverrideEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Gain control of target artifact or creature until end of "
         "turn. Untap that permanent. It gains haste until end of "
         "turn. If it's a Spacecraft, put ten charge counters on it. "
         "If you do, remove ten charge counters from it at the "
         "beginning of the next end step."
     )
+    eff = _parse_spell_effect_phrase(body, "Systems Override")
     assert eff == SystemsOverrideEffect()
 
 

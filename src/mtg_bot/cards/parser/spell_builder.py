@@ -40,7 +40,6 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
-    BiosynthicBurstEffect,
     CardPrinting,
     CloseEncounterEffect,
     CommuneWithEvilEffect,
@@ -75,8 +74,6 @@ from mtg_bot.cards.base import (
     ReturnTargetCreatureToOwnersHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     Sequence,
-    SystemsOverrideEffect,
-    VengefulPossessionEffect,
     ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
@@ -937,15 +934,12 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "until end of turn. It deals damage equal to its power to "
         "target creature an opponent controls."
     ): DiplomaticRelationsEffect(),
-    # Biosynthic Burst: counter + grant-three-keywords + untap on a
-    # creature you control. The static class wires the +1/+1 counter,
-    # the reach/trample/indestructible UEOT grant, and the untap into
-    # one resolve.
-    (
-        "Put a +1/+1 counter on target creature you control. "
-        "It gains reach, trample, and indestructible until end of "
-        "turn. Untap it."
-    ): BiosynthicBurstEffect(),
+    # Biosynthic Burst — "Put a +1/+1 counter on target creature you
+    # control. It gains reach, trample, and indestructible until end of
+    # turn. Untap it." — migrated to per-clause grammar: the new
+    # multi-sentence literal recognizer in ``effects.py`` claims the full
+    # three-sentence body (anaphoric "It"/"it" referring to the same
+    # target across all three clauses) as ``BiosynthicBurstEffect()``.
     # Cerebral Download — "Surveil X, where X is the number of artifacts
     # you control. Then draw three cards." — migrated to per-clause
     # grammar: the new ``_SURVEIL_X_ARTIFACT_COUNT`` recognizer in
@@ -982,17 +976,14 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "X life. If X is 6 or more, return a creature card put into "
         "a graveyard this way to the battlefield under your control."
     ): ZeroPointBalladEffect(),
-    # Systems Override: gain-control + untap + grant-haste plus a
-    # Spacecraft-only charge-counter rider. The bespoke engine
-    # class threads all four steps through one resolve, including
-    # the end-step counter-removal scheduling.
-    (
-        "Gain control of target artifact or creature until end of "
-        "turn. Untap that permanent. It gains haste until end of "
-        "turn. If it's a Spacecraft, put ten charge counters on it. "
-        "If you do, remove ten charge counters from it at the "
-        "beginning of the next end step."
-    ): SystemsOverrideEffect(),
+    # Systems Override — "Gain control of target artifact or creature until
+    # end of turn. Untap that permanent. It gains haste until end of turn.
+    # If it's a Spacecraft, put ten charge counters on it. If you do,
+    # remove ten charge counters from it at the beginning of the next end
+    # step." — migrated to per-clause grammar: the new multi-sentence
+    # literal recognizer in ``effects.py`` claims the full five-sentence
+    # body (Threaten core + Spacecraft charge-counter rider) as
+    # ``SystemsOverrideEffect()``.
     # Devastating Onslaught: variable-X token-copy spell with haste
     # and end-step sac. The X-formula sits on the spell's mana cost
     # ({X}{X}{R}) and is resolved through the engine class at cast
@@ -1161,23 +1152,14 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # type-change rider ("becomes a Horror enchantment creature in
     # addition to its other types") per the parser-is-right simplification
     # precedent (Unravel, Divert Disaster).
-    # Vengeful Possession (Duskmourn) — gain-control + untap +
-    # haste UEOT plus an optional looter rider ("You may discard a
-    # card. If you do, draw a card."). The static side ships
-    # ``VengefulPossessionEffect()`` which mirrors Systems
-    # Override's gain-control + untap + haste skeleton, narrowed to
-    # creature targets and stripped of the Spacecraft charge-counter
-    # rider. The optional looter rider is dropped on the parser
-    # side per the parser-is-right precedent — the bare base
-    # mechanic (gain-control + untap + haste UEOT) is what the
-    # engine models cleanly; the optional looter rider would need a
-    # new ``OptionalDiscardThenDraw`` primitive that no other DSK
-    # spell needs today.
-    (
-        "Gain control of target creature until end of turn. "
-        "Untap it. It gains haste until end of turn. "
-        "You may discard a card. If you do, draw a card."
-    ): VengefulPossessionEffect(),
+    # Vengeful Possession (Duskmourn) — "Gain control of target creature
+    # until end of turn. Untap it. It gains haste until end of turn.
+    # You may discard a card. If you do, draw a card." — migrated to
+    # per-clause grammar: the new multi-sentence literal recognizer in
+    # ``effects.py`` claims the full four-sentence body (Threaten core
+    # + optional-looter rider) as ``VengefulPossessionEffect()``,
+    # matching the parser-is-right simplification the old bespoke entry
+    # made (optional-looter dropped; engine models only the Threaten core).
     # Coordinated Clobbering (Duskmourn) — two-clause multi-target
     # spell: tap 1-2 friendly untapped creatures, then each deals
     # power-as-damage to one target opp creature. The static ships

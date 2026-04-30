@@ -155,6 +155,9 @@ from mtg_bot.cards.base import (
     TargetPlayerLosesLife,
     TannukEnsignLandfallEffect,
     UntapTargetOtherPermanent,
+    BiosynthicBurstEffect,
+    VengefulPossessionEffect,
+    SystemsOverrideEffect,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -3369,6 +3372,58 @@ def _parse_effect(phrase: str) -> Effect | None:
         "draw a card"
     ):
         return TannukEnsignLandfallEffect()
+    # Biosynthic Burst's three-sentence body — counter + grant-three-keywords
+    # + untap on the same target creature you control. The anaphoric "It"/"it"
+    # in sentences 2 and 3 refers back to the creature targeted in sentence 1,
+    # so the three sentences must be kept together; the sentence-splitting
+    # grammar can't model them as independent clauses. Matched here as a
+    # single literal so the whole body dispatches to the bespoke engine class
+    # in one step. Only Biosynthic Burst in the EoE pool fits this exact
+    # three-sentence shape; broader grammar deferred until a second example
+    # exists (e.g. a card with different keywords or a different counter type).
+    if phrase == (
+        "put a +1/+1 counter on target creature you control. "
+        "It gains reach, trample, and indestructible until end of turn. "
+        "Untap it"
+    ):
+        return BiosynthicBurstEffect()
+    # Vengeful Possession's four-sentence body — the Threaten core (gain
+    # control + untap + haste UEOT on the same target creature) plus a
+    # trailing optional-looter rider ("You may discard a card. If you do,
+    # draw a card."). The anaphoric "it" in sentences 2–3 refers to the
+    # target of sentence 1; the optional-looter sentence-pair stays joined
+    # by the sentence-splitter's "If you do," negative lookahead. Matched
+    # as a single literal so ``VengefulPossessionEffect`` is wired faithfully
+    # to the printed text (parser-is-right: the engine models only the
+    # Threaten core; the optional-looter rider is silently dropped, same
+    # simplification as the former ``_WHOLE_SPELL_EXACT_TEXT`` entry). Only
+    # Vengeful Possession (Duskmourn) in the pool fits this exact surface;
+    # broader grammar deferred until a second card with this shape ships.
+    if phrase == (
+        "gain control of target creature until end of turn. "
+        "Untap it. It gains haste until end of turn. "
+        "You may discard a card. If you do, draw a card"
+    ):
+        return VengefulPossessionEffect()
+    # Systems Override's five-sentence body — gain control of target artifact
+    # or creature UEOT, untap it, grant haste UEOT (the Threaten core), plus
+    # a Spacecraft-conditional charge-counter rider: put ten charge counters
+    # on it; if you do, remove ten at the next end step. All five sentences
+    # share the same target via anaphoric pronouns ("that permanent", "It",
+    # "it", "it"). The Spacecraft conditional and the delayed counter-removal
+    # trigger can't be expressed as standalone clauses in the unified grammar,
+    # so the full five-sentence body is matched here as a single literal
+    # dispatching to the bespoke ``SystemsOverrideEffect``. Only Systems
+    # Override (EoE) in the pool has this exact surface; broader grammar
+    # deferred until a second card with this shape ships.
+    if phrase == (
+        "gain control of target artifact or creature until end of turn. "
+        "Untap that permanent. It gains haste until end of turn. "
+        "If it's a Spacecraft, put ten charge counters on it. "
+        "If you do, remove ten charge counters from it at the "
+        "beginning of the next end step"
+    ):
+        return SystemsOverrideEffect()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner

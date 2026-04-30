@@ -256,9 +256,11 @@ def test_vengeful_possession_missing_target_noop():
 # ---------- Vengeful Possession parser claim ----------
 
 def test_vengeful_possession_claimed_by_parser():
-    # Vengeful Possession ``{2}{R}`` Sorcery — claimed via the new
-    # whole-spell exact-text dispatch entry mapping to the new
-    # ``VengefulPossessionEffect`` engine class.
+    # Vengeful Possession ``{2}{R}`` Sorcery — claimed via the per-clause
+    # grammar's multi-sentence literal in ``effects.py`` (migrated from
+    # the whole-spell exact-text tier in bespoke-spells4). The full
+    # four-sentence body (Threaten core + optional-looter rider) maps to
+    # ``VengefulPossessionEffect()``.
     assert "Vengeful Possession" in _claimed_names()
 
 
@@ -276,6 +278,33 @@ def test_vengeful_possession_is_sorcery():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Vengeful Possession"]
     assert "Sorcery" in p.card_types
+
+
+def test_dispatch_vengeful_possession_no_bespoke_entry():
+    # Vengeful Possession migrated from the whole-spell exact-text tier
+    # to the per-clause grammar; whole-spell dispatch now falls through.
+    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
+    assert _try_whole_spell_exact_text(
+        "Gain control of target creature until end of turn. "
+        "Untap it. It gains haste until end of turn. "
+        "You may discard a card. If you do, draw a card."
+    ) is None
+
+
+def test_vengeful_possession_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the full four-sentence body
+    # (Threaten core + optional-looter rider) as
+    # ``VengefulPossessionEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.effects import VengefulPossessionEffect
+    body = (
+        "Gain control of target creature until end of turn. "
+        "Untap it. It gains haste until end of turn. "
+        "You may discard a card. If you do, draw a card."
+    )
+    eff = _parse_spell_effect_phrase(body, "Vengeful Possession")
+    assert eff == VengefulPossessionEffect()
 
 
 # ---------- ExorciseEffect engine class ----------

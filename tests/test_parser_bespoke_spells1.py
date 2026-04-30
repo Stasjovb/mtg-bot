@@ -123,8 +123,12 @@ def test_bespoke_table_count():
     #     + Sequence.target_count_range() fix)
     #   + Get Out (modal exactly-one-parseable fallback, mode 1)
     #   + Untimely Malfunction (modal exactly-one-parseable fallback, mode 1)
-    # 50 - 35 = 15 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 15
+    # Additional removals in bespoke-spells4 branch (3 more, 12 remaining):
+    #   + Biosynthic Burst (per-clause multi-sentence literal in effects.py)
+    #   + Systems Override (per-clause multi-sentence literal in effects.py)
+    #   + Vengeful Possession (per-clause multi-sentence literal in effects.py)
+    # 50 - 38 = 12 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 12
 
 
 # ------------------------------------------------------------------ #
