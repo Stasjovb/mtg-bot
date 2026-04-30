@@ -18,6 +18,7 @@ import re
 from mtg_bot.cards.base import (
     AddManaToPool,
     AnticausalVestigeLeavesEffect,
+    AstelliReclaimerETBEffect,
     CounterTargetSpell,
     CreateLanderAndScheduleSacrifice,
     CreateToken,
@@ -115,6 +116,7 @@ from mtg_bot.cards.base import (
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
     SeedshipImpactEffect,
+    TerritorialBruntarLandfallEffect,
     SelfMill,
     Sequence,
     SingularityRuptureEffect,
@@ -2408,6 +2410,28 @@ def _parse_effect(phrase: str) -> Effect | None:
         "hand onto the battlefield tapped"
     ):
         return AnticausalVestigeLeavesEffect()
+    # Astelli Reclaimer's ETB body (only EoE card with the "return
+    # noncreature/nonland from GY with MV ≤ mana-spent" shape; broader
+    # grammar deferred until a second example exists). The mana-spent
+    # gate is dynamic (evaluated against the warp cost or full cost paid
+    # at cast time), which the single-effect grammar can't model.
+    if phrase == (
+        "return target noncreature, nonland permanent card with mana "
+        "value X or less from your graveyard to the battlefield, where "
+        "X is the amount of mana spent to cast this creature"
+    ):
+        return AstelliReclaimerETBEffect()
+    # Territorial Bruntar's Landfall body (only EoE card with the
+    # "exile top until nonland + may cast that card this turn" shape;
+    # broader grammar deferred until a second example exists). The
+    # anaphoric "that card" in sentence 2 refers to the nonland card
+    # exiled in sentence 1, which the sentence-splitting grammar can't
+    # model as a standalone clause.
+    if phrase == (
+        "exile cards from the top of your library until you exile a "
+        "nonland card. You may cast that card this turn"
+    ):
+        return TerritorialBruntarLandfallEffect()
     # Fanatic of the Harrowing's ETB body (only DSK card with the
     # "each player discards + reflexive draw if you did" shape; broader
     # grammar deferred until a second example exists). The reflexive

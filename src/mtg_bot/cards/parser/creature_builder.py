@@ -307,32 +307,6 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
                 ),
             ),
         ),
-        # Astelli Reclaimer {3}{W}{W} 5/4 Angel Warrior — flying,
-        # warp {2}{W}. ETB return noncreature/nonland from graveyard
-        # with MV ≤ mana spent.
-        "Astelli Reclaimer": make_creature(
-            "Astelli Reclaimer", "{3}{W}{W}", 5, 4,
-            keywords={"flying"},
-            warp="{2}{W}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=AstelliReclaimerETBEffect(),
-                ),
-            ),
-        ),
-        # Territorial Bruntar {4}{R}{R} 6/6 Beast — reach.
-        # Landfall: exile top until nonland, may cast this turn.
-        "Territorial Bruntar": make_creature(
-            "Territorial Bruntar", "{4}{R}{R}", 6, 6,
-            keywords={"reach"},
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=Subject(None, IsLand()) & Controlled(YOU),
-                    effect=TerritorialBruntarLandfallEffect(),
-                ),
-            ),
-        ),
         # Perigee Beckoner {4}{B} 4/5 Horror — warp {1}{B}.
         # ETB: another creature you control gets +2/+0 and gains
         # "when this creature dies, return it to bf tapped".
