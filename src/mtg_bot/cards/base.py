@@ -244,6 +244,17 @@ from mtg_bot.effects import (
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
 
+# All valid two-color hybrid pairs (both orderings so look-up is symmetric).
+# Standard ten allied/enemy hybrid pairs plus the Phyrexian-hybrid pairs
+# ({W/P}, {U/P}, etc.) are handled separately in parse_mana_cost.
+_HYBRID_PAIRS: frozenset[frozenset[str]] = frozenset(
+    frozenset(pair)
+    for pair in [
+        ("W", "U"), ("U", "B"), ("B", "R"), ("R", "G"), ("G", "W"),
+        ("W", "B"), ("U", "R"), ("B", "G"), ("R", "W"), ("G", "U"),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class ManaCost:
@@ -254,14 +265,25 @@ class ManaCost:
     # caster's chosen value. Stored separately so a card's "templated"
     # cost stays distinct from its paid cost.
     x_pips: int = 0
+    # Hybrid mana symbols, e.g. {U/R}, stored as a tuple of (color_a,
+    # color_b) pairs in canonical alphabetical order. Each hybrid symbol
+    # has a mana value of 1 and can be paid with either color (or
+    # generically — engine simplification: treated as generic-1 in
+    # payment so the existing payment loop needs no changes). Both colors
+    # of each hybrid symbol contribute to the card's color identity via
+    # the ``colors`` property.
+    hybrid: tuple[tuple[str, str], ...] = ()
 
     @property
     def total(self) -> int:
-        return self.generic + sum(n for _, n in self.colored)
+        return self.generic + sum(n for _, n in self.colored) + len(self.hybrid)
 
     @property
     def colors(self) -> frozenset[str]:
-        return frozenset(c for c, _ in self.colored)
+        hybrid_colors: frozenset[str] = frozenset(
+            c for pair in self.hybrid for c in pair
+        )
+        return frozenset(c for c, _ in self.colored) | hybrid_colors
 
     def reduced(self, amount: int) -> "ManaCost":
         """Return a new ManaCost with ``amount`` generic mana removed
@@ -276,6 +298,7 @@ class ManaCost:
             generic=max(0, self.generic - amount),
             colored=self.colored,
             x_pips=self.x_pips,
+            hybrid=self.hybrid,
         )
 
 
@@ -325,6 +348,7 @@ def parse_mana_cost(s: str) -> ManaCost:
     generic = 0
     colored: dict[str, int] = {}
     x_pips = 0
+    hybrid_list: list[tuple[str, str]] = []
     for sym in re.findall(r"\{([^}]+)\}", s):
         if sym.isdigit():
             generic += int(sym)
@@ -334,12 +358,35 @@ def parse_mana_cost(s: str) -> ManaCost:
             generic += 1
         elif sym == "X":
             x_pips += 1
+        elif "/" in sym:
+            # Hybrid mana symbol: {W/U}, {U/R}, {B/G}, etc.
+            # Also handles Phyrexian hybrid {W/P}, {U/P}, etc.
+            parts = sym.split("/")
+            if len(parts) == 2:
+                a, b = parts[0], parts[1]
+                if b == "P":
+                    # Phyrexian hybrid: {W/P} etc. MV=1, can be paid with
+                    # the color or 2 life. Engine simplification: treat as
+                    # generic-1 (same as non-Phyrexian hybrid — life-payment
+                    # path not yet modeled). Store as hybrid for color identity.
+                    color_a = tuple(sorted((a, b)))[0]
+                    color_b = tuple(sorted((a, b)))[1]
+                    hybrid_list.append((color_a, color_b))
+                elif a in COLORS and b in COLORS:
+                    # Standard two-color hybrid: store canonical (alpha) order.
+                    pair = tuple(sorted((a, b)))
+                    hybrid_list.append((pair[0], pair[1]))
+                else:
+                    raise ValueError(f"unsupported mana symbol: {{{sym}}}")
+            else:
+                raise ValueError(f"unsupported mana symbol: {{{sym}}}")
         else:
             raise ValueError(f"unsupported mana symbol: {{{sym}}}")
     return ManaCost(
         generic=generic,
         colored=tuple(sorted(colored.items())),
         x_pips=x_pips,
+        hybrid=tuple(hybrid_list),
     )
 
 
