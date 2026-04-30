@@ -283,17 +283,11 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
             "Lightstall Inquisitor", "{W}", 2, 1,
             keywords={"vigilance"},
         ),
-        # Genemorph Imago {G}{U} 1/3 Insect Druid — flying.
-        # SKIP (wave7): Landfall trigger sets base P/T to 3/3 UEOT
-        # (or 6/6 if ≥6 lands) using a "has base power and toughness
-        # N/N until end of turn" shape.  Neither ``ContinuousModifier``
-        # nor any grammar effect primitive implements a base-PT-setter
-        # UEOT; ``PowerToughnessBonus`` only adds a delta, not a floor.
-        # Only Flying is retained; the Landfall ability is dropped.
-        "Genemorph Imago": make_creature(
-            "Genemorph Imago", "{G}{U}", 1, 3,
-            keywords={"flying"},
-        ),
+        # Genemorph Imago migrated to the grammar:
+        # ``SetBasePTConditionalUntilEOT`` now models the landfall
+        # trigger's "has base power and toughness 3/3 until end of turn;
+        # if you control 6 or more lands, 6/6 instead" shape. Removed
+        # from bespoke — the grammar claims it end-to-end.
         # Duskmourn Overlord cycle (Mistmoors, Floodpits, Boilerbilges)
         # migrated to the parameterized grammar (engine-impending):
         # - ``Impending N—{cost}`` parses via ``_parse_impending_line``

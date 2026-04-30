@@ -10,7 +10,8 @@ Covered creatures:
   2.  Biomechan Engineer — ETB Lander token + activated {8}: draw2 + Robot
   3.  Blade of the Swarm — ETB modal PutPlusOneCounterOnSelf / OwnerPutsTargetWarpedExileCardOnBottomOfLibrary (no warp)
   4.  Seedship Broodtender — ETB SelfMill(3) + activated sorcery reanimate
-  5.  Genemorph Imago — flying only (simplified)
+  5.  Genemorph Imago — migrated to grammar (engine-base-pt); flying +
+      Landfall trigger with SetBasePTConditionalUntilEOT (3/3 or 6/6)
   6.  Broodguard Elite — Insect Knight, warp {X}{G}, enters_with_counters_from_x, leaves trigger
   7.  Icetill Explorer — grants_additional_land_per_turn + graveyard lands + landfall mill
   8.  Possibility Technician — warp {1}{R}, Kavu Artificer, two ETB exile triggers
@@ -59,7 +60,36 @@ def test_seedship_broodtender_claimed_by_parser():
 
 
 def test_genemorph_imago_claimed_by_parser():
+    # Genemorph Imago is now claimed end-to-end by the grammar
+    # (migrated from _BESPOKE_CREATURES in the engine-base-pt branch).
     assert "Genemorph Imago" in _PARSER_PRINTINGS
+
+
+def test_genemorph_imago_not_in_bespoke():
+    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
+    assert "Genemorph Imago" not in _BESPOKE_CREATURES
+
+
+def test_genemorph_imago_has_flying():
+    m = _parser("Genemorph Imago")
+    assert "flying" in m.keywords
+
+
+def test_genemorph_imago_has_landfall_trigger():
+    from mtg_bot.effects.generic import SetBasePTConditionalUntilEOT
+    m = _parser("Genemorph Imago")
+    assert len(m.triggered_abilities) >= 1
+    landfall_effects = [
+        ab.effect for ab in m.triggered_abilities
+        if isinstance(ab.effect, SetBasePTConditionalUntilEOT)
+    ]
+    assert len(landfall_effects) == 1
+    eff = landfall_effects[0]
+    assert eff.default_power == 3
+    assert eff.default_toughness == 3
+    assert eff.land_threshold == 6
+    assert eff.upgrade_power == 6
+    assert eff.upgrade_toughness == 6
 
 
 
