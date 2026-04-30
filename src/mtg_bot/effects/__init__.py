@@ -171,6 +171,8 @@ from mtg_bot.effects.generic import (
     Surveil,
     Pump,
     PutPlusOneCounters,
+    SetBasePTUntilEOT,
+    SetBasePTConditionalUntilEOT,
     SwitchSourcePowerToughnessUEOT,
     Tap,
     TapAndStunUpToOneTargetCreature,

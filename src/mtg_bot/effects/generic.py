@@ -4090,6 +4090,173 @@ class PumpTargetCreatureUntilEOT(Effect):
 
 
 @dataclass(frozen=True)
+class SetBasePTUntilEOT(Effect):
+    """Target creature has base power and toughness N/N until end of turn.
+
+    CR layer 7b: sets the base P/T of the target creature to ``power``
+    / ``toughness``, overriding its printed (or otherwise established)
+    base. The effect is recorded as a layer-7 sublayer-1 registry entry
+    with ``expires_at="cleanup"`` via
+    ``GameState.grant_set_base_pt_ueot``. Any layer-7c additive bonuses
+    (anthems, pump spells, +1/+1 counters) still stack on top.
+
+    Parameterized over ``power`` and ``toughness`` so a single class
+    covers every "has base power and toughness N/N until end of turn"
+    surface: Genemorph Imago's 3/3 / 6/6 arms, and any future printing
+    with a different static value.
+    """
+
+    power: int
+    toughness: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (1, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list["Target"]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature or o.temp_is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple["Target", ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        src = state.resolving_source
+        state.grant_set_base_pt_ueot(
+            source_id=src.id if src is not None else obj.id,
+            target_id=obj.id,
+            power=self.power,
+            toughness=self.toughness,
+            description=(
+                f"{src.printing.name if src else '?'} sets "
+                f"{obj.printing.name} base P/T to "
+                f"{self.power}/{self.toughness} UEOT"
+            ),
+        )
+        state.log.append(
+            f"{obj.printing.name} has base power and toughness "
+            f"{self.power}/{self.toughness} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"target creature has base power and toughness "
+            f"{self.power}/{self.toughness} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
+class SetBasePTConditionalUntilEOT(Effect):
+    """Target creature has base power and toughness N/N until end of turn;
+    if you control ``land_threshold`` or more lands, M/M instead.
+
+    Models Genemorph Imago's landfall trigger:
+      "target creature has base power and toughness 3/3 until end of
+      turn. If you control six or more lands, that creature has base
+      power and toughness 6/6 until end of turn instead."
+
+    At resolve time counts the lands the effect's controller controls.
+    If the count meets or exceeds ``land_threshold``, applies
+    ``upgrade_power``/``upgrade_toughness``; otherwise applies
+    ``default_power``/``default_toughness``. Only ONE registry entry is
+    written (the winning branch) so the most-recent-timestamp 7b rule
+    sees a single clean entry.
+
+    Parameterized over all four stat values and the threshold so a
+    future printing with different numbers claims via the same class.
+    """
+
+    default_power: int
+    default_toughness: int
+    land_threshold: int
+    upgrade_power: int
+    upgrade_toughness: int
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (1, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list["Target"]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature or o.temp_is_creature
+        ]
+
+    def _land_count(self, state: "GameState", controller_id: int) -> int:
+        return sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_land
+        )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple["Target", ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        lands = self._land_count(state, controller_id)
+        if lands >= self.land_threshold:
+            p, t = self.upgrade_power, self.upgrade_toughness
+        else:
+            p, t = self.default_power, self.default_toughness
+        src = state.resolving_source
+        state.grant_set_base_pt_ueot(
+            source_id=src.id if src is not None else obj.id,
+            target_id=obj.id,
+            power=p,
+            toughness=t,
+            description=(
+                f"{src.printing.name if src else '?'} sets "
+                f"{obj.printing.name} base P/T to {p}/{t} UEOT "
+                f"(lands={lands})"
+            ),
+        )
+        state.log.append(
+            f"{obj.printing.name} has base power and toughness "
+            f"{p}/{t} until end of turn "
+            f"(you control {lands} land(s))"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"target creature has base power and toughness "
+            f"{self.default_power}/{self.default_toughness} until end of turn; "
+            f"if you control {self.land_threshold} or more lands, "
+            f"{self.upgrade_power}/{self.upgrade_toughness} instead"
+        )
+
+
+@dataclass(frozen=True)
 class GrantUnblockable(Effect):
     """Unified can't-be-blocked-this-turn primitive driven by ``targets``.
 

@@ -199,6 +199,8 @@ from mtg_bot.effects import (
     PutLoyaltyCounterOnSelf,
     TargetArtifactBecomesCreatureUEOT,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
+    SetBasePTUntilEOT,
+    SetBasePTConditionalUntilEOT,
     SetLifeToHalfStartingRoundedUp,
     SwitchSourcePowerToughnessUEOT,
     CoordinatedClobberingEffect,

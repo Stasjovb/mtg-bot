@@ -2305,6 +2305,49 @@ class GameState:
             description=description,
         )
 
+    def grant_set_base_pt_ueot(
+        self,
+        *,
+        source_id: int,
+        target_id: int,
+        power: int,
+        toughness: int,
+        description: str = "",
+    ) -> "ContinuousEffect":
+        """Helper for the layer-7 sublayer-1 ``"set_base_pt"`` UEOT-grant
+        pattern: "target creature has base power and toughness N/N until
+        end of turn." (CR layer 7b — sets, not adds.)
+
+        Writes a registry entry with ``layer=7``, ``sublayer=1``,
+        ``kind="set_base_pt"``, ``params=(power, toughness)``, and
+        ``expires_at="cleanup"``; AND mirrors the values onto the
+        target's ``temp_base_pt_override`` legacy cache so existing
+        ``effective_power`` / ``effective_toughness`` read sites
+        (including ``_compute_effective_pt``'s layer-7b path) continue
+        to work unchanged.
+
+        ``run_cleanup_step`` clears ``temp_base_pt_override`` along with
+        every other ``temp_*`` field; the registry entry expires at the
+        same point via ``expire_continuous_effects("cleanup")``.
+
+        No-op when no battlefield object has ``id == target_id``.
+        """
+        target = next(
+            (o for o in self.battlefield if o.id == target_id), None,
+        )
+        if target is not None:
+            target.temp_base_pt_override = (power, toughness)
+        return self.add_continuous_effect(
+            source_id=source_id,
+            layer=7,
+            sublayer=1,
+            kind="set_base_pt",
+            target_id=target_id,
+            params=(power, toughness),
+            expires_at="cleanup",
+            description=description,
+        )
+
     def grant_become_creature_ueot(
         self,
         *,

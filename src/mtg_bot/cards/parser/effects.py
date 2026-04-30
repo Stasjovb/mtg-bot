@@ -130,6 +130,8 @@ from mtg_bot.cards.base import (
     SearchLibraryForEquipmentToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     SeedshipImpactEffect,
+    SetBasePTUntilEOT,
+    SetBasePTConditionalUntilEOT,
     TakeExtraTurnAfterThisOne,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
@@ -2122,6 +2124,44 @@ _TARGET_ARTIFACT_BECOMES_CREATURE_UEOT = re.compile(
     r"creature with base power and toughness (\d+)/(\d+)"
     r"(?: and gains (.+))? until end of turn$"
 )
+# "target creature has base power and toughness N/N until end of turn"
+# — CR layer 7b set-base-PT UEOT.  Parameterized over power (group 1)
+# and toughness (group 2) so any future printing with a different
+# static P/T value claims via the same recognizer.  Maps to
+# ``SetBasePTUntilEOT(power=N, toughness=N)``.
+#
+# This regex handles the bare single-sentence form.  The two-sentence
+# conditional form ("… until end of turn. If you control N or more
+# lands, that creature has base power and toughness M/M until end of
+# turn instead.") is handled by ``_SET_BASE_PT_CONDITIONAL_UEOT``
+# below, which must be tried FIRST because the base regex would match
+# the first sentence of the conditional body if the splitter carved it.
+_SET_BASE_PT_UEOT = re.compile(
+    r"^target creature has base power and toughness (\d+)/(\d+) "
+    r"until end of turn$"
+)
+# Two-sentence conditional form: "target creature has base power and
+# toughness N/N until end of turn. If you control M or more lands,
+# that creature has base power and toughness P/Q until end of turn
+# instead." — Genemorph Imago's landfall trigger.
+#
+# Parameterized over all four stat values (groups 1–4) and the land
+# threshold (group 5, spelled-out or digit) so any future printing with
+# different numbers claims without new code.  Maps to
+# ``SetBasePTConditionalUntilEOT(default_power, default_toughness,
+#                                  land_threshold,
+#                                  upgrade_power, upgrade_toughness)``.
+#
+# Must be tried BEFORE ``_SET_BASE_PT_UEOT`` in ``_parse_effect`` so
+# the more-specific two-sentence form wins over a bare single-sentence
+# match on the first clause.
+_SET_BASE_PT_CONDITIONAL_UEOT = re.compile(
+    r"^target creature has base power and toughness (\d+)/(\d+) "
+    r"until end of turn\. "
+    r"If you control (\d+|" + _SMALL_CARDINAL_PATTERN + r") or more lands, "
+    r"that creature has base power and toughness (\d+)/(\d+) "
+    r"until end of turn instead$"
+)
 # ETB exile-until-source-leaves family — Oblivion Ring / Banishing
 # Light shape.  Two regexes cover the two engine classes:
 #
@@ -3714,6 +3754,34 @@ def _parse_effect(phrase: str) -> Effect | None:
         # in multiplayer (per the engine class docstring). Amount
         # accepts digits and spelled-out small cardinals.
         return EachOpponentMillsCards(amount=_parse_amount(m.group(1)))
+    # ``target creature has base power and toughness N/N until end of
+    # turn. If you control M or more lands, that creature has base
+    # power and toughness P/Q until end of turn instead.`` — Genemorph
+    # Imago's landfall trigger.  Tried BEFORE the bare single-sentence
+    # ``_SET_BASE_PT_UEOT`` recognizer so the more-specific conditional
+    # form wins when both could match the leading clause.
+    m = _SET_BASE_PT_CONDITIONAL_UEOT.match(phrase)
+    if m is not None:
+        default_p = int(m.group(1))
+        default_t = int(m.group(2))
+        threshold = _parse_amount(m.group(3))
+        upgrade_p = int(m.group(4))
+        upgrade_t = int(m.group(5))
+        return SetBasePTConditionalUntilEOT(
+            default_power=default_p,
+            default_toughness=default_t,
+            land_threshold=threshold,
+            upgrade_power=upgrade_p,
+            upgrade_toughness=upgrade_t,
+        )
+    # ``target creature has base power and toughness N/N until end of
+    # turn`` — bare single-sentence form (layer 7b UEOT set).
+    m = _SET_BASE_PT_UEOT.match(phrase)
+    if m is not None:
+        return SetBasePTUntilEOT(
+            power=int(m.group(1)),
+            toughness=int(m.group(2)),
+        )
     m = _TARGET_ARTIFACT_BECOMES_CREATURE_UEOT.match(phrase)
     if m is not None:
         # ``up to one other target artifact you control becomes an

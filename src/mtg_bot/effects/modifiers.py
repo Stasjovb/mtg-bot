@@ -239,6 +239,28 @@ class PowerToughnessBonus(LayerPayload):
 
 
 @dataclass(frozen=True)
+class SetBasePowerToughness(LayerPayload):
+    """CR 613 layer 7b — set base power and toughness to specific values.
+
+    Models "target creature has base power and toughness N/N until end
+    of turn" (Genemorph Imago's landfall trigger, Lignify, Clone-style
+    copy-set-PT effects). Distinct from ``PowerToughnessBonus`` (layer
+    7c, which is additive): this payload replaces the base P/T entirely.
+    The most-recent-timestamp entry wins within sublayer 7b (CR 613.7e).
+
+    The UEOT resolve path records this via
+    ``GameState.grant_set_base_pt_ueot`` which writes a registry entry
+    with ``expires_at="cleanup"`` and mirrors the values onto the
+    target's ``temp_base_pt_override`` legacy cache so all existing
+    ``effective_power`` / ``effective_toughness`` read sites continue
+    to work unchanged.
+    """
+
+    power: int
+    toughness: int
+
+
+@dataclass(frozen=True)
 class AddSubtype(LayerPayload):
     """CR 613 layer 4 — add a permanent / creature subtype.
 
@@ -603,6 +625,7 @@ __all__ = [
     "GrantKeyword",
     "RemoveKeyword",
     "PowerToughnessBonus",
+    "SetBasePowerToughness",
     "AddSubtype",
     "ContinuousModifier",
     "ReplacementEffect",
