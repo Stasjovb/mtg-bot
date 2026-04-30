@@ -6,7 +6,7 @@ Covers:
   (``MultiplyCount``, ``AddToCount``, ``AddInstances``, ``Replace``,
   ``Prevent``).
 - :class:`EventPattern` data-class wiring.
-- :class:`ContinuousEffect` / :class:`ReplacementEffect` dataclass
+- :class:`ContinuousModifier` / :class:`ReplacementEffect` dataclass
   shapes survive frozen-equality and field-default expectations.
 - :func:`dispatch_replacement` returns the original payload when no
   replacement applies (0 candidates).
@@ -31,7 +31,7 @@ from mtg_bot.effects.modifiers import (
     AddInstances,
     AddSubtype,
     AddToCount,
-    ContinuousEffect,
+    ContinuousModifier,
     EventPattern,
     EventTransform,
     GrantKeyword,
@@ -134,7 +134,7 @@ def test_replacement_effect_default_scope_filter_none():
 
 
 def test_continuous_effect_minimal_shape():
-    ce = ContinuousEffect(
+    ce = ContinuousModifier(
         layer=6,
         subject_filter=IsCreature(),
         payload=GrantKeyword("flying"),

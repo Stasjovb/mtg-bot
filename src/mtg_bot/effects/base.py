@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from mtg_bot.cards import CostReduction, ManaCost
     from mtg_bot.effects.conditions import Condition
     from mtg_bot.effects.modifiers import (
-        ContinuousEffect, ReplacementEffect,
+        ContinuousModifier, ReplacementEffect,
     )
     from mtg_bot.effects.targets import TargetSlot
     from mtg_bot.game import GameState
@@ -574,13 +574,18 @@ class StaticAbility:
     # ``ReplacementEffect`` declarations carried here). Unused
     # today — empty for every existing card.
     replacement_effect: "ReplacementEffect | None" = None
-    # Optional CR 613 continuous effect carried by this static. The
-    # PR-D continuous-effect dispatcher walks every active
+    # Optional CR 613 continuous-effect declaration carried by this
+    # static. Renamed from the original ``ContinuousEffect`` to
+    # ``ContinuousModifier`` to avoid colliding with the pre-existing
+    # ``mtg_bot.game.ContinuousEffect`` (the runtime registry-entry
+    # shape — every active layered effect lives in
+    # ``GameState.continuous_effects`` as one of those). The PR-D
+    # continuous-effect dispatcher walks every active
     # ``StaticAbility`` with this slot populated and folds the
-    # ``ContinuousEffect.payload`` into the matching object's
+    # ``ContinuousModifier.payload`` into the matching object's
     # effective state at the declared layer. Unused today — empty
     # for every existing card.
-    continuous_effect: "ContinuousEffect | None" = None
+    continuous_effect: "ContinuousModifier | None" = None
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""

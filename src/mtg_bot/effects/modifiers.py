@@ -1,4 +1,4 @@
-"""Modifier-grammar primitives — :class:`ContinuousEffect` (CR 613)
+"""Modifier-grammar primitives — :class:`ContinuousModifier` (CR 613)
 and :class:`ReplacementEffect` (CR 614).
 
 This module is the architectural pillar that replaces the per-card
@@ -10,14 +10,14 @@ boolean-flag anti-pattern (``is_token_doubler``,
 ``unblockable_if_two_spells_cast_this_turn``, …) and the literal-line
 recognizers in ``printing_keywords.py`` / ``equipment_builder.py`` /
 ``statics.py`` anthem family. Decomposition: a modifier is either a
-:class:`ContinuousEffect` (CR 613 layer system — P/T mod, keyword
+:class:`ContinuousModifier` (CR 613 layer system — P/T mod, keyword
 grant/remove, type add) or a :class:`ReplacementEffect` (CR 614 —
 intercept events; transforms ``MultiplyCount(×N)``, ``AddToCount(+N)``,
 ``AddInstances(+N)``, ``Replace(other_event)``, ``Prevent``).
 
 PR A (this module's birth) lands the type definitions for both
 families plus the :func:`dispatch_replacement` infrastructure for
-``ReplacementEffect``. The CR-613 dispatcher for ``ContinuousEffect``
+``ReplacementEffect``. The CR-613 dispatcher for ``ContinuousModifier``
 lands in PR D when the continuous-effect family migrates.
 """
 
@@ -185,7 +185,7 @@ class EventPattern:
 
 
 class LayerPayload(ABC):
-    """A description of what a :class:`ContinuousEffect` does to each
+    """A description of what a :class:`ContinuousModifier` does to each
     matching object.
 
     Concrete payloads (``GrantKeyword``, ``RemoveKeyword``,
@@ -203,7 +203,7 @@ class GrantKeyword(LayerPayload):
     Models the Illvoi-Infiltrator-shape "while [condition], this
     creature has unblockable" and the anthem-family "creatures you
     control have flying" — same payload, different scope_filter on
-    the wrapping :class:`ContinuousEffect`.
+    the wrapping :class:`ContinuousModifier`.
     """
 
     keyword: str
@@ -215,7 +215,7 @@ class RemoveKeyword(LayerPayload):
 
     Models the Mechan-Shieldmate-shape "while an artifact entered
     this turn, this creature loses defender" — the
-    ``ContinuousEffect`` payload removes the keyword from the
+    ``ContinuousModifier`` payload removes the keyword from the
     matching object's effective keyword set, the same shape as the
     legacy ``attack_bypass_if_artifact_entered_this_turn`` flag
     expressed structurally.
@@ -252,19 +252,19 @@ class AddSubtype(LayerPayload):
 
 
 # ────────────────────────────────────────────────────────────────────
-# ContinuousEffect / ReplacementEffect — top-level modifier types
+# ContinuousModifier / ReplacementEffect — top-level modifier types
 # ────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class ContinuousEffect:
+class ContinuousModifier:
     """A CR 613 continuous effect.
 
     While the source is on the battlefield (and the wrapping
     :class:`StaticAbility`'s condition is satisfied, when present),
     apply ``payload`` to every object satisfying ``subject_filter`` at
     layer ``layer``. The CR 613 dispatcher (PR D) walks every active
-    ``ContinuousEffect`` per object query and folds the contributions
+    ``ContinuousModifier`` per object query and folds the contributions
     in layer order.
     """
 
@@ -561,7 +561,7 @@ __all__ = [
     "RemoveKeyword",
     "PowerToughnessBonus",
     "AddSubtype",
-    "ContinuousEffect",
+    "ContinuousModifier",
     "ReplacementEffect",
     "dispatch_replacement",
 ]

@@ -136,13 +136,13 @@ def test_replacement_effect_slot_holds_value():
 
 
 def test_continuous_effect_slot_holds_value():
-    """The slot accepts a ``ContinuousEffect`` instance and exposes
+    """The slot accepts a ``ContinuousModifier`` instance and exposes
     it for the PR-D continuous-effect dispatcher to discover."""
     from mtg_bot.effects.modifiers import (
-        ContinuousEffect, GrantKeyword,
+        ContinuousModifier, GrantKeyword,
     )
 
-    ce = ContinuousEffect(
+    ce = ContinuousModifier(
         layer=6,
         subject_filter=IsArtifact(),
         payload=GrantKeyword("haste"),
