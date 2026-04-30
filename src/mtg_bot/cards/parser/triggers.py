@@ -441,6 +441,15 @@ _SURVIVAL_GATE_PREFIX = "if this creature is tapped, "
 _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "your end step": (Event.BEGINNING_OF_END_STEP, Controlled(YOU)),
     "each end step": (Event.BEGINNING_OF_END_STEP, Always()),
+    # ``At the beginning of your upkeep`` — Thrumming Hivepool's
+    # two-Sliver-token minting trigger. Surface form pairs the
+    # ``BEGINNING_OF_UPKEEP`` event with the ``Controlled(YOU)``
+    # controller gate (fires only during the controller's own upkeep).
+    # Mirrors the ``your end step`` / ``each X`` precedent: ``your X``
+    # reads as ``Controlled(YOU)``; an ``each upkeep`` variant would map
+    # to ``Always()``, but no card today carries that form so only the
+    # controller-gated entry is wired.
+    "your upkeep": (Event.BEGINNING_OF_UPKEEP, Controlled(YOU)),
     # ``At the beginning of combat on your turn`` — Molecular Modifier's
     # pump-and-grant trigger and Ouroboroid's mass-counter trigger.
     # Surface form pairs the ``BEGINNING_OF_COMBAT`` event with the

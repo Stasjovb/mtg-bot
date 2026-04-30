@@ -218,6 +218,12 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 _ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
     "creatures you control": StaticScope.CREATURES_YOU_CONTROL,
     "other creatures you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    # Thrumming Hivepool — ``Slivers you control have double strike and
+    # haste.`` The engine's ``StaticScope.SLIVERS_YOU_CONTROL``
+    # ``applies_to`` walk admits only permanents whose effective subtypes
+    # include ``"Sliver"`` (checked via ``effective_subtypes``), so the
+    # anthem correctly grants keywords through layer-4 subtype grants.
+    "slivers you control": StaticScope.SLIVERS_YOU_CONTROL,
     # Lecture Hall (DSK Room half) prints ``Other permanents you control
     # have hexproof.`` — strictly broader than "Other creatures" (also
     # affects non-creature permanents). The engine's ``applies_to``
@@ -253,7 +259,8 @@ _ANTHEM_SUBJECT_RE = (
     r"(?P<subject>[Cc]reatures you control"
     r"|[Oo]ther creatures you control"
     r"|[Oo]ther permanents you control"
-    r"|[Oo]ther tapped legendary creatures you control)"
+    r"|[Oo]ther tapped legendary creatures you control"
+    r"|[Ss]livers you control)"
 )
 _ANTHEM_TURN_RIDER_RE = r"(?P<turn_rider>During your turn, )?"
 
@@ -340,10 +347,23 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     granted: frozenset[str] = frozenset()
     keyword = m.group("keyword")
     if keyword is not None:
-        engine_keyword = _KEYWORD_LINES.get(keyword.strip().capitalize())
-        if engine_keyword is None:
-            return None
-        granted = frozenset({engine_keyword})
+        # The keyword tail may list multiple evergreens joined by " and "
+        # (e.g. Thrumming Hivepool's ``Slivers you control have double
+        # strike and haste.``). Split on " and ", look up each piece, and
+        # reject if any piece isn't a recognized keyword. The first piece
+        # in a multi-keyword group is already sentence-case (capital first
+        # letter) because it follows " have "; each subsequent piece is
+        # lowercase mid-sentence, so we capitalize before lookup — same
+        # normalization ``_parse_keyword_line`` applies to comma-separated
+        # keyword lines.
+        pieces = [kw.strip() for kw in keyword.strip().split(" and ")]
+        engine_keywords: set[str] = set()
+        for piece in pieces:
+            ek = _KEYWORD_LINES.get(piece.capitalize())
+            if ek is None:
+                return None
+            engine_keywords.add(ek)
+        granted = frozenset(engine_keywords)
     return StaticAbility(
         scope=scope,
         power_bonus=power_bonus,

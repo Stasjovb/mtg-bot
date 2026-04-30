@@ -95,9 +95,27 @@ post-reminder-strip oracle line:
   ``ActivationCost(mana=..., mana_str=...)`` without
   ``sacrifice_self``).
 
-Thrumming Hivepool still falls through — its oracle uses shapes
-(``Affinity for Slivers``, SLIVERS_YOU_CONTROL anthem) the parser
-doesn't yet model.
+Two additional cards are claimed via the expanded unified grammar
+(migrated from ``_BESPOKE_ARTIFACT_BUILDERS`` in this round):
+
+* **Thrumming Hivepool** — ``Affinity for Slivers`` keyword line
+  (parsed by the new ``_parse_affinity_line`` recognizer in
+  ``cost_reduction.py``) → ``CostReduction(amount=1, condition=
+  PerControlled(HasSubtype("Sliver")))``. ``Slivers you control have
+  double strike and haste.`` anthem (new ``"slivers you control"``
+  entry in ``_ANTHEM_SUBJECT_SCOPES`` in ``statics.py`` with
+  multi-keyword " and "-split logic) → ``StaticAbility(scope=
+  SLIVERS_YOU_CONTROL, granted_keywords={"double strike","haste"})``.
+  ``At the beginning of your upkeep, create two 1/1 colorless Sliver
+  creature tokens.`` trigger (new ``"your upkeep"`` entry in
+  ``_AT_BEGINNING_OF_PHRASES`` in ``triggers.py``).
+* **Found Footage** — ``You may look at face-down creatures your
+  opponents control any time.`` (new ``_LITERAL_FLAG_LINES`` dispatch
+  setting ``looks_at_opponents_face_down_creatures=True`` on
+  ``make_artifact``). ``{2}, Sacrifice this artifact: Surveil 2, then
+  draw a card.`` (unified ``_parse_clause`` activated-ability grammar).
+  The Clue subtype is extracted from the Scryfall type-line via the
+  new ``artifact_subtype`` step in ``_build_artifact_printing``.
 
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
@@ -134,6 +152,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.cost_reduction import _parse_affinity_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -142,6 +161,27 @@ from mtg_bot.effects.conditions import PerControlled
 from mtg_bot.effects.generic import CreateToken, Surveil
 from mtg_bot.effects.object_predicates import HasSubtype
 from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
+
+
+# Literal oracle lines that set a printing-level boolean flag rather
+# than producing an ability. ``_LITERAL_FLAG_LINES`` maps the verbatim
+# post-strip oracle line to the flag name it sets on the ``make_artifact``
+# call. The artifact builder consults this table FIRST — before the
+# unified ``_parse_clause`` — so the line is consumed cleanly and doesn't
+# fall through to the "unrecognized → skip card" path.
+#
+# Today's entries:
+#
+# * Found Footage — ``You may look at face-down creatures your opponents
+#   control any time.`` → ``looks_at_opponents_face_down_creatures=True``.
+#   The engine doesn't model face-down hidden information (a controller
+#   can already inspect any face-down GameObject), so the flag is purely
+#   informational for fidelity; no engine consequence today.
+_LITERAL_FLAG_LINES: dict[str, str] = {
+    "You may look at face-down creatures your opponents control any time.": (
+        "looks_at_opponents_face_down_creatures"
+    ),
+}
 
 
 # Literal oracle lines whose bespoke effect class lives in
@@ -568,13 +608,16 @@ def _build_thrumming_hivepool() -> CardPrinting:
 
 
 # Name-keyed bespoke dispatch for artifacts whose oracle text uses
-# shapes (affinity cost reductions, anthem statics) the unified
-# ``_parse_clause`` grammar doesn't yet cover. Each factory mirrors
+# shapes the unified ``_parse_clause`` grammar and the per-line flag /
+# cost-reduction dispatchers don't yet cover. Each factory mirrors
 # the corresponding ``make_artifact`` call in ``eoe_spells.py`` exactly.
-_BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    "Thrumming Hivepool": _build_thrumming_hivepool,
-    "Found Footage": _build_found_footage,
-}
+# Thrumming Hivepool and Found Footage were migrated to the unified
+# clause grammar (``_parse_affinity_line`` for the Affinity rider,
+# ``_ANTHEM_SUBJECT_SCOPES["slivers you control"]`` for the Sliver
+# anthem, ``"your upkeep"`` in ``_AT_BEGINNING_OF_PHRASES`` for the
+# upkeep token trigger, and ``_LITERAL_FLAG_LINES`` for the
+# looks-at-face-down-creatures static).
+_BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {}
 
 
 def _build_artifact_printing(card: dict) -> CardPrinting | None:
@@ -616,24 +659,52 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     if "Spacecraft" in subtypes:
         return None
 
+    # Extract the non-Equipment, non-Spacecraft subtype for ``make_artifact``
+    # (e.g. ``"Clue"`` from ``"Artifact — Clue"``). Creature, Equipment, and
+    # Spacecraft subtypes are already gated out above; any remaining subtype
+    # is a pure-artifact subtype like Clue or Food.
+    artifact_subtype: str | None = subtypes[0] if subtypes else None
+
     text = card.get("oracle_text", "")
     keywords: set[str] = set()
     triggers: list[TriggeredAbility] = []
     activated: list[ActivatedAbility] = []
     statics: list[StaticAbility] = []
+    cost_reductions: list[CostReduction] = []
+    looks_at_face_down: bool = False
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
             continue
+        # Printing-level flag dispatch — lines that set a boolean flag on
+        # ``make_artifact`` rather than producing an ability. Tried first
+        # so these lines are consumed before the unified clause grammar.
+        flag_name = _LITERAL_FLAG_LINES.get(line)
+        if flag_name is not None:
+            if flag_name == "looks_at_opponents_face_down_creatures":
+                looks_at_face_down = True
+            continue
+        # Affinity keyword line dispatch — ``Affinity for <subtype>``
+        # (reminder text already stripped). Produces a
+        # ``CostReduction(amount=1, condition=PerControlled(HasSubtype
+        # ("<subtype>")))`` and is consumed here before ``_parse_clause``
+        # (which doesn't know about cost-reduction lines). Tried after the
+        # flag dispatch so a future card whose oracle somehow matched both
+        # would take the flag path first (no such card exists today).
+        affinity_reduction = _parse_affinity_line(line)
+        if affinity_reduction is not None:
+            cost_reductions.append(affinity_reduction)
+            continue
         # Literal-line dispatch for bespoke single-card effect bodies
         # (Memorial Vault, Requiem Monolith, All-Fates Scroll, The
-        # Endstone). Tried FIRST so the bespoke effect class survives —
-        # the unified ``_parse_clause`` would either reject the body
-        # (no matching primitive) or, in pathological cases, claim a
-        # near-miss primitive that doesn't match the static side. Same
-        # pattern as ``equipment_builder``'s Hylderblade / Robe of
-        # Stars literal match.
+        # Endstone). Tried FIRST (relative to the unified clause grammar)
+        # so the bespoke effect class survives — the unified
+        # ``_parse_clause`` would either reject the body (no matching
+        # primitive) or, in pathological cases, claim a near-miss
+        # primitive that doesn't match the static side. Same pattern as
+        # ``equipment_builder``'s Hylderblade / Robe of Stars literal
+        # match.
         literal_activated_factory = _LITERAL_ACTIVATED_LINES.get(line)
         if literal_activated_factory is not None:
             activated.append(literal_activated_factory())
@@ -678,8 +749,11 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         name=card["name"],
         cost=card["mana_cost"],
         legendary=("Legendary" in supertypes),
+        subtype=artifact_subtype,
         keywords=frozenset(keywords),
         triggered_abilities=tuple(triggers),
         activated_abilities=tuple(activated),
         static_abilities=tuple(statics),
+        cost_reductions=tuple(cost_reductions),
+        looks_at_opponents_face_down_creatures=looks_at_face_down,
     )

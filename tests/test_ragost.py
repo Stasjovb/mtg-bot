@@ -89,9 +89,14 @@ def test_ragost_static_adds_food_subtype_to_your_artifacts():
 
 
 def test_ragost_static_does_not_affect_opponents_artifacts():
+    # Use a non-Food artifact (All-Fates Scroll) so the baseline has no
+    # Food subtype — Ragost grants Food only to YOUR artifacts, not
+    # opponents'. Nutrient Block is now an "Artifact — Food" in its base
+    # printing so it's unsuitable for this "Food absent without Ragost"
+    # assertion.
     state = _new_state()
     _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
-    opp_art = _put(state, _PRINTINGS["Nutrient Block"], owner_id=1)
+    opp_art = _put(state, _PRINTINGS["All-Fates Scroll"], owner_id=1)
     subs = effective_subtypes(state, opp_art)
     assert "Food" not in subs
 
@@ -114,9 +119,14 @@ def test_ragost_static_grants_sac_for_3_life_ability():
 
 
 def test_ragost_removed_retracts_food_and_ability_grants():
+    # Use All-Fates Scroll (no Food subtype in base printing) so the
+    # "Food absent after Ragost leaves" assertion is meaningful. Nutrient
+    # Block is now an "Artifact — Food" in its base printing, so its
+    # effective_subtypes would still contain Food after Ragost is removed
+    # (from the base printing), making it unsuitable here.
     state = _new_state()
     ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
-    art = _put(state, _PRINTINGS["Nutrient Block"])
+    art = _put(state, _PRINTINGS["All-Fates Scroll"])
     assert "Food" in effective_subtypes(state, art)
     state.battlefield.remove(ragost)
     assert "Food" not in effective_subtypes(state, art)
@@ -260,13 +270,17 @@ def test_effective_activated_abilities_no_ragost_returns_printed_only():
 
 def test_ragost_sac_food_legal_when_ragost_gives_food_subtype():
     """Confirm legality via Ragost's granted Food subtype on an
-    artifact that's not printed as Food."""
+    artifact that's not printed as Food. Uses All-Fates Scroll (no Food
+    subtype in its base printing) so this verifies Ragost's dynamic Food
+    grant — not the base printing's type line."""
     state = _new_state()
     ragost = _put(state, _PRINTINGS["Ragost, Deft Gastronaut"])
     ragost.summoning_sick = False
     _put(state, BASIC_LANDS["Mountain"])
-    # Printed-non-Food artifact now counts as Food.
-    _put(state, _PRINTINGS["Nutrient Block"])
+    # All-Fates Scroll has no Food subtype in its base printing;
+    # Ragost's static grants Food dynamically so it becomes a legal
+    # sacrifice target for Ragost's "{1}, {T}, Sacrifice a Food" ability.
+    _put(state, _PRINTINGS["All-Fates Scroll"])
     actions = legal_moves(state)
     assert any(
         isinstance(a, ActivateAbility) and a.source_id == ragost.id

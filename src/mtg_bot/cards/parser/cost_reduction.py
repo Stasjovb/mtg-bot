@@ -23,11 +23,15 @@ engine's ``apply_cost_reductions`` — the unit ``amount=1`` is
 multiplied by ``condition.multiplier`` (the count of distinctly named
 lands the controller controls).
 
+``Affinity for <type>`` keyword lines are recognized by the
+``_parse_affinity_line`` function at the bottom of this module.
+Reminder text is stripped before that function is called, so the
+bare ``Affinity for Slivers`` form (not the parenthesized reminder)
+reaches the recognizer. Produces ``CostReduction(amount=1,
+condition=PerControlled(HasSubtype("<type>")))`` per CR 702.41.
+
 Out of scope this slice:
 
-* ``Affinity for <type> (This spell costs {1} less to cast for each
-  …)`` — Thrumming Hivepool. Different surface shape (the rider is
-  inside the parenthesized reminder of the Affinity keyword).
 * Rider-only conditions used by activated abilities (Thaumaton
   Torpedo's ``This ability costs {3} less to activate if …``) —
   those live on ``ActivatedAbility.cost_reductions``, parsed
@@ -57,6 +61,7 @@ from mtg_bot.effects.conditions import (
     VoidActiveCondition,
 )
 from mtg_bot.effects.object_predicates import (
+    HasSubtype,
     IsArtifact,
     IsBlocking,
     IsCreature,
@@ -293,4 +298,57 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
         return None
     return CostReduction(
         amount=int(m.group(1)), condition=condition,
+    )
+
+
+# ``Affinity for <subtype>`` keyword line (after reminder text is
+# stripped). Scryfall prints Affinity as a standalone keyword word line
+# — ``Affinity for Slivers`` — with the per-type reminder text in
+# parentheses. After ``_strip_reminder_text`` removes the parenthetical,
+# the bare ``Affinity for Slivers`` form reaches the per-line parsers.
+#
+# Maps to ``CostReduction(amount=1, condition=PerControlled(HasSubtype
+# ("<subtype>")))`` — the engine's ``apply_cost_reductions`` multiplies
+# the unit amount by ``condition.multiplier`` (the count of permanents
+# matching the subtype that the caster controls at cast time), giving
+# ``{1}`` off per matching permanent in play per CR 702.41.
+#
+# The subtype capture is open-ended (``(.+)``). Only subtypes that
+# ``HasSubtype`` can test at runtime are meaningful; an unrecognized
+# subtype still produces a structurally valid ``CostReduction`` whose
+# ``PerControlled(HasSubtype("<unrecognized>"))`` condition will always
+# evaluate to zero (no permanents have an unknown subtype), so the
+# printing degrades gracefully rather than hard-failing.
+_AFFINITY_FOR_LINE = re.compile(r"^Affinity for (.+)$")
+
+
+def _parse_affinity_line(line: str) -> CostReduction | None:
+    """Return a ``CostReduction`` for an ``Affinity for <subtype>``
+    keyword line (reminder text already stripped), or ``None`` if
+    the line doesn't match.
+
+    Produces ``CostReduction(amount=1, condition=PerControlled(
+    HasSubtype("<subtype>")))`` — the same structural shape the
+    Thrumming Hivepool bespoke factory hard-codes for
+    ``Affinity for Slivers``. The engine's
+    ``apply_cost_reductions`` multiplies the unit amount by the
+    ``PerControlled`` multiplier (the count of matching permanents
+    the caster controls at cast time), giving a per-permanent
+    discount per CR 702.41.
+    """
+    m = _AFFINITY_FOR_LINE.match(line.strip())
+    if m is None:
+        return None
+    subtype = m.group(1).strip().rstrip("s")  # normalize plural → singular
+    # Scryfall prints the subtype in plural form: ``Affinity for Slivers``.
+    # ``HasSubtype`` tests against the singular subtype name (``"Sliver"``),
+    # so we strip a trailing ``s`` from the captured form. This heuristic
+    # is correct for all current Affinity printings (Slivers → Sliver,
+    # Artifacts → Artifact); a future printing whose plural doesn't strip
+    # cleanly to the singular (e.g. ``Wolves`` → ``Wolve`` vs. ``Wolf``)
+    # would evaluate to zero at runtime (no permanents with subtype
+    # ``"Wolve"``), degrading gracefully rather than hard-failing.
+    return CostReduction(
+        amount=1,
+        condition=PerControlled(HasSubtype(subtype)),
     )

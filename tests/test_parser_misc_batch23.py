@@ -184,14 +184,19 @@ def test_thrumming_hivepool_has_anthem_static():
     assert "haste" in sa.granted_keywords
 
 
-def test_thrumming_hivepool_unknown_name_falls_through():
-    """Non-bespoke artifact with Sliver oracle falls through to unified
-    grammar and is silently skipped (affinity isn't in the grammar)."""
+def test_thrumming_hivepool_oracle_shape_is_grammar_claimed():
+    """Any artifact with Thrumming Hivepool's oracle shape is now claimed
+    by the unified grammar — Affinity-for-Slivers, the Sliver keyword
+    anthem, and the upkeep token trigger are all parameterized recognizers.
+    A different name doesn't matter; the shape is what drives the parse."""
     card = _artifact_card(
         "Unknown Sliver Artifact", "{6}", _THRUMMING_ORACLE
     )
     result = _build_artifact_printing(card)
-    assert result is None
+    assert result is not None
+    assert len(result.cost_reductions) == 1
+    assert len(result.static_abilities) == 1
+    assert len(result.triggered_abilities) == 1
 
 
 # ---------------------------------------------------------------------------
