@@ -2030,6 +2030,15 @@ class GameState:
     # "put a +1/+1 counter on this creature" can reach the source without
     # having to thread it through every resolve() signature.
     resolving_source: Optional[GameObject] = None
+    # Controller id pinned for the current legal-targets enumeration.
+    # Set transiently by ``Effect._enumerate_for_filter`` (and by
+    # any peer call that consults a ``TargetFilter``) so controller-
+    # aware atoms (``ControlledByOpponent`` / ``ControlledByYou``)
+    # can compare an object's ``controller_id`` against the spell /
+    # ability's controller without threading the id through every
+    # ``ObjectPredicate.test`` signature. Cleared back to ``None``
+    # after the enumeration unwinds.
+    resolving_controller_id: Optional[int] = None
     # Value of {X} for the currently-resolving spell or ability. Mirrors
     # StackItem.x_value during resolution so effects can read X without
     # threading it through every resolve() signature. 0 when no X spell
@@ -2632,6 +2641,7 @@ class GameState:
             once_per_turn_fired=set(self.once_per_turn_fired),
             delayed_triggers=[dict(d) for d in self.delayed_triggers],
             resolving_source=new_resolving_source,
+            resolving_controller_id=self.resolving_controller_id,
             resolving_x_value=self.resolving_x_value,
             resolving_kicked=self.resolving_kicked,
             resolving_modes=self.resolving_modes,

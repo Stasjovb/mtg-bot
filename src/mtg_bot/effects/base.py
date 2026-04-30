@@ -103,36 +103,48 @@ class Effect:
         ``target_filter``. Pure helper — used by both
         :meth:`legal_targets` and per-slot enumeration in multi-slot
         new-shape effects.
+
+        Pins ``state.resolving_controller_id`` to ``controller_id``
+        for the duration of the walk so controller-aware atoms
+        (``ControlledByOpponent`` / ``ControlledByYou``) can resolve
+        "you" / "an opponent" without the predicate test signature
+        having to grow. Restores the prior value on exit so nested
+        enumerations don't see a stale id.
         """
         from mtg_bot.game import is_creature_now
 
-        results: list[Target] = []
-        for o in state.battlefield:
-            if not target_filter.test(o, state):
-                continue
-            # Pick the engine "kind" tag for the object. Creatures use
-            # the legal-now check (``is_creature_now``) so impending-
-            # suppressed Overlords aren't valid creature targets even
-            # if their printed type carries Creature.
-            if is_creature_now(o):
-                results.append(("creature", o.id))
-            elif "Planeswalker" in o.printing.card_types:
-                results.append(("planeswalker", o.id))
-            elif "Battle" in o.printing.card_types:
-                results.append(("battle", o.id))
-            else:
-                results.append(("permanent", o.id))
-        # Players are not on the battlefield list — walk them
-        # separately so an "any target" filter (which accepts
-        # IsPlayer) picks them up. Filters that don't admit players
-        # (``IsCreature`` etc.) reject every player via their own
-        # ``test`` and the loop is a cheap no-op.
-        for p in state.players:
-            if p.has_lost:
-                continue
-            if target_filter.test(p, state):
-                results.append(("player", p.id))
-        return results
+        prior_controller = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            results: list[Target] = []
+            for o in state.battlefield:
+                if not target_filter.test(o, state):
+                    continue
+                # Pick the engine "kind" tag for the object. Creatures
+                # use the legal-now check (``is_creature_now``) so
+                # impending-suppressed Overlords aren't valid creature
+                # targets even if their printed type carries Creature.
+                if is_creature_now(o):
+                    results.append(("creature", o.id))
+                elif "Planeswalker" in o.printing.card_types:
+                    results.append(("planeswalker", o.id))
+                elif "Battle" in o.printing.card_types:
+                    results.append(("battle", o.id))
+                else:
+                    results.append(("permanent", o.id))
+            # Players are not on the battlefield list — walk them
+            # separately so an "any target" filter (which accepts
+            # IsPlayer) picks them up. Filters that don't admit
+            # players (``IsCreature`` etc.) reject every player via
+            # their own ``test`` and the loop is a cheap no-op.
+            for p in state.players:
+                if p.has_lost:
+                    continue
+                if target_filter.test(p, state):
+                    results.append(("player", p.id))
+            return results
+        finally:
+            state.resolving_controller_id = prior_controller
 
     def target_count_range(self) -> tuple[int, int]:
         """Return (min, max) number of TARGETS (not slots).

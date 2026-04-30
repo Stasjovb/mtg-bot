@@ -47,6 +47,7 @@ from mtg_bot.effects import (
     ConditionalOnTappedCreatures,
     CounterTargetSpell,
     CreateToken,
+    DealDamage,
     DealDamageAnyTarget,
     DealDamageEachOpponent,
     DealDamageEqualToSourcePowerAnyTarget,

@@ -91,12 +91,25 @@ class IsLand(ObjectPredicate):
 
 @dataclass(frozen=True)
 class IsCreature(ObjectPredicate):
-    """The object is a creature."""
+    """The object is a creature, in the rules-correct sense.
+
+    Reads through :func:`mtg_bot.game.is_creature_now` so type-changing
+    runtime state is honoured: an Impending-suppressed Overlord whose
+    printed type line still reads "Creature" evaluates False until the
+    last time counter is removed (CR 702.176); a face-down permanent
+    is True regardless of the printed type (CR 701.34); a Spacecraft
+    above its tier-threshold is True; a manlanded land is True for
+    the activation duration. Mirrors the
+    :class:`HasSubtype` precedent — predicates should reflect the
+    object's effective state, not just its printing.
+    """
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Creature" in obj.printing.card_types
+        from mtg_bot.game import is_creature_now
+
+        return is_creature_now(obj)
 
 
 @dataclass(frozen=True)
@@ -233,6 +246,58 @@ class IsTapped(ObjectPredicate):
 
     def test(self, obj, state):
         return bool(getattr(obj, "tapped", False))
+
+
+@dataclass(frozen=True)
+class ControlledByOpponent(ObjectPredicate):
+    """The object's controller is NOT the current target-selecting
+    controller.
+
+    Models the "an opponent controls" qualifier on filters like
+    "target creature an opponent controls". The "current target-
+    selecting controller" is read from
+    ``state.resolving_controller_id`` — a transient field the
+    targeting pipeline pins before invoking ``TargetFilter.test``.
+    Players evaluate against ``id != resolving_controller_id``;
+    permanents against ``controller_id != resolving_controller_id``.
+
+    A ``None`` ``resolving_controller_id`` means the field hasn't
+    been pinned for this enumeration — defensively returns ``False``
+    rather than over-accepting.
+    """
+
+    def test(self, obj, state):
+        viewer_id = getattr(state, "resolving_controller_id", None)
+        if viewer_id is None:
+            return False
+        if hasattr(obj, "printing"):
+            return obj.controller_id != viewer_id
+        # Players: their ``id`` is the controller identity.
+        if obj is None:
+            return False
+        return getattr(obj, "id", None) != viewer_id
+
+
+@dataclass(frozen=True)
+class ControlledByYou(ObjectPredicate):
+    """The object's controller IS the current target-selecting
+    controller.
+
+    Mirror of :class:`ControlledByOpponent` for "you control"
+    qualifiers ("target creature you control"). Same
+    ``resolving_controller_id`` source; same defensive ``False``
+    when the field is unset.
+    """
+
+    def test(self, obj, state):
+        viewer_id = getattr(state, "resolving_controller_id", None)
+        if viewer_id is None:
+            return False
+        if hasattr(obj, "printing"):
+            return obj.controller_id == viewer_id
+        if obj is None:
+            return False
+        return getattr(obj, "id", None) == viewer_id
 
 
 @dataclass(frozen=True)

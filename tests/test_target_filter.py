@@ -32,6 +32,14 @@ class FakePrinting:
     grants_food_to_your_artifacts: bool = False
     grants_all_basic_land_types_to_lands_you_control: bool = False
     grants_basic_land_type_to_all_lands: str | None = None
+    # ``is_creature_now`` reads ``printing.is_creature`` — auto-derived
+    # from ``card_types`` so fixtures don't have to set both.
+    is_creature: bool = False
+    station_threshold: int | None = None
+
+    def __post_init__(self) -> None:
+        if "Creature" in self.card_types and not self.is_creature:
+            self.is_creature = True
 
 
 @dataclass
@@ -41,6 +49,12 @@ class FakeObject:
     printing: FakePrinting = field(default_factory=FakePrinting)
     face_down: bool = False
     etb_timestamp: int = 0
+    charge_counters: int = 0
+    # Read by ``is_creature_now`` — runtime type-line overrides.
+    impending_active: bool = False
+    enduring_returned_as_enchantment: bool = False
+    temp_is_creature: bool = False
+    permanent_is_creature: bool = False
 
 
 @dataclass

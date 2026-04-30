@@ -54,6 +54,14 @@ class FakePrinting:
     card_types: tuple[str, ...] = ()
     subtypes: tuple[str, ...] = ()
     is_token: bool = False
+    # ``is_creature_now`` reads ``printing.is_creature`` — auto-derived
+    # from ``card_types`` so fixtures don't have to set both.
+    is_creature: bool = False
+    station_threshold: int | None = None
+
+    def __post_init__(self) -> None:
+        if "Creature" in self.card_types and not self.is_creature:
+            self.is_creature = True
 
 
 @dataclass
@@ -68,6 +76,12 @@ class FakeObject:
     # Attachment id (an aura/Equipment's host) — None means unattached.
     attached_to: int | None = None
     tapped: bool = False
+    # Read by ``is_creature_now`` — runtime type-line overrides.
+    face_down: bool = False
+    impending_active: bool = False
+    enduring_returned_as_enchantment: bool = False
+    temp_is_creature: bool = False
+    permanent_is_creature: bool = False
 
 
 @dataclass
