@@ -320,11 +320,15 @@ def test_baseball_bat_carries_etb_attach_and_pump():
 def test_tap_up_to_one_target_creature_target_range():
     # Up-to-one means 0 or 1 target, distinguishing this from sibling
     # ``TapAnotherTargetCreature`` (strict 1) and
-    # ``TapTargetArtifactOrCreature`` (strict 1).
+    # ``TapTargetArtifactOrCreature`` (strict 1). After the unified
+    # ``Tap`` migration ``requires_target()`` follows the structural
+    # rule "any slot with count_min >= 1" — for an up-to-one slot
+    # (count_min=0) the answer is False, which is CR-correct (0
+    # targets is a legal resolution).
     from mtg_bot.effects import TapUpToOneTargetCreature
 
     eff = TapUpToOneTargetCreature()
-    assert eff.requires_target() is True
+    assert eff.requires_target() is False
     assert eff.target_count_range() == (0, 1)
 
 
