@@ -103,6 +103,7 @@ from mtg_bot.effects import (
     DrawCardsEqualToResolvingCombatDamage,
     DrawCardsEqualToResolvingCounterAmount,
     EachOpponentDiscards,
+    EachOpponentExilesCardFromHandWithCastPermission,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     EachOpponentLosesLife,

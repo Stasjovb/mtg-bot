@@ -8549,6 +8549,52 @@ class EachOpponentDiscards(Effect):
 
 
 @dataclass(frozen=True)
+class EachOpponentExilesCardFromHandWithCastPermission(Effect):
+    """Lightstall Inquisitor ETB: each opponent exiles a card from their
+    hand and may play that card for as long as it remains exiled.  Each
+    spell cast this way costs {1} more; each land played this way enters
+    tapped.
+
+    The exiling player chooses which card to exile via their agent's
+    ``choose_discard`` hook (the choice is the same: pick one of your
+    hand cards).  The chosen card moves to exile with
+    ``cast_from_exile_with_lightstall_surcharge=True``; ``legal.py`` and
+    ``actions.py`` honour that flag to grant and enforce the permission +
+    surcharge + tapped-land-entry.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            if not p.hand:
+                continue
+            hand_ids = [c.id for c in p.hand]
+            chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
+            card = next(c for c in p.hand if c.id == chosen_id)
+            p.hand.remove(card)
+            card.zone = Zone.EXILE
+            card.cast_from_exile_with_lightstall_surcharge = True
+            p.exile.append(card)
+            state.log.append(
+                f"P{p.id} exiles {card.printing.name} "
+                f"(Lightstall Inquisitor; may play from exile, costs {{1}} more)"
+            )
+
+    def describe(self) -> str:
+        return (
+            "each opponent exiles a card from their hand and may play "
+            "that card for as long as it remains exiled"
+        )
+
+
+
+@dataclass(frozen=True)
 class EachOpponentSacrificesCreature(Effect):
     """Each opponent sacrifices a nontoken creature of their choice.
 

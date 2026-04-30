@@ -439,6 +439,46 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
+    # Lightstall Inquisitor exile-from-hand grant: the opponent may play
+    # the exiled card for as long as it remains in exile, with a {1}
+    # surcharge on spells and tapped-entry on lands. Sorcery-speed only
+    # (oracle: "only if it's a land or they could cast it" — same timing
+    # as a normal cast). Instants could technically be cast at instant
+    # speed, but the oracle text's "could cast it" clause is interpreted
+    # as "could cast it at sorcery timing" to keep the model simple; no
+    # such card combination exists in the pool today.
+    for card in p.exile:
+        if not card.cast_from_exile_with_lightstall_surcharge:
+            continue
+        if card.warped:
+            continue  # warp block above already handles this
+        if card.printing.is_land:
+            if _is_sorcery_timing(state, player_id) and p.lands_played_this_turn < (
+                1 + sum(
+                    o.printing.grants_additional_land_per_turn
+                    for o in state.battlefield
+                    if o.controller_id == player_id
+                )
+            ):
+                actions.append(PlayLand(card.id))
+            continue
+        # Non-land: only castable at sorcery timing (mirrors the standard
+        # "could cast it" restriction on the card's text).
+        if not _is_sorcery_timing(state, player_id):
+            continue
+        # Apply +{1} surcharge on top of normal effective cost.
+        base_with_surcharge = ManaCost(
+            generic=_effective_cost(card, card.printing.mana_cost).generic + 1,
+            colored=_effective_cost(card, card.printing.mana_cost).colored,
+            x_pips=_effective_cost(card, card.printing.mana_cost).x_pips,
+        )
+        if (
+            _can_cast(state, player_id, card, base_with_surcharge)
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            actions.append(CastSpell(card.id))
+
     # Cast-from-library (top card only): Mm'menon, the Right Hand.
     # "You may cast artifact spells from the top of your library."
     # Offered when the controller has any permanent with the grant

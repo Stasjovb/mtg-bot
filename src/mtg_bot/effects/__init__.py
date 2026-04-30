@@ -83,6 +83,7 @@ from mtg_bot.effects.generic import (
     EquipToTargetCreatureYouControl,
     EachOpponentDiscards,
     EachOpponentDiscardsOrLosesLife,
+    EachOpponentExilesCardFromHandWithCastPermission,
     EachOpponentLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,

@@ -84,6 +84,13 @@ class GameObject:
     # legal_actions honors it for cast-from-exile at normal cost when
     # the controller currently controls at least one Kavu.
     play_from_exile_requires_kavu: bool = False
+    # Lightstall Inquisitor exile-from-hand grant: the card's owner may
+    # play it from exile for as long as it remains exiled, but each spell
+    # cast this way costs {1} more and each land played this way enters
+    # tapped.  Set on cards exiled by EachOpponentExilesCardFromHandWithCastPermission;
+    # NOT cleared at cleanup — persists until the card leaves exile.
+    # Cleared in _cast_spell / _play_land on use.
+    cast_from_exile_with_lightstall_surcharge: bool = False
     # Base P/T override ("has base power and toughness 1/1 until end of
     # turn") — Atomic Microsizer. None = use printed P/T. Cleared at
     # cleanup.

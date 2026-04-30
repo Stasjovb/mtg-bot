@@ -1035,10 +1035,18 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         p.exile.remove(card)
         card.playable_from_exile_this_turn = False
         card.play_from_exile_requires_kavu = False
+    # Track whether the land was played from Lightstall exile (enters
+    # tapped regardless of printing) before clearing the flag.
+    lightstall_land = card.cast_from_exile_with_lightstall_surcharge
+    card.cast_from_exile_with_lightstall_surcharge = False
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
     # "Enters tapped" covers Planets + most non-basic utility lands.
     card.tapped = bool(card.printing.enters_tapped)
+    # Lightstall Inquisitor: lands played from exile via this grant
+    # always enter tapped.
+    if lightstall_land:
+        card.tapped = True
     # Duskmourn horror duals: "This land enters tapped unless a
     # player has 13 or less life." Deterministic state check at ETB,
     # no agent choice. The land enters untapped when any player's
@@ -1409,11 +1417,14 @@ def _cast_spell(
     else:
         # Cast from exile: legal for (a) cards previously exiled by warp
         # (warped=True), (b) cards marked impulse-playable this turn
-        # (playable_from_exile_this_turn=True), or (c) cards exiled by
+        # (playable_from_exile_this_turn=True), (c) cards exiled by
         # Possibility Technician (play_from_exile_requires_kavu=True),
-        # provided the controller still controls a Kavu. All pay
-        # normal cost. (legal_actions enforces the Kavu-control gate
-        # on (c); the predicate here just authorizes the cast site.)
+        # provided the controller still controls a Kavu, or (d) cards
+        # exiled by Lightstall Inquisitor's ETB
+        # (cast_from_exile_with_lightstall_surcharge=True) which carry a
+        # {1} surcharge applied below. All pay normal cost except (d).
+        # (legal_actions enforces the Kavu-control gate on (c); the
+        # predicate here just authorizes the cast site.)
         card = next(
             (
                 c for c in p.exile
@@ -1421,17 +1432,29 @@ def _cast_spell(
                     c.warped
                     or c.playable_from_exile_this_turn
                     or c.play_from_exile_requires_kavu
+                    or c.cast_from_exile_with_lightstall_surcharge
                 )
             ),
             None,
         )
         if card is not None:
             cost = card.printing.mana_cost
+            # Lightstall surcharge: "each spell cast this way costs {1}
+            # more to cast" — add 1 generic on top of the printed cost.
+            # This runs before apply_cost_reductions so reductions can
+            # offset the surcharge (standard MTG layer order).
+            if card.cast_from_exile_with_lightstall_surcharge:
+                cost = ManaCost(
+                    generic=cost.generic + 1,
+                    colored=cost.colored,
+                    x_pips=cost.x_pips,
+                )
             cast_from_outside_hand = True
             p.exile.remove(card)
             card.warped = False
             card.playable_from_exile_this_turn = False
             card.play_from_exile_requires_kavu = False
+            card.cast_from_exile_with_lightstall_surcharge = False
             card.cast_via_warp = False
             # Cast from exile is NOT a cast from hand — clear any stale
             # provenance flag from a prior hand-cast so cast-from-hand-
