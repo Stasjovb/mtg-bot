@@ -140,6 +140,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.generic import TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -1988,6 +1989,18 @@ _OWNER_PUTS_TARGET_NONLAND_PERMANENT_ON_TOP_OR_BOTTOM = re.compile(
 )
 # "Tap target artifact or creature." — Mental Modulation's middle
 # clause and any future card that ships the same surface form. Maps to
+# "Tap enchanted creature." / "Tap enchanted permanent." — Aura ETB
+# trigger bodies (Stay Hidden, Stay Silent; Tractor Beam). Both surface
+# forms map to ``TapEnchantedPermanent``, which resolves the host via
+# ``state.resolving_source.attached_to`` and routes through
+# ``mtg_bot.turn.tap_permanent``. "creature" and "permanent" are
+# synonymous here — the Aura's host is always a creature in all current
+# EoE/DSK cards that carry this line. Only Aura cards in the pool
+# currently carry these surfaces; the grammar addition is forward-looking
+# so future Aura cards with the same trigger line claim automatically.
+_TAP_ENCHANTED_PERMANENT = re.compile(
+    r"^tap enchanted (?:creature|permanent)$"
+)
 # ``TapTargetArtifactOrCreature()``. No-op if the chosen target is
 # already tapped at resolution.
 _TAP_TARGET_ARTIFACT_OR_CREATURE = re.compile(
@@ -3506,6 +3519,12 @@ def _parse_effect(phrase: str) -> Effect | None:
     # regex below because the bare regex's ``$`` anchor wouldn't match
     # the ``another`` qualifier anyway, but ordering more-specific
     # before more-general is the convention here.
+    if _TAP_ENCHANTED_PERMANENT.match(phrase) is not None:
+        # ``tap enchanted creature`` / ``tap enchanted permanent`` — Aura
+        # ETB trigger bodies (Stay Hidden, Stay Silent; Tractor Beam). The
+        # host is identified via ``state.resolving_source.attached_to`` at
+        # resolve time by ``TapEnchantedPermanent``; no target is chosen.
+        return TapEnchantedPermanent()
     if _TAP_ANOTHER_TARGET_CREATURE.match(phrase) is not None:
         return TapAnotherTargetCreature()
     if _TAP_TARGET_ARTIFACT_OR_CREATURE.match(phrase) is not None:

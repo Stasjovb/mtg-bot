@@ -1,63 +1,73 @@
-"""Whole-card name-keyed dispatch for Edge of Eternities + Duskmourn
-Enchantments.
+"""Enchantment card builders for Edge of Eternities + Duskmourn.
 
-Each enchantment whose oracle text maps directly to well-typed
-``CardPrinting`` fields is claimed here via a name-keyed exact-dispatch
-table — one factory per card, no grammar required.
+Two claim paths co-exist in this module:
 
-This module covers:
+1. **Name-keyed bespoke factories** (``_ENCHANTMENT_BUILDERS`` table) —
+   exact-dispatch factories for enchantments whose oracle text cannot yet
+   be expressed through the parameterized grammar (bespoke engine effects,
+   multi-part statics not in the grammar, etc.).
 
-Non-Aura enchantments (EoE):
-- Banishing Light ``{2}{W}``
-- Seam Rip ``{W}``
-- Loading Zone ``{3}{G}``
-- Weftwalking ``{4}{U}{U}``
-- Sothera, the Supervoid ``{2}{B}{B}``
-- Terrasymbiosis ``{2}{G}``
-- Weapons Manufacturing ``{1}{R}``
-- Bioengineered Future ``{1}{G}{G}``
-- Eusocial Engineering ``{3}{G}{G}``
+2. **Oracle-text grammar paths** — parameterized parsers that walk oracle
+   text line by line:
+   - ``_build_aura_via_oracle_text`` for Enchantment — Aura cards
+     (gated by ``_UNIFIED_AURA_NAMES``).
+   - ``_build_enchantment_via_oracle_text`` for non-Aura enchantments
+     (gated by ``_UNIFIED_ENCHANTMENT_NAMES``).
 
-Non-Aura enchantments (DSK):
-- Leyline of Mutation ``{2}{G}{G}`` (honest-no-op: opening-hand
-  replacement isn't modeled and the printed ``You may pay {W}{U}{B}
-  {R}{G} rather than pay the mana cost for spells you cast.`` alt
-  cost is not offered by ``legal.py`` — so the printing sits there
-  inert. Same permission-not-offered pattern Lecture Hall ships
-  per dsk-rooms-batch6.)
-- Trapped in the Screen ``{2}{W}`` (Ward {2} + ETB exile-opp-permanent-
-  until-leaves; first non-Aura enchantment to ship the new ``ward``
-  kwarg on ``make_enchantment``)
+Cards still on the bespoke path (in ``_ENCHANTMENT_BUILDERS``):
 
-Aura enchantments (EoE):
-- Moonlit Meditation ``{2}{U}``
-- Tractor Beam ``{2}{U}{U}``
-- Chorale of the Void ``{3}{B}``
-- Cryoshatter ``{U}``
-- Meltstrider's Resolve ``{G}``
-- Hardlight Containment ``{W}``
-- Pain for All ``{2}{R}``
+Non-Aura enchantments:
+- Loading Zone ``{3}{G}`` — is_counter_doubler + warp
+- Weftwalking ``{4}{U}{U}`` — ETB (WeftwalkingETBEffect) + grants_first_
+  spell_each_turn_free
+- Sothera, the Supervoid ``{2}{B}{B}`` — bespoke DIES + end-step effects
+- Terrasymbiosis ``{2}{G}`` — COUNTERS_ADDED trigger
+- Bioengineered Future ``{1}{G}{G}`` — ETB token + grants_etb_counter_
+  per_land_entered_this_turn
+- Leyline of Mutation ``{2}{G}{G}`` — honest no-op
 
-Aura enchantments (DSK):
-- Cracked Skull ``{2}{B}`` (ETB look-at-target-opp-hand may-discard
-  + DEALT_DAMAGE-destroys-enchanted)
-- Duskmourn's Domination ``{4}{U}{U}``
-- Frantic Strength ``{1}{R}`` (Flash + +2/+2 + trample)
-- Shardmage's Rescue ``{W}`` (Flash + Enchant-creature-you-control +
-  +1/+1; ``as long as this Aura entered this turn, enchanted creature
-  has hexproof`` is dropped — hexproof is engine-unenforced metadata
-  in this codebase per the rooms-batch6 precedent, so a conditional
-  hexproof grant is also a no-op.)
-- Sheltered by Ghosts ``{1}{W}`` (Enchant-creature-you-control + ETB
-  exile-opp-permanent-until-leaves + +1/+0 + lifelink + ward {2})
-- Sporogenic Infection ``{1}{B}`` (ETB target-opp-sacs-creature-other-
-  than-enchanted + DEALT_DAMAGE-destroys-enchanted)
-- Stay Hidden, Stay Silent ``{1}{U}`` (ETB tap-enchanted +
-  attached-prevents-untap; the {4}{U}{U} sorcery-speed activated
-  ability is dropped as honest no-op for unoffered alt-cost)
+Aura enchantments:
+- Chorale of the Void ``{3}{B}`` — bespoke attacks-trigger effect
+  (ChoraleReanimateDefenderGraveCreatureEffect) and Void end-step rider
+  (SacrificeSelfUnlessVoidActive); deferred until those effects land as
+  grammar-level phrases.
+
+Cards migrated to the Aura oracle-text path (``_UNIFIED_AURA_NAMES``):
+
+EoE Auras (migrated in bespoke-enchantments wave 1):
+- Cryoshatter ``{U}`` — -5/-0 + compound becomes-tapped-or-dealt-damage
+- Hardlight Containment ``{W}`` — Enchant artifact + ETB exile + ward {1}
+- Meltstrider's Resolve ``{G}`` — Enchant creature you control + ETB
+  fights + +0/+2 + menace
+- Moonlit Meditation ``{2}{U}`` — Enchant artifact or creature you control
+  + token-replace static
+- Pain for All ``{2}{R}`` — Enchant creature you control + ETB damage + echo
+- Tractor Beam ``{2}{U}{U}`` — Enchant creature or Spacecraft + ETB tap
+  + control + doesn't-untap
+
+DSK Auras (migrated in bespoke-enchantments wave 1):
+- Cracked Skull ``{2}{B}`` — ETB look-at-hand-may-discard + dealt-damage-
+  destroy
+- Duskmourn's Domination ``{4}{U}{U}`` — control + -3/-0 + lose-all
+- Frantic Strength ``{2}{G}`` — Flash + +2/+2 + trample
+- Shardmage's Rescue ``{W}`` — Flash + Enchant creature you control +
+  conditional hexproof (honest no-op) + +1/+1
+- Sheltered by Ghosts ``{1}{W}`` — Enchant creature you control + ETB
+  exile nonland + +1/+0 + lifelink + ward {2}
+- Sporogenic Infection ``{1}{B}`` — ETB sac-other-than-enchanted + dealt-
+  damage-destroy
+- Stay Hidden, Stay Silent ``{1}{U}`` — ETB tap-enchanted + doesn't-
+  untap + activated ability (honest no-op)
+
+Non-Aura cards already on the oracle-text path
+(``_UNIFIED_ENCHANTMENT_NAMES``):
+- Banishing Light, Seam Rip, Trapped in the Screen, Eusocial Engineering,
+  Weapons Manufacturing, Deafening Silence, Burgeoning
 """
 
 from __future__ import annotations
+
+import re
 
 from mtg_bot.cards.base import (
     CardPrinting,
@@ -105,6 +115,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_ward_line,
     _parse_warp_line,
 )
+from mtg_bot.cards.parser.keywords import _parse_keyword_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 
@@ -695,30 +706,611 @@ def _build_duskmourns_domination() -> CardPrinting:
 # ---------------------------------------------------------------------------
 
 _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
-    # Non-Aura
+    # Non-Aura (unchanged — not yet migrated to oracle-text path)
     "Loading Zone": _build_loading_zone,
     "Weftwalking": _build_weftwalking,
     "Sothera, the Supervoid": _build_sothera_the_supervoid,
     "Terrasymbiosis": _build_terrasymbiosis,
     "Bioengineered Future": _build_bioengineered_future,
     "Leyline of Mutation": _build_leyline_of_mutation,
-    # Auras
-    "Moonlit Meditation": _build_moonlit_meditation,
-    "Tractor Beam": _build_tractor_beam,
+    # Auras that remain on the bespoke path because their oracle text
+    # contains bespoke effect classes not yet in the grammar:
+    #
+    # Chorale of the Void — the attacks trigger body is
+    # ChoraleReanimateDefenderGraveCreatureEffect (no parseable effect
+    # phrase) and the Void end-step rider uses SacrificeSelfUnlessVoid
+    # Active (no parseable "sacrifice this Aura unless" form). Deferred
+    # until those effects land as grammar-level phrases.
     "Chorale of the Void": _build_chorale_of_the_void,
-    "Cryoshatter": _build_cryoshatter,
-    "Meltstrider's Resolve": _build_meltstriders_resolve,
-    "Hardlight Containment": _build_hardlight_containment,
-    "Pain for All": _build_pain_for_all,
-    # Duskmourn (DSK) Auras
-    "Cracked Skull": _build_cracked_skull,
-    "Duskmourn's Domination": _build_duskmourns_domination,
-    "Frantic Strength": _build_frantic_strength,
-    "Shardmage's Rescue": _build_shardmages_rescue,
-    "Sheltered by Ghosts": _build_sheltered_by_ghosts,
-    "Sporogenic Infection": _build_sporogenic_infection,
-    "Stay Hidden, Stay Silent": _build_stay_hidden_stay_silent,
 }
+
+
+# ---------------------------------------------------------------------------
+# Aura oracle-text parser
+# ---------------------------------------------------------------------------
+#
+# Each of the recognizers below handles ONE printed surface shape found on
+# Aura oracle lines. They are tried in order by ``_build_aura_via_oracle_
+# text``; any unrecognized line causes the card to be rejected (returns
+# None) so the silent-skip discipline stays intact.
+#
+# ``"Enchant X"`` line → (aura_enchant_type, aura_yours_only) --------
+#
+# Four printed shapes in the EoE/DSK pool:
+#
+#   "Enchant creature"                       → ("creature", False)
+#   "Enchant creature you control"           → ("creature", True)
+#   "Enchant artifact you control"           → ("artifact", True)
+#   "Enchant creature or Spacecraft"         → ("creature", False)
+#      Simplified: Spacecraft are non-creature artifacts; the engine's
+#      Aura cast-time target picker only has two branches ("artifact" or
+#      "creature"), so we collapse Spacecraft into the creature branch.
+#      No card in the pool casts this Aura onto a Spacecraft during play
+#      in the current implementation, so the simplification is observable-
+#      behavior-equivalent.
+#   "Enchant artifact or creature you control" → ("creature", True)
+#      Simplified to the creature branch for the same reason as
+#      "creature or Spacecraft" above; yours-only=True from the printed
+#      "you control" restriction.
+#
+_ENCHANT_LINE = re.compile(
+    r"^Enchant "
+    r"(?:(creature you control)"          # group 1: yours-only creature
+    r"|(artifact you control)"            # group 2: yours-only artifact
+    r"|(creature or Spacecraft)"          # group 3: creature-or-spacecraft
+    r"|(artifact or creature you control)"# group 4: artifact-or-creature yours
+    r"|(creature)"                        # group 5: plain creature
+    r")$"
+)
+
+
+def _parse_enchant_line(
+    line: str,
+) -> tuple[str, bool] | None:
+    """Return ``(aura_enchant_type, aura_yours_only)`` for a recognized
+    ``Enchant X`` line, else ``None``.
+
+    The two engine parameters drive the cast-time target picker
+    (``actions._select_spell_targets``). Simplifications for compound
+    enchant targets ("creature or Spacecraft", "artifact or creature
+    you control") are documented on the ``_ENCHANT_LINE`` regex comment.
+    """
+    m = _ENCHANT_LINE.match(line.strip())
+    if m is None:
+        return None
+    if m.group(1):   # "creature you control"
+        return ("creature", True)
+    if m.group(2):   # "artifact you control"
+        return ("artifact", True)
+    if m.group(3):   # "creature or Spacecraft" — simplified to creature
+        return ("creature", False)
+    if m.group(4):   # "artifact or creature you control" — simplified
+        return ("creature", True)
+    # m.group(5) — plain "creature"
+    return ("creature", False)
+
+
+# ``"Enchanted (creature|permanent) gets ±N/±M[ and has/loses ...]"``
+# line recognizer. Maps to ``power_bonus``, ``toughness_bonus``,
+# ``granted_keywords``, ``attached_grants_lose_all_abilities``, and
+# ``attached_grants_ward_str`` on ``make_aura``.
+#
+# The P/T part uses signed integer notation: ``+2/+2``, ``-5/-0``,
+# ``+1/+0``, ``-3/-0``. The optional rider is one of:
+#
+#   and has <keyword>[, keyword]*[ and ward {cost}]
+#   and has <keyword> and <keyword>[ and ward {cost}]
+#   and can't be blocked by more than one creature
+#   and loses all abilities
+#
+# The ``and loses all abilities`` form also sets
+# ``attached_grants_lose_all_abilities=True``; it may appear alone or
+# paired with a P/T modifier (Duskmourn's Domination has ``-3/-0 and
+# loses all abilities``).
+_ENCHANTED_GETS_RE = re.compile(
+    r"^Enchanted (?:creature|permanent) gets "
+    r"([+-]\d+)/([+-]\d+)"               # groups 1+2: power / toughness
+    r"(?: and (.+))?$"                   # group 3: optional rider (no trailing period)
+)
+# Rider: "loses all abilities" → attached_grants_lose_all_abilities
+_RIDER_LOSES_ALL_ABILITIES = "loses all abilities"
+# Rider: "can't be blocked by more than one creature" → menace keyword
+_RIDER_MENACE = "can't be blocked by more than one creature"
+# Ward in "has ... and ward {cost}" rider
+_RIDER_WARD_RE = re.compile(r"^(.*?) and (ward \{[^}]+\})$")
+# "has <keywords>" rider prefix
+_RIDER_HAS_PREFIX = "has "
+
+
+def _parse_enchanted_gets_line(
+    line: str,
+) -> (
+    "tuple[int, int, frozenset[str], bool, str | None] | None"
+):
+    """Parse an ``Enchanted (creature|permanent) gets ±N/±M ...`` line.
+
+    Returns ``(power_bonus, toughness_bonus, granted_keywords,
+    lose_all_abilities, ward_cost_str_or_None)`` on success, else
+    ``None``.
+
+    Handles the following rider shapes (after the P/T modifier):
+    - No rider → zero bonuses, empty keywords, no lose-all, no ward.
+    - ``and has <keyword>`` → granted keyword.
+    - ``and has <kw1> and <kw2>`` → two granted keywords.
+    - ``and has <kw> and ward {cost}`` → keyword + ward grant.
+    - ``and can't be blocked by more than one creature`` → menace.
+    - ``and loses all abilities`` → lose-all flag.
+    """
+    line = line.rstrip(".")
+    m = _ENCHANTED_GETS_RE.match(line)
+    if m is None:
+        return None
+    power_bonus = int(m.group(1))
+    toughness_bonus = int(m.group(2))
+    rider = m.group(3)  # None if no rider
+
+    granted: set[str] = set()
+    lose_all = False
+    ward_cost: str | None = None
+
+    if rider is None:
+        return (power_bonus, toughness_bonus, frozenset(granted),
+                lose_all, ward_cost)
+
+    # "loses all abilities" rider (may stand alone)
+    if rider == _RIDER_LOSES_ALL_ABILITIES:
+        return (power_bonus, toughness_bonus, frozenset(granted),
+                True, ward_cost)
+
+    # "can't be blocked by more than one creature" → menace
+    if rider == _RIDER_MENACE:
+        granted.add("menace")
+        return (power_bonus, toughness_bonus, frozenset(granted),
+                lose_all, ward_cost)
+
+    # "has ..." rider — strip the "has " prefix then parse keywords
+    if not rider.startswith(_RIDER_HAS_PREFIX):
+        return None
+    keyword_part = rider[len(_RIDER_HAS_PREFIX):]
+
+    # Check for "... and ward {cost}" suffix
+    ward_m = _RIDER_WARD_RE.match(keyword_part)
+    if ward_m:
+        keyword_part = ward_m.group(1)
+        ward_line = ward_m.group(2)  # "ward {cost}"
+        # Parse "ward {cost}" via the standard ward-line parser but
+        # capitalize for it to match "Ward {cost}" form.
+        ward_parsed = _parse_ward_line(ward_line.capitalize())
+        if ward_parsed is None:
+            return None
+        ward_cost = ward_parsed
+
+    # Split remaining keyword_part on " and " to handle multi-keyword
+    kw_pieces = [p.strip() for p in keyword_part.split(" and ")]
+    for kw in kw_pieces:
+        # Normalize first letter to upper case for _parse_keyword_line
+        kw_cap = kw[:1].upper() + kw[1:] if kw else kw
+        parsed = _parse_keyword_line(kw_cap)
+        if parsed is None:
+            return None
+        granted.update(parsed)
+
+    return (power_bonus, toughness_bonus, frozenset(granted),
+            lose_all, ward_cost)
+
+
+# Aura-level static-flag lines -----------------------------------------
+
+# "Enchanted (creature|permanent) has ward {cost}." (standalone ward grant,
+# no P/T modifier) → attached_grants_ward.
+# Hardlight Containment prints "Enchanted permanent has ward {1}." as its
+# own oracle line. Distinct from the "and ward {cost}" inline rider on a
+# "gets +N/+M and has ... and ward {cost}" line; the inline rider is parsed
+# by ``_parse_enchanted_gets_line``'s ``_RIDER_WARD_RE`` logic, while this
+# standalone form is its own line recognizer. Both feed the same
+# ``attached_grants_ward`` kwarg on ``make_aura``.
+_ENCHANTED_HAS_WARD_LINE = re.compile(
+    r"^Enchanted (?:creature|permanent) has "
+    r"(?:ward (\{[^}]+\}))\.$"
+)
+# "You control enchanted creature/permanent." → attached_grants_control
+_YOU_CONTROL_ENCHANTED_LINE = re.compile(
+    r"^You control enchanted (?:creature|permanent)\.$"
+)
+# "Enchanted creature/permanent doesn't untap during its controller's
+# untap step." → attached_prevents_untap
+_DOESNT_UNTAP_LINE = re.compile(
+    r"^Enchanted (?:creature|permanent) doesn't untap during its "
+    r"controller's untap step\.$"
+)
+# "Enchanted creature/permanent loses all abilities." (standalone, no P/T)
+_LOSES_ALL_ABILITIES_LINE = re.compile(
+    r"^Enchanted (?:creature|permanent) loses all abilities\.$"
+)
+# "The first time you would create one or more tokens each turn, you may
+# instead create that many tokens that are copies of enchanted permanent."
+# → replaces_first_tokens_with_copies=True (Moonlit Meditation). Literal
+# — only card in the pool with this surface today; deferred until a second
+# example with this shape exists.
+_REPLACES_FIRST_TOKENS_LINE = (
+    "The first time you would create one or more tokens each turn, "
+    "you may instead create that many tokens that are copies of "
+    "enchanted permanent."
+)
+# Honest no-op lines that appear on migrated Aura cards but map to
+# engine-unenforced metadata or unoffered options. Each is recognized and
+# silently dropped so the card can still claim its other lines.
+#
+# "As long as this Aura entered this turn, enchanted creature has
+# hexproof." (Shardmage's Rescue) — hexproof is unenforced metadata per
+# rooms-batch6; the conditional grant is likewise a no-op.
+#
+# Activated-ability lines beginning with "{cost}:" that are dropped as
+# honest no-ops (Stay Hidden's shuffle-and-manifest, etc.) — matched
+# by the cost-prefix pattern below.
+_AURA_HONEST_NOOP_LINES = frozenset({
+    # Shardmage's Rescue: conditional hexproof (no-op per rooms-batch6)
+    "As long as this Aura entered this turn, enchanted creature "
+    "has hexproof.",
+})
+
+# Activated abilities on Auras that are dropped as honest no-ops
+# (the option isn't offered via ``legal.py``; same permission-not-offered
+# shape Lecture Hall ships per dsk-rooms-batch6).
+_ACTIVATED_ABILITY_PREFIX = re.compile(r"^\{[^}]+\}.*:.*$")
+
+# "When enchanted creature becomes tapped or is dealt damage, destroy it."
+# (Cryoshatter) — compound trigger line: produces TWO TriggeredAbility
+# entries (one BECOMES_TAPPED + IsHost(), one DEALT_DAMAGE + IsHost()) both
+# with DestroyEnchantedPermanent(). Only Cryoshatter in the pool has this
+# exact surface today; deferred generalization until a second card with a
+# compound Aura-trigger line (becomes-tapped-or-dealt-damage → destroy)
+# appears.
+_CRYOSHATTER_COMPOUND_LINE = (
+    "When enchanted creature becomes tapped or is dealt damage, "
+    "destroy it."
+)
+
+# Literal trigger-line recognizers for Aura ETBs whose effect phrase
+# uses a bespoke engine class not yet in the general grammar. Each entry
+# maps the verbatim stripped oracle trigger line to the ``TriggeredAbility``
+# object the bespoke factory would have built. Only one card in the pool
+# prints each surface today; each entry's docstring documents why
+# generalization is deferred.
+#
+# The table is consulted BEFORE the standard ``_parse_triggered_ability_line``
+# path so the known literal wins over a potential partial parse failure.
+# ``_strip_reminder_text`` has already been applied to the line before
+# the lookup — keys must be reminder-text-stripped.
+_AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
+    # ---------------------------------------------------------------
+    # Meltstrider's Resolve
+    # ETB: "enchanted creature fights up to one target creature an
+    # opponent controls" → EnchantedCreatureFightsTargetEffect.
+    # Only card in the pool with an Aura-ETB fights trigger today;
+    # generalization (a "fights" surface in the grammar with "enchanted
+    # creature" as actor) deferred until a second example exists.
+    # ---------------------------------------------------------------
+    (
+        "When this Aura enters, enchanted creature fights up to one "
+        "target creature an opponent controls."
+    ): TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=EnchantedCreatureFightsTargetEffect(),
+    ),
+    # ---------------------------------------------------------------
+    # Pain for All — ETB trigger
+    # "When this Aura enters, enchanted creature deals damage equal to
+    # its power to any other target." → PainForAllETBEffect.
+    # Only card in the pool with this "enchanted creature deals power
+    # damage to any other target" Aura ETB surface; generalization
+    # deferred until a second example exists.
+    # ---------------------------------------------------------------
+    (
+        "When this Aura enters, enchanted creature deals damage equal "
+        "to its power to any other target."
+    ): TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=PainForAllETBEffect(),
+    ),
+    # ---------------------------------------------------------------
+    # Pain for All — DEALT_DAMAGE trigger
+    # "Whenever enchanted creature is dealt damage, it deals that much
+    # damage to each opponent." → PainForAllDamageEchoEffect.
+    # Only card in the pool with this "echo dealt-damage to each
+    # opponent" Aura trigger; generalization deferred until a second
+    # example exists.
+    # ---------------------------------------------------------------
+    (
+        "Whenever enchanted creature is dealt damage, it deals that "
+        "much damage to each opponent."
+    ): TriggeredAbility(
+        event=Event.DEALT_DAMAGE,
+        predicate=IsHost(),
+        effect=PainForAllDamageEchoEffect(),
+    ),
+    # ---------------------------------------------------------------
+    # Cracked Skull — ETB look-at-hand may-discard trigger.
+    # Multi-sentence oracle trigger line; the standard trigger parser
+    # anchors on a single trailing period so it can't match this
+    # three-sentence form. Literal keeps the entire printed surface.
+    # Only Cracked Skull in the pool has this ETB form.
+    # ---------------------------------------------------------------
+    (
+        "When this Aura enters, look at target player's hand. "
+        "You may choose a nonland card from it. "
+        "That player discards that card."
+    ): TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=TargetOpponentLookHandMayDiscard(),
+    ),
+    # ---------------------------------------------------------------
+    # Sporogenic Infection — ETB target-opp-sacs trigger.
+    # "When this Aura enters, target player sacrifices a creature of
+    # their choice other than enchanted creature." →
+    # TargetOpponentSacrificesCreatureOtherThanEnchanted.
+    # Only card in the pool with this ETB Aura form.
+    # ---------------------------------------------------------------
+    (
+        "When this Aura enters, target player sacrifices a creature of "
+        "their choice other than enchanted creature."
+    ): TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
+    ),
+    # ---------------------------------------------------------------
+    # Cracked Skull / Sporogenic Infection — DEALT_DAMAGE trigger.
+    # "When enchanted creature is dealt damage, destroy it."
+    # → DestroyEnchantedPermanent on DEALT_DAMAGE + IsHost().
+    # Two cards in the pool share this exact surface; having it here as
+    # a literal is still preferable to adding "destroy it" to the general
+    # effects grammar since "it" is an anaphoric pronoun whose referent
+    # (the enchanted creature) is Aura-context-specific and would be
+    # ambiguous outside of Aura triggers.
+    # ---------------------------------------------------------------
+    "When enchanted creature is dealt damage, destroy it.": TriggeredAbility(
+        event=Event.DEALT_DAMAGE,
+        predicate=IsHost(),
+        effect=DestroyEnchantedPermanent(),
+    ),
+}
+
+# Allowlist of names that may claim through the Aura oracle-text path.
+# Mirrors ``_UNIFIED_ENCHANTMENT_NAMES`` — explicit opt-in per name.
+# Adding a name here removes it from ``_ENCHANTMENT_BUILDERS`` and routes
+# it through ``_build_aura_via_oracle_text`` instead.
+_UNIFIED_AURA_NAMES: frozenset[str] = frozenset({
+    # EoE Auras — high priority (simple grammar)
+    "Cryoshatter",        # -5/-0 + compound becomes-tapped-or-dealt-damage trigger
+    "Frantic Strength",   # Flash + Enchant creature + +2/+2 + trample
+    "Hardlight Containment",  # Enchant artifact you control + ETB exile + ward {1}
+    "Meltstrider's Resolve",  # Enchant creature you control + ETB fights + +0/+2 + menace
+    "Pain for All",       # Enchant creature you control + ETB deals damage + echo
+    # DSK Auras — high priority
+    "Cracked Skull",       # ETB look-at-hand-may-discard + dealt-damage-destroy
+    "Duskmourn's Domination",  # Enchant creature + control + -3/-0 + lose-all
+    "Shardmage's Rescue",  # Flash + Enchant creature you control + hexproof(noop) + +1/+1
+    "Sheltered by Ghosts", # Enchant creature you control + ETB exile + +1/+0 + lifelink + ward {2}
+    "Sporogenic Infection",  # ETB sac + dealt-damage-destroy
+    "Stay Hidden, Stay Silent",  # ETB tap + doesn't-untap + activated(noop)
+    # EoE Auras — medium priority
+    "Moonlit Meditation",  # Enchant artifact or creature you control + token-replace
+    "Tractor Beam",        # Enchant creature or Spacecraft + ETB tap + control + doesn't-untap
+    # Chorale of the Void deferred — the attacks trigger body
+    # (ChoraleReanimateDefenderGraveCreatureEffect) and the Void end-step
+    # rider (SacrificeSelfUnlessVoidActive) are bespoke effects not yet
+    # in the general grammar. Will migrate after those effects land as
+    # parseable effect phrases. Remains in _ENCHANTMENT_BUILDERS below.
+})
+
+
+def _build_aura_via_oracle_text(card: dict) -> CardPrinting | None:
+    """Claim an Enchantment — Aura card whose oracle text parses through
+    the recognized Aura line grammar.
+
+    Gated on ``_UNIFIED_AURA_NAMES`` so only explicitly migrated cards
+    can reach this path. Returns ``None`` for any card with an
+    unrecognized line so the silent-skip discipline stays intact.
+
+    The parser walks the oracle text line by line and accumulates:
+    - ``keywords`` — keyword abilities on the Aura itself (Flash).
+    - ``aura_enchant_type``, ``aura_yours_only`` — from the "Enchant X"
+      line.
+    - ``power_bonus``, ``toughness_bonus``, ``granted_keywords`` — from
+      "Enchanted creature gets ±N/±M[ and has ...]" static lines.
+    - ``attached_grants_control`` — from "You control enchanted
+      creature/permanent." lines.
+    - ``attached_prevents_untap`` — from the "doesn't untap during its
+      controller's untap step." line.
+    - ``attached_grants_lose_all_abilities`` — from "Enchanted creature
+      loses all abilities." standalone lines or the "and loses all
+      abilities" rider on a "gets ±N/±M" line.
+    - ``replaces_first_tokens_with_copies`` — from the Moonlit Meditation
+      literal line.
+    - ``attached_grants_ward_str`` — from the "ward {cost}" inline rider
+      on "Enchanted creature gets ... and has ... and ward {cost}." lines.
+    - ``triggered_abilities`` — from triggered-ability lines parsed
+      through ``_parse_triggered_ability_line`` plus the Cryoshatter
+      compound line (two triggers from one surface line).
+
+    Lines that are honest no-ops (conditional hexproof, unoffered
+    activated abilities) are recognized and silently dropped; any
+    line that doesn't fit a recognized shape causes the card to be
+    rejected outright (returns ``None``).
+    """
+    name = card.get("name", "")
+    if name not in _UNIFIED_AURA_NAMES:
+        return None
+
+    text = card.get("oracle_text", "")
+
+    # Aura fields accumulated across lines
+    aura_keywords: set[str] = set()
+    aura_enchant_type: str = "creature"
+    aura_yours_only: bool = False
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    granted_keywords: set[str] = set()
+    attached_grants_control: bool = False
+    attached_prevents_untap: bool = False
+    attached_grants_lose_all_abilities: bool = False
+    replaces_first_tokens_with_copies: bool = False
+    attached_grants_ward_str: str | None = None
+    triggers: list[TriggeredAbility] = []
+
+    for raw_line in text.split("\n"):
+        line = _strip_reminder_text(raw_line)
+        if not line:
+            continue
+
+        # ----------------------------------------------------------------
+        # Honest no-op lines — recognized and dropped
+        # ----------------------------------------------------------------
+        if line in _AURA_HONEST_NOOP_LINES:
+            continue
+        # Activated-ability lines (cost: effect) dropped as unoffered
+        # optional actions (same permission-not-offered shape Lecture Hall
+        # ships per dsk-rooms-batch6).
+        if _ACTIVATED_ABILITY_PREFIX.match(line):
+            continue
+
+        # ----------------------------------------------------------------
+        # Keyword lines on the Aura itself (Flash, etc.)
+        # ----------------------------------------------------------------
+        kw_parsed = _parse_keyword_line(line)
+        if kw_parsed is not None:
+            aura_keywords.update(kw_parsed)
+            continue
+
+        # ----------------------------------------------------------------
+        # "Enchant X" line → aura_enchant_type + aura_yours_only
+        # ----------------------------------------------------------------
+        enchant_parsed = _parse_enchant_line(line)
+        if enchant_parsed is not None:
+            aura_enchant_type, aura_yours_only = enchant_parsed
+            continue
+
+        # ----------------------------------------------------------------
+        # Cryoshatter compound trigger: two events, one oracle line.
+        # "When enchanted creature becomes tapped or is dealt damage,
+        # destroy it." → BECOMES_TAPPED + IsHost() and
+        #                 DEALT_DAMAGE + IsHost() both with
+        #                 DestroyEnchantedPermanent.
+        # Checked BEFORE the standard triggered-ability parser so this
+        # specialized compound line wins over the generic single-trigger
+        # path (which would fail to parse the compound condition phrase
+        # anyway — the standard parser doesn't recognize "becomes tapped
+        # or is dealt damage" as a compound event).
+        # ----------------------------------------------------------------
+        if line == _CRYOSHATTER_COMPOUND_LINE:
+            triggers.append(TriggeredAbility(
+                event=Event.BECOMES_TAPPED,
+                predicate=IsHost(),
+                effect=DestroyEnchantedPermanent(),
+            ))
+            triggers.append(TriggeredAbility(
+                event=Event.DEALT_DAMAGE,
+                predicate=IsHost(),
+                effect=DestroyEnchantedPermanent(),
+            ))
+            continue
+
+        # ----------------------------------------------------------------
+        # Literal bespoke trigger lines: effects that aren't yet in the
+        # general grammar. The table maps the verbatim stripped oracle
+        # line to its TriggeredAbility. Checked BEFORE the standard
+        # trigger parser so the known literal wins.
+        # ----------------------------------------------------------------
+        literal_trigger = _AURA_LITERAL_TRIGGER_LINES.get(line)
+        if literal_trigger is not None:
+            triggers.append(literal_trigger)
+            continue
+
+        # ----------------------------------------------------------------
+        # Standard triggered-ability lines (When/Whenever ...)
+        # ----------------------------------------------------------------
+        parsed_trigger = _parse_triggered_ability_line(line, name=name)
+        if parsed_trigger is not None:
+            if isinstance(parsed_trigger, tuple):
+                triggers.extend(parsed_trigger)
+            else:
+                triggers.append(parsed_trigger)
+            continue
+
+        # ----------------------------------------------------------------
+        # Aura static lines — "Enchanted creature/permanent gets ..."
+        # ----------------------------------------------------------------
+        gets_parsed = _parse_enchanted_gets_line(line)
+        if gets_parsed is not None:
+            pb, tb, gkw, lose_all, ward = gets_parsed
+            power_bonus += pb
+            toughness_bonus += tb
+            granted_keywords.update(gkw)
+            if lose_all:
+                attached_grants_lose_all_abilities = True
+            if ward is not None:
+                attached_grants_ward_str = ward
+            continue
+
+        # ----------------------------------------------------------------
+        # "Enchanted (creature|permanent) has ward {cost}." (standalone)
+        # ----------------------------------------------------------------
+        ward_m = _ENCHANTED_HAS_WARD_LINE.match(line)
+        if ward_m is not None:
+            attached_grants_ward_str = ward_m.group(1)
+            continue
+
+        # ----------------------------------------------------------------
+        # "You control enchanted creature/permanent."
+        # ----------------------------------------------------------------
+        if _YOU_CONTROL_ENCHANTED_LINE.match(line):
+            attached_grants_control = True
+            continue
+
+        # ----------------------------------------------------------------
+        # "Enchanted ... doesn't untap during its controller's untap step."
+        # ----------------------------------------------------------------
+        if _DOESNT_UNTAP_LINE.match(line):
+            attached_prevents_untap = True
+            continue
+
+        # ----------------------------------------------------------------
+        # "Enchanted ... loses all abilities." (standalone)
+        # ----------------------------------------------------------------
+        if _LOSES_ALL_ABILITIES_LINE.match(line):
+            attached_grants_lose_all_abilities = True
+            continue
+
+        # ----------------------------------------------------------------
+        # Moonlit Meditation token-replace static (literal)
+        # ----------------------------------------------------------------
+        if line.rstrip(".") == _REPLACES_FIRST_TOKENS_LINE.rstrip("."):
+            replaces_first_tokens_with_copies = True
+            continue
+
+        # Unrecognized line — reject the card
+        return None
+
+    return make_aura(
+        name=card["name"],
+        cost=card.get("mana_cost", ""),
+        power_bonus=power_bonus,
+        toughness_bonus=toughness_bonus,
+        granted_keywords=frozenset(granted_keywords),
+        keywords=frozenset(aura_keywords),
+        triggered_abilities=tuple(triggers),
+        aura_enchant_type=aura_enchant_type,
+        aura_yours_only=aura_yours_only,
+        attached_prevents_untap=attached_prevents_untap,
+        attached_grants_control=attached_grants_control,
+        attached_grants_lose_all_abilities=attached_grants_lose_all_abilities,
+        replaces_first_tokens_with_copies=replaces_first_tokens_with_copies,
+        attached_grants_ward=attached_grants_ward_str,
+    )
 
 
 def _build_enchantment_printing(card: dict) -> CardPrinting | None:
@@ -742,6 +1334,12 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
     factory = _ENCHANTMENT_BUILDERS.get(card.get("name", ""))
     if factory is not None:
         return factory()
+    # Aura oracle-text path tried before the non-Aura oracle-text path
+    # so "Aura" in the type line routes to the right grammar.
+    if "Aura" in type_line:
+        aura = _build_aura_via_oracle_text(card)
+        if aura is not None:
+            return aura
     return _build_enchantment_via_oracle_text(card)
 
 

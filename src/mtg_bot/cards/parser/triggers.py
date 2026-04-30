@@ -105,6 +105,7 @@ from mtg_bot.effects.predicates import (
     Always,
     Controlled,
     Event,
+    IsHost,
     IsSelf,
     Predicate,
     Source,
@@ -806,6 +807,29 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this enchantment enters": (Event.ENTERS, IsSelf()),
     "this Aura enters": (Event.ENTERS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
+    # Batch 12 — Aura relational trigger family. Three trigger conditions
+    # that fire based on what happens to the Aura's enchanted host:
+    #
+    # - ``"enchanted creature attacks"`` → Chorale of the Void's reanimate
+    #   trigger. Maps to the same ``IsHost(subject="attacker")`` predicate
+    #   the bespoke factory wires directly; moving it to the phrasebook
+    #   makes it available to the unified Aura oracle-text parser.
+    #
+    # - ``"enchanted creature is dealt damage"`` → Cracked Skull /
+    #   Sporogenic Infection / Cryoshatter's destroy-host trigger.
+    #   ``Event.DEALT_DAMAGE`` carries the damaged subject; ``IsHost()``
+    #   gates on the subject being the source Aura's enchanted permanent.
+    #   The ``"enchanted creature becomes tapped"`` shape is handled by
+    #   the compound recognizer for Cryoshatter's two-condition line in
+    #   ``enchantment_builder``; it isn't in this phrasebook because no
+    #   oracle text today uses it as a standalone ``When ... becomes
+    #   tapped`` clause.
+    #
+    # Both share the ``IsHost()`` predicate pattern that the engine's
+    # DEALT_DAMAGE and ATTACKS dispatch already uses for bespoke Aura
+    # cards; the phrasebook additions are the parser-layer wiring only.
+    "enchanted creature attacks": (Event.ATTACKS, IsHost(subject="attacker")),
+    "enchanted creature is dealt damage": (Event.DEALT_DAMAGE, IsHost()),
     # ``Whenever you attack`` — DSK's once-per-declare-attackers trigger
     # family (Razorkin Hordecaller, Most Valuable Slayer, Lionheart
     # Glimmer). Distinct from ``"this creature attacks"`` (which fires
