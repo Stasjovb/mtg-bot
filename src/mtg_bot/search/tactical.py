@@ -121,6 +121,16 @@ class DefaultTacticalAgent(Agent):
         # pick the strongest one.
         return legend_object_ids[0]
 
+    def choose_replacement_order(
+        self, candidates, state, affected_player_id,
+    ):
+        # CR 616.1 — when ≥2 replacement effects apply to the same
+        # event, pick the application order. Deterministic identity
+        # ordering for search: apply in the order the dispatcher
+        # collected them (sorted by source object id). Tactical
+        # policies can override to favor Prevent first, etc.
+        return tuple(range(len(candidates)))
+
     def choose_convoke_creatures(
         self, state, player_id, candidates,
         remaining_generic, remaining_colored,

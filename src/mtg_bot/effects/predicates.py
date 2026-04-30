@@ -144,6 +144,59 @@ class Event(str, Enum):
     # for each declared attacker): ``YOU_ATTACK`` fires exactly ONCE per
     # declare-attackers pass when at least one creature attacked.
     YOU_ATTACK = "you_attack"
+    # ────────────────────────────────────────────────────────────────
+    # Pre-fact "would-X" events for CR 614 replacement effects.
+    # ────────────────────────────────────────────────────────────────
+    # The post-fact events above (ENTERS, DIES, …) fire triggered
+    # abilities AFTER the event resolves. The WOULD_X events below
+    # fire BEFORE the event resolves so a registered
+    # ``ReplacementEffect`` can transform the in-flight payload
+    # (multiply the count, add instances, replace a destination,
+    # prevent entirely). The :func:`mtg_bot.effects.modifiers
+    # .dispatch_replacement` walker collects matching replacements
+    # and applies them in CR 616.1 order (the affected player chooses
+    # among multiple). Each WOULD_X event has a natural post-fact
+    # twin: COUNTERS_ADDED (post-doubling) ↔ WOULD_PLACE_COUNTER
+    # (pre-doubling), DIES ↔ WOULD_GO_TO_GRAVEYARD, etc.
+    #
+    # Subject ``(player,)``; payload carries ``count``. Models the
+    # Quantum-Riddler-shape "if you would draw a card while you have
+    # no cards in hand, draw two cards instead". The drawing site
+    # routes through dispatch_replacement before performing the
+    # actual draw; the post-replacement count is consumed by
+    # ``draw_n_cards``.
+    WOULD_DRAW_CARDS = "would_draw_cards"
+    # Subject ``(controller, kind)``; payload carries ``count``. The
+    # "controller" subject is the Player creating the tokens; "kind"
+    # is the token printing's name. Models token-doubling
+    # replacements (Exalted Sunborn ×2, hypothetical Anointed
+    # Procession ×3). The token-creation site routes through
+    # dispatch_replacement before instantiating the token objects;
+    # the post-replacement count drives the loop.
+    WOULD_CREATE_TOKEN = "would_create_token"
+    # Subject ``(triggering_obj, ability_source)``; payload carries
+    # ``instances`` (defaults to 1). Models the Strionic-Resonator-
+    # shape "your triggered abilities trigger an additional time"
+    # and Starfield-Vocalist's narrower "creature ETB triggers".
+    # The triggered-ability-firing path consults
+    # dispatch_replacement to decide how many copies of the trigger
+    # to push onto the stack.
+    TRIGGERED_ABILITY_TRIGGERS = "triggered_ability_triggers"
+    # Subject ``(obj, kind)``; payload carries ``count``. ``kind`` is
+    # the counter name (``"+1/+1"``, ``"charge"``, …). Models the
+    # Loading-Zone-shape counter doublers and the Hardened-Scales
+    # +1-to-+1/+1 family. The counter-placement site routes through
+    # dispatch_replacement before mutating the counter scalar.
+    WOULD_PLACE_COUNTER = "would_place_counter"
+    # Subject ``(card,)``; payload carries ``destination`` (default
+    # "graveyard"). Models Nexus-of-Fate-shape "instead of going to
+    # the graveyard, shuffle into your library". The would-go-to-
+    # graveyard site routes through dispatch_replacement; if a
+    # ``Replace(new_destination="library")`` transform applies, the
+    # card routes there instead. ``WOULD_ENTER`` (self-replacement
+    # for entry counters / clones / etc.) is a separate deferred
+    # pillar — see project notes.
+    WOULD_GO_TO_GRAVEYARD = "would_go_to_graveyard"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -169,6 +222,12 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.YOU_ATTACK: ("player",),
+    # WOULD_X (CR 614 replacement) events — see Event enum docs above.
+    Event.WOULD_DRAW_CARDS: ("player",),
+    Event.WOULD_CREATE_TOKEN: ("controller", "kind"),
+    Event.TRIGGERED_ABILITY_TRIGGERS: ("triggering_obj", "ability_source"),
+    Event.WOULD_PLACE_COUNTER: ("obj", "kind"),
+    Event.WOULD_GO_TO_GRAVEYARD: ("card",),
 }
 
 

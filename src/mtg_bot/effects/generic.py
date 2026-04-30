@@ -4992,15 +4992,34 @@ class CreateToken(Effect):
                         f"Moonlit Meditation: tokens become copies of "
                         f"{base.name}"
                     )
-            # Token-doubling replacement effects (Exalted Sunborn).
-            # Each controller-side permanent with is_token_doubler
-            # doubles the count before tokens enter.
-            doublers = sum(
-                1 for o in state.battlefield
-                if o.controller_id == recipient
-                and o.printing.is_token_doubler
+            # CR 614 token-creation replacement effects (Exalted
+            # Sunborn ×2, future Anointed Procession ×3, …) flow
+            # through the unified ``dispatch_replacement``. The
+            # dispatcher walks the battlefield collecting matching
+            # ``ReplacementEffect`` instances (currently synthesised
+            # from the legacy ``CardPrinting.is_token_doubler`` flag;
+            # native declarations on each printing's static abilities
+            # come in PR D), applies them in CR 616.1 order, and
+            # returns the post-replacement count.
+            from mtg_bot.effects.modifiers import dispatch_replacement
+            from mtg_bot.effects.predicates import Event as _Event
+            replaced = dispatch_replacement(
+                state, _Event.WOULD_CREATE_TOKEN,
+                affected_player_id=recipient,
+                subjects={
+                    "controller": state.player_by_id(recipient),
+                    "kind": printing.name,
+                    # ``controller_id`` is read by the legacy
+                    # ``is_token_doubler`` synthesizer to gate the
+                    # doubler to the recipient's own permanents.
+                    "controller_id": recipient,
+                },
+                payload={"count": self.count},
             )
-            effective_count = self.count * (2 ** doublers)
+            if replaced.get("prevented"):
+                continue
+            effective_count = replaced.get("count", 0)
+            doubled = effective_count != self.count
             for _ in range(effective_count):
                 obj = state.new_object(
                     printing, owner_id=recipient, zone=Zone.BATTLEFIELD,
@@ -5008,7 +5027,10 @@ class CreateToken(Effect):
                 state.log.append(
                     f"P{recipient} creates a {printing.name} token"
                     + (" (tapped)" if self.tapped else "")
-                    + (f" (doubled x{2 ** doublers})" if doublers else "")
+                    + (
+                        f" (replaced x{effective_count}/{self.count})"
+                        if doubled else ""
+                    )
                 )
                 put_into_battlefield(state, obj, recipient)
                 if self.tapped:
