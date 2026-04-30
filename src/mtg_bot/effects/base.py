@@ -555,6 +555,17 @@ class StaticAbility:
     # P/T bonuses to creatures, so the existing scope/applies_to
     # plumbing isn't exercised.
     grants_no_max_hand_size: bool = False
+    # "Creature spells you control can't be countered." When True on a
+    # permanent's static ability, ``CounterTargetSpell.legal_targets``
+    # skips creature spells whose controller matches this permanent's
+    # controller, and ``CounterTargetSpell.resolve`` is a no-op for such
+    # targets. The effect is continuous (CR 101.2): while the source is
+    # on the battlefield, every creature spell the controller puts on the
+    # stack is shielded. Scope is implicitly the casting player's side;
+    # ``applies_to`` is not used (this static applies to spells on the
+    # stack, not permanents on the battlefield). Matches Frenzied Baloth's
+    # third oracle line.
+    grants_creature_spells_uncounterable: bool = False
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,

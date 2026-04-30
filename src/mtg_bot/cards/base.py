@@ -842,6 +842,21 @@ class CardPrinting:
     # set; this requirement OBLIGATES at least one block. Matches DSK's
     # Fear of Being Hunted's static rider.
     must_be_blocked_if_able: bool = False
+    # "This spell can't be countered." When True on a spell's printing,
+    # ``CounterTargetSpell.legal_targets`` and ``CounterTargetSpell.resolve``
+    # both skip this stack item — it appears untargetable by counter effects
+    # and the counter fizzles silently even if somehow targeted. Matches
+    # Frenzied Baloth's first line. The flag lives on the printing (static
+    # declaration) and is checked against the stack item's source printing
+    # at targeting time. CR 101.2 rule: a spell with this clause can't be
+    # countered by spells or abilities.
+    spell_is_uncounterable: bool = False
+    # "Combat damage can't be prevented." When True on a creature's printing,
+    # the global ``state.prevent_combat_damage_this_turn`` flag is bypassed
+    # for damage events sourced by this creature. Checked per-attacker and
+    # per-blocker in ``combat._resolve_damage_step``. Matches Frenzied
+    # Baloth's fourth line.
+    combat_damage_cant_be_prevented: bool = False
     # Protection from a single color (CR 702.16). When set on a
     # creature's printing, ``combat.can_block`` rejects any block
     # declared by an attacker (or against an attacker) whose
@@ -1055,6 +1070,8 @@ def make_creature(
     landcycling: tuple[str, str] | None = None,
     enters_with_plus_one_counter_if_creature_died_this_turn: bool = False,
     enters_with_minus_one_counters_from_hand_cast: int = 0,
+    spell_is_uncounterable: bool = False,
+    combat_damage_cant_be_prevented: bool = False,
 ) -> CardPrinting:
     prefix = "Legendary " if legendary else ""
     artifact_word = "Artifact " if artifact else ""
@@ -1125,6 +1142,8 @@ def make_creature(
         enters_with_minus_one_counters_from_hand_cast=(
             enters_with_minus_one_counters_from_hand_cast
         ),
+        spell_is_uncounterable=spell_is_uncounterable,
+        combat_damage_cant_be_prevented=combat_damage_cant_be_prevented,
     )
 
 

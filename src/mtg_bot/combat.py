@@ -319,17 +319,24 @@ def resolve_combat_damage(state: GameState, defending_player_id: int) -> None:
     _resolve_damage_step(state, defending_player_id, first_strike_step=False)
 
 
+def _source_bypasses_prevention(state: GameState, source_id: int) -> bool:
+    """Return True if the creature with ``source_id`` has
+    ``combat_damage_cant_be_prevented`` on its printing.
+
+    Used to let individual attackers/blockers punch through global combat-
+    damage prevention effects (e.g. Darkness) when the creature's oracle
+    text says "Combat damage can't be prevented." (Frenzied Baloth).
+    """
+    for obj in state.battlefield:
+        if obj.id == source_id:
+            return obj.printing.combat_damage_cant_be_prevented
+    return False
+
+
 def _resolve_damage_step(
     state: GameState, defending_player_id: int, *, first_strike_step: bool
 ) -> None:
     """Build and apply the damage events for one combat damage step."""
-    # Darkness: "prevent all combat damage that would be dealt this
-    # turn." Skip the entire damage pass — we still proceed through the
-    # step so combat-damage-to-player triggers that key on actual
-    # damage simply don't fire (no damage events to pair them with).
-    if state.prevent_combat_damage_this_turn:
-        state.log.append("combat damage prevented this turn (Darkness)")
-        return
     # Event tuple layout:
     # (kind, target_id, amount, source_id, source_keywords, source_controller_id)
     damage_events_typed: list[
@@ -402,6 +409,27 @@ def _resolve_damage_step(
                         ("creature", attacker.id, blocker_power,
                          blocker.id, blocker_kws, blocker.controller_id)
                     )
+
+    # Darkness: "prevent all combat damage that would be dealt this
+    # turn." Filter out events whose source does NOT have
+    # ``combat_damage_cant_be_prevented`` on its printing; sources that
+    # do bypass prevention entirely (CR 614.16 — prevention effects don't
+    # apply to damage that "can't be prevented"). Log prevention once if
+    # any events are suppressed.
+    if state.prevent_combat_damage_this_turn:
+        surviving: list[tuple[str, int, int, int, frozenset[str], int]] = []
+        suppressed = False
+        for ev in damage_events_typed:
+            _, _, _, source_id, _, _ = ev
+            if _source_bypasses_prevention(state, source_id):
+                surviving.append(ev)
+            else:
+                suppressed = True
+        if suppressed:
+            state.log.append("combat damage prevented this turn (Darkness)")
+        damage_events_typed = surviving
+        if not damage_events_typed:
+            return
 
     # Combat damage in MTG is simultaneous, so aggregate damage to each
     # player into a single end-of-step log line ("P0 takes 5 (life:

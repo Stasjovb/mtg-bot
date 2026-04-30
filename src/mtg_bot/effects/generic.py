@@ -6964,12 +6964,48 @@ class CounterTargetSpell(Effect):
     Targets a stack item by its index via the new ``"stack"`` target kind.
     Triggered and activated abilities on the stack can't be countered by
     this effect (only spells — items where ``ability`` is None).
+
+    Uncounterable spells are excluded from legal targets:
+    - A spell whose printing has ``spell_is_uncounterable=True`` (e.g.
+      Frenzied Baloth's "This spell can't be countered.").
+    - A creature spell whose controller controls a permanent with a
+      static ability carrying ``grants_creature_spells_uncounterable=True``
+      (e.g. Frenzied Baloth on the battlefield granting the same
+      protection to your other creature spells).
+
+    CR 101.2: such spells can't be countered by spells or abilities.
     """
 
     filter_types: frozenset[str] = frozenset()
 
     def requires_target(self) -> bool:
         return True
+
+    @staticmethod
+    def _is_uncounterable(state: "GameState", item: "object") -> bool:
+        """Return True if this stack item is immune to counter effects.
+
+        Checks two sources of uncounterability:
+        1. The spell's own printing carries ``spell_is_uncounterable``.
+        2. The spell is a creature spell and the controller has a permanent
+           on the battlefield with a static ability carrying
+           ``grants_creature_spells_uncounterable``.
+        """
+        src = item.source.printing  # type: ignore[attr-defined]
+        # Self-flag: "This spell can't be countered."
+        if src.spell_is_uncounterable:
+            return True
+        # Battlefield static grant: "Creature spells you control can't be
+        # countered." Only applies to creature spells.
+        if "Creature" in src.card_types:
+            spell_controller = item.controller_id  # type: ignore[attr-defined]
+            for obj in state.battlefield:
+                if obj.controller_id != spell_controller:
+                    continue
+                for sa in obj.printing.static_abilities:
+                    if sa.grants_creature_spells_uncounterable:
+                        return True
+        return False
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -6980,6 +7016,8 @@ class CounterTargetSpell(Effect):
                 continue  # not a spell
             if item.countered:
                 continue
+            if self._is_uncounterable(state, item):
+                continue  # CR 101.2: can't be countered
             src = item.source.printing
             if self.filter_types:
                 if not any(t in src.card_types for t in self.filter_types):
@@ -7000,6 +7038,15 @@ class CounterTargetSpell(Effect):
             return
         item = state.stack[idx]
         if item.ability is not None:
+            return
+        # Re-check uncounterability at resolve time (the spell may have
+        # gained protection between targeting and resolution, e.g. a
+        # Frenzied Baloth entering the battlefield in response).
+        if self._is_uncounterable(state, item):
+            state.log.append(
+                f"counterspell fizzles: "
+                f"{item.source.printing.name} can't be countered"
+            )
             return
         item.countered = True
         state.log.append(
