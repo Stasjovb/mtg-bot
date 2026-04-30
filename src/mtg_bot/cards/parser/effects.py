@@ -111,9 +111,11 @@ from mtg_bot.cards.base import (
     PutLoyaltyCounterOnSelf,
     PutPlusOneCounterOnSelf,
     PutPlusOneCounterOnTargetCreature,
+    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     ReturnAllCreaturesFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
+    ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnTargetArtifactCardFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
     ReturnTargetPermanentYouControlToOwnersHand,
@@ -602,6 +604,23 @@ _COUNTER_TARGET_ARTIFACT_OR_ENCHANTMENT_SPELL = re.compile(
     r"^counter target artifact or enchantment spell$"
 )
 _EXILE_TARGET_CREATURE = re.compile(r"^exile target creature$")
+# "Exile target creature or planeswalker." — Archenemy's Charm mode 1.
+# Planeswalkers aren't fully modeled in the EoE pool today; maps to the
+# same ``ExileTargetCreature()`` engine class used by the bare-creature
+# form (same "or planeswalker" scope drop as the static registry's
+# Archenemy's Charm mode 1 comment notes). Tried BEFORE the bare
+# ``exile target creature`` regex so the more-specific ``or
+# planeswalker`` tail wins; the bare regex's ``$`` anchor would never
+# match this longer form anyway, but ordering more-specific before
+# more-general is the convention here.
+# Only Archenemy's Charm fits this exact surface today; the recognizer
+# is a literal-line match (no capture groups) since no varying piece
+# exists. A future card "exile target creature or enchantment" would
+# need a separate literal or a parameterized regex capturing the disjunct
+# type.
+_EXILE_TARGET_CREATURE_OR_PLANESWALKER = re.compile(
+    r"^exile target creature or planeswalker$"
+)
 # "Exile target creature with power or toughness N or less." — Warping
 # Wail's mode 1. Maps to ``ExileTargetCreatureWithPowerOrToughnessAtMost
 # (max_value=N)`` whose combined ``power ≤ N OR toughness ≤ N`` filter
@@ -1313,6 +1332,23 @@ _RETURN_CREATURE_OR_SPACECRAFT_GRAVEYARD_TO_HAND = re.compile(
 # Interceptor Mechan and any other MV-unrestricted reanimator.
 _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV = re.compile(
     r"^return target creature card with mana value (\d+) or less "
+    r"from your graveyard to your hand$"
+)
+# "Return one or two target creature and/or planeswalker cards from
+# your graveyard to your hand." — Archenemy's Charm mode 2. The
+# "and/or planeswalker" scope drop mirrors the existing "or
+# planeswalker" scope drops across the pool (same pending-engine
+# support precedent as mode 1's planeswalker exile). Maps to
+# ``ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1)``
+# whose ``legal_targets`` is creature-only today; planeswalkers would
+# surface through the same code path if they appear in graveyards.
+# Literal-line recognizer: only Archenemy's Charm fits this exact
+# surface today; the "one or two" count and "and/or planeswalker"
+# disjunct are both fixed at their printed values. A future "return
+# one or three target creature cards" would carry a different count;
+# generalize if/when a second card with a varying piece appears.
+_RETURN_ONE_OR_TWO_CREATURE_OR_PLANESWALKER_FROM_GRAVEYARD_TO_HAND = re.compile(
+    r"^return one or two target creature and/or planeswalker cards "
     r"from your graveyard to your hand$"
 )
 # "Return target creature card from your graveyard to the battlefield"
@@ -2175,6 +2211,23 @@ _GRANT_KEYWORDS_TO_ANOTHER_TARGET_CREATURE_YOU_CONTROL_UEOT = re.compile(
 _GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_UEOT = re.compile(
     r"^target creature you control gains (.+) until end of turn\. "
     r"If it has a \+1/\+1 counter on it, draw a card$"
+)
+# "Put N +1/+1 counters on target creature you control. It gains
+# <kw> until end of turn." — Archenemy's Charm mode 3. Two-sentence
+# recognizer: the second sentence's ``it`` is anaphoric to the
+# targeted creature, so both sentences must be kept together.
+# Maps to ``PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl
+# (amount=N, granted_keywords=...)``. The amount tail accepts digits
+# and spelled-out small cardinals; the keyword body is validated via
+# ``_parse_keyword_grant_body``.
+#
+# Currently only Archenemy's Charm in the pool fits this exact shape;
+# the regex captures both the amount and the keyword body as parameters
+# so a future printing with different values (e.g. "three +1/+1
+# counters ... It gains flying and haste") lands for free.
+_PUT_PLUS_ONE_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL_IT_GAINS_UEOT = re.compile(
+    rf"^put (\d+|{_SMALL_CARDINAL_PATTERN}) \+1/\+1 counters on "
+    rf"target creature you control\. It gains (.+) until end of turn$"
 )
 # "Target creature gains <kw>[ and <kw2>...] until end of turn." —
 # pure keyword-grant variant with no P/T pump and no control
@@ -3085,6 +3138,12 @@ def _parse_effect(phrase: str) -> Effect | None:
     # a Spacecraft-aware engine class in lockstep with the static.
     if _EXILE_TARGET_CREATURE_OR_SPACECRAFT.match(phrase) is not None:
         return ExileTargetCreature()
+    # ``exile target creature or planeswalker`` — Archenemy's Charm
+    # mode 1. Planeswalkers aren't fully modeled; same "or planeswalker"
+    # scope drop as the static registry. Tried BEFORE the bare
+    # ``exile target creature`` regex.
+    if _EXILE_TARGET_CREATURE_OR_PLANESWALKER.match(phrase) is not None:
+        return ExileTargetCreature()
     # ``exile target creature with power or toughness N or less`` —
     # Warping Wail mode 1. Tried BEFORE the bare ``exile target
     # creature`` regex so the more-specific power/toughness-threshold
@@ -3560,6 +3619,18 @@ def _parse_effect(phrase: str) -> Effect | None:
             max_n=_parse_amount(m.group(1)),
             exclude_spacecraft=True,
         )
+    # ``return one or two target creature and/or planeswalker cards from
+    # your graveyard to your hand`` — Archenemy's Charm mode 2. Maps to
+    # ``ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1)``
+    # which targets creature graveyard cards only (planeswalkers dropped
+    # per the same scope-drop precedent as mode 1). Tried BEFORE the
+    # single-target bare form so the "one or two" multi-target shape wins.
+    if (
+        _RETURN_ONE_OR_TWO_CREATURE_OR_PLANESWALKER_FROM_GRAVEYARD_TO_HAND.match(
+            phrase
+        ) is not None
+    ):
+        return ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1)
     m = _RETURN_TARGET_CREATURE_GRAVEYARD_TO_HAND_WITH_MV.match(phrase)
     if m is not None:
         # ``return target creature card with mana value N or less from
@@ -3958,6 +4029,25 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Tried BEFORE the ``another target creature you control gains …``
     # shape so the more-specific 2-sentence body (including the
     # conditional draw rider) wins on phrases that carry it.
+    # ``put N +1/+1 counters on target creature you control. It gains
+    # <kw> until end of turn`` — Archenemy's Charm mode 3. Two-sentence
+    # recognizer: the ``it`` pronoun in sentence 2 refers to the target
+    # of sentence 1, so both sentences are kept together. Maps to
+    # ``PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl
+    # (amount=N, granted_keywords=...)``. Tried BEFORE the draw-if-
+    # counter shape so the more-specific counter-count+grant shape wins;
+    # the draw-if-counter regex's tail would never match the
+    # ``It gains ...`` sentence anyway.
+    m = _PUT_PLUS_ONE_COUNTERS_ON_TARGET_CREATURE_YOU_CONTROL_IT_GAINS_UEOT.match(
+        phrase
+    )
+    if m is not None:
+        keywords = _parse_keyword_grant_body(m.group(2))
+        if keywords is not None:
+            return PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+                amount=_parse_amount(m.group(1)),
+                granted_keywords=keywords,
+            )
     m = _GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_UEOT.match(
         phrase
     )

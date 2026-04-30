@@ -120,24 +120,37 @@ def test_dispatch_divert_disaster_returns_engine_class():
 
 def test_archenemys_charm_claimed_by_parser():
     # Archenemy's Charm ``{B}{B}{B}`` Instant — 3-mode Choose-one
-    # modal whose per-mode primitives are one-off engine classes.
-    # Whole-spell exact-text dispatch returns the full
-    # ``ModalChooseOne`` the static side ships.
+    # modal now claimed via the per-clause grammar: mode 1 (exile-or-
+    # planeswalker), mode 2 (1-or-2 graveyard returns), and mode 3
+    # (multi-counter + grant-keyword 2-sentence body).
     assert "Archenemy's Charm" in _claimed_names()
 
 
-def test_dispatch_archenemys_charm_returns_engine_class():
-    # Archenemy's Charm's printed text is a multi-line modal — the
-    # dispatch key carries the ``Choose one —`` header on its own
-    # line plus three bullet mode lines, with literal ``\n`` between
-    # them (no reminder text to strip in this spell).
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_archenemys_charm_no_bespoke_entry():
+    # After migration, the whole-spell dispatcher no longer has an
+    # entry for Archenemy's Charm.
+    assert _try_whole_spell_exact_text(
         "Choose one —\n"
         "• Exile target creature or planeswalker.\n"
         "• Return one or two target creature and/or planeswalker "
         "cards from your graveyard to your hand.\n"
         "• Put two +1/+1 counters on target creature you control. "
         "It gains lifelink until end of turn."
+    ) is None
+
+
+def test_archenemys_charm_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause modal grammar produces the
+    # same 3-mode ModalChooseOne as the static registry.
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    eff = _parse_spell_oracle_text(
+        "Choose one —\n"
+        "• Exile target creature or planeswalker.\n"
+        "• Return one or two target creature and/or planeswalker "
+        "cards from your graveyard to your hand.\n"
+        "• Put two +1/+1 counters on target creature you control. "
+        "It gains lifelink until end of turn.",
+        "Archenemy's Charm",
     )
     assert eff == ModalChooseOne(modes=(
         ExileTargetCreature(),

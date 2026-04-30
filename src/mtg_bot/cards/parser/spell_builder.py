@@ -71,11 +71,9 @@ from mtg_bot.cards.base import (
     OptionalSacArtifactForEffect,
     PumpCreaturesYouControlUntilEOT,
     PumpTargetCreatureUntilEOT,
-    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     ReturnTargetCreatureToOwnersHand,
-    ReturnUpToNCreaturesFromYourGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     Sequence,
@@ -882,39 +880,6 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
         "or less from your graveyard to the battlefield. "
         "Then create a Lander token."
     ): ReturnCreatureFromYourGraveyardToBattlefield(),
-    # Archenemy's Charm: 3-mode Choose-one modal with one one-off
-    # primitive per mode. The per-mode parser (``_parse_modal_choose_
-    # one``) can't claim it because none of the three mode lines parse
-    # as standalone spell-effect phrases — Mode 1's ``or planeswalker``
-    # tail and Mode 2's ``creature and/or planeswalker cards`` shape
-    # don't exist in the unified grammar, and Mode 3 is a multi-
-    # sentence pump-and-grant-keyword combined-target effect that has
-    # no per-clause primitive. Each of the three engine classes
-    # (``ExileTargetCreature``, ``ReturnUpToNCreaturesFromYourGraveyard
-    # ToHand``, ``PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
-    # YouControl``) is used only by this spell, so adding per-mode
-    # grammar entries would be over-engineering. The whole-spell tier
-    # is the right place — same pattern as Warping Wail's mode 3,
-    # which similarly drops a one-off mode into a whole-spell entry.
-    #
-    # The Mode 1 ``or planeswalker`` and Mode 2 ``and/or planeswalker``
-    # simplifications match Warping Wail's ``ExileTargetCreatureWith
-    # PowerOrToughnessAtMost`` (which similarly drops the planeswalker
-    # scope) — planeswalkers aren't fully modeled in the EoE pool yet.
-    (
-        "Choose one —\n"
-        "• Exile target creature or planeswalker.\n"
-        "• Return one or two target creature and/or planeswalker "
-        "cards from your graveyard to your hand.\n"
-        "• Put two +1/+1 counters on target creature you control. "
-        "It gains lifelink until end of turn."
-    ): ModalChooseOne(modes=(
-        ExileTargetCreature(),
-        ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1),
-        PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
-            amount=2, granted_keywords=frozenset({"lifelink"}),
-        ),
-    )),
     # Terminal Velocity: put-card-from-hand onto battlefield + haste +
     # death-trigger + end-step-sac. Complex triple-rider oracle text
     # that the per-clause grammar can't parse; the static ships a

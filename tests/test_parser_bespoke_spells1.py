@@ -80,8 +80,10 @@ def test_bespoke_table_count():
     #   + Warping Wail (exile-p/t-threshold + sorcery-counter +
     #     "It has" token suffix recognizers)
     #   + Decode Transmissions (Void "instead" rider recognizer)
-    # 50 - 13 = 37 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 37
+    #   + Archenemy's Charm (exile-or-planeswalker + graveyard-return +
+    #     counter-grant recognizers)
+    # 50 - 14 = 36 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 36
 
 
 # ------------------------------------------------------------------ #
