@@ -71,7 +71,6 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     RovingActuatorETBEffect,
     SearchLibraryForCard,
-    SelfcraftMechanETBEffect,
     SelfMill,
     Sequence,
     SplitskinDollETBEffect,
@@ -443,30 +442,18 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # Removed from this table so the grammar claims it directly.
         #
         # Selfcraft Mechan {3}{U} 3/4 Robot Artificer.
+        # Migrated to the oracle-text grammar (bespoke-artifact-misc).
         # "When this creature enters, you may sacrifice an artifact. When
         # you do, put a +1/+1 counter on target creature and draw a card."
-        # SKIP (wave7): The oracle shape is "you may sacrifice an artifact.
-        # When you do, <effect>." — "sacrifice an artifact" (not "sacrifice
-        # another creature or artifact") with a reflexive "When you do"
-        # continuation.  The grammar has ``OptionalSacAnotherForEffect``
-        # (shape: "you may sacrifice another creature or artifact. If you
-        # do, <effect>") but Selfcraft Mechan uses a different sacrifice
-        # object ("an artifact" = possibly self) and the continuation uses
-        # "When you do" not "If you do".  Neither the sacrifice-object
-        # shape nor the "When you do" reflexive trigger form has a grammar
-        # recognizer today.  Requires a parameterized recognizer for the
-        # "you may sacrifice <object>. When you do, <effect>" shape.
-        # Subtypes: Artificer is dropped (matching static registry).
-        "Selfcraft Mechan": make_creature(
-            "Selfcraft Mechan", "{3}{U}", 3, 4,
-            artifact=True,
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=SelfcraftMechanETBEffect(),
-                ),
-            ),
-        ),
+        # The new ``_OPTIONAL_SAC_ARTIFACT_WHEN_YOU_DO_EFFECT`` recognizer
+        # in ``effects.py`` matches "you may sacrifice an artifact. When
+        # you do, <inner>" → ``OptionalSacArtifactForEffect(inner)``.
+        # Inner "put a +1/+1 counter on target creature and draw a card"
+        # parses via compound split: ``PutPlusOneCounterOnTargetCreature``
+        # + ``DrawCards(1)``. ``OptionalSacArtifactForEffect`` now forwards
+        # ``requires_target`` and ``legal_targets`` from the inner effect
+        # so target selection works correctly at trigger-resolution time.
+        # Removed from this table so the oracle parser claims it directly.
         # Survey Mechan {4} 1/3.
         # Real oracle: "Flying. Hexproof. {10}, Sacrifice this creature:
         # …" — large activated ability dropped; shipped with flying only

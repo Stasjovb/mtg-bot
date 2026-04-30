@@ -1,10 +1,23 @@
 """Tests for Selfcraft Mechan's may-sac-artifact → +1/+1 counter + draw
-ETB."""
+ETB.
+
+Selfcraft Mechan was migrated from the bespoke ``SelfcraftMechanETBEffect``
+engine class to the oracle-text grammar in bespoke-artifact-misc.  The
+grammar path produces an ``OptionalSacArtifactForEffect`` wrapping a
+``Sequence`` of ``PutPlusOneCounterOnTargetCreature`` and ``DrawCards(1)``
+— the same observable behavior as the bespoke class.
+
+Effect-level tests now exercise the grammar-produced effect; integration
+tests remain unchanged because they drive through ``_PRINTINGS`` (which
+resolves via the oracle parser).
+"""
 
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
-from mtg_bot.effects import SelfcraftMechanETBEffect
+from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+from mtg_bot.effects.combinators import Sequence
+from mtg_bot.effects.generic import DrawCards, PutPlusOneCounterOnTargetCreature
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
@@ -36,18 +49,40 @@ def _stock_library(state, player_id, n):
 
 
 # -----------------------
-# Effect-level
+# Grammar-path effect structure
 # -----------------------
 
 
-def test_effect_requires_target_and_describe():
-    e = SelfcraftMechanETBEffect()
-    assert e.requires_target()
-    d = e.describe()
+def test_grammar_printing_has_optional_sac_artifact_effect():
+    """The grammar-produced ETB trigger carries an
+    ``OptionalSacArtifactForEffect`` wrapping a ``Sequence``."""
+    from mtg_bot.effects.predicates import Event
+
+    m = _PRINTINGS["Selfcraft Mechan"]
+    etb = [t for t in m.triggered_abilities if t.event == Event.ENTERS]
+    assert len(etb) == 1
+    eff = etb[0].effect
+    assert isinstance(eff, OptionalSacArtifactForEffect)
+    assert isinstance(eff.inner_effect, Sequence)
+
+
+def test_grammar_effect_requires_target_and_describe():
+    """The grammar-produced effect requires a target (delegated from the
+    inner ``PutPlusOneCounterOnTargetCreature``) and its describe
+    string mentions sacrifice, +1/+1 counter, and draw."""
+    m = _PRINTINGS["Selfcraft Mechan"]
+    from mtg_bot.effects.predicates import Event
+
+    etb = [t for t in m.triggered_abilities if t.event == Event.ENTERS]
+    eff = etb[0].effect
+    assert eff.requires_target()
+    d = eff.describe()
     assert "sacrifice" in d and "+1/+1" in d and "draw" in d
 
 
-def test_effect_legal_targets_includes_all_creatures():
+def test_grammar_effect_legal_targets_includes_all_creatures():
+    """legal_targets on the grammar-produced effect returns all creatures
+    on the battlefield (same as the former bespoke class)."""
     state = _new_state()
     own = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
@@ -57,7 +92,12 @@ def test_effect_legal_targets_includes_all_creatures():
         SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
     )
     state.battlefield.append(enemy)
-    legal = SelfcraftMechanETBEffect().legal_targets(state, 0)
+    m = _PRINTINGS["Selfcraft Mechan"]
+    from mtg_bot.effects.predicates import Event
+
+    etb = [t for t in m.triggered_abilities if t.event == Event.ENTERS]
+    eff = etb[0].effect
+    legal = eff.legal_targets(state, 0)
     ids = {tid for _, tid in legal}
     assert own.id in ids and enemy.id in ids
 
@@ -99,12 +139,14 @@ def test_selfcraft_etb_fizzles_when_no_artifact_can_be_sacrificed():
         SYNTHETIC_CREATURES["Wild Bear"], 0, Zone.BATTLEFIELD,
     )
     state.battlefield.append(bear)
-    # Resolve the effect directly (not via ETB) so Mechan isn't on the
-    # battlefield as a candidate artifact — simulating a scenario where
-    # no artifact is available.
-    SelfcraftMechanETBEffect().resolve(
-        state, 0, (("creature", bear.id),),
-    )
+    # Resolve the grammar-produced effect directly (not via ETB) so
+    # Mechan isn't on the battlefield as a candidate artifact —
+    # simulating a scenario where no artifact is available. No artifact
+    # → the optional sac has no legal options → silent no-op.
+    from mtg_bot.effects.predicates import Event
+    m = _PRINTINGS["Selfcraft Mechan"]
+    eff = next(t for t in m.triggered_abilities if t.event == Event.ENTERS).effect
+    eff.resolve(state, 0, (("creature", bear.id),))
     assert bear.plus_one_counters == 0
     assert len(state.players[0].hand) == 0
 

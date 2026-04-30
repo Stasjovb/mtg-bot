@@ -91,6 +91,7 @@ from mtg_bot.cards.base import (
     OptionalPutLandFromHandOntoBattlefield,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
+    OptionalSacArtifactForEffect,
     OptionalSacLandOrLanderForBasicLandRamp,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
@@ -2018,6 +2019,22 @@ _OPTIONAL_SAC_LAND_OR_LANDER_FOR_BASIC_LAND_RAMP = re.compile(
     rf"(\d+|{_SMALL_CARDINAL_PATTERN}) basic land cards, "
     rf"put them onto the battlefield tapped, then shuffle$"
 )
+# "You may sacrifice an artifact. When you do, <inner-effect>." —
+# the ``OptionalSacArtifactForEffect`` wrapper. Surface form uses
+# "When you do" (reflexive trigger) rather than "If you do"; the
+# engine class treats both phrasings identically (sacrifice is optional;
+# inner effect runs only if the sacrifice is paid). Inner-effect phrase
+# is parsed recursively so any parseable effect (or compound) can serve
+# as the consequence. Selfcraft Mechan's ETB prints this shape with
+# inner "put a +1/+1 counter on target creature and draw a card".
+# Tried BEFORE the more general ``_OPTIONAL_SAC_ANOTHER_FOR_EFFECT``
+# so the more-specific artifact-only object wins on phrases that carry
+# "sacrifice an artifact" (the general regex requires "another creature
+# or artifact" and would not match this anyway, but ordering keeps the
+# most-specific-first convention intact).
+_OPTIONAL_SAC_ARTIFACT_WHEN_YOU_DO_EFFECT = re.compile(
+    r"^you may sacrifice an artifact\. When you do, (.+)$"
+)
 # "You may sacrifice another creature or artifact. If you do, <inner-
 # effect>." — the general ``OptionalSacAnotherForEffect`` wrapper.
 # Inner-effect phrase is parsed recursively via the unified grammar so
@@ -2754,7 +2771,7 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
 # level so triggered abilities with multi-sentence bodies — e.g.
 # Dauntless Scrapbot's ``exile each opponent's graveyard. Create a
 # Lander token.`` — split at the right boundary).
-_EFFECT_SENTENCE_BOUNDARY = re.compile(r"(?<=\.) (?=[A-Z](?!f you do,))")
+_EFFECT_SENTENCE_BOUNDARY = re.compile(r"(?<=\.) (?=[A-Z](?!f you do,)(?!hen you do,))")
 
 
 def _split_effect_sentences(phrase: str) -> list[str]:
@@ -3124,6 +3141,23 @@ def _parse_effect(phrase: str) -> Effect | None:
         "draw a card"
     ):
         return TannukEnsignLandfallEffect()
+    # "you may sacrifice an artifact. When you do, <inner>" —
+    # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
+    # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
+    # inside the inner clause (e.g. "put a +1/+1 counter on target
+    # creature and draw a card") isn't split at the wrong boundary —
+    # the whole phrase must parse as a unit with the inner clause
+    # belonging entirely to the sac-conditional rider, not split off
+    # as a parallel sequence step.
+    m_sac_art = _OPTIONAL_SAC_ARTIFACT_WHEN_YOU_DO_EFFECT.match(phrase)
+    if m_sac_art is not None:
+        inner_sac = _parse_effect(m_sac_art.group(1))
+        if inner_sac is not None:
+            return OptionalSacArtifactForEffect(inner_effect=inner_sac)
+        # Inner doesn't parse — fall through to the compound/single-effect
+        # dispatchers so this phrase can try other parse paths (belt-
+        # and-suspenders; in practice the inner always either parses or
+        # the card is unclaimed).
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound

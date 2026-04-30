@@ -229,9 +229,22 @@ class OptionalSacArtifactForEffect(Effect):
     default base-Agent behavior is "True" so existing cards that relied
     on "may → always yes" are unaffected. Once the controller agrees
     to sacrifice, ``choose_sacrifice`` picks WHICH artifact.
+
+    Targeting is forwarded from the inner effect so that inner effects
+    that require a target (e.g. a counter on a creature) work correctly:
+    ``requires_target``, ``legal_targets``, and the ``targets`` tuple
+    passed at resolve time are all delegated to ``inner_effect``.
     """
 
     inner_effect: Effect
+
+    def requires_target(self) -> bool:
+        return self.inner_effect.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner_effect.legal_targets(state, controller_id)
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -267,7 +280,7 @@ class OptionalSacArtifactForEffect(Effect):
             f"P{controller_id} optionally sacrifices {chosen.printing.name}"
         )
         _sacrifice(state, chosen)
-        self.inner_effect.resolve(state, controller_id, ())
+        self.inner_effect.resolve(state, controller_id, targets)
 
     def describe(self) -> str:
         return (

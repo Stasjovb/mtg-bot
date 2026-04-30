@@ -15,6 +15,12 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     its power to any target`` compound now parses after adding ``(?:it )?``
     to ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET``.
     Migrated in bespoke-creature-wave7.
+  - Selfcraft Mechan — new ``_OPTIONAL_SAC_ARTIFACT_WHEN_YOU_DO_EFFECT``
+    recognizer in ``effects.py`` matches "you may sacrifice an artifact.
+    When you do, <inner>" → ``OptionalSacArtifactForEffect(inner)``;
+    ``OptionalSacArtifactForEffect`` updated to forward ``requires_target``
+    / ``legal_targets`` / ``targets`` from the inner effect.
+    Migrated in bespoke-artifact-misc.
 
 Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   1. Emissary Escort — dynamic P/T formula (emissary_escort)
@@ -24,12 +30,11 @@ Remaining bespoke cards (still in ``_BESPOKE_ARTIFACT_CREATURES``):
   4. Mechan Shieldmate — defender + ControlledArtifactEnteredThisTurn ContinuousModifier
   5. Monoist Circuit-Feeder — dual-target +X/-X ETB (MonoistCircuitFeederETBEffect)
   6. Roving Actuator — void ETB exile-from-graveyard+copy+free-cast (RovingActuatorETBEffect)
-  7. Selfcraft Mechan — "you may sacrifice an artifact. When you do" shape
-  8. Survey Mechan — flying only (simplified; large activated body dropped)
-  9. Splitskin Doll — draw + source-relative conditional discard (DSK)
- 10. Attack-in-the-Box — optional pump + delayed end-step sac (DSK)
- 11. Osseous Sticktwister — Delirium end-step per-opponent choice (DSK)
- 12. Wickerfolk Thresher — Delirium attack peek-top-then-branch (DSK)
+  7. Survey Mechan — flying only (simplified; large activated body dropped)
+  8. Splitskin Doll — draw + source-relative conditional discard (DSK)
+  9. Attack-in-the-Box — optional pump + delayed end-step sac (DSK)
+ 10. Osseous Sticktwister — Delirium end-step per-opponent choice (DSK)
+ 11. Wickerfolk Thresher — Delirium attack peek-top-then-branch (DSK)
 """
 
 from __future__ import annotations
@@ -136,6 +141,26 @@ def test_rust_harvester_grammar_structure():
 
 def test_selfcraft_mechan_claimed_by_parser():
     assert "Selfcraft Mechan" in _PARSER_PRINTINGS
+
+
+def test_selfcraft_mechan_grammar_structure():
+    """Grammar-claimed Selfcraft Mechan carries an ETB trigger whose
+    effect is ``OptionalSacArtifactForEffect`` wrapping a ``Sequence``
+    of ``PutPlusOneCounterOnTargetCreature`` and ``DrawCards`` — the
+    oracle-faithful shape for "you may sacrifice an artifact. When you
+    do, put a +1/+1 counter on target creature and draw a card."
+    """
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect, Sequence
+    from mtg_bot.effects.predicates import Event
+
+    sm = _parser("Selfcraft Mechan")
+    assert sm.is_artifact
+    etb = [t for t in sm.triggered_abilities if t.event == Event.ENTERS]
+    assert len(etb) == 1
+    eff = etb[0].effect
+    assert isinstance(eff, OptionalSacArtifactForEffect)
+    assert isinstance(eff.inner_effect, Sequence)
+    assert eff.requires_target()
 
 
 
