@@ -8256,7 +8256,13 @@ class PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(Effect):
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, self.amount)
         if self.granted_keywords:
-            obj.temp_keywords = obj.temp_keywords | self.granted_keywords
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, (("creature", obj.id),))
         state.log.append(
             f"{obj.printing.name} gets {self.amount} +1/+1 counter(s) "
             f"(now {obj.plus_one_counters})"

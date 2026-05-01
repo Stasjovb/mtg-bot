@@ -15,7 +15,7 @@ from mtg_bot.effects import (
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
 )
-from mtg_bot.game import GameState, Player, Zone
+from mtg_bot.game import GameState, Player, Zone, effective_keywords
 
 from mtg_bot.cards.source import get_active_source
 
@@ -138,13 +138,13 @@ def test_archenemys_charm_mode_2_grants_counters_and_lifelink():
     state.battlefield.append(bear)
 
     assert bear.plus_one_counters == 0
-    assert "lifelink" not in bear.temp_keywords
+    assert "lifelink" not in effective_keywords(state, bear)
 
     spell = _PRINTINGS["Archenemy's Charm"]
     spell.spell_effect.resolve(state, 0, (("creature", bear.id),))
 
     assert bear.plus_one_counters == 2
-    assert "lifelink" in bear.temp_keywords
+    assert "lifelink" in effective_keywords(state, bear)
 
 
 # -------------------------------------------------------------
@@ -314,4 +314,4 @@ def test_pump_with_counters_no_keywords_skips_keyword_log():
     assert "lifelink" not in text
     effect.resolve(state, 0, (("creature", bear.id),))
     assert bear.plus_one_counters == 1
-    assert "lifelink" not in bear.temp_keywords
+    assert "lifelink" not in effective_keywords(state, bear)
