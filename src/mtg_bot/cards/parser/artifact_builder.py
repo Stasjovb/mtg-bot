@@ -307,21 +307,99 @@ def _haunted_screen_once_only_activation() -> ActivatedAbility:
 
 _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     # Memorial Vault — bespoke "exile X-from-top, may play this turn"
-    # body. Cost atom is standard.
+    # body. Cost atom (``{T}, Sacrifice another artifact``) parses via
+    # the unified activated grammar.
+    #
+    # Decomposition blocker: the body has two pieces that don't yet
+    # have a generic engine primitive:
+    #
+    #   1. **MV-of-most-recently-sacrificed-as-cost formula.** ``X``
+    #      reads the mana value of the artifact that paid the
+    #      ``Sacrifice another artifact`` cost atom. The engine has no
+    #      first-class "objects sacrificed as cost for this resolving
+    #      ability" slot today — ``MemorialVaultActivatedEffect`` reads
+    #      the most-recently-graveyarded artifact in the controller's
+    #      graveyard at resolve time as a heuristic, which works
+    #      because cost payment runs immediately before resolve. A
+    #      proper decomposition would need
+    #      ``ResolvingAbility.cost_paid_objects`` (a tuple of
+    #      ``GameObject`` references threaded by the cost-payment
+    #      pipeline) plus a ``MVOfCostPaidObjectPlus(constant)``
+    #      formula primitive.
+    #   2. **Variable-amount exile-top-may-play.** The existing generic
+    #      ``ExileTopOfLibraryMayPlayThisTurn`` takes a fixed
+    #      ``amount`` set at parse time. Memorial Vault needs a
+    #      formula-driven sibling: ``ExileTopXOfLibraryMayPlayThisTurn
+    #      (amount_formula)`` that calls ``amount_formula(state,
+    #      controller_id)`` at resolve time.
+    #
+    # Once both primitives land, the body decomposes to
+    # ``ExileTopXOfLibraryMayPlayThisTurn(amount_formula=
+    # MVOfCostPaidObjectPlus(1))`` and the literal entry can be
+    # deleted. No second EoE/DSK printing prints either piece today,
+    # so the bespoke class earns its keep until a second example ships.
     "{T}, Sacrifice another artifact: Exile the top X cards of your "
     "library, where X is one plus the mana value of the sacrificed "
     "artifact. You may play those cards this turn.":
         _memorial_vault_activation,
     # Requiem Monolith — bespoke UEOT-grant-plus-optional-ping body.
-    # Sorcery-speed rider flips ``sorcery_speed=True``.
+    # Sorcery-speed rider flips ``sorcery_speed=True`` at the activated-
+    # ability layer; the cost atom (``{T}``) parses via the unified
+    # activated grammar.
+    #
+    # Decomposition blocker: the body grants a quoted triggered ability
+    # to the target creature for the rest of the turn, then offers the
+    # target's controller (NOT the activator) an optional 1-damage
+    # ping via ``choose_mode``. Two missing engine primitives:
+    #
+    #   1. **Generic UEOT triggered-ability grant.** The engine has
+    #      ``state.grant_triggered_ability_ueot`` but no parser-level
+    #      primitive that encapsulates "until end of turn, target
+    #      creature gains <quoted-triggered-ability>". The quoted
+    #      ability body itself ("Whenever this creature is dealt
+    #      damage, you draw that many cards and lose that much life.")
+    #      is a separate parser problem — combat-damage observer
+    #      triggers granted UEOT need their own grammar arm.
+    #   2. **Optional ping where the choosing player is the target's
+    #      controller, not the activator.** Existing optional-effect
+    #      combinators (``MayDo``, ``IfYouDo``) ask the resolving
+    #      controller to choose; this body asks the *target's*
+    #      controller. No generic primitive routes a may-decision to
+    #      a non-resolving player today.
+    #
+    # No second EoE/DSK printing prints either piece, so the bespoke
+    # class earns its keep until a second example ships.
     "{T}: Until end of turn, target creature gains \"Whenever this "
     "creature is dealt damage, you draw that many cards and lose "
     "that much life.\" That creature's controller may have this "
     "artifact deal 1 damage to it. Activate only as a sorcery.":
         _requiem_monolith_activation,
     # Pinnacle Starcage — bespoke "put exiled-with-this-artifact into
-    # graveyard, mint a Robot per, sacrifice this" body. Sacrifice
-    # phrase is part of the effect body, not the cost.
+    # graveyard, mint a Robot per, sacrifice this" body. Cost atom
+    # (``{6}{W}{W}``) parses via the unified activated grammar.
+    #
+    # Decomposition blocker: the body chains three card-tracking
+    # operations that don't yet have generic primitives:
+    #
+    #   1. **Exiled-with-this-source recall.** ``Put each card exiled
+    #      with this artifact into its owner's graveyard.`` walks every
+    #      player's exile zone for cards tagged with
+    #      ``GameObject.exiled_by_source == source.id``. The tagging
+    #      side exists today (used by ``ExileAllMatchingUntilSourceLeaves``
+    #      and ``ExileTargetCreatureUntilSourceLeaves``) but no generic
+    #      "move all exiled-with-this to <zone>" primitive consumes it.
+    #   2. **Per-card token creation.** ``Then create a 2/2 colorless
+    #      Robot artifact creature token for each card put into a
+    #      graveyard this way.`` needs a ``CreateTokenPerXMoved``
+    #      combinator parameterized by the prior step's count.
+    #   3. **Sacrifice-this-artifact as part of the body** (not cost).
+    #      The printed ``Sacrifice this artifact.`` is the LAST clause,
+    #      so it's part of the effect, not a cost atom. ``Sequence``
+    #      can compose with ``SacrificeSelf`` once it exists, but no
+    #      such primitive ships today.
+    #
+    # No second EoE/DSK printing chains all three pieces; the bespoke
+    # class earns its keep until a second example ships.
     "{6}{W}{W}: Put each card exiled with this artifact into its "
     "owner's graveyard, then create a 2/2 colorless Robot artifact "
     "creature token for each card put into a graveyard this way. "
@@ -332,8 +410,29 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     # Cost is parser-grammar standard; only the body needs the literal
     # dispatch. The companion ``{T}: Exile target card from a
     # graveyard.`` ability parses through the unified activated grammar
-    # via the new ``ExileTargetCardFromGraveyard`` primitive — no
+    # via the existing ``ExileTargetCardFromGraveyard`` primitive — no
     # literal entry needed for that one.
+    #
+    # Decomposition blocker: the body chains four operations that
+    # don't yet have generic primitives:
+    #
+    #   1. **Exiled-with-this-source filtered recall.** Same missing
+    #      primitive Pinnacle Starcage hits — walk every exile zone for
+    #      ``exiled_by_source == source.id`` cards, with an additional
+    #      filter (creatures only, by ``printing.is_creature``).
+    #   2. **Recall to controller's battlefield with per-card
+    #      counter.** The recalled creatures enter under the activator's
+    #      control with a ``flying counter`` on each. No generic "put
+    #      onto battlefield with named counter" combinator today.
+    #   3. **Permanent layer-4/7 grant (1/1 Spirit in addition to its
+    #      other types).** Permanent registry writes for ``add_subtype
+    #      "Spirit"`` and ``set_base_pt (1, 1)`` with
+    #      ``expires_at=None``. The Haunted Screen body has the same
+    #      shape but on the source itself — the engine has no shared
+    #      "grant subtype + set base PT permanently" primitive yet.
+    #
+    # No second EoE/DSK printing chains all four pieces; the bespoke
+    # class earns its keep until a second example ships.
     "{6}, {T}, Sacrifice this artifact: Put each creature card exiled "
     "with this artifact onto the battlefield under your control with "
     "a flying counter on it. Each of them is a 1/1 Spirit in addition "
