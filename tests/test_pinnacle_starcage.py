@@ -4,7 +4,21 @@ grave-and-robots sac-self activated ability."""
 from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import SYNTHETIC_CREATURES
-from mtg_bot.effects import PinnacleStarcageETBEffect, PinnacleStarcageSacEffect
+from mtg_bot.effects import (
+    ExileAllMatchingUntilSourceLeaves,
+    PinnacleStarcageSacEffect,
+)
+
+
+def _starcage_etb_effect():
+    """Return the generic mass-exile-until-leaves effect parameterized
+    for Pinnacle Starcage's ETB body. The bespoke
+    ``PinnacleStarcageETBEffect`` was deleted when the parser migrated
+    this body to the unified clause grammar; the engine class it now
+    routes through is ``ExileAllMatchingUntilSourceLeaves``."""
+    return ExileAllMatchingUntilSourceLeaves(
+        match_artifact=True, match_creature=True, max_mv=2,
+    )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
 
@@ -42,7 +56,7 @@ def test_etb_exiles_small_creatures_and_artifacts():
     vault = _put(state, _PRINTINGS["Memorial Vault"])
     state.resolving_source = cage
     try:
-        PinnacleStarcageETBEffect().resolve(state, 0, ())
+        _starcage_etb_effect().resolve(state, 0, ())
     finally:
         state.resolving_source = None
     assert bear not in state.battlefield
@@ -57,7 +71,7 @@ def test_etb_skips_lands_and_the_source_itself():
     forest = _put(state, BASIC_LANDS["Forest"])
     state.resolving_source = cage
     try:
-        PinnacleStarcageETBEffect().resolve(state, 0, ())
+        _starcage_etb_effect().resolve(state, 0, ())
     finally:
         state.resolving_source = None
     assert cage in state.battlefield
@@ -65,7 +79,7 @@ def test_etb_skips_lands_and_the_source_itself():
 
 
 def test_etb_describe():
-    d = PinnacleStarcageETBEffect().describe()
+    d = _starcage_etb_effect().describe()
     assert "exile" in d and "2 or less" in d
 
 
@@ -80,7 +94,7 @@ def test_sac_moves_exiled_to_graveyards_and_creates_robots():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.resolving_source = cage
     try:
-        PinnacleStarcageETBEffect().resolve(state, 0, ())
+        _starcage_etb_effect().resolve(state, 0, ())
     finally:
         state.resolving_source = None
     assert bear not in state.battlefield
@@ -107,7 +121,7 @@ def test_starcage_cage_leaving_releases_exiled_back_to_battlefield():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.resolving_source = cage
     try:
-        PinnacleStarcageETBEffect().resolve(state, 0, ())
+        _starcage_etb_effect().resolve(state, 0, ())
     finally:
         state.resolving_source = None
     assert bear not in state.battlefield

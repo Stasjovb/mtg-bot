@@ -87,17 +87,18 @@ post-reminder-strip oracle line:
   ``"your life total becomes half your starting life total, rounded
   up"`` literal-phrase recognizer in ``effects.py`` mapping to the
   generic ``SetLifeToHalfStartingRoundedUp`` engine class.
-* **Pinnacle Starcage** — both lines are literal-matched. The ETB
-  ``When this artifact enters, exile all artifacts and creatures
-  with mana value 2 or less until this artifact leaves the
-  battlefield.`` maps to a single self-ETB ``TriggeredAbility``
-  carrying ``PinnacleStarcageETBEffect``; the activation
+* **Pinnacle Starcage** — the ETB line ``When this artifact enters,
+  exile all artifacts and creatures with mana value 2 or less until
+  this artifact leaves the battlefield.`` claims through the unified
+  clause grammar via the existing ``"this artifact enters"`` predicate
+  trigger phrase plus the new ``_EXILE_ALL_MATCHING_UNTIL_LEAVES``
+  effect-phrase regex in ``effects.py`` (mapping to the new generic
+  ``ExileAllMatchingUntilSourceLeaves(match_artifact=True,
+  match_creature=True, max_mv=2)`` engine class). The activation
   ``{6}{W}{W}: Put each card exiled ... Sacrifice this artifact.``
-  maps to a single ``{6}{W}{W}``-cost ``ActivatedAbility`` carrying
-  ``PinnacleStarcageSacEffect`` (the sacrifice clause is part of the
-  effect body, not the cost — matching the static registry's
-  ``ActivationCost(mana=..., mana_str=...)`` without
-  ``sacrifice_self``).
+  remains literal-matched — its body is bespoke (``PinnacleStarcage
+  SacEffect``, with the sacrifice clause part of the effect body, not
+  the cost).
 
 Two additional cards are claimed via the expanded unified grammar
 (migrated from ``_BESPOKE_ARTIFACT_BUILDERS`` in this round):
@@ -145,7 +146,6 @@ from mtg_bot.cards.base import (
     HauntedScreenActivatedEffect,
     LockOrUnlockDoorOfTargetRoomYouControl,
     MemorialVaultActivatedEffect,
-    PinnacleStarcageETBEffect,
     PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
     StaticAbility,
@@ -163,7 +163,7 @@ from mtg_bot.effects.combinators import Sequence
 from mtg_bot.effects.conditions import PerControlled
 from mtg_bot.effects.generic import CreateToken, Surveil
 from mtg_bot.effects.object_predicates import HasSubtype
-from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
+from mtg_bot.effects.predicates import Controlled, Event, YOU
 
 
 # Literal oracle lines that set a printing-level boolean flag rather
@@ -473,33 +473,10 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
 # (one or more arms) instead of a single ``ActivatedAbility``. Used for
 # trigger lines whose surface form falls outside the unified
 # ``_parse_clause`` grammar (bespoke effect bodies that can't be
-# expressed as primitives).
-def _pinnacle_starcage_etb_trigger() -> tuple[TriggeredAbility, ...]:
-    """Pinnacle Starcage's ETB exile-until-leaves trigger. The bespoke
-    ``PinnacleStarcageETBEffect`` engine class encodes both halves of
-    the printed body — exile all artifacts and creatures with mana
-    value 2 or less, AND the "until this artifact leaves the
-    battlefield" return-on-leave delayed trigger. One ETB
-    ``TriggeredAbility`` with ``predicate=IsSelf()`` matches the
-    static-registry shape exactly."""
-    return (
-        TriggeredAbility(
-            event=Event.ENTERS,
-            predicate=IsSelf(),
-            effect=PinnacleStarcageETBEffect(),
-        ),
-    )
-
-
-_LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
-    # Pinnacle Starcage — bespoke "exile artifacts/creatures MV<=2
-    # until this leaves" ETB. The "until this artifact leaves" return
-    # is wired by the bespoke effect class, not by a separate trigger.
-    "When this artifact enters, exile all artifacts and creatures "
-    "with mana value 2 or less until this artifact leaves the "
-    "battlefield.":
-        _pinnacle_starcage_etb_trigger,
-}
+# expressed as primitives). Empty today — every printing whose ETB
+# trigger previously routed through this table now claims via the
+# unified clause grammar.
+_LITERAL_TRIGGER_LINES: dict[str, "callable"] = {}
 
 
 def _build_found_footage() -> CardPrinting:

@@ -1751,49 +1751,6 @@ class ConsultTheStarChartsEffect(Effect):
 
 
 @dataclass(frozen=True)
-class PinnacleStarcageETBEffect(Effect):
-    """Pinnacle Starcage's ETB: "Exile all artifacts and creatures with
-    mana value 2 or less until this artifact leaves the battlefield."
-
-    Untargeted mass exile filtered by type (artifact or creature) and
-    mana value. Uses the same ``exiled_by_source`` bookkeeping as other
-    "exile until this leaves" effects so they return when the Starcage
-    itself leaves the battlefield.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import move_off_battlefield
-
-        source = state.resolving_source
-        if source is None:
-            return
-        victims = [
-            o for o in list(state.battlefield)
-            if o is not source
-            and (o.printing.is_artifact or o.printing.is_creature)
-            and not o.printing.is_land
-            and o.printing.mana_cost.total <= 2
-        ]
-        for obj in victims:
-            obj.exiled_by_source = source.id
-            state.log.append(
-                f"{obj.printing.name} exiled by "
-                f"{source.printing.name}"
-            )
-            move_off_battlefield(state, obj, destination="exile")
-
-    def describe(self) -> str:
-        return (
-            "exile all artifacts and creatures with mana value 2 or "
-            "less until this artifact leaves the battlefield"
-        )
-
-
-
-@dataclass(frozen=True)
 class PinnacleStarcageSacEffect(Effect):
     """Pinnacle Starcage's {6}{W}{W} activated ability: "Put each card
     exiled with this artifact into its owner's graveyard, then create

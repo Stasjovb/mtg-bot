@@ -9802,3 +9802,77 @@ class ThreatenTargetCreatureUEOT(Effect):
         )
 
 
+
+@dataclass(frozen=True)
+class ExileAllMatchingUntilSourceLeaves(Effect):
+    """Mass-exile every battlefield permanent matching the type+MV filter
+    until the source leaves the battlefield.
+
+    Parameters describe a printed-text type union ("all artifacts and
+    creatures") and an optional mana-value cap. When the source leaves
+    play, the existing ``exiled_by_source`` bookkeeping returns each
+    exiled card to the battlefield (Banishing Light family). Tokens
+    cease to exist on exile per CR 704.5d — they are caught in the
+    sweep and don't return.
+
+    Used by Pinnacle Starcage's ETB ("Exile all artifacts and creatures
+    with mana value 2 or less until this artifact leaves the battlefield"):
+    ``match_artifact=True, match_creature=True, max_mv=2``.
+
+    The source itself is excluded from the sweep — it can't exile itself.
+    Lands are excluded by ``not is_land`` so an artifact land doesn't get
+    caught accidentally; the printed text speaks of "artifacts and
+    creatures", which by oracle convention excludes lands.
+    """
+
+    match_artifact: bool = False
+    match_creature: bool = False
+    max_mv: int = 0  # 0 = no MV cap
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        victims = []
+        for o in list(state.battlefield):
+            if o is source:
+                continue
+            if o.printing.is_land:
+                continue
+            type_match = (
+                (self.match_artifact and o.printing.is_artifact)
+                or (self.match_creature and o.printing.is_creature)
+            )
+            if not type_match:
+                continue
+            if self.max_mv and o.printing.mana_cost.total > self.max_mv:
+                continue
+            victims.append(o)
+        for obj in victims:
+            obj.exiled_by_source = source.id
+            state.log.append(
+                f"{obj.printing.name} exiled by {source.printing.name}"
+            )
+            move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        types: list[str] = []
+        if self.match_artifact:
+            types.append("artifacts")
+        if self.match_creature:
+            types.append("creatures")
+        type_phrase = " and ".join(types) if types else "permanents"
+        mv_clause = (
+            f" with mana value {self.max_mv} or less" if self.max_mv else ""
+        )
+        return (
+            f"exile all {type_phrase}{mv_clause} until this leaves the "
+            f"battlefield"
+        )
+
+

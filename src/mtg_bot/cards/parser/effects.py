@@ -63,6 +63,7 @@ from mtg_bot.cards.base import (
     EnduringDiesReturnAsEnchantmentEffect,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
+    ExileAllMatchingUntilSourceLeaves,
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
@@ -2477,6 +2478,26 @@ _EXILE_CREATURE_UNTIL_LEAVES = re.compile(
     r"( an opponent controls)?"
     r" until this \w+ leaves the battlefield$"
 )
+# Mass exile-until-source-leaves (Pinnacle Starcage shape) —
+# ``exile all <type-list> with mana value N or less until this
+# <X> leaves the battlefield``. The type list is one or two of
+# {artifacts, creatures} joined by `` and ``; the MV cap is required
+# (no printed mass exile-until-leaves without one in the current pool;
+# extending the regex to make the cap optional is a one-line change
+# when a future printing ships without it). The trailing ``until this
+# <X> leaves the battlefield`` anchor uses a word-character capture
+# for the card type (matches "artifact", "enchantment", "permanent",
+# etc.) like the targeted family. Maps to ``ExileAllMatchingUntil
+# SourceLeaves`` which exiles all matching battlefield permanents
+# (excluding the source) and tags each with ``exiled_by_source`` so
+# the generic on-leave release brings them back when the source
+# leaves play.
+_EXILE_ALL_MATCHING_UNTIL_LEAVES = re.compile(
+    r"^exile all "
+    r"(artifacts and creatures|artifacts|creatures)"
+    r" with mana value (\d+) or less"
+    r" until this \w+ leaves the battlefield$"
+)
 # "Exile target creature or Spacecraft." — Gravkill's printed surface.
 # The static ``cards/eoe_spells.py`` Gravkill entry intentionally fudges
 # this to ``ExileTargetCreature()`` because Spacecraft aren't yet a
@@ -4310,6 +4331,26 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ExileTargetCreatureUntilSourceLeaves(
             excluded_subtypes=excluded,
             opponents_only=opponents_only,
+        )
+    # Mass exile-until-source-leaves (Pinnacle Starcage). Captured type
+    # list is one of {"artifacts and creatures", "artifacts",
+    # "creatures"}; captured MV cap is the integer threshold. Maps to
+    # ``ExileAllMatchingUntilSourceLeaves`` with the appropriate boolean
+    # flags. Tried right after the targeted variants — the regex
+    # anchors on a leading ``exile all`` (vs ``exile target``) so the
+    # two families don't overlap, but ordering more-specific before
+    # more-general remains the dispatch convention here. Today only
+    # Pinnacle Starcage in the EoE pool fits this surface; broader
+    # generalization (additional type words, optional MV cap) will land
+    # naturally as more printings ship.
+    m = _EXILE_ALL_MATCHING_UNTIL_LEAVES.match(phrase)
+    if m is not None:
+        type_phrase = m.group(1)
+        max_mv = int(m.group(2))
+        return ExileAllMatchingUntilSourceLeaves(
+            match_artifact=("artifacts" in type_phrase),
+            match_creature=("creatures" in type_phrase),
+            max_mv=max_mv,
         )
     # ``exile target creature or Spacecraft`` — Gravkill's printed
     # surface. Tried BEFORE the bare ``exile target creature`` regex so

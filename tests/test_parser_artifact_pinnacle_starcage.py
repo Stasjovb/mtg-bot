@@ -1,4 +1,5 @@
-"""Parser claims Pinnacle Starcage via two literal-line dispatches.
+"""Parser claims Pinnacle Starcage end-to-end through the unified
+clause grammar (ETB line) plus one literal-activated dispatch.
 
 Pinnacle Starcage prints:
 
@@ -9,26 +10,19 @@ Pinnacle Starcage prints:
     creature token for each card put into a graveyard this way.
     Sacrifice this artifact.
 
-Both lines fall outside the unified ``_parse_clause`` grammar — both
-bodies are wrapped in single-card bespoke engine classes
-(``PinnacleStarcageETBEffect`` encodes the exile-AND-return-on-leave
-behavior, ``PinnacleStarcageSacEffect`` encodes the put-to-graveyard-
-plus-mint-Robot-tokens-plus-sacrifice behavior).
+The ETB line claims through the unified clause grammar: the
+``"this artifact enters"`` predicate-trigger phrase produces
+``(ENTERS, IsSelf())`` and the ``_EXILE_ALL_MATCHING_UNTIL_LEAVES``
+effect-phrase regex maps the body to the generic
+``ExileAllMatchingUntilSourceLeaves`` engine class
+(``match_artifact=True, match_creature=True, max_mv=2``).
 
-Two literal-line entries claim the printing:
-
-  * The ETB line is added to ``_LITERAL_TRIGGER_LINES`` (returning a
-    1-tuple of ``TriggeredAbility(event=ENTERS, predicate=IsSelf(),
-    effect=PinnacleStarcageETBEffect())``).
-  * The activation line is added to ``_LITERAL_ACTIVATED_LINES``
-    (returning ``ActivatedAbility(cost=ActivationCost(mana=...,
-    mana_str="{6}{W}{W}"), effect=PinnacleStarcageSacEffect())``).
-
-The activation cost is just the mana piece — the ``Sacrifice this
-artifact.`` clause is part of the effect body, not the cost (the
-bespoke effect's resolve method handles the sacrifice itself). This
-matches the static registry's ``ActivationCost(mana=..., mana_str=...)``
-without ``sacrifice_self``.
+The activation line is still literal-matched — its body is bespoke
+(``PinnacleStarcageSacEffect`` encodes the put-to-graveyard-plus-
+mint-Robot-tokens-plus-sacrifice behavior). The activation cost is
+just the mana piece — the ``Sacrifice this artifact.`` clause is part
+of the effect body, not the cost (the bespoke effect's resolve
+method handles the sacrifice itself).
 """
 
 from __future__ import annotations
@@ -36,7 +30,7 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    PinnacleStarcageETBEffect,
+    ExileAllMatchingUntilSourceLeaves,
     PinnacleStarcageSacEffect,
     TriggeredAbility,
     parse_mana_cost,
@@ -66,9 +60,10 @@ _PINNACLE_STARCAGE_CARD = {
 
 def test_build_artifact_printing_claims_pinnacle_starcage():
     """The Scryfall-shaped Pinnacle Starcage record builds an Artifact
-    with the bespoke ETB exile trigger plus the bespoke ``{6}{W}{W}``
-    sacrifice activation — same shape as the static registry's
-    ``make_artifact(...)``."""
+    whose ETB carries the generic ``ExileAllMatchingUntilSourceLeaves``
+    engine class (replacing the deleted bespoke ``PinnacleStarcage
+    ETBEffect``) and whose ``{6}{W}{W}`` activation carries the
+    bespoke ``PinnacleStarcageSacEffect``."""
     printing = _build_artifact_printing(_PINNACLE_STARCAGE_CARD)
     assert printing is not None
     assert printing.name == "Pinnacle Starcage"
@@ -76,7 +71,11 @@ def test_build_artifact_printing_claims_pinnacle_starcage():
         TriggeredAbility(
             event=Event.ENTERS,
             predicate=IsSelf(),
-            effect=PinnacleStarcageETBEffect(),
+            effect=ExileAllMatchingUntilSourceLeaves(
+                match_artifact=True,
+                match_creature=True,
+                max_mv=2,
+            ),
         ),
     )
     assert printing.activated_abilities == (
