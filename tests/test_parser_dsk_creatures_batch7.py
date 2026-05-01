@@ -101,6 +101,124 @@ def test_boilerbilges_ripper_etb_legal_targets_include_creatures_and_players():
     assert ("player", 1) in legal
 
 
+class _BoilerbilgesAgent:
+    """Deterministic agent for Boilerbilges-Ripper resolve tests:
+    answers ``yes/no`` from ``accept_sac`` and always picks the first
+    sac candidate."""
+
+    def __init__(self, accept_sac: bool):
+        self.accept_sac = accept_sac
+
+    def choose_yes_no(self, state, controller_id, prompt):
+        return self.accept_sac
+
+    def choose_sacrifice(self, state, controller_id, ids):
+        return ids[0]
+
+    def choose_target(self, state, controller_id, options):
+        return options[0] if options else None
+
+    def choose_mode(self, state, controller_id, descriptions):
+        return 0
+
+    def choose_modes(self, state, controller_id, descriptions):
+        return [0]
+
+    def choose_card_from_library(self, state, controller_id, ids):
+        return ids[0] if ids else None
+
+
+def test_boilerbilges_ripper_etb_decline_keeps_sac_target_and_skips_damage():
+    # Agent declines the optional sacrifice → no permanent leaves the
+    # battlefield, no damage applied to the target opponent.
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import BoilerbilgesRipperETBEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=_BoilerbilgesAgent(accept_sac=False)))
+    state.players.append(Player(id=1, agent=_BoilerbilgesAgent(accept_sac=False)))
+    src = OracleParserCardSource().get_printings()["Boilerbilges Ripper"]
+    br = state.new_object(src, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(br)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = br
+    try:
+        BoilerbilgesRipperETBEffect().resolve(
+            state, controller_id=0, targets=(("player", 1),),
+        )
+    finally:
+        state.resolving_source = None
+    # Sacrifice candidate stayed.
+    assert bear in state.battlefield
+    # Target opponent took no damage.
+    assert state.players[1].life == 20
+
+
+def test_boilerbilges_ripper_etb_accept_sacrifices_and_damages_target():
+    # Agent accepts the sacrifice → the chosen creature is sacrificed,
+    # and the rider deals 2 damage to the chosen any-target.
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import BoilerbilgesRipperETBEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=_BoilerbilgesAgent(accept_sac=True)))
+    state.players.append(Player(id=1, agent=_BoilerbilgesAgent(accept_sac=True)))
+    src = OracleParserCardSource().get_printings()["Boilerbilges Ripper"]
+    br = state.new_object(src, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(br)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = br
+    try:
+        BoilerbilgesRipperETBEffect().resolve(
+            state, controller_id=0, targets=(("player", 1),),
+        )
+    finally:
+        state.resolving_source = None
+    # Sacrifice candidate left the battlefield.
+    assert bear not in state.battlefield
+    # Target opponent took 2 damage.
+    assert state.players[1].life == 18
+
+
+def test_boilerbilges_ripper_etb_accept_but_no_targets_skips_damage():
+    # Agent accepts the sacrifice but the rider has no any-target tuple
+    # to damage — the sacrifice still happens, the damage clause is a
+    # no-op (the "if not targets: return" guard before _apply_damage).
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.effects import BoilerbilgesRipperETBEffect
+    from mtg_bot.game import GameState, Player, Zone
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=_BoilerbilgesAgent(accept_sac=True)))
+    state.players.append(Player(id=1, agent=_BoilerbilgesAgent(accept_sac=True)))
+    src = OracleParserCardSource().get_printings()["Boilerbilges Ripper"]
+    br = state.new_object(src, owner_id=0, zone=Zone.BATTLEFIELD)
+    state.battlefield.append(br)
+    bear = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = br
+    try:
+        BoilerbilgesRipperETBEffect().resolve(
+            state, controller_id=0, targets=(),
+        )
+    finally:
+        state.resolving_source = None
+    assert bear not in state.battlefield
+    # No target → no damage applied to anyone.
+    assert state.players[0].life == 20
+    assert state.players[1].life == 20
+
+
 # ---------- Fanatic of the Harrowing ----------
 
 
