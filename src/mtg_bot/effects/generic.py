@@ -4825,11 +4825,11 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
     and toughness ``power``/``toughness`` and gains ``granted_keywords``
     until end of turn.``
 
-    The effect reuses the manland animation primitives — sets
-    ``temp_is_creature``, overrides base P/T via ``temp_base_pt_override``,
-    and folds keywords into ``temp_keywords``. Cleanup wipes all three.
-    Targets exclude the source (``"other"``); both creature and non-
-    creature artifacts are valid targets (a non-creature artifact
+    Composes ``ApplyEffect(BecomeType(...), EndOfTurn())`` for the
+    type/PT side, with the chosen target threaded through ``targets``.
+    Keyword grants go through the legacy ``state.grant_keywords_ueot``
+    helper. Targets exclude the source (``"other"``); both creature and
+    non-creature artifacts are valid targets (a non-creature artifact
     gains creature status until end of turn; an already-creature
     artifact has its base P/T overridden — which can shrink a
     stationed Spacecraft).
@@ -4863,6 +4863,9 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+
         if not targets:
             return
         kind, target_id = targets[0]
@@ -4873,17 +4876,14 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
         )
         if obj is None:
             return
-        src = state.resolving_source
-        state.grant_become_creature_ueot(
-            source_id=src.id if src is not None else obj.id,
-            target_id=obj.id,
-            power=self.power,
-            toughness=self.toughness,
-            description=(
-                f"{obj.printing.name} becomes a "
-                f"{self.power}/{self.toughness} artifact creature UEOT"
+        ApplyEffect(
+            inner=BecomeType(
+                types_to_add=("creature",),
+                base_pt=(self.power, self.toughness),
             ),
-        )
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, targets)
+        src = state.resolving_source
         if self.granted_keywords:
             state.grant_keywords_ueot(
                 source_id=src.id if src is not None else obj.id,
@@ -10996,8 +10996,17 @@ class BecomeType(Effect):
         ``_registry_set_base_pt``, so any duration is faithfully
         respected.
 
-    No-op when ``state.resolving_source`` is None (defensive — the
-    activated-ability resolve site sets it before the effect runs).
+    Target selection: when ``targets`` carries a ``(kind, id)`` pair,
+    the registry entries target that object — the spell/ability source
+    (``state.resolving_source``) is still recorded as the
+    registry-entry ``source_id``, so the entry is dropped when the
+    spell/ability source leaves play. With no targets, the effect
+    falls back to self-target (Haunted Screen, manland animation):
+    both ``source_id`` and ``target_id`` are
+    ``state.resolving_source.id``.
+
+    No-op when neither ``targets`` nor ``state.resolving_source``
+    yields a battlefield object.
     """
 
     types_to_add: tuple[str, ...] = ()
@@ -11009,41 +11018,52 @@ class BecomeType(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         source = state.resolving_source
-        if source is None:
+        if targets:
+            _, target_id = targets[0]
+            target = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+        else:
+            target = source
+        if target is None:
             return
+        # Registry ``source_id`` = the spell/ability source (so its
+        # leave-play drops the entry); falls back to the target itself
+        # for self-target callers that resolve outside a stack frame.
+        source_id = source.id if source is not None else target.id
         for type_name in self.types_to_add:
             state.add_continuous_effect(
-                source_id=source.id, layer=4, kind="add_type",
-                target_id=source.id, params=(type_name,),
+                source_id=source_id, layer=4, kind="add_type",
+                target_id=target.id, params=(type_name,),
                 expires_at=None,
                 description=(
-                    f"{source.printing.name} becomes a {type_name}"
+                    f"{target.printing.name} becomes a {type_name}"
                 ),
             )
             if type_name.lower() == "creature":
-                source.permanent_is_creature = True
+                target.permanent_is_creature = True
         for subtype in self.subtypes_to_add:
             state.add_continuous_effect(
-                source_id=source.id, layer=4, kind="add_subtype",
-                target_id=source.id, params=(subtype,),
+                source_id=source_id, layer=4, kind="add_subtype",
+                target_id=target.id, params=(subtype,),
                 expires_at=None,
                 description=(
-                    f"{source.printing.name} becomes a {subtype}"
+                    f"{target.printing.name} becomes a {subtype}"
                 ),
             )
         if self.base_pt is not None:
             base_p, base_t = self.base_pt
             state.add_continuous_effect(
-                source_id=source.id, layer=7, sublayer=1,
+                source_id=source_id, layer=7, sublayer=1,
                 kind="set_base_pt",
-                target_id=source.id, params=(base_p, base_t),
+                target_id=target.id, params=(base_p, base_t),
                 expires_at=None,
                 description=(
-                    f"{source.printing.name} base {base_p}/{base_t}"
+                    f"{target.printing.name} base {base_p}/{base_t}"
                 ),
             )
         state.log.append(
-            f"{source.printing.name} {self.describe()}"
+            f"{target.printing.name} {self.describe()}"
         )
 
     def describe(self) -> str:

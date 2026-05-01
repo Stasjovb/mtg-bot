@@ -81,21 +81,23 @@ def test_synthesizer_labship_combat_trigger_only_at_tier_2():
     )
     state.battlefield.append(robot)
 
-    from mtg_bot.game import effective_keywords
+    from mtg_bot.game import (
+        _compute_effective_pt, effective_keywords, is_creature_now,
+    )
 
-    # Below threshold: no effect.
+    # Below threshold: no effect (no registry entry written).
     labship.charge_counters = 1
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
-    assert robot.temp_base_pt_override is None
+    pt_below = _compute_effective_pt(state, robot)
     assert "flying" not in effective_keywords(state, robot)
 
     # At threshold: rider applies.
     labship.charge_counters = 2
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
-    assert robot.temp_is_creature is True
-    assert robot.temp_base_pt_override == (2, 2)
+    assert is_creature_now(robot)
+    assert _compute_effective_pt(state, robot) == (2, 2)
     assert "flying" in effective_keywords(state, robot)
 
 

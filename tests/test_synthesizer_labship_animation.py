@@ -73,9 +73,7 @@ def test_lander_becomes_2_2_flying_creature_ueot():
     drain_stack(state)
 
     # Post-state: Lander is now a 2/2 flying creature UEOT.
-    assert lander.temp_is_creature is True
-    assert is_creature_now(state if False else lander) or is_creature_now(lander)
-    assert lander.temp_base_pt_override == (2, 2)
+    assert is_creature_now(lander)
     assert effective_power(state, lander) == 2
     assert effective_toughness(state, lander) == 2
     assert "flying" in effective_keywords(state, lander)
@@ -88,12 +86,11 @@ def test_animation_clears_at_cleanup():
     lander = _put(state, TOKEN_PRINTINGS["Lander"])
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
-    assert lander.temp_is_creature is True
+    assert is_creature_now(lander)
 
     run_cleanup_step(state)
-    assert lander.temp_is_creature is False
-    assert lander.temp_base_pt_override is None
-    assert "flying" not in lander.temp_keywords
+    assert not is_creature_now(lander)
+    assert "flying" not in effective_keywords(state, lander)
 
 
 # -----------------------
@@ -122,7 +119,6 @@ def test_already_creature_artifact_base_pt_overridden():
     drain_stack(state)
 
     # Base P/T overridden to 2/2 — the shrink is real.
-    assert other_sc.temp_base_pt_override == (2, 2)
     assert effective_power(state, other_sc) == 2
     assert effective_toughness(state, other_sc) == 2
     assert "flying" in effective_keywords(state, other_sc)
@@ -142,9 +138,8 @@ def test_below_tier_threshold_no_animation():
     run_beginning_of_combat_triggers(state)
     drain_stack(state)
 
-    assert lander.temp_is_creature is False
-    assert lander.temp_base_pt_override is None
-    assert "flying" not in lander.temp_keywords
+    assert not is_creature_now(lander)
+    assert "flying" not in effective_keywords(state, lander)
 
 
 # -----------------------
