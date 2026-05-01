@@ -140,6 +140,7 @@ from mtg_bot.effects.conditions import (
     ControlledArtifactEnteredThisTurn,
 )
 from mtg_bot.effects.modifiers import (
+    AddInstances,
     ContinuousModifier,
     EventPattern,
     GrantKeyword,
@@ -862,7 +863,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
-    extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
     dynamic_pt_formula: str | None = None
     enters_with_counters_from_x: str | None = None
@@ -1073,15 +1073,25 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # triggered ability of a permanent you control to trigger,
             # that ability triggers an additional time.`` — Starfield
             # Vocalist's Panharmonicon-style ETB-trigger doubler.
-            # Increments the ``extra_etb_trigger`` kwarg below; the
-            # engine reads the controller's battlefield total at
-            # trigger enqueue time and adds that many extra firings.
-            # Accumulating rather than overwriting matches the
-            # static-registry semantics — multiple copies on the same
-            # printing would each contribute one extra firing (no card
-            # in the pool today carries the line twice, but the int
-            # field handles it).
-            extra_etb_trigger += 1
+            # Builds a SELF-scope StaticAbility carrying a
+            # ReplacementEffect(EventPattern(
+            # TRIGGERED_ABILITY_TRIGGERS), AddInstances(1)). Each
+            # matched line produces its own StaticAbility, so a
+            # hypothetical printing with the line twice gets two
+            # replacements that compose additively in CR 616.1 order
+            # (no card in the pool today carries the line more than
+            # once). The dispatcher's implicit "source's controller
+            # is the affected player" gate handles the "permanent you
+            # control" qualifier.
+            statics.append(StaticAbility(
+                scope=StaticScope.SELF,
+                replacement_effect=ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.TRIGGERED_ABILITY_TRIGGERS,
+                    ),
+                    transform=AddInstances(delta=1),
+                ),
+            ))
             continue
         if _parse_replaces_draw_when_hand_at_most_one_line(line):
             # ``As long as you have one or fewer cards in hand, if you
@@ -1362,7 +1372,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_minus_one_counters_from_hand_cast
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
-        extra_etb_trigger=extra_etb_trigger,
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
         ),

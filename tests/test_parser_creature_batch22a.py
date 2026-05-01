@@ -16,7 +16,9 @@ Covered creatures:
   7. Fungal Colossus — CostReduction per_differently_named_land
   8. Perigee Beckoner — warp {1}{B}, ETB PumpTargetCreatureUntilEOT + granted trigger
   9. Honored Knight-Captain — ETB Human Soldier token + activated Equipment tutor
- 10. Starfield Vocalist — warp {1}{U}, extra_etb_trigger=1
+ 10. Starfield Vocalist — warp {1}{U}, ETB-trigger doubler static
+     (StaticAbility.replacement_effect = AddInstances(1) on
+     TRIGGERED_ABILITY_TRIGGERS)
  11. Elegy Acolyte — grammar-claimed (lifelink + combat-damage draw + void Robot token)
  12. Pulsar Squadron Ace — ETB LookAtTopNRevealOrCounter(5, spacecraft)
 """

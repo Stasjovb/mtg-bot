@@ -597,12 +597,6 @@ class CardPrinting:
     # (still subject to the land-per-turn cap). Matches Icetill
     # Explorer. _play_land removes the card from the graveyard.
     grants_play_lands_from_graveyard: bool = False
-    # "If a permanent entering the battlefield causes a triggered
-    # ability of a permanent you control to trigger, that ability
-    # triggers an additional time." Starfield Vocalist. Summed across
-    # permanents the acting player controls by etb_trigger_multiplier
-    # — each one adds 1 extra firing.
-    extra_etb_trigger: int = 0
     # "Enchanted/equipped permanent doesn't untap during its
     # controller's untap step." Tractor Beam's don't-untap clause.
     # When True on an aura/equipment attached to a permanent, the
@@ -1140,7 +1134,6 @@ def make_creature(
     ward_discard_chosen: bool = False,
     grants_additional_land_per_turn: int = 0,
     grants_play_lands_from_graveyard: bool = False,
-    extra_etb_trigger: int = 0,
     grants_look_at_top_of_library: bool = False,
     grants_cast_artifact_from_top_of_library: bool = False,
     grants_food_to_your_artifacts: bool = False,
@@ -1198,7 +1191,6 @@ def make_creature(
         ward_discard_chosen=ward_discard_chosen,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
-        extra_etb_trigger=extra_etb_trigger,
         grants_look_at_top_of_library=grants_look_at_top_of_library,
         grants_cast_artifact_from_top_of_library=(
             grants_cast_artifact_from_top_of_library

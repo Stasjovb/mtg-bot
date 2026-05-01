@@ -1421,11 +1421,12 @@ def etb_trigger_multiplier(state: "GameState", controller_id: int) -> int:
 
     Routes through :func:`mtg_bot.effects.modifiers
     .dispatch_replacement` on ``TRIGGERED_ABILITY_TRIGGERS`` with a
-    base ``instances=1`` payload. The Starfield-Vocalist-shape
-    ``extra_etb_trigger`` flag synthesises an ``AddInstances(N)``
-    replacement keyed on the carrier's controller; the post-
-    replacement ``instances`` count drives the per-trigger fire
-    loop.
+    base ``instances=1`` payload. Starfield-Vocalist-shape doublers
+    ride a SELF-scope StaticAbility with
+    ``ReplacementEffect(AddInstances(1))``; the dispatcher's implicit
+    "source.controller_id == affected_player_id" gate keys them on
+    the carrier's controller. The post-replacement ``instances`` count
+    drives the per-trigger fire loop.
     """
     from mtg_bot.effects.modifiers import dispatch_replacement
     from mtg_bot.effects.predicates import Event

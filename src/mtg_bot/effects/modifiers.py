@@ -500,27 +500,6 @@ def _collect_replacement_effects(
                         transform=AddToCount(delta=1),
                     ),
                 ))
-        # Starfield-Vocalist-shape extra-ETB-trigger replacement →
-        # AddInstances(extra) on TRIGGERED_ABILITY_TRIGGERS. Scope:
-        # the triggering ETB is on a permanent the carrier's
-        # controller controls.
-        extra_etb = getattr(obj.printing, "extra_etb_trigger", 0)
-        if event == Event.TRIGGERED_ABILITY_TRIGGERS and extra_etb > 0:
-            ability_source = subjects.get("ability_source")
-            if (
-                ability_source is not None
-                and getattr(ability_source, "controller_id", None)
-                == obj.controller_id
-            ):
-                out.append((
-                    obj.id,
-                    ReplacementEffect(
-                        event_pattern=EventPattern(
-                            event=Event.TRIGGERED_ABILITY_TRIGGERS,
-                        ),
-                        transform=AddInstances(delta=extra_etb),
-                    ),
-                ))
     # Out-of-band synthesis: WOULD_GO_TO_GRAVEYARD reads a flag on
     # the moving CARD's printing, not on a battlefield permanent
     # (the card is mid-flight at dispatch). The dispatch site

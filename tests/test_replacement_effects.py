@@ -224,6 +224,26 @@ def test_moonlit_attached_bear_keeps_printed_pt():
     assert effective_toughness(state, bear) == 2
 
 
-def test_starfield_printing_has_extra_etb_trigger():
+def test_starfield_printing_has_extra_etb_trigger_static():
+    """Starfield Vocalist's Panharmonicon-shape extra-trigger doubler
+    is a SELF-scope StaticAbility carrying a ReplacementEffect(
+    AddInstances(1)) on TRIGGERED_ABILITY_TRIGGERS — the registry-
+    driven shape that replaced the legacy ``extra_etb_trigger``
+    printing int field."""
+    from mtg_bot.effects.modifiers import (
+        AddInstances, EventPattern, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
     s = _PRINTINGS["Starfield Vocalist"]
-    assert s.extra_etb_trigger == 1
+    matches = [
+        st for st in s.static_abilities
+        if st.replacement_effect is not None
+        and st.replacement_effect.event_pattern.event
+        == Event.TRIGGERED_ABILITY_TRIGGERS
+    ]
+    assert len(matches) == 1
+    assert matches[0].replacement_effect == ReplacementEffect(
+        event_pattern=EventPattern(event=Event.TRIGGERED_ABILITY_TRIGGERS),
+        transform=AddInstances(delta=1),
+    )

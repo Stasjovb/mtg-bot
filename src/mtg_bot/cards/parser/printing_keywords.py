@@ -338,12 +338,13 @@ def _parse_token_doubler_line(line: str) -> bool:
 # ``If a permanent entering the battlefield causes a triggered ability
 # of a permanent you control to trigger, that ability triggers an
 # additional time.`` — Starfield Vocalist's printed ETB-trigger
-# doubler. The engine wires the extra-trigger replacement off the
-# printing-level ``extra_etb_trigger`` int field (incremented on the
-# permanent; the trigger pipeline reads the controller's battlefield
-# total). Matched as a literal string — Starfield Vocalist is the only
-# card in the pool with this exact surface today; "broader grammar
-# deferred until a second example exists" (a hypothetical
+# doubler. The parser builds a SELF-scope ``StaticAbility`` carrying a
+# ``ReplacementEffect(EventPattern(TRIGGERED_ABILITY_TRIGGERS),
+# AddInstances(1))``; the dispatcher's implicit "source's controller
+# is the affected player" gate handles the "permanent you control"
+# qualifier. Matched as a literal string — Starfield Vocalist is the
+# only card in the pool with this exact surface today; "broader
+# grammar deferred until a second example exists" (a hypothetical
 # Panharmonicon-style printing with the same shape would either land
 # its own recognizer or, if a parameter such as the trigger count
 # varies, parameterize this one).
@@ -357,9 +358,10 @@ _EXTRA_ETB_TRIGGER_LINE = (
 def _parse_extra_etb_trigger_line(line: str) -> bool:
     """Return ``True`` if ``line`` is the printing-level
     Panharmonicon-style ETB-trigger doubler clause, else ``False``.
-    Adds 1 to the ``extra_etb_trigger`` kwarg on ``make_creature``;
-    the engine reads the controller's battlefield total at trigger
-    enqueue time and adds that many extra firings.
+    Drives a SELF-scope ``StaticAbility(replacement_effect=
+    ReplacementEffect(..., AddInstances(1)))`` declaration in the
+    calling parser; the engine walks ``static_abilities`` at trigger
+    enqueue time and adds the replacement's contribution.
     """
     return line.strip() == _EXTRA_ETB_TRIGGER_LINE
 
