@@ -1431,11 +1431,37 @@ _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES: frozenset[str] = frozenset({
 # uses a bespoke engine class not yet in the general grammar. Parallel to
 # ``_AURA_LITERAL_TRIGGER_LINES`` for non-Aura paths.
 _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
-    # Sothera, the Supervoid — DIES trigger
+    # Sothera, the Supervoid — DIES trigger.
+    #
     # "Whenever a creature you control dies, each opponent chooses a
-    # creature they control and exiles it." → SotheraExileOpponentCreature
-    # Effect. Only Sothera in the pool has this "each opponent exiles
-    # their choice of creature" Aura trigger shape; generalization deferred.
+    # creature they control and exiles it." → bespoke
+    # ``SotheraExileOpponentCreatureEffect``.
+    #
+    # ARCHITECTURAL BLOCKER: this body needs a per-opponent
+    # independent-choice mass-exile primitive that ALSO tags each
+    # exiled card with ``exiled_by_source = source.id``. The engine
+    # primitives available today are mismatched on two axes:
+    #
+    #   1. ``EachOpponentSacrificesCreature`` exists but sacrifices,
+    #      not exiles, and uses the agent's ``choose_sacrifice`` prompt
+    #      with no mechanism to thread a source-id link onto the chosen
+    #      object. Switching it to exile would also break sacrifice
+    #      semantics for every existing caller.
+    #   2. ``ExileTargetCreatureUntilSourceLeaves`` exiles with a
+    #      source link but is targeted (single creature, picked by the
+    #      ABILITY's controller) — wrong choosing player and wrong
+    #      cardinality. The Sothera reading needs N independent
+    #      per-opponent picks resolved in turn order, each by that
+    #      opponent's agent.
+    #
+    # Generalization is gated on a new
+    # ``EachOpponentChoosesAndExilesCreatureLinkedToSource`` primitive
+    # (or a multi-axis parameterization of the existing exile family
+    # with: ``per_opponent_choice=True, exile_with_source_link=True``).
+    # Until that primitive lands, the literal-line dispatch is the only
+    # honest claim — generalizing without it would produce the wrong
+    # choosing-player or drop the exile-link bookkeeping that Sothera's
+    # end-step trigger then reads.
     (
         "Whenever a creature you control dies, each opponent chooses a "
         "creature they control and exiles it."
@@ -1444,14 +1470,51 @@ _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         predicate=Subject(None, IsCreature()) & Controlled(YOU),
         effect=SotheraExileOpponentCreatureEffect(),
     ),
-    # Sothera, the Supervoid — end-step trigger
+    # Sothera, the Supervoid — end-step trigger.
+    #
     # "At the beginning of your end step, if a player controls no
-    # creatures, sacrifice Sothera, then put a creature card exiled with
-    # it onto the battlefield under your control with two additional
-    # +1/+1 counters on it." → SotheraEndStepReanimateEffect. The
-    # "if a player controls no creatures" intervening-if gate is honored
-    # by SotheraEndStepReanimateEffect's resolve method. Only Sothera
-    # in the pool has this "sac-then-reanimate-from-exile" end-step shape.
+    # creatures, sacrifice Sothera, then put a creature card exiled
+    # with it onto the battlefield under your control with two
+    # additional +1/+1 counters on it." → bespoke
+    # ``SotheraEndStepReanimateEffect``.
+    #
+    # ARCHITECTURAL BLOCKERS (multiple, all on the same ability):
+    #
+    #   1. The intervening-``if`` gate "if a player controls no
+    #      creatures" is a creatureless-player check. The unified
+    #      ``_INTERVENING_IF_PHRASES`` table only has ``StateBound``
+    #      gates (``OpponentControlsMoreLandsThanYou``, ``VoidActive``,
+    #      ``Delirium``); a "any player controls zero creatures"
+    #      predicate would need a new ``StateBound`` primitive.
+    #      Furthermore, this gate must be re-checked at RESOLVE time
+    #      (not just trigger time), per the bespoke's actual behavior
+    #      — the ``_INTERVENING_IF_PHRASES`` predicate is checked only
+    #      at trigger time today, so even adding the predicate would
+    #      drop the resolve-time recheck (a state change between
+    #      trigger and resolve would mis-fire).
+    #
+    #   2. The body composes three sequential operations that share
+    #      anaphoric state: (a) sacrifice the source, (b) find a
+    #      creature card "exiled with it" (the source-link from the
+    #      DIES-trigger sibling above), pull it out of exile BEFORE
+    #      the sacrifice triggers the on-leave release path, (c) put
+    #      the chosen exiled card onto the battlefield under YOUR
+    #      control with +2 +1/+1 counters. The ``Sequence``
+    #      combinator can't model the (b)-before-(a) ordering
+    #      (sequence runs strictly in order, but the sac-then-recall
+    #      reading of the printed text requires recall-then-sac at
+    #      the engine level to defeat the auto-return). A
+    #      ``SacrificeSelfThenReturnExiledByMeWithCounters`` primitive
+    #      would solve it; until that primitive exists, the bespoke
+    #      effect is the only correct claim.
+    #
+    #   3. The "creature card exiled with it" anaphoric reference
+    #      depends on the ``exiled_by_source`` bookkeeping populated
+    #      by the DIES trigger's bespoke effect — i.e. these two
+    #      bespoke classes are coupled, and migrating either one in
+    #      isolation would break the other. The migration must land
+    #      both new primitives in the same change so the source-link
+    #      contract stays consistent.
     (
         "At the beginning of your end step, if a player controls no "
         "creatures, sacrifice Sothera, then put a creature card exiled "
@@ -1505,9 +1568,14 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # to ``DrawCardsEqualToResolvingCounterAmount`` when the trigger
     # event is COUNTERS_ADDED.
     "Terrasymbiosis",
-    # Sothera, the Supervoid — two literal trigger lines:
-    # DIES (SotheraExileOpponentCreatureEffect) + end-step
-    # (SotheraEndStepReanimateEffect).
+    # Sothera, the Supervoid — two literal trigger lines pending
+    # architectural blockers documented in
+    # ``_NONAURA_LITERAL_TRIGGER_LINES``: the DIES body needs a per-
+    # opponent-choice mass-exile-with-source-link primitive, and the
+    # end-step body needs both a creatureless-player ``StateBound``
+    # gate predicate AND a sequenced sac-then-recall-with-counters
+    # primitive. Both are coupled (the end-step recall reads the
+    # ``exiled_by_source`` link populated by the DIES trigger).
     "Sothera, the Supervoid",
 })
 
