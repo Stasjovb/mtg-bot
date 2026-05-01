@@ -298,39 +298,35 @@ def test_prevention_flag_reset_at_cleanup():
 # Frenzied Baloth parser parity
 # ---------------------------------------------------------------------------
 
-def test_frenzied_baloth_claimed_by_parser():
-    """Parser must claim Frenzied Baloth (migrated out of bespoke)."""
+def test_frenzied_baloth_parser_parity():
+    """Parser claims Frenzied Baloth and produces the printing the
+    oracle text describes: trample + haste, both uncounterable flags,
+    combat-damage-can't-be-prevented, plus a 3/2 G{G}{G}{G} Beast.
+
+    The "not in _BESPOKE_CREATURES" regression check is implied by the
+    parser source returning Frenzied Baloth — the parser would only
+    construct the printing if no bespoke entry intercepted first.
+    """
     from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
+
+    assert "Frenzied Baloth" not in _BESPOKE_CREATURES, (
+        "Frenzied Baloth should be claimed by the grammar, not bespoke"
+    )
+
     p = OracleParserCardSource().get_printings()
     assert "Frenzied Baloth" in p, "parser must claim Frenzied Baloth"
 
-
-def test_frenzied_baloth_keywords():
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    p = OracleParserCardSource().get_printings()
     b = p["Frenzied Baloth"]
     assert "trample" in b.keywords
     assert "haste" in b.keywords
-
-
-def test_frenzied_baloth_spell_is_uncounterable():
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    p = OracleParserCardSource().get_printings()
-    b = p["Frenzied Baloth"]
     assert b.spell_is_uncounterable is True
-
-
-def test_frenzied_baloth_combat_damage_cant_be_prevented():
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    p = OracleParserCardSource().get_printings()
-    b = p["Frenzied Baloth"]
     assert b.combat_damage_cant_be_prevented is True
+    assert b.power == 3
+    assert b.toughness == 2
+    assert b.mana_cost_str == "{G}{G}"
+    assert "Beast" in b.subtypes
 
-
-def test_frenzied_baloth_grants_creature_spells_uncounterable():
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    p = OracleParserCardSource().get_printings()
-    b = p["Frenzied Baloth"]
     matching = [
         sa for sa in b.static_abilities
         if sa.grants_creature_spells_uncounterable
@@ -338,22 +334,4 @@ def test_frenzied_baloth_grants_creature_spells_uncounterable():
     assert len(matching) == 1, (
         "Frenzied Baloth should have exactly one static with "
         "grants_creature_spells_uncounterable"
-    )
-
-
-def test_frenzied_baloth_stats():
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-    p = OracleParserCardSource().get_printings()
-    b = p["Frenzied Baloth"]
-    assert b.power == 3
-    assert b.toughness == 2
-    assert b.mana_cost_str == "{G}{G}"
-    assert "Beast" in b.subtypes
-
-
-def test_frenzied_baloth_not_in_bespoke():
-    """Frenzied Baloth must not be in the bespoke table after migration."""
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Frenzied Baloth" not in _BESPOKE_CREATURES, (
-        "Frenzied Baloth should have been migrated out of _BESPOKE_CREATURES"
     )

@@ -115,7 +115,6 @@ from mtg_bot.cards.parser.spell_builder import (
     _SENTENCE_BOUNDARY_RE,
     _split_sentences,
     _try_whole_spell_exact_text,
-    _WHOLE_SPELL_EXACT_TEXT,
     _parse_spell_oracle_text,
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -125,26 +124,8 @@ def _claimed_names() -> frozenset[str]:
     return frozenset(OracleParserCardSource().claimed_names)
 
 
-# ------------------------------------------------------------------ #
-# Table-size regression                                               #
-# ------------------------------------------------------------------ #
-
-def test_bespoke_table_count():
-    # bespoke-spells1 removed 23 entries (27 remaining);
-    # bespoke-spells2 removes 5 more → 22 remaining;
-    # bespoke-spells3 removes 7 more (Lithobraking, Scrounge for Eternity,
-    # Pull Through the Weft, Commune with Evil, Unnerving Grasp, Get Out,
-    # Untimely Malfunction) → 15 remaining.
-    # bespoke-spells4 removes 3 more (Biosynthic Burst, Systems Override,
-    # Vengeful Possession) → 12 remaining.
-    # bespoke-spells6 removes 10 more (Cut Propulsion, Mutinous Massacre,
-    # Diplomatic Relations, Desculpting Blast, Scout for Survivors,
-    # Coordinated Clobbering, Trial of Agony, Zero Point Ballad,
-    # Devastating Onslaught, Consult the Star Charts) → 2 remaining.
-    # bespoke-final-spells removes 2 more (Terminal Velocity,
-    # Close Encounter) → 0 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 0
-
+# Table-size regression covered comprehensively by
+# tests/test_parser_bespoke_spells1.py::test_bespoke_table_count.
 
 # ------------------------------------------------------------------ #
 # _SENTENCE_BOUNDARY_RE — "When you do," guard                       #
