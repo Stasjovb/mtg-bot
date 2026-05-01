@@ -5136,12 +5136,15 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
     control get -3/-0 until end of turn" (one-time snapshot).
 
     Set ``until_caster_next_turn=True`` for the "until your next turn"
-    variant (Mouth of the Storm). The bonuses are written to the
-    ``extended_temp_*`` fields on each affected GameObject and tagged
-    with the resolving controller's id. They DON'T clear at the
-    casting turn's cleanup; instead they expire at the start
-    (``run_untap_step``) of that controller's NEXT turn, so the
-    opponent's full subsequent turn keeps the debuff applied.
+    variant (Mouth of the Storm). The P/T bonus is written to the
+    ``extended_temp_power_bonus`` / ``extended_temp_toughness_bonus``
+    fields tagged with the resolving controller's id; the keyword
+    grant rides ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())``
+    and writes a layer-6 ``grant_keyword`` registry entry with
+    ``expires_at="controller_untap"`` and the controller as the
+    expiring player. Both expire at the start (``run_untap_step``) of
+    that controller's NEXT turn, so the opponent's full subsequent
+    turn keeps the debuff applied.
     """
 
     power_bonus: int = 0
@@ -5175,15 +5178,17 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
                         ),
                     )
                 if self.granted_keywords:
-                    # Extended-temporal keywords still flow through
-                    # the bespoke field path; the layered registry
-                    # currently models only P/T pumps for this
-                    # lifetime. Future work can mirror grant_keywords
-                    # under expires_at="controller_untap".
-                    obj.extended_temp_keywords = (
-                        obj.extended_temp_keywords | self.granted_keywords
+                    from mtg_bot.effects.combinators import ApplyEffect
+                    from mtg_bot.effects.durations import EndOfYourNextTurn
+
+                    ApplyEffect(
+                        inner=GrantKeywords(
+                            keywords=self.granted_keywords,
+                        ),
+                        ends_at=EndOfYourNextTurn(),
+                    ).resolve(
+                        state, controller_id, (("creature", obj.id),),
                     )
-                    obj.extended_temp_expires_at_player_id = controller_id
             else:
                 if self.power_bonus or self.toughness_bonus:
                     src = state.resolving_source

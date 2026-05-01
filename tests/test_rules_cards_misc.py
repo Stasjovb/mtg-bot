@@ -6896,6 +6896,53 @@ def test_mouth_of_the_storm_debuff_skips_caster_own_creatures():
     assert own.extended_temp_power_bonus == 0
 
 
+def test_mass_keyword_grant_until_your_next_turn_persists_then_expires():
+    """Companion to the P/T-side Mouth-of-the-Storm tests: a "until your
+    next turn" keyword grant on opponents' creatures rides ApplyEffect(
+    GrantKeywords, EndOfYourNextTurn()) — a layer-6 grant_keyword
+    registry entry with expires_at='controller_untap' keyed on the
+    caster. The keyword must survive the casting turn's cleanup AND
+    the opponent's full subsequent turn, then expire at the start of
+    the caster's NEXT untap step. Exercises the EndOfYourNextTurn
+    duration end-to-end through the registry — there's no production
+    card with this combo today (the parser regex doesn't capture
+    keywords for the until-your-next-turn tail), so this test stands
+    in for the wired-but-unused infrastructure."""
+    from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import run_untap_step
+
+    state = _arena()
+    op = state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(op)
+    assert "defender" not in effective_keywords(state, op)
+    PumpCreaturesOpponentsControlUntilEOT(
+        granted_keywords=frozenset({"defender"}),
+        until_caster_next_turn=True,
+    ).resolve(state, controller_id=0)
+    assert "defender" in effective_keywords(state, op)
+
+    # Casting turn cleanup — keyword survives (it's "until YOUR next
+    # turn", not UEOT). The grant_keyword entry's expires_at is
+    # 'controller_untap', not 'cleanup'.
+    run_cleanup_step(state)
+    assert "defender" in effective_keywords(state, op)
+
+    # Opponent's full turn — they untap, but only entries keyed on
+    # their player_id expire. The caster's grant survives.
+    state.active_player_idx = 1
+    run_untap_step(state)
+    assert "defender" in effective_keywords(state, op)
+    run_cleanup_step(state)
+
+    # Caster's next untap — entry keyed on player 0 expires now.
+    state.active_player_idx = 0
+    run_untap_step(state)
+    assert "defender" not in effective_keywords(state, op)
+
+
 def test_pump_creatures_opponents_control_describe_and_log():
     """Sanity: describe() and the log line render with signed bonuses."""
     from mtg_bot.effects import PumpCreaturesOpponentsControlUntilEOT

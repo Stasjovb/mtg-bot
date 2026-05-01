@@ -6,16 +6,16 @@ pair stored on a ``ContinuousEffect`` registry entry. Use them with the
 to wrap an inner ``Effect`` and rewrite the lifetime of every registry
 entry the inner adds.
 
-Today only ``EndOfTurn`` (``"cleanup"``) and ``Permanent`` (``None``) are
-exercised by migrated callers. ``EndOfYourNextTurn`` already maps to the
-existing ``"controller_untap"`` lifecycle (used by Mouth-of-the-Storm-
-style extended-temporal pumps via the legacy ``extended_temp_*`` fields,
-not by registry entries — so an ``ApplyEffect(..., EndOfYourNextTurn())``
-write does land on a wired key, but no migrated callsite uses it yet).
-``EndOfCombat`` and ``UntilSourceLeaves`` are stubs: their string keys
-aren't yet recognised by ``run_cleanup_step`` / move_off_battlefield, and
-no migrated caller uses them. Wire them through cleanup when a card
-needs them.
+Today ``EndOfTurn`` (``"cleanup"``), ``Permanent`` (``None``), and
+``EndOfYourNextTurn`` (``"controller_untap"`` keyed on the controller)
+are exercised by migrated callers — ``EndOfYourNextTurn`` lands on
+``run_untap_step``'s ``expire_continuous_effects("controller_untap",
+player_id=ap.id)`` hook through
+``PumpCreaturesOpponentsControlUntilEOT``'s ``until_caster_next_turn=
+True`` keyword path. ``EndOfCombat`` and ``UntilSourceLeaves`` are
+stubs: their string keys aren't yet recognised by ``run_cleanup_step``
+/ ``move_off_battlefield``, and no migrated caller uses them. Wire
+them through cleanup when a card needs them.
 """
 
 from __future__ import annotations
@@ -79,9 +79,9 @@ class EndOfYourNextTurn(Duration):
     """``until your next turn``: dropped at the start of the controller's
     next untap step. Maps to ``expires_at="controller_untap"`` with the
     controller id stored in ``expires_at_player_id`` — the same key
-    used by Mouth-of-the-Storm-style pumps in ``GameState.expire_*``
-    (the registry-key path is wired today; no migrated caller exercises
-    it via ApplyEffect yet)."""
+    used by Mouth-of-the-Storm-style pumps in ``GameState.expire_*``.
+    Exercised end-to-end by ``PumpCreaturesOpponentsControlUntilEOT``'s
+    ``until_caster_next_turn=True`` keyword grant via ``ApplyEffect``."""
 
     def to_expires(
         self, controller_id: int,

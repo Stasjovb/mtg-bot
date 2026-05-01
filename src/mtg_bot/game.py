@@ -133,17 +133,21 @@ class GameObject:
     # multiple pumps hit the same object.
     temp_power_bonus: int = 0
     temp_toughness_bonus: int = 0
-    # Extended-temporal-scope bonuses: "until your next turn" — expire
-    # at the START (untap step) of player ``extended_temp_expires_at_player_id``,
-    # NOT at this turn's cleanup. Stacked additively, contribute to
-    # effective_power / effective_toughness / effective_keywords just
-    # like the regular temp_* fields. Matches Mouth of the Storm's
-    # "creatures your opponents control get -3/-0 until your next turn."
-    # Set ``extended_temp_expires_at_player_id`` to the casting/source
-    # controller's id; their next untap clears these.
+    # Extended-temporal-scope P/T bonuses: "until your next turn" —
+    # expire at the START (untap step) of player
+    # ``extended_temp_expires_at_player_id``, NOT at this turn's
+    # cleanup. Stacked additively, contribute to effective_power /
+    # effective_toughness like the regular temp_* fields. Matches
+    # Mouth of the Storm's "creatures your opponents control get -3/-0
+    # until your next turn." Set
+    # ``extended_temp_expires_at_player_id`` to the casting/source
+    # controller's id; their next untap clears these. The companion
+    # keyword grant for this lifetime now flows through
+    # ``ApplyEffect(GrantKeywords(...), EndOfYourNextTurn())`` —
+    # registry entries with ``expires_at="controller_untap"`` —
+    # rather than a parallel ``extended_temp_keywords`` field.
     extended_temp_power_bonus: int = 0
     extended_temp_toughness_bonus: int = 0
-    extended_temp_keywords: frozenset[str] = field(default_factory=frozenset)
     extended_temp_expires_at_player_id: Optional[int] = None
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
@@ -667,14 +671,15 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     model):
     - ``obj.printing.keywords``
     - ``obj.printing.stationed_keywords`` if stationed
-    - ``obj.extended_temp_keywords`` (legacy "until your next turn"
-      grants — the UEOT path now flows through layer-6 ``grant_keyword``
-      registry entries written by ``GrantKeywords``)
 
     Layer-6 entries (real + synthesized via
     ``_layer6_entries_for``) walked in timestamp order:
     - ``"lose_all_abilities"`` clears the set entirely.
-    - ``"grant_keyword"`` adds ``params[0]``.
+    - ``"grant_keyword"`` adds ``params[0]``. UEOT grants carry
+      ``expires_at="cleanup"`` (dropped at this turn's cleanup);
+      "until your next turn" grants carry ``expires_at=
+      "controller_untap"`` with the controller's id (dropped at
+      that controller's next untap step).
 
     Static-anthem keyword grants from a Sliver-lord-style source
     are synthesized as layer-6 ``grant_keyword`` entries with the
@@ -692,7 +697,6 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     kws: set[str] = set(obj.printing.keywords)
     if is_stationed(obj):
         kws |= set(obj.printing.stationed_keywords)
-    kws |= set(obj.extended_temp_keywords)
     layer6 = sorted(_layer6_entries_for(state, obj), key=lambda ce: ce.timestamp)
     for ce in layer6:
         if ce.kind == "lose_all_abilities":

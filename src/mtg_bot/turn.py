@@ -58,7 +58,6 @@ def run_untap_step(state: GameState) -> None:
         if obj.extended_temp_expires_at_player_id == ap.id:
             obj.extended_temp_power_bonus = 0
             obj.extended_temp_toughness_bonus = 0
-            obj.extended_temp_keywords = frozenset()
             obj.extended_temp_expires_at_player_id = None
     # Phasing: "until its controller's next turn." At the start of the
     # phased creature's controller's untap step, phase it (and anything
