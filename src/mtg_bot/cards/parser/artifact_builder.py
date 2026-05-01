@@ -137,7 +137,6 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    AddNManaOfChosenColor,
     AllFatesScrollDrawEffect,
     CardPrinting,
     CostReduction,
@@ -308,45 +307,6 @@ def _ghost_vacuum_recall_activation() -> ActivatedAbility:
     )
 
 
-def _haunted_screen_first_mana_activation() -> ActivatedAbility:
-    """Build Haunted Screen's ``{T}: Add {W} or {B}.`` mana ability.
-
-    Maps to ``AddNManaOfChosenColor(amount=1, options=("W", "B"))`` —
-    the controller picks one of the two listed colors at resolution and
-    the engine class mints a single coin of the chosen color. The cost
-    is bare ``{T}``; ``is_mana_ability=True`` short-circuits the stack
-    per CR 605, so the ability resolves immediately on activation
-    (parallel to the unified-grammar mana-ability detection in
-    ``activated.py`` for ``AddManaToPool``-bodied abilities — the
-    detector there is gated on the ``AddManaToPool`` instance check, so
-    ``AddNManaOfChosenColor`` doesn't auto-flag and we set the flag
-    explicitly here).
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(tap_self=True),
-        effect=AddNManaOfChosenColor(amount=1, options=("W", "B")),
-        is_mana_ability=True,
-    )
-
-
-def _haunted_screen_second_mana_activation() -> ActivatedAbility:
-    """Build Haunted Screen's ``{T}, Pay 1 life: Add {G}, {U}, or {R}.``
-    mana ability.
-
-    Cost shape ``{T}, Pay 1 life`` rides the existing two-piece
-    ``ActivationCost`` grammar (``tap_self=True`` plus ``pay_life=1``);
-    the body maps to ``AddNManaOfChosenColor(amount=1, options=("G",
-    "U", "R"))`` — one chosen-color coin from a three-color list.
-    ``is_mana_ability=True`` for the same CR-605 reason as the first
-    ability.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(tap_self=True, pay_life=1),
-        effect=AddNManaOfChosenColor(amount=1, options=("G", "U", "R")),
-        is_mana_ability=True,
-    )
-
-
 def _haunted_screen_once_only_activation() -> ActivatedAbility:
     """Build Haunted Screen's ``{7}: Put seven +1/+1 counters on this
     artifact. It becomes a 0/0 Spirit creature in addition to its
@@ -447,21 +407,27 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "to its other types. Activate only as a sorcery.":
         _ghost_vacuum_recall_activation,
     # Haunted Screen — three activations. The first two are mana
-    # abilities whose chosen-color body uses
-    # ``AddNManaOfChosenColor(options=...)`` — the existing engine class
-    # already accepts an ``options`` tuple, so only the literal-line
-    # dispatch is new (the unified ``add {<color>} or {<color>}`` and
-    # ``add {<c>}, {<c>}, or {<c>}`` surface forms aren't yet recognized
-    # by the per-line dispatcher in ``effects.py`` — those would each
-    # need their own primitive shape, so the literal entry is the
-    # cheapest correct claim today). The third activation is the once-
-    # only "becomes a 0/0 Spirit" body whose bespoke effect handles
-    # both halves of the printed line plus the "Activate only once"
-    # rider via the ``has_activated_once_only_ability`` GameObject flag.
-    "{T}: Add {W} or {B}.":
-        _haunted_screen_first_mana_activation,
-    "{T}, Pay 1 life: Add {G}, {U}, or {R}.":
-        _haunted_screen_second_mana_activation,
+    # abilities (``{T}: Add {W} or {B}.`` and ``{T}, Pay 1 life: Add
+    # {G}, {U}, or {R}.``) that now claim through the unified clause
+    # grammar via the new ``add {<c1>} or {<c2>}`` /
+    # ``add {<c1>}, {<c2>}, or {<c3>}`` recognizers in ``effects.py``
+    # (mapping to ``AddNManaOfChosenColor(amount=1, options=…)``);
+    # ``_is_mana_ability_effect`` in ``activated.py`` recognizes the
+    # primitive and sets ``is_mana_ability=True`` so CR 605 stack-bypass
+    # still applies. The third activation below is the once-only
+    # "becomes a 0/0 Spirit" body — genuinely card-unique (the
+    # combination of "Activate only once", a bare-cost type-change, and
+    # a self-counter init has no second example in the pool today).
+    # Decomposition blocker: the engine has no general "activate only
+    # once" ability rider — the ``has_activated_once_only_ability``
+    # ``GameObject`` flag is honored only by ``HauntedScreenActivated
+    # Effect``'s resolve site. Lifting it to a per-ability gate (and
+    # unbinding the type-change + counter init from this single class)
+    # would let the body decompose to ``Sequence(PutNCountersOnSelf
+    # (7), GrantTypeAndPTPermanently("creature","Spirit",(0,0)))`` plus
+    # an ``activate_only_once=True`` field on ``ActivatedAbility``. No
+    # second EoE/DSK printing prints the same shape today, so the
+    # bespoke class earns its keep until a second example ships.
     "{7}: Put seven +1/+1 counters on this artifact. It becomes a 0/0 "
     "Spirit creature in addition to its other types. Activate only once.":
         _haunted_screen_once_only_activation,

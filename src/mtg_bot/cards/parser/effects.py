@@ -183,6 +183,7 @@ from mtg_bot.effects.conditions import (
 )
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
+    AddNManaOfChosenColor,
     EachOpponentExilesCardFromHandWithCastPermission,
     PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
@@ -1476,6 +1477,29 @@ _ADD_N_COLORLESS_MANA = re.compile(r"^add ((?:\{C\})+)$")
 _ADD_X_MANA_ANY_COLOR_PER_CHARGE_COUNTER = re.compile(
     r"^add X mana of any one color, where X is the number of "
     r"charge counters on this creature$"
+)
+# "Add {<c1>} or {<c2>}." — choose-one-of-two-colors single-coin mana
+# ability (Haunted Screen's first ability ``{T}: Add {W} or {B}.``).
+# Maps to ``AddNManaOfChosenColor(amount=1, options=(<c1>, <c2>))`` —
+# the controller picks one of the two listed colors at resolution and
+# the engine class mints a single coin of the chosen color. Distinct
+# from the single-color ``add {<color>}`` shape (no choice — fixed
+# color) and from the unrestricted ``add one mana of any color`` shape
+# (any of W/U/B/R/G). The captured colors order is preserved and lands
+# directly on the engine class's ``options`` tuple, faithful to the
+# printed list.
+_ADD_TWO_COLOR_CHOICE_MANA = re.compile(
+    r"^add \{([WUBRG])\} or \{([WUBRG])\}$"
+)
+# "Add {<c1>}, {<c2>}, or {<c3>}." — choose-one-of-three-colors
+# single-coin mana ability (Haunted Screen's second ability ``{T}, Pay
+# 1 life: Add {G}, {U}, or {R}.``). Three-color sibling of the
+# two-color shape above. Maps to ``AddNManaOfChosenColor(amount=1,
+# options=(<c1>, <c2>, <c3>))``. The Oxford-comma "or" before the
+# final color matches Scryfall's standard wording for three-element
+# disjunctions.
+_ADD_THREE_COLOR_CHOICE_MANA = re.compile(
+    r"^add \{([WUBRG])\}, \{([WUBRG])\}, or \{([WUBRG])\}$"
 )
 # "Add {<mana>}. Spend this mana only to <restriction>." —
 # restricted-mana ability whose produced coins are tagged with an
@@ -5008,6 +5032,27 @@ def _parse_effect(phrase: str) -> Effect | None:
         # whose ``resolve`` reads the source's charge counter count at fire
         # time and mints that many coins of the controller's chosen color.
         return AddChargeCounterManaOfChosenColor()
+    # ``add {<c1>} or {<c2>}`` and ``add {<c1>}, {<c2>}, or {<c3>}`` —
+    # choose-one-of-N-colors single-coin mana abilities (Haunted Screen's
+    # first two activations: ``{T}: Add {W} or {B}.`` and ``{T}, Pay 1
+    # life: Add {G}, {U}, or {R}.``). Both produce
+    # ``AddNManaOfChosenColor(amount=1, options=(<colors>))`` — same
+    # primitive ``land_builder`` uses for filter-land ``add {C} or
+    # {D}``-style abilities, just driven by oracle text instead of by
+    # name-keyed dispatch. Tried BEFORE the bare ``add {<color>}`` regex
+    # so the multi-color choice shape wins; the bare regex's ``$`` anchor
+    # wouldn't match the ``or {…}`` tail anyway, but ordering more-
+    # specific before more-general is the convention here.
+    m = _ADD_TWO_COLOR_CHOICE_MANA.match(phrase)
+    if m is not None:
+        return AddNManaOfChosenColor(
+            amount=1, options=(m.group(1), m.group(2)),
+        )
+    m = _ADD_THREE_COLOR_CHOICE_MANA.match(phrase)
+    if m is not None:
+        return AddNManaOfChosenColor(
+            amount=1, options=(m.group(1), m.group(2), m.group(3)),
+        )
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))

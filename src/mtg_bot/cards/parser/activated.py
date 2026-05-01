@@ -86,7 +86,10 @@ from mtg_bot.cards.base import (
     CostReduction,
     parse_mana_cost,
 )
-from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor
+from mtg_bot.effects.generic import (
+    AddChargeCounterManaOfChosenColor,
+    AddNManaOfChosenColor,
+)
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
@@ -510,6 +513,12 @@ def _is_mana_ability_effect(effect) -> bool:
     criterion. Marking it ``is_mana_ability=True`` causes the engine to
     bypass the stack on activation, matching the printed behavior.
 
+    ``AddNManaOfChosenColor`` covers the choose-one-of-N-colors mana
+    abilities (Haunted Screen's ``{T}: Add {W} or {B}.`` and ``{T}, Pay
+    1 life: Add {G}, {U}, or {R}.``). The controller picks one of the
+    listed colors at resolution; like ``AddManaToPool`` the ability
+    mints mana with no targets, satisfying CR 605.
+
     The other "permanent-color" / "land-could-produce" mana effects also
     belong here in principle but aren't yet emitted by the activated-ability
     grammar (each requires its own surface-form regex first).
@@ -517,11 +526,19 @@ def _is_mana_ability_effect(effect) -> bool:
     Effects that would be excluded if they ever appeared (defense in
     depth): anything reporting ``requires_target() == True`` is not a
     mana ability per the rules — even if it adds mana, the targeting
-    forces the ability to use the stack. Today neither ``AddManaToPool``
-    nor ``AddChargeCounterManaOfChosenColor`` targets, but the explicit
-    guard keeps future grammar additions honest.
+    forces the ability to use the stack. Today none of ``AddManaToPool``,
+    ``AddChargeCounterManaOfChosenColor``, or ``AddNManaOfChosenColor``
+    targets, but the explicit guard keeps future grammar additions
+    honest.
     """
-    if isinstance(effect, (AddManaToPool, AddChargeCounterManaOfChosenColor)):
+    if isinstance(
+        effect,
+        (
+            AddManaToPool,
+            AddChargeCounterManaOfChosenColor,
+            AddNManaOfChosenColor,
+        ),
+    ):
         if effect.requires_target():
             return False
         return True
