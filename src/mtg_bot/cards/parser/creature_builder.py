@@ -50,7 +50,6 @@ from mtg_bot.cards.base import (
     DealDamageEqualToSourcePowerAnyTarget,
     DiscardSelf,
     DrawCards,
-    EachOpponentExilesCardFromHandWithCastPermission,
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FanaticOfTheHarrowingETBEffect,
@@ -272,14 +271,16 @@ def _make_bespoke_creatures() -> dict[str, CardPrinting]:
     """
     return {
         # ── bespoke-creature-wave7 ─────────────────────────────────────
-        # Lightstall Inquisitor migrated to the literal trigger-line
-        # dispatch in ``_BESPOKE_TRIGGER_LINES`` (engine-lightstall).
-        # The ETB body uses ``EachOpponentExilesCardFromHandWithCastPermission``
-        # which sets ``cast_from_exile_with_lightstall_surcharge`` on
-        # the exiled card; all other oracle lines (Vigilance keyword,
-        # mana cost, P/T, Angel Wizard subtypes) now flow through the
-        # unified grammar. Removed from this table so the oracle parser
-        # claims Lightstall Inquisitor end-to-end.
+        # Lightstall Inquisitor migrated to the parser's multi-sentence
+        # literal recognizer in ``effects._parse_effect`` (audit-
+        # litdispatch-easy). The ETB body dispatches through the unified
+        # ``_parse_effect`` grammar to ``EachOpponentExilesCardFromHandWith
+        # CastPermission``; the engine class still sets
+        # ``cast_from_exile_with_lightstall_surcharge`` on the exiled card
+        # at resolve time so the {1}-more rider and tapped-land-entry
+        # remain enforced. All other oracle lines (Vigilance keyword,
+        # mana cost, P/T, Angel Wizard subtypes) flow through the unified
+        # grammar.
         # Genemorph Imago migrated to the grammar:
         # ``SetBasePTConditionalUntilEOT`` now models the landfall
         # trigger's "has base power and toughness 3/3 until end of turn;
@@ -764,21 +765,6 @@ _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
         event=Event.ATTACKS,
         predicate=IsSelf() & StateBound(Delirium()),
         effect=WickerfolkThresherAttackEffect(),
-    ),
-    # Lightstall Inquisitor: each opponent exiles a card from their hand
-    # and may play it from exile (with {1} surcharge on spells, tapped-
-    # entry on lands). The surcharge and tapped-entry are enforced by
-    # engine flags (``cast_from_exile_with_lightstall_surcharge``) set
-    # by the effect, not by grammar primitives. Only card in the pool
-    # with this exact "exile from hand with conditional-cost play
-    # permission" shape; generalize if a second example exists.
-    "When this creature enters, each opponent exiles a card from their "
-    "hand and may play that card for as long as it remains exiled. "
-    "Each spell cast this way costs {1} more to cast. Each land played "
-    "this way enters tapped.": TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=EachOpponentExilesCardFromHandWithCastPermission(),
     ),
     # Splitskin Doll (DSK): ETB draw + source-relative conditional
     # discard. The "discard a card unless you control another creature

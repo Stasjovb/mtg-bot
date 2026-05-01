@@ -175,7 +175,11 @@ from mtg_bot.effects.bespoke import (
     TerminalVelocityEffect,
 )
 from mtg_bot.effects.combinators import IfYouDo, MayDo
-from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor, TapEnchantedPermanent
+from mtg_bot.effects.generic import (
+    AddChargeCounterManaOfChosenColor,
+    EachOpponentExilesCardFromHandWithCastPermission,
+    TapEnchantedPermanent,
+)
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -3282,6 +3286,25 @@ def _parse_effect(phrase: str) -> Effect | None:
         "if you control a Kavu"
     ):
         return PossibilityTechnicianETBEffect()
+    # Lightstall Inquisitor's ETB body — three-sentence body whose
+    # second and third sentences are anaphoric "this way" qualifiers on
+    # the cards exiled in sentence 1 (each opponent's exile target).
+    # The {1} surcharge on cast spells and the tapped-entry on lands are
+    # enforced by the engine-side ``cast_from_exile_with_lightstall_
+    # surcharge`` flag the effect class sets; the parser's job here is
+    # just to dispatch the printed body to the existing engine primitive.
+    # Currently only Lightstall Inquisitor in the EoE pool prints this
+    # exact "exile from hand with conditional-cost play permission" three-
+    # sentence shape; broader grammar deferred until a second card with
+    # this shape ships (a parameterized recognizer would capture the
+    # surcharge amount and the tapped-entry rider as separate fields).
+    if phrase == (
+        "each opponent exiles a card from their hand and may play that "
+        "card for as long as it remains exiled. Each spell cast this "
+        "way costs {1} more to cast. Each land played this way enters "
+        "tapped"
+    ):
+        return EachOpponentExilesCardFromHandWithCastPermission()
     # Starfield Shepherd's ETB body (only EoE card with the
     # "search for basic Plains OR creature MV≤1" shape; broader grammar
     # deferred until a second example exists). The "or" clause is a
