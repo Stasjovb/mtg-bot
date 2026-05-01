@@ -8,7 +8,7 @@ from mtg_bot.combat import declare_attackers, declare_blockers
 from mtg_bot.effects import AtomicMicrosizerAttackEffect
 from mtg_bot.game import (
     GameState, Player, Zone,
-    effective_power, effective_toughness,
+    effective_keywords, effective_power, effective_toughness,
 )
 from mtg_bot.turn import run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
@@ -56,7 +56,7 @@ def test_effect_sets_unblockable_and_base_pt_1_1():
     AtomicMicrosizerAttackEffect().resolve(
         state, 0, (("creature", bear.id),),
     )
-    assert bear.temp_unblockable
+    assert "unblockable" in effective_keywords(state, bear)
     # effective P/T reflects the layer-7b set_base_pt registry entry
     # (base 1/1, no counters, no pumps).
     assert effective_power(state, bear) == 1
@@ -69,10 +69,10 @@ def test_cleanup_clears_base_pt_and_unblockable():
     AtomicMicrosizerAttackEffect().resolve(
         state, 0, (("creature", bear.id),),
     )
-    assert bear.temp_unblockable
+    assert "unblockable" in effective_keywords(state, bear)
     assert effective_power(state, bear) == 1
     run_cleanup_step(state)
-    assert bear.temp_unblockable is False
+    assert "unblockable" not in effective_keywords(state, bear)
     # Registry entry expired; bear back to printed 2/2.
     assert effective_power(state, bear) == 2
     assert effective_toughness(state, bear) == 2
@@ -92,7 +92,11 @@ def test_declare_blockers_skips_unblockable_attackers():
     state = _new_state()
     attacker = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     attacker.attacking = True
-    attacker.temp_unblockable = True
+    state.add_continuous_effect(
+        source_id=attacker.id, layer=6, kind="grant_keyword",
+        target_id=attacker.id, params=("unblockable",),
+        expires_at=None, description="test setup",
+    )
     blocker = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     declare_blockers(state, {blocker.id: attacker.id})
     assert blocker.blocking is None
@@ -121,7 +125,7 @@ def test_equipment_attacks_trigger_fires():
     # has its base toughness set to 1 by the layer-7b registry entry
     # (the bear also has the equipment +1/+0 attack-pump on top, so
     # power-side asserts aren't a stable signal) and carries the
-    # temp_unblockable flag.
+    # unblockable keyword via a layer-6 grant_keyword registry entry.
     affected = [
         o for o in [bear, enemy]
         if any(
@@ -131,7 +135,7 @@ def test_equipment_attacks_trigger_fires():
         )
     ]
     assert len(affected) == 1
-    assert affected[0].temp_unblockable
+    assert "unblockable" in effective_keywords(state, affected[0])
 
 
 def test_microsizer_printing_has_attack_trigger():

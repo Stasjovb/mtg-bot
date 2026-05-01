@@ -376,12 +376,15 @@ def test_grant_unblockable_ueot_legal_targets_lists_creatures_only():
     assert ("enchantment", 2) not in legal
 
 
-def test_grant_unblockable_ueot_resolve_sets_temp_unblockable():
+def test_grant_unblockable_ueot_resolve_grants_keyword():
     # End-to-end resolve sanity: pick a target creature, run resolve,
-    # verify the target's ``temp_unblockable`` flag is set. The flag
-    # is what ``combat.eligible_blockers`` reads at block time.
+    # verify a layer-6 grant_keyword "unblockable" registry entry
+    # appears for the target. ``effective_keywords`` reads this entry,
+    # and ``combat.eligible_blockers`` reads ``effective_keywords``.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.game import GameObject, GameState, Player, Zone
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone, effective_keywords,
+    )
 
     bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
     bear_obj = GameObject(
@@ -393,9 +396,9 @@ def test_grant_unblockable_ueot_resolve_sets_temp_unblockable():
         battlefield=[bear_obj],
     )
     eff = GrantUnblockableUEOT()
-    assert bear_obj.temp_unblockable is False
+    assert "unblockable" not in effective_keywords(state, bear_obj)
     eff.resolve(state, controller_id=0, targets=(("creature", 1),))
-    assert bear_obj.temp_unblockable is True
+    assert "unblockable" in effective_keywords(state, bear_obj)
 
 
 def test_grant_unblockable_ueot_resolve_no_target_is_no_op():

@@ -750,7 +750,7 @@ class AtomicMicrosizerAttackEffect(Effect):
     ) -> None:
         from mtg_bot.effects.combinators import ApplyEffect
         from mtg_bot.effects.durations import EndOfTurn
-        from mtg_bot.effects.generic import BecomeType
+        from mtg_bot.effects.generic import BecomeType, GrantKeywords
 
         if not targets:
             return
@@ -762,12 +762,16 @@ class AtomicMicrosizerAttackEffect(Effect):
         )
         if obj is None:
             return
-        obj.temp_unblockable = True
-        # Layer-7b "set base P/T to 1/1 UEOT" — composes the production
-        # ``ApplyEffect(BecomeType(...), EndOfTurn())`` pattern with the
-        # equipped creature as the explicit target so the registry entry
-        # is anchored to the equipped creature, not to
+        # Layer-6 "unblockable UEOT" + layer-7b "set base P/T to 1/1
+        # UEOT" — both compose the production
+        # ``ApplyEffect(<primitive>, EndOfTurn())`` pattern with the
+        # equipped creature as the explicit target so the registry
+        # entries are anchored to the equipped creature, not to
         # ``state.resolving_source``.
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({"unblockable"})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, targets)
         ApplyEffect(
             inner=BecomeType(base_pt=(1, 1)),
             ends_at=EndOfTurn(),

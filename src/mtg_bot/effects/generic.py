@@ -4649,15 +4649,22 @@ class SetBasePTConditionalUntilEOT(Effect):
 
 @dataclass(frozen=True)
 class GrantUnblockable(Effect):
-    """Unified can't-be-blocked-this-turn primitive driven by ``targets``.
+    """Unified can't-be-blocked primitive driven by ``targets``.
 
     Sibling of :class:`Destroy` / :class:`Exile` / :class:`Tap` /
     :class:`Pump` / :class:`Bounce` / :class:`PutPlusOneCounters`
     for the can't-be-blocked family. The unified resolve walks each
-    slot, re-verifies legality at resolution per CR 608.2b, and sets
-    ``temp_unblockable = True`` on each surviving target — the flag
-    is read by ``combat.eligible_blockers`` at block-declaration
-    time and cleared at cleanup.
+    slot, re-verifies legality at resolution per CR 608.2b, and writes
+    a layer-6 ``grant_keyword`` registry entry with ``params=
+    ("unblockable",)`` and ``expires_at=None`` (permanent until source
+    leaves play) for each surviving target. Wrap with ``ApplyEffect(
+    GrantUnblockable(...), EndOfTurn())`` (or use the
+    :class:`GrantUnblockableUEOT` sugar) to give the grants a UEOT
+    lifetime — ``ApplyEffect`` rewrites the ``expires_at`` of every
+    entry written here.
+
+    The "unblockable" keyword is read by ``combat.eligible_blockers``
+    via ``"unblockable" in effective_keywords(state, attacker)``.
     """
 
     targets: tuple = ()
@@ -4670,6 +4677,7 @@ class GrantUnblockable(Effect):
             return
         from mtg_bot.effects.targets import SlotRef, TargetSpec
 
+        source = state.resolving_source
         prior = getattr(state, "resolving_controller_id", None)
         try:
             state.resolving_controller_id = controller_id
@@ -4692,7 +4700,20 @@ class GrantUnblockable(Effect):
                 )
                 if obj is None:
                     continue
-                obj.temp_unblockable = True
+                source_id = source.id if source is not None else obj.id
+                source_name = (
+                    source.printing.name if source is not None
+                    else obj.printing.name
+                )
+                state.add_continuous_effect(
+                    source_id=source_id, layer=6, kind="grant_keyword",
+                    target_id=obj.id, params=("unblockable",),
+                    expires_at=None,
+                    description=(
+                        f"{source_name} grants unblockable to "
+                        f"{obj.printing.name}"
+                    ),
+                )
                 state.log.append(
                     f"{obj.printing.name} can't be blocked this turn"
                 )
@@ -4706,7 +4727,9 @@ class GrantUnblockable(Effect):
 @dataclass(frozen=True)
 class GrantUnblockableUEOT(GrantUnblockable):
     """``GrantUnblockable`` constructor sugar for "target creature can't
-    be blocked this turn" with optional filter narrowing flags.
+    be blocked this turn" with optional filter narrowing flags. The
+    UEOT lifetime is composed by wrapping the parent's registry-write
+    in ``ApplyEffect(_, EndOfTurn())`` at resolve time.
 
     Filter composition:
       - base: ``IsCreature()``
@@ -4734,6 +4757,18 @@ class GrantUnblockableUEOT(GrantUnblockable):
         if self.power_at_most is not None:
             f = f & HasPowerAtMost(self.power_at_most)
         object.__setattr__(self, "targets", (TargetSpec(f),))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+
+        ApplyEffect(
+            inner=GrantUnblockable(targets=self.targets),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, targets)
 
     def describe(self) -> str:
         if self.attacking_only and self.exclude_self:
@@ -5993,14 +6028,13 @@ class BecomeLandCreatureUEOT(Effect):
     its non-creature state at end of turn.
 
     Keyword grants ride ``ApplyEffect(GrantKeywords(...),
-    EndOfTurn())`` (layer-6 ``grant_keyword`` registry entries).
-    Granted activated / triggered abilities ride
+    EndOfTurn())`` (layer-6 ``grant_keyword`` registry entries) — the
+    ``unblockable`` rider for Creeping Tar Pit folds the keyword into
+    ``GrantKeywords`` alongside any other granted keywords. Granted
+    activated / triggered abilities ride
     ``ApplyEffect(GrantActivatedAbility(...), EndOfTurn())`` /
     ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` (layer-6
-    ``grant_*_ability`` registry entries). ``unblockable`` still sets
-    ``temp_unblockable`` directly — that's the last legacy ``temp_*``
-    write on this animation path; migrating it to a dedicated
-    primitive is a separate sweep.
+    ``grant_*_ability`` registry entries).
     """
 
     power: int = 0
@@ -6045,13 +6079,14 @@ class BecomeLandCreatureUEOT(Effect):
             ),
             ends_at=EndOfTurn(),
         ).resolve(state, controller_id, ())
-        if self.granted_keywords:
+        kws = self.granted_keywords
+        if self.unblockable:
+            kws = kws | frozenset({"unblockable"})
+        if kws:
             ApplyEffect(
-                inner=GrantKeywords(keywords=self.granted_keywords),
+                inner=GrantKeywords(keywords=kws),
                 ends_at=EndOfTurn(),
             ).resolve(state, controller_id, ())
-        if self.unblockable:
-            source.temp_unblockable = True
         for ab in self.granted_activated_abilities:
             ApplyEffect(
                 inner=GrantActivatedAbility(ability=ab),
@@ -6063,8 +6098,7 @@ class BecomeLandCreatureUEOT(Effect):
                 ends_at=EndOfTurn(),
             ).resolve(state, controller_id, ())
         kw_note = (
-            f" with {', '.join(sorted(self.granted_keywords))}"
-            if self.granted_keywords else ""
+            f" with {', '.join(sorted(kws))}" if kws else ""
         )
         state.log.append(
             f"{source.printing.name} becomes a {self.power}/{self.toughness}"

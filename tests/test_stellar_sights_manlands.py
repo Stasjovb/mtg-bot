@@ -250,7 +250,7 @@ def test_every_manland_animates_to_expected_pt_and_keywords():
         for k in kws:
             assert k in eff_kws, f"{name} missing keyword {k!r}"
         if unblockable:
-            assert land.temp_unblockable, (
+            assert "unblockable" in eff_kws, (
                 f"{name} should be unblockable"
             )
 

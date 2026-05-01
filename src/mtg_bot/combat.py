@@ -251,9 +251,7 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
         attacker = next(o for o in state.battlefield if o.id == attacker_id)
-        if attacker.temp_unblockable or "unblockable" in effective_keywords(
-            state, attacker
-        ):
+        if "unblockable" in effective_keywords(state, attacker):
             state.log.append(
                 f"{attacker.printing.name} can't be blocked — "
                 f"{blocker.printing.name}'s block is ignored"
