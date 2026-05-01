@@ -961,18 +961,6 @@ class CardPrinting:
     # for now; extend to a frozenset if real cards need protection
     # from multiple colors at once.
     protection_from_color: str | None = None
-    # Zone-change replacement: when this card would be put into a
-    # graveyard from ANY zone the engine currently models, instead it
-    # is shuffled into its owner's library. Consumed by
-    # actions._send_to_graveyard_or_library at the spell-resolve,
-    # spell-countered, and failed-cast graveyard sites. Matches
-    # Nexus of Fate's "from anywhere" clause and Green Sun's Zenith's
-    # self-shuffle rider (GSZ's oracle is effectively the same
-    # replacement after its tutor effect resolves). Simplification:
-    # discard-from-hand and mill-from-library graveyard paths aren't
-    # hooked (those aren't hit by any currently-modeled card that
-    # targets Nexus / GSZ specifically).
-    shuffles_into_library_instead_of_graveyard: bool = False
     # Convoke (CR 702.51): "Your creatures can help cast this spell.
     # Each creature you tap while casting this spell pays for {1} or
     # one mana of that creature's color." Wires the per-cast prompt
@@ -1309,7 +1297,7 @@ def make_instant(
     kicker: str | None = None,
     additional_cost_choose_your_creature: bool = False,
     additional_cost_sacrifice_creature_or_enchantment: bool = False,
-    shuffles_into_library_instead_of_graveyard: bool = False,
+    static_abilities: tuple["StaticAbility", ...] = (),
     has_convoke: bool = False,
 ) -> CardPrinting:
     type_line = "Instant"
@@ -1332,9 +1320,7 @@ def make_instant(
         additional_cost_sacrifice_creature_or_enchantment=(
             additional_cost_sacrifice_creature_or_enchantment
         ),
-        shuffles_into_library_instead_of_graveyard=(
-            shuffles_into_library_instead_of_graveyard
-        ),
+        static_abilities=tuple(static_abilities),
         has_convoke=has_convoke,
     )
 
@@ -1344,7 +1330,7 @@ def make_sorcery(
     cost_reductions: tuple[CostReduction, ...] = (),
     additional_cost_sacrifice_creature_or_artifact: bool = False,
     additional_cost_sacrifice_creature_or_enchantment: bool = False,
-    shuffles_into_library_instead_of_graveyard: bool = False,
+    static_abilities: tuple["StaticAbility", ...] = (),
     has_convoke: bool = False,
 ) -> CardPrinting:
     type_line = "Sorcery"
@@ -1365,9 +1351,7 @@ def make_sorcery(
         additional_cost_sacrifice_creature_or_enchantment=(
             additional_cost_sacrifice_creature_or_enchantment
         ),
-        shuffles_into_library_instead_of_graveyard=(
-            shuffles_into_library_instead_of_graveyard
-        ),
+        static_abilities=tuple(static_abilities),
         has_convoke=has_convoke,
     )
 

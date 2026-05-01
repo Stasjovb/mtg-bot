@@ -2603,11 +2603,13 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     Routes through :func:`mtg_bot.effects.modifiers
     .dispatch_replacement` on ``WOULD_GO_TO_GRAVEYARD`` with a base
     ``destination="graveyard"`` payload. Nexus-of-Fate-shape
-    printings (``shuffles_into_library_instead_of_graveyard``) carry
-    a ``Replace(new_destination="library")`` synthesis in
-    :func:`_collect_replacement_effects`; the dispatcher applies it
-    and this site reads the post-replacement destination off the
-    payload to route the card.
+    printings carry a SELF-scope ``StaticAbility`` whose
+    ``replacement_effect=ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    Replace(new_destination="library"))`` is collected by the
+    dispatcher's moving-card walker (the card is mid-flight at
+    dispatch — not on the battlefield); the dispatcher applies the
+    transform and this site reads the post-replacement destination
+    off the payload to route the card.
     """
     from mtg_bot.effects.modifiers import dispatch_replacement
     from mtg_bot.effects.predicates import Event

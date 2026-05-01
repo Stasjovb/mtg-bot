@@ -1,9 +1,10 @@
 """Tests for Nexus of Fate + Green Sun's Zenith.
 
-Both Special Guests spells share the
-``shuffles_into_library_instead_of_graveyard`` replacement flag; this
-file covers both the shared redirect plumbing and each card's unique
-effect (extra-turn queueing, green-creature tutor).
+Both Special Guests spells share a SELF-scope StaticAbility that
+carries a ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+Replace(new_destination="library")); this file covers both the shared
+redirect plumbing and each card's unique effect (extra-turn queueing,
+green-creature tutor).
 """
 
 import random
@@ -13,11 +14,29 @@ from mtg_bot.cards import SYNTHETIC_CREATURES, make_creature
 from mtg_bot.effects import (
     SearchLibraryForGreenCreatureWithMVAtMostX, TakeExtraTurnAfterThisOne,
 )
+from mtg_bot.effects.modifiers import (
+    EventPattern, Replace, ReplacementEffect,
+)
+from mtg_bot.effects.predicates import Event
 from mtg_bot.game import GameState, Player, Zone
 
 from mtg_bot.cards.source import get_active_source
 
 _PRINTINGS = get_active_source().get_printings()
+
+
+def _has_shuffle_self_static(printing) -> bool:
+    """True if the printing carries a SELF-scope StaticAbility with a
+    ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    Replace(new_destination="library"))."""
+    expected = ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
+        transform=Replace(new_destination="library"),
+    )
+    return any(
+        s.replacement_effect == expected
+        for s in printing.static_abilities
+    )
 
 
 class _PickFirst(Agent):
@@ -39,7 +58,7 @@ def test_nexus_is_wired_up():
     assert n.is_instant
     assert n.mana_cost_str == "{5}{U}{U}"
     assert isinstance(n.spell_effect, TakeExtraTurnAfterThisOne)
-    assert n.shuffles_into_library_instead_of_graveyard is True
+    assert _has_shuffle_self_static(n)
 
 
 def test_extra_turn_effect_queues_controller():
@@ -191,7 +210,7 @@ def test_gsz_is_wired_up():
     assert isinstance(
         g.spell_effect, SearchLibraryForGreenCreatureWithMVAtMostX
     )
-    assert g.shuffles_into_library_instead_of_graveyard is True
+    assert _has_shuffle_self_static(g)
 
 
 _GREEN_2 = make_creature("Grizzly Bears", "{1}{G}", 2, 2)  # MV 2

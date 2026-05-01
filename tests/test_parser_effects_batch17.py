@@ -1,9 +1,13 @@
 """Tests for batch-17 whole-spell exact-text dispatch additions plus
-the self-shuffle printing-flag detector.
+the self-shuffle StaticAbility detector.
 
 Batch 17 originally extended the ``_WHOLE_SPELL_EXACT_TEXT`` dispatcher
 with three entries (Darkness, Nexus of Fate, Green Sun's Zenith) and
-added a name-aware self-shuffle rider detector (``_detect_shuffle_self_flags``).
+added a name-aware self-shuffle rider detector that produces a SELF-
+scope ``StaticAbility(replacement_effect=ReplacementEffect(
+WOULD_GO_TO_GRAVEYARD, Replace(new_destination="library")))`` per
+matching spell — historically a printing-flag detector
+``_detect_shuffle_self_flags``, now ``_detect_shuffle_self_statics``.
 
 In bespoke-spells2, **Nexus of Fate** and **Green Sun's Zenith** were
 further migrated OUT of ``_WHOLE_SPELL_EXACT_TEXT`` to the per-clause
@@ -46,10 +50,24 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.spell_builder import (
     _detect_kicker_cost,
-    _detect_shuffle_self_flags,
+    _detect_shuffle_self_statics,
     _is_kicker_preamble,
     _kicker_cost,
     _try_whole_spell_exact_text,
+)
+from mtg_bot.effects.base import StaticAbility, StaticScope
+from mtg_bot.effects.modifiers import (
+    EventPattern, Replace, ReplacementEffect,
+)
+from mtg_bot.effects.predicates import Event
+
+
+_SHUFFLE_SELF_STATIC = StaticAbility(
+    scope=StaticScope.SELF,
+    replacement_effect=ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
+        transform=Replace(new_destination="library"),
+    ),
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.cards.parser_source import OracleParserCardSource
@@ -166,7 +184,7 @@ def test_green_suns_zenith_parses_via_per_clause_grammar():
 
 # ---------- self-shuffle rider detector ----------
 
-def test_detect_shuffle_self_flags_nexus_shape():
+def test_detect_shuffle_self_statics_nexus_shape():
     # Nexus-of-Fate-style rider: ``If <Name> would be put into a
     # graveyard from anywhere, reveal <Name> and shuffle it into its
     # owner's library instead.``
@@ -176,11 +194,11 @@ def test_detect_shuffle_self_flags_nexus_shape():
         "reveal Nexus of Fate and shuffle it into its owner's library "
         "instead."
     )
-    flags = _detect_shuffle_self_flags(text, "Nexus of Fate")
-    assert flags == {"shuffles_into_library_instead_of_graveyard": True}
+    statics = _detect_shuffle_self_statics(text, "Nexus of Fate")
+    assert statics == (_SHUFFLE_SELF_STATIC,)
 
 
-def test_detect_shuffle_self_flags_gsz_shape():
+def test_detect_shuffle_self_statics_gsz_shape():
     # GSZ-style rider: ``Shuffle <Name> into its owner's library.`` —
     # appears as the trailing sentence of the spell's single oracle
     # line.
@@ -189,18 +207,18 @@ def test_detect_shuffle_self_flags_gsz_shape():
         "value X or less, put it onto the battlefield, then shuffle. "
         "Shuffle Green Sun's Zenith into its owner's library."
     )
-    flags = _detect_shuffle_self_flags(text, "Green Sun's Zenith")
-    assert flags == {"shuffles_into_library_instead_of_graveyard": True}
+    statics = _detect_shuffle_self_statics(text, "Green Sun's Zenith")
+    assert statics == (_SHUFFLE_SELF_STATIC,)
 
 
-def test_detect_shuffle_self_flags_no_rider():
-    # Spell text without a self-shuffle rider returns an empty dict so
-    # the caller's ``**`` spread is a no-op.
+def test_detect_shuffle_self_statics_no_rider():
+    # Spell text without a self-shuffle rider returns an empty tuple so
+    # the caller's ``static_abilities=`` argument is a no-op.
     text = "Prevent all combat damage that would be dealt this turn."
-    assert _detect_shuffle_self_flags(text, "Darkness") == {}
+    assert _detect_shuffle_self_statics(text, "Darkness") == ()
 
 
-def test_detect_shuffle_self_flags_name_with_apostrophe():
+def test_detect_shuffle_self_statics_name_with_apostrophe():
     # ``Green Sun's Zenith`` carries an apostrophe; the helper
     # ``re.escape``-s the name so the rider matches verbatim. Sanity-
     # check that this works (regression for a future card with
@@ -209,21 +227,21 @@ def test_detect_shuffle_self_flags_name_with_apostrophe():
         "Do something. "
         "Shuffle Green Sun's Zenith into its owner's library."
     )
-    flags = _detect_shuffle_self_flags(text, "Green Sun's Zenith")
-    assert flags == {"shuffles_into_library_instead_of_graveyard": True}
+    statics = _detect_shuffle_self_statics(text, "Green Sun's Zenith")
+    assert statics == (_SHUFFLE_SELF_STATIC,)
 
 
-def test_detect_shuffle_self_flags_wrong_name():
+def test_detect_shuffle_self_statics_wrong_name():
     # The detector keys on the card's name, so a spell that mentions
-    # a DIFFERENT card's shuffle rider doesn't trip the flag. (No real
-    # card in the EoE pool does this — defensive regression.)
+    # a DIFFERENT card's shuffle rider doesn't trip the static. (No
+    # real card in the EoE pool does this — defensive regression.)
     text = (
         "Take an extra turn after this one.\n"
         "If Nexus of Fate would be put into a graveyard from anywhere, "
         "reveal Nexus of Fate and shuffle it into its owner's library "
         "instead."
     )
-    assert _detect_shuffle_self_flags(text, "Some Other Card") == {}
+    assert _detect_shuffle_self_statics(text, "Some Other Card") == ()
 
 
 # ---------- Lithobraking and Temporal Intervention ----------

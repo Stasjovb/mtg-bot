@@ -5,9 +5,11 @@ This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
 
 1. **Self-shuffle rider dropper** (``_is_self_shuffle_clause``) — recognizes
    the two printed self-shuffle surface forms and drops them from the
-   effect-clause stream.  The behavior is already wired via the
-   ``shuffles_into_library_instead_of_graveyard`` printing flag
-   (``_detect_shuffle_self_flags``); dropping the clause lets the
+   effect-clause stream.  The behavior is wired via a SELF-scope
+   StaticAbility on the spell printing carrying a
+   ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+   Replace(new_destination="library"))`` (built by
+   ``_detect_shuffle_self_statics``); dropping the clause lets the
    remaining effect clause parse cleanly through the unified grammar.
 
    Two shapes recognized:
@@ -271,10 +273,21 @@ def test_nexus_of_fate_engine_class():
     assert p.spell_effect == TakeExtraTurnAfterThisOne()
 
 
-def test_nexus_of_fate_shuffles_flag():
+def test_nexus_of_fate_shuffles_static():
+    from mtg_bot.effects.modifiers import (
+        EventPattern, Replace, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
     parser = OracleParserCardSource()
     p = parser.get_printings()["Nexus of Fate"]
-    assert p.shuffles_into_library_instead_of_graveyard is True
+    expected = ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
+        transform=Replace(new_destination="library"),
+    )
+    assert any(
+        s.replacement_effect == expected for s in p.static_abilities
+    )
 
 
 def test_nexus_of_fate_no_bespoke_entry():
@@ -312,10 +325,21 @@ def test_green_suns_zenith_engine_class():
     assert p.spell_effect == SearchLibraryForGreenCreatureWithMVAtMostX()
 
 
-def test_green_suns_zenith_shuffles_flag():
+def test_green_suns_zenith_shuffles_static():
+    from mtg_bot.effects.modifiers import (
+        EventPattern, Replace, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
     parser = OracleParserCardSource()
     p = parser.get_printings()["Green Sun's Zenith"]
-    assert p.shuffles_into_library_instead_of_graveyard is True
+    expected = ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
+        transform=Replace(new_destination="library"),
+    )
+    assert any(
+        s.replacement_effect == expected for s in p.static_abilities
+    )
 
 
 def test_green_suns_zenith_no_bespoke_entry():

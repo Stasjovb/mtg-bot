@@ -994,11 +994,13 @@ _DEAL_N_DAMAGE_EACH_CREATURE = re.compile(
 # accompanying self-shuffle rider ("If Nexus of Fate would be put into a
 # graveyard from anywhere, reveal Nexus of Fate and shuffle it into its
 # owner's library instead.") is detected separately by
-# ``_detect_shuffle_self_flags`` in ``spell_builder`` and wired via the
-# ``shuffles_into_library_instead_of_graveyard`` printing flag; the
-# self-shuffle clause is dropped from the effect-clause stream by
-# ``_is_self_shuffle_clause`` before the Sequence combinator runs, so
-# this single-sentence recognizer claims the whole spell.
+# ``_detect_shuffle_self_statics`` in ``spell_builder`` and wired as a
+# SELF-scope StaticAbility carrying a ``ReplacementEffect(
+# WOULD_GO_TO_GRAVEYARD, Replace(new_destination="library"))`` on the
+# spell printing; the self-shuffle clause is dropped from the effect-
+# clause stream by ``_is_self_shuffle_clause`` before the Sequence
+# combinator runs, so this single-sentence recognizer claims the whole
+# spell.
 # Currently only Nexus of Fate in the EoE/DSK pool prints this exact
 # surface today; the recognizer is a parameterless literal per parser
 # CLAUDE.md (one card, no second example yet with a varying piece).
@@ -1013,11 +1015,12 @@ _TAKE_EXTRA_TURN_AFTER_THIS_ONE = re.compile(
 # and puts the found creature directly onto the battlefield. The
 # accompanying GSZ self-shuffle rider ("Shuffle Green Sun's Zenith into
 # its owner's library.") is detected separately by
-# ``_detect_shuffle_self_flags`` and wired via
-# ``shuffles_into_library_instead_of_graveyard``; the self-shuffle clause
-# is dropped from the effect-clause stream by ``_is_self_shuffle_clause``
-# before the Sequence combinator runs, so this single-sentence recognizer
-# claims the whole spell.
+# ``_detect_shuffle_self_statics`` and wired as a SELF-scope
+# StaticAbility carrying a ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+# Replace(new_destination="library"))`` on the spell printing; the
+# self-shuffle clause is dropped from the effect-clause stream by
+# ``_is_self_shuffle_clause`` before the Sequence combinator runs, so
+# this single-sentence recognizer claims the whole spell.
 # Currently only Green Sun's Zenith in the EoE pool prints this exact
 # X-cost battlefield-tutor surface today; the recognizer is a
 # parameterless literal per parser CLAUDE.md (one card, no second example
@@ -5034,7 +5037,7 @@ def _parse_effect(phrase: str) -> Effect | None:
     # ``take an extra turn after this one`` — Nexus of Fate's single-
     # sentence main effect. Maps to the parameterless
     # ``TakeExtraTurnAfterThisOne`` engine class. The accompanying self-
-    # shuffle rider is handled separately by ``_detect_shuffle_self_flags``
+    # shuffle rider is handled separately by ``_detect_shuffle_self_statics``
     # and dropped from the effect stream by ``_is_self_shuffle_clause`` in
     # ``spell_builder``; this single-sentence recognizer therefore claims
     # the full spell once the rider is stripped. Tried in the

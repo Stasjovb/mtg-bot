@@ -10,18 +10,19 @@ grant/remove, type add) or a :class:`ReplacementEffect` (CR 614 —
 intercept events; transforms ``MultiplyCount(×N)``, ``AddToCount(+N)``,
 ``AddInstances(+N)``, ``Replace(other_event)``, ``Prevent``).
 
-Today every battlefield-permanent replacement flag is a native
+Today every replacement-flag surface in the EoE pool is a native
 ``StaticAbility.replacement_effect`` declaration on the printing —
-the legacy boolean-flag synthesis paths
-(``is_token_doubler`` / ``is_counter_doubler`` /
-``extra_etb_trigger`` / ``replaces_draw_with_extra_when_hand_at_most_one``)
-have all been retired. The continuous-effect side (anthem family,
-Mechan Shieldmate, Illvoi Infiltrator) is partially migrated;
-:func:`walk_continuous_modifiers` is the consumer-facing dispatcher.
-The ``shuffles_into_library_instead_of_graveyard`` flag still
-synthesises a ``ReplacementEffect`` because the moving card isn't on
-the battlefield at dispatch time — its native-declaration migration
-needs the walker extended to also visit moving cards.
+both the battlefield-resident family (``is_token_doubler`` /
+``is_counter_doubler`` / ``extra_etb_trigger`` /
+``replaces_draw_with_extra_when_hand_at_most_one``) and the
+moving-card family (``shuffles_into_library_instead_of_graveyard``).
+:func:`_collect_replacement_effects` walks both: a battlefield pass
+gates on ``source.controller_id == affected_player_id``, and a
+moving-card pass on ``card.owner_id == affected_player_id`` for any
+event whose ``subjects`` carry a ``"card"`` key. The continuous-
+effect side (anthem family, Mechan Shieldmate, Illvoi Infiltrator)
+is partially migrated; :func:`walk_continuous_modifiers` is the
+consumer-facing dispatcher.
 """
 
 from __future__ import annotations
@@ -478,26 +479,44 @@ def _collect_replacement_effects(
                 ):
                     continue
                 out.append((obj.id, re))
-    # Out-of-band synthesis: WOULD_GO_TO_GRAVEYARD reads a flag on
-    # the moving CARD's printing, not on a battlefield permanent
-    # (the card is mid-flight at dispatch). The dispatch site
-    # passes the card via ``subjects["card"]``.
-    if event == Event.WOULD_GO_TO_GRAVEYARD:
-        card = subjects.get("card")
-        if card is not None and getattr(
-            getattr(card, "printing", None),
-            "shuffles_into_library_instead_of_graveyard",
-            False,
-        ):
-            out.append((
-                getattr(card, "id", -1),
-                ReplacementEffect(
-                    event_pattern=EventPattern(
-                        event=Event.WOULD_GO_TO_GRAVEYARD,
-                    ),
-                    transform=Replace(new_destination="library"),
-                ),
-            ))
+    # Moving-card walker: if subjects carries a ``"card"`` key, the
+    # dispatcher is firing on an event whose source is the card itself
+    # (mid-flight, not on the battlefield) — Nexus-of-Fate-shape
+    # WOULD_GO_TO_GRAVEYARD self-shuffles, future "if you would draw
+    # this card …" moments, etc. Walk the moving card's
+    # ``static_abilities`` looking for matching ``replacement_effect``
+    # declarations. Implicit gate: ``card.owner_id ==
+    # affected_player_id`` (every dispatch site setting a ``"card"``
+    # subject already passes the owner as ``affected_player_id``, so
+    # this gate is effectively always-true today, but keeping it
+    # explicit guards against a future site that dispatches on a
+    # different player's behalf).
+    card = subjects.get("card")
+    if card is not None and getattr(
+        card, "owner_id", None,
+    ) == affected_player_id:
+        for static in getattr(
+            getattr(card, "printing", None), "static_abilities", (),
+        ) or ():
+            re = getattr(static, "replacement_effect", None)
+            if re is None:
+                continue
+            if re.event_pattern.event != event:
+                continue
+            cond = getattr(static, "condition", None)
+            if cond is not None and not cond.matches(
+                state, card.owner_id,
+            ):
+                continue
+            if not _subject_filters_match(
+                re.event_pattern.subject_filters, subjects, state,
+            ):
+                continue
+            if re.scope_filter is not None and not re.scope_filter.test(
+                card, state,
+            ):
+                continue
+            out.append((getattr(card, "id", -1), re))
     return out
 
 

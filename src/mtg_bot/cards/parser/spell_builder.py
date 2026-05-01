@@ -72,6 +72,13 @@ from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+from mtg_bot.effects.base import StaticAbility, StaticScope
+from mtg_bot.effects.modifiers import (
+    EventPattern,
+    Replace,
+    ReplacementEffect,
+)
+from mtg_bot.effects.predicates import Event
 
 
 # Modal spell headers: ``Choose one —`` (single-mode pick) or
@@ -409,11 +416,12 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
 
 # Self-shuffle rider clauses — recognizers for the two Scryfall-printed
 # self-shuffle surface forms that a spell's oracle text may carry as a
-# trailing sentence or a separate oracle line. Both are already handled by
-# the ``shuffles_into_library_instead_of_graveyard`` printing flag (wired
-# via ``_detect_shuffle_self_flags``), so they contribute no ``Effect``
-# and must be dropped from the effect-clause stream before the
-# combinator dispatch runs.
+# trailing sentence or a separate oracle line. Both are handled by a
+# SELF-scope ``StaticAbility`` carrying a ``ReplacementEffect(
+# WOULD_GO_TO_GRAVEYARD, Replace(new_destination="library"))`` on
+# the spell printing (wired via ``_detect_shuffle_self_statics``), so
+# they contribute no ``Effect`` and must be dropped from the effect-
+# clause stream before the combinator dispatch runs.
 #
 # Two shapes exist in the EoE pool:
 #
@@ -429,10 +437,11 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
 # Both shapes are matched with generic regexes that accept any card name
 # (an arbitrary non-empty word sequence between the anchors), so a future
 # card with the same self-shuffle mechanic claims automatically without
-# adding a new literal key. The ``_detect_shuffle_self_flags`` helper uses
-# a name-interpolated ``re.search`` against the FULL oracle text, which
-# fires correctly regardless of whether the self-shuffle line is dropped
-# here — the dropping only affects the effect-clause stream, not the flag
+# adding a new literal key. The ``_detect_shuffle_self_statics`` helper
+# uses a name-interpolated ``re.search`` against the FULL oracle text,
+# which fires correctly regardless of whether the self-shuffle line is
+# dropped here — the dropping only affects the effect-clause stream, not
+# the StaticAbility
 # detection.
 _SELF_SHUFFLE_GSZ_RE = re.compile(
     r"^Shuffle .+ into its owner's library\.$"
@@ -453,13 +462,15 @@ def _is_self_shuffle_clause(clause: str) -> bool:
         <Name> and shuffle it into its owner's library instead.``
         (Nexus of Fate form)
 
-    Both shapes are already modeled by the
-    ``shuffles_into_library_instead_of_graveyard`` printing flag (wired
-    via ``_detect_shuffle_self_flags``), so they contribute no ``Effect``
-    and should be excluded from the effect-clause stream. Dropping here
-    lets the remaining clause(s) parse through the unified per-clause
-    grammar rather than failing the whole spell because the self-shuffle
-    rider can't parse as a standalone ``Effect``.
+    Both shapes are modeled by the SELF-scope StaticAbility carrying a
+    ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    Replace(new_destination="library"))`` on the spell printing (wired
+    via ``_detect_shuffle_self_statics``), so they contribute no
+    ``Effect`` and should be excluded from the effect-clause stream.
+    Dropping here lets the remaining clause(s) parse through the
+    unified per-clause grammar rather than failing the whole spell
+    because the self-shuffle rider can't parse as a standalone
+    ``Effect``.
     """
     c = clause.strip()
     return (
@@ -978,8 +989,10 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # recognizer in ``effects.py`` claims the first clause as
     # ``TakeExtraTurnAfterThisOne()``; the Nexus self-shuffle rider (second
     # line) is dropped by the new ``_is_self_shuffle_clause`` dropper, and
-    # the ``shuffles_into_library_instead_of_graveyard`` printing flag is
-    # wired separately by ``_detect_shuffle_self_flags``.
+    # the SELF-scope StaticAbility carrying the
+    # ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    # Replace(new_destination="library"))`` is wired separately by
+    # ``_detect_shuffle_self_statics``.
     # Green Sun's Zenith — "Search your library for a green creature
     # card with mana value X or less, put it onto the battlefield, then
     # shuffle. Shuffle Green Sun's Zenith into its owner's library." —
@@ -989,8 +1002,10 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the GSZ self-shuffle
     # rider (second sentence on the same oracle line, split off by
     # ``_split_sentences``) is dropped by ``_is_self_shuffle_clause``, and
-    # the ``shuffles_into_library_instead_of_graveyard`` printing flag is
-    # wired separately by ``_detect_shuffle_self_flags``.
+    # the SELF-scope StaticAbility carrying the
+    # ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    # Replace(new_destination="library"))`` is wired separately by
+    # ``_detect_shuffle_self_statics``.
     # Consult the Star Charts — "Kicker {1}{U}\n Look at the top X cards
     # of your library, where X is the number of lands you control. Put
     # one of those cards into your hand. If this spell was kicked, put
@@ -1368,9 +1383,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             new_clauses.extend(_split_sentences(c))
     clauses = new_clauses
     # Drop recognized self-shuffle rider clauses — they contribute no
-    # ``Effect`` (the engine consumes them via the
-    # ``shuffles_into_library_instead_of_graveyard`` printing flag wired
-    # by ``_detect_shuffle_self_flags``). Two shapes are recognized:
+    # ``Effect`` (the engine consumes them via the SELF-scope
+    # StaticAbility carrying the
+    # ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+    # Replace(new_destination="library"))`` wired by
+    # ``_detect_shuffle_self_statics``). Two shapes are recognized:
     #   - ``Shuffle <Name> into its owner's library.`` (Green Sun's Zenith)
     #   - ``If <Name> would be put into a graveyard from anywhere, reveal
     #     <Name> and shuffle it into its owner's library instead.``
@@ -1541,19 +1558,21 @@ def _detect_additional_cost_flags(text: str) -> dict:
 # Self-shuffle riders: a clause of the form "Shuffle <Name> into its
 # owner's library." (Green Sun's Zenith) or "If <Name> would be put
 # into a graveyard from anywhere, reveal <Name> and shuffle it into
-# its owner's library instead." (Nexus of Fate). The static side wires
-# both via the ``shuffles_into_library_instead_of_graveyard`` printing
-# flag — so detecting either rider in a spell's oracle text threads the
-# flag onto the resulting ``CardPrinting`` without contributing an
-# ``Effect``. The rider's text remains in the oracle text and is
-# matched verbatim by the whole-spell exact-text dispatcher; there is
-# no clause-stripping pass needed for these riders, since the dispatch
-# key already includes the rider.
+# its owner's library instead." (Nexus of Fate). The parser models
+# both as a SELF-scope ``StaticAbility(replacement_effect=
+# ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+# Replace(new_destination="library")))`` on the spell printing — so
+# detecting either rider in a spell's oracle text threads the
+# StaticAbility onto the resulting ``CardPrinting`` without
+# contributing an ``Effect``. The rider's text remains in the oracle
+# text and is matched verbatim by the whole-spell exact-text
+# dispatcher; there is no clause-stripping pass needed for these
+# riders, since the dispatch key already includes the rider.
 #
 # Both shapes interpolate the card's own name and are matched after
 # escaping the name. Non-matching cards (no shuffle rider in their
-# text) round-trip through ``_detect_shuffle_self_flags`` with an
-# empty flag dict.
+# text) round-trip through ``_detect_shuffle_self_statics`` with an
+# empty tuple.
 _SHUFFLE_SELF_GSZ_RE_TEMPLATE = (
     r"Shuffle {name} into its owner's library\."
 )
@@ -1563,10 +1582,14 @@ _SHUFFLE_SELF_NEXUS_RE_TEMPLATE = (
 )
 
 
-def _detect_shuffle_self_flags(text: str, name: str) -> dict:
-    """Return ``{"shuffles_into_library_instead_of_graveyard": True}``
-    if ``text`` contains a recognized self-shuffle rider for ``name``;
-    an empty dict otherwise.
+def _detect_shuffle_self_statics(
+    text: str, name: str,
+) -> tuple[StaticAbility, ...]:
+    """Return a one-element tuple containing a SELF-scope
+    ``StaticAbility`` carrying a ``ReplacementEffect(WOULD_GO_TO_
+    GRAVEYARD, Replace(new_destination="library"))`` if ``text``
+    contains a recognized self-shuffle rider for ``name``; an empty
+    tuple otherwise.
 
     Two shapes are recognized:
       - ``Shuffle <Name> into its owner's library.`` (Green Sun's
@@ -1581,9 +1604,16 @@ def _detect_shuffle_self_flags(text: str, name: str) -> dict:
     rider regardless of where in the spell text it appears. Each
     pattern interpolates ``re.escape(name)`` so a card name with regex
     metacharacters (e.g. apostrophes, periods) doesn't break the
-    match. Non-matching texts return ``{}`` — callers spread the dict
-    via ``**`` into ``make_instant`` / ``make_sorcery`` so an empty
-    dict is a no-op.
+    match. Non-matching texts return an empty tuple.
+
+    The returned ``StaticAbility`` rides on the spell printing's
+    ``static_abilities`` tuple. The dispatcher's moving-card walker
+    in :func:`mtg_bot.effects.modifiers._collect_replacement_effects`
+    visits ``card.printing.static_abilities`` for events that pass a
+    ``"card"`` subject (today: ``WOULD_GO_TO_GRAVEYARD`` from
+    ``actions._send_to_graveyard_or_library``); the implicit
+    ``card.owner_id == affected_player_id`` gate keys the replacement
+    on the spell's owner.
     """
     name_re = re.escape(name)
     patterns = (
@@ -1592,8 +1622,16 @@ def _detect_shuffle_self_flags(text: str, name: str) -> dict:
     )
     for p in patterns:
         if re.search(p, text) is not None:
-            return {"shuffles_into_library_instead_of_graveyard": True}
-    return {}
+            return (StaticAbility(
+                scope=StaticScope.SELF,
+                replacement_effect=ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.WOULD_GO_TO_GRAVEYARD,
+                    ),
+                    transform=Replace(new_destination="library"),
+                ),
+            ),)
+    return ()
 
 
 def _detect_kicker_cost(text: str) -> str | None:
@@ -1667,8 +1705,8 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         cost=card["mana_cost"],
         effect=effect,
         cost_reductions=_detect_cost_reductions(text),
+        static_abilities=_detect_shuffle_self_statics(text, card["name"]),
         **_detect_preamble_flags(text),
         **_detect_additional_cost_flags(text),
-        **_detect_shuffle_self_flags(text, card["name"]),
         **kwargs,
     )
