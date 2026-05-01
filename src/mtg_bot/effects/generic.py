@@ -10967,9 +10967,10 @@ class BecomeType(Effect):
       - For each entry in ``types_to_add``: layer 4 ``add_type``. When
         the type is ``"creature"``, also flips the
         ``GameObject.permanent_is_creature`` write-through cache that
-        ``is_creature_now`` reads. (Caveat: the cache flip is sticky
-        across cleanup — see ``ApplyEffect``'s docstring for the deferred
-        UEOT type-change story.)
+        ``is_creature_now`` reads. ``run_cleanup_step`` rebuilds the
+        cache from the registry after expiring cleanup-scoped entries,
+        so an ``ApplyEffect``-wrapped ``BecomeType`` with a finite
+        duration correctly reverts the cache when its entry expires.
       - For each entry in ``subtypes_to_add``: layer 4 ``add_subtype``.
         Read by ``effective_subtypes`` walking the registry, so any
         duration is faithfully respected.

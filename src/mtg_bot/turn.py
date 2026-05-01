@@ -1022,6 +1022,27 @@ def run_cleanup_step(state: GameState) -> None:
         )
         if not any_remaining:
             obj.controller_id_before_any_aura_swap = None
+    # Layer-4 ``add_type "creature"`` cache rebuild: when an
+    # ApplyEffect-rewritten ``BecomeType`` entry expired above, the
+    # cached ``permanent_is_creature`` flag is stale. The registry is
+    # the source of truth — keep the cache True only while at least
+    # one layer-4 ``add_type "creature"`` entry still targets the
+    # object. Without this rebuild, a finite-lifetime ``BecomeType
+    # (types_to_add=("creature",))`` (manland animation, e.g. Raging
+    # Ravine via the new pattern) would leave the permanent stuck as
+    # a creature after cleanup.
+    for obj in state.battlefield:
+        if not obj.permanent_is_creature:
+            continue
+        still_creature = any(
+            ce.layer == 4
+            and ce.kind == "add_type"
+            and ce.target_id == obj.id
+            and ce.params == ("creature",)
+            for ce in state.continuous_effects
+        )
+        if not still_creature:
+            obj.permanent_is_creature = False
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False

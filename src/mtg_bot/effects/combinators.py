@@ -41,20 +41,21 @@ class ApplyEffect(Effect):
     ends_at=EndOfTurn())`` writes a layer-4 ``add_type "creature"``
     entry that expires at the next cleanup step.
 
-    Notes & known caveats for this PR's first migration:
+    Read-path notes:
 
-    - The PT and subtype read paths (``_compute_effective_pt``,
+    - PT and subtype reads (``_compute_effective_pt``,
       ``effective_subtypes``) consult the registry directly, so any
       duration is faithfully respected for those changes.
-    - ``is_creature_now`` reads the ``GameObject.permanent_is_creature``
-      write-through cache rather than walking the registry. ``BecomeType``
-      sets that cache on resolve regardless of the wrapping
-      ``ApplyEffect``'s ``ends_at``. Migrating UEOT type-changes (so the
-      cache reverts when the registry entry expires) is deferred — for now
-      use ``BecomeLandCreatureUEOT`` (the legacy ``temp_*`` path) for any
-      "becomes a creature until end of turn" migration. The single
-      Haunted-Screen migration in this PR is permanent, so the caveat
-      doesn't bite.
+    - ``is_creature_now`` reads the
+      ``GameObject.permanent_is_creature`` write-through cache.
+      ``BecomeType`` sets that cache on resolve; ``run_cleanup_step``
+      rebuilds it from the registry after expiring cleanup-scoped
+      entries, so an ApplyEffect-wrapped ``BecomeType`` with a finite
+      duration correctly reverts the cache when its registry entry
+      expires. This makes the new pattern viable for manland-style
+      animation (``Raging Ravine`` etc.); the existing
+      ``BecomeLandCreatureUEOT`` primitive still owns the
+      legacy ``temp_*`` path until the manland migration sweep lands.
     """
 
     inner: Effect

@@ -297,3 +297,81 @@ def test_apply_effect_round_trips_through_cleanup():
     # PT reverts when no set_base_pt entry exists; an artifact with no
     # printed P/T resolves to (0, 0).
     assert _compute_effective_pt(state, source_obj) == (0, 0)
+
+
+def test_apply_effect_creature_type_cache_reverts_at_cleanup():
+    """``ApplyEffect(BecomeType(types_to_add=("creature",)),
+    EndOfTurn())`` is the manland-animation pattern: the cleanup
+    rebuild walks the registry and resets ``permanent_is_creature``
+    for any object whose layer-4 ``add_type "creature"`` entry has
+    expired, so ``is_creature_now`` flips back."""
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.effects import (
+        ApplyEffect, BecomeType, EndOfTurn,
+    )
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone,
+        is_creature_now,
+    )
+    from mtg_bot.turn import run_cleanup_step
+
+    art_pr = make_artifact("Stone", "{1}")
+    source_obj = GameObject(
+        id=10, printing=art_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[source_obj],
+        resolving_source=source_obj,
+    )
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            subtypes_to_add=("Elemental",),
+            base_pt=(3, 3),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, controller_id=0, targets=())
+    # During the turn: counts as a creature, cache flipped.
+    assert source_obj.permanent_is_creature is True
+    assert is_creature_now(source_obj) is True
+    # After cleanup: registry entry expired AND the cache reverted.
+    run_cleanup_step(state)
+    assert source_obj.permanent_is_creature is False
+    assert is_creature_now(source_obj) is False
+
+
+def test_permanent_become_type_cache_survives_cleanup():
+    """A ``BecomeType(types_to_add=("creature",))`` written WITHOUT
+    an ``ApplyEffect`` wrapper writes a permanent registry entry
+    (``expires_at=None``) and the cleanup rebuild leaves the cache
+    True — Haunted Screen's permanent transformation must persist
+    across turns."""
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.effects import BecomeType
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone, is_creature_now,
+    )
+    from mtg_bot.turn import run_cleanup_step
+
+    art_pr = make_artifact("Haunted Screen", "{3}")
+    source_obj = GameObject(
+        id=10, printing=art_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[source_obj],
+        resolving_source=source_obj,
+    )
+    BecomeType(
+        types_to_add=("creature",),
+        subtypes_to_add=("Spirit",),
+        base_pt=(0, 0),
+    ).resolve(state, controller_id=0, targets=())
+    assert source_obj.permanent_is_creature is True
+    run_cleanup_step(state)
+    # Permanent registry entry stayed, so the cache stays True.
+    assert source_obj.permanent_is_creature is True
+    assert is_creature_now(source_obj) is True
