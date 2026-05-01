@@ -55,6 +55,7 @@ from mtg_bot.cards.base import (
     DrawCards,
     DrawCardsEqualToResolvingCombatDamage,
     EachOpponentDiscards,
+    EachOpponentExilesOwnCreature,
     EachOpponentLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
@@ -2409,6 +2410,22 @@ _EACH_OPPONENT_DISCARDS = re.compile(
 # captured groups.
 _EACH_OPPONENT_SACRIFICES_CREATURE = re.compile(
     r"^each opponent sacrifices a nontoken creature of their choice$"
+)
+# "Each opponent chooses a creature they control and exiles it." —
+# Sothera, the Supervoid's DIES-trigger body. Each opponent independently
+# picks one creature they control via their agent's ``choose_sacrifice``
+# (re-used as a generic "pick one of your battlefield creatures" prompt),
+# and the chosen object moves to exile with
+# ``exiled_by_source = state.resolving_source.id`` so Sothera's end-step
+# recall can find "creature card exiled with it". The link is requested
+# at the parser site by passing ``link_to_source=True`` on
+# ``EachOpponentExilesOwnCreature``. Literal-line recognizer with no
+# capture groups — Sothera is the only EoE/DSK card in the pool with
+# this exact "each opponent chooses … exiles it" surface today; broader
+# generalization deferred until a second example exists (e.g. an effect
+# with a different filter on what each opponent must pick).
+_EACH_OPPONENT_EXILES_OWN_CREATURE = re.compile(
+    r"^each opponent chooses a creature they control and exiles it$"
 )
 # "Defending player loses half their life, rounded up." —
 # Alpharael, Stonechosen's Void attack trigger effect (after the
@@ -4841,6 +4858,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``choose_sacrifice`` (skipping opponents with no legal
         # nontoken creature).
         return EachOpponentSacrificesCreature()
+    if _EACH_OPPONENT_EXILES_OWN_CREATURE.match(phrase) is not None:
+        # ``each opponent chooses a creature they control and exiles
+        # it`` — Sothera, the Supervoid's DIES trigger body. Each
+        # opponent independently picks one of their creatures via
+        # ``choose_sacrifice``; the chosen object is exiled with
+        # ``exiled_by_source = state.resolving_source.id`` so Sothera's
+        # end-step recall can locate it via the ``creature card exiled
+        # with it`` anaphoric reference. Source-link is requested via
+        # ``link_to_source=True`` because the bookkeeping is required
+        # by the sibling end-step ability — without the link the recall
+        # would silently miss its target.
+        return EachOpponentExilesOwnCreature(link_to_source=True)
     if _DEFENDING_PLAYER_LOSES_HALF_LIFE_ROUNDED_UP.match(phrase) is not None:
         # ``defending player loses half their life, rounded up`` —
         # Alpharael, Stonechosen's Void attack trigger. The engine

@@ -279,7 +279,6 @@ from mtg_bot.effects.bespoke import (
     SelfcraftMechanETBEffect,
     SingularityRuptureEffect,
     SotheraEndStepReanimateEffect,
-    SotheraExileOpponentCreatureEffect,
     SurveyMechanActivationEffect,
     SystemsOverrideEffect,
     TannukEnsignLandfallEffect,

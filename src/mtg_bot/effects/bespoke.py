@@ -284,53 +284,15 @@ class SelfcraftMechanETBEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class SotheraExileOpponentCreatureEffect(Effect):
-    """Sothera's dies-observer: "Each opponent chooses a creature they
-    control and exiles it." Uses the source's id for exiled_by_source
-    bookkeeping so Sothera's end-step reanimate can find them.
-
-    Simplification: engine uses the generic your_creature_or_artifact
-    _dies observer, which also fires for artifact deaths — slightly
-    wider than oracle's "creature you control".
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import move_off_battlefield
-
-        source = state.resolving_source
-        if source is None:
-            return
-        for opp in state.players:
-            if opp.id == controller_id or opp.has_lost:
-                continue
-            candidates = [
-                o for o in state.battlefield
-                if o.controller_id == opp.id and o.printing.is_creature
-            ]
-            if not candidates or opp.agent is None:
-                continue
-            pick_id = opp.agent.choose_sacrifice(
-                state, opp.id, [o.id for o in candidates]
-            )
-            chosen = next(
-                (o for o in candidates if o.id == pick_id), candidates[0]
-            )
-            chosen.exiled_by_source = source.id
-            state.log.append(
-                f"P{opp.id} exiles {chosen.printing.name} "
-                f"(Sothera, the Supervoid)"
-            )
-            move_off_battlefield(state, chosen, destination="exile")
-
-    def describe(self) -> str:
-        return (
-            "each opponent chooses a creature they control and exiles it"
-        )
-
+# NOTE: ``SotheraExileOpponentCreatureEffect`` was deleted in
+# audit-per-opponent-choice. Sothera's DIES trigger ("Whenever a creature
+# you control dies, each opponent chooses a creature they control and
+# exiles it.") now decomposes into the generic
+# ``EachOpponentExilesOwnCreature(link_to_source=True)`` primitive (in
+# ``effects/generic.py``) via the unified parser grammar. The
+# ``link_to_source=True`` flag preserves the ``exiled_by_source`` link
+# that the sibling ``SotheraEndStepReanimateEffect`` reads via the
+# "creature card exiled with it" anaphoric reference.
 
 
 @dataclass(frozen=True)

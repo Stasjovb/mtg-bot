@@ -1,10 +1,22 @@
 """Tests for Sothera, the Supervoid — dies-exile-opponent and end-step
-reanimate effects."""
+reanimate effects.
+
+The DIES trigger ("each opponent chooses a creature they control and
+exiles it") now decomposes into the generic
+``EachOpponentExilesOwnCreature(link_to_source=True)`` primitive (in
+``effects/generic.py``) via the unified parser grammar; the bespoke
+``SotheraExileOpponentCreatureEffect`` was deleted in
+audit-per-opponent-choice. The end-step reanimate remains bespoke
+pending the parallel ``exiled_with_this`` tracking work.
+"""
 
 from mtg_bot.actions import drain_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import SYNTHETIC_CREATURES
-from mtg_bot.effects import SotheraEndStepReanimateEffect, SotheraExileOpponentCreatureEffect
+from mtg_bot.effects import (
+    EachOpponentExilesOwnCreature,
+    SotheraEndStepReanimateEffect,
+)
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy, run_beginning_of_end_step_triggers
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
@@ -47,7 +59,9 @@ def test_dies_observer_exiles_opponent_creature():
     enemy = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     state.resolving_source = sothera
     try:
-        SotheraExileOpponentCreatureEffect().resolve(state, 0, ())
+        EachOpponentExilesOwnCreature(link_to_source=True).resolve(
+            state, 0, (),
+        )
     finally:
         state.resolving_source = None
     assert enemy not in state.battlefield
@@ -62,7 +76,9 @@ def test_dies_observer_skips_controller():
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     state.resolving_source = sothera
     try:
-        SotheraExileOpponentCreatureEffect().resolve(state, 0, ())
+        EachOpponentExilesOwnCreature(link_to_source=True).resolve(
+            state, 0, (),
+        )
     finally:
         state.resolving_source = None
     # Own creature untouched.
@@ -70,7 +86,7 @@ def test_dies_observer_skips_controller():
 
 
 def test_dies_observer_describe():
-    d = SotheraExileOpponentCreatureEffect().describe()
+    d = EachOpponentExilesOwnCreature(link_to_source=True).describe()
     assert "opponent" in d and "exile" in d
 
 
@@ -131,3 +147,24 @@ def test_sothera_printing_metadata():
     triggers = {_legacy_or_inferred_key(ab) for ab in s.triggered_abilities}
     assert "your_creature_or_artifact_dies" in triggers
     assert "beginning_of_end_step" in triggers
+
+
+def test_sothera_dies_trigger_decomposes_to_generic_primitive():
+    """The DIES trigger no longer wires the bespoke
+    ``SotheraExileOpponentCreatureEffect``; the unified parser claims
+    "Whenever a creature you control dies, each opponent chooses a
+    creature they control and exiles it." through
+    ``_parse_predicate_trigger_phrase`` for the trigger and the new
+    ``each opponent chooses a creature they control and exiles it``
+    regex for the body, producing
+    ``EachOpponentExilesOwnCreature(link_to_source=True)``."""
+    from mtg_bot.effects.predicates import Event
+
+    s = _PRINTINGS["Sothera, the Supervoid"]
+    dies = [
+        ta for ta in s.triggered_abilities if ta.event == Event.DIES
+    ]
+    assert len(dies) == 1
+    assert dies[0].effect == EachOpponentExilesOwnCreature(
+        link_to_source=True,
+    )

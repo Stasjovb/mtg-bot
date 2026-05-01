@@ -84,6 +84,7 @@ from mtg_bot.effects import (
     ChoraleReanimateDefenderGraveCreatureEffect,
     CreateToken,
     DestroyEnchantedPermanent,
+    EachOpponentExilesOwnCreature,
     EnchantedCreatureFightsTargetEffect,
     ExileOpponentsNonlandPermanentUntilLeaves,
     ExileTargetCreatureUntilSourceLeaves,
@@ -91,7 +92,6 @@ from mtg_bot.effects import (
     PainForAllETBEffect,
     SacrificeSelfUnlessVoidActive,
     SotheraEndStepReanimateEffect,
-    SotheraExileOpponentCreatureEffect,
     TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
@@ -158,6 +158,13 @@ def _build_loading_zone() -> CardPrinting:
 
 
 def _build_sothera_the_supervoid() -> CardPrinting:
+    # NOTE: this builder is unused — Sothera now claims through the
+    # unified non-Aura enchantment grammar via
+    # ``_build_enchantment_via_oracle_text`` (gated on the name being in
+    # ``_UNIFIED_ENCHANTMENT_NAMES``). The DIES trigger decomposes into
+    # ``EachOpponentExilesOwnCreature(link_to_source=True)`` (generic);
+    # the end-step trigger remains in ``_NONAURA_LITERAL_TRIGGER_LINES``
+    # pending the parallel ``exiled_with_this`` tracking work.
     return make_enchantment(
         "Sothera, the Supervoid", "{2}{B}{B}",
         legendary=True,
@@ -165,7 +172,7 @@ def _build_sothera_the_supervoid() -> CardPrinting:
             TriggeredAbility(
                 event=Event.DIES,
                 predicate=Subject(None, IsCreature()) & Controlled(YOU),
-                effect=SotheraExileOpponentCreatureEffect(),
+                effect=EachOpponentExilesOwnCreature(link_to_source=True),
             ),
             TriggeredAbility(
                 event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -1394,45 +1401,20 @@ _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES: frozenset[str] = frozenset({
 # uses a bespoke engine class not yet in the general grammar. Parallel to
 # ``_AURA_LITERAL_TRIGGER_LINES`` for non-Aura paths.
 _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
-    # Sothera, the Supervoid — DIES trigger.
-    #
+    # Sothera, the Supervoid — DIES trigger:
+    # MIGRATED to the unified grammar in audit-per-opponent-choice.
     # "Whenever a creature you control dies, each opponent chooses a
-    # creature they control and exiles it." → bespoke
-    # ``SotheraExileOpponentCreatureEffect``.
+    # creature they control and exiles it." now claims through the
+    # standard ``_parse_predicate_trigger_phrase`` path:
+    #   - ``a creature you control dies`` → ``(Event.DIES, Subject(
+    #     None, IsCreature()) & Controlled(YOU))``
+    #   - ``each opponent chooses a creature they control and exiles it``
+    #     → ``EachOpponentExilesOwnCreature(link_to_source=True)``
+    #     (new generic primitive in ``effects/generic.py``).
+    # The ``link_to_source=True`` flag tags exiled objects with
+    # ``exiled_by_source = state.resolving_source.id`` so Sothera's
+    # end-step recall ("creature card exiled with it") still finds them.
     #
-    # ARCHITECTURAL BLOCKER: this body needs a per-opponent
-    # independent-choice mass-exile primitive that ALSO tags each
-    # exiled card with ``exiled_by_source = source.id``. The engine
-    # primitives available today are mismatched on two axes:
-    #
-    #   1. ``EachOpponentSacrificesCreature`` exists but sacrifices,
-    #      not exiles, and uses the agent's ``choose_sacrifice`` prompt
-    #      with no mechanism to thread a source-id link onto the chosen
-    #      object. Switching it to exile would also break sacrifice
-    #      semantics for every existing caller.
-    #   2. ``ExileTargetCreatureUntilSourceLeaves`` exiles with a
-    #      source link but is targeted (single creature, picked by the
-    #      ABILITY's controller) — wrong choosing player and wrong
-    #      cardinality. The Sothera reading needs N independent
-    #      per-opponent picks resolved in turn order, each by that
-    #      opponent's agent.
-    #
-    # Generalization is gated on a new
-    # ``EachOpponentChoosesAndExilesCreatureLinkedToSource`` primitive
-    # (or a multi-axis parameterization of the existing exile family
-    # with: ``per_opponent_choice=True, exile_with_source_link=True``).
-    # Until that primitive lands, the literal-line dispatch is the only
-    # honest claim — generalizing without it would produce the wrong
-    # choosing-player or drop the exile-link bookkeeping that Sothera's
-    # end-step trigger then reads.
-    (
-        "Whenever a creature you control dies, each opponent chooses a "
-        "creature they control and exiles it."
-    ): TriggeredAbility(
-        event=Event.DIES,
-        predicate=Subject(None, IsCreature()) & Controlled(YOU),
-        effect=SotheraExileOpponentCreatureEffect(),
-    ),
     # Sothera, the Supervoid — end-step trigger.
     #
     # "At the beginning of your end step, if a player controls no
@@ -1531,14 +1513,13 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # to ``DrawCardsEqualToResolvingCounterAmount`` when the trigger
     # event is COUNTERS_ADDED.
     "Terrasymbiosis",
-    # Sothera, the Supervoid — two literal trigger lines pending
-    # architectural blockers documented in
-    # ``_NONAURA_LITERAL_TRIGGER_LINES``: the DIES body needs a per-
-    # opponent-choice mass-exile-with-source-link primitive, and the
-    # end-step body needs both a creatureless-player ``StateBound``
-    # gate predicate AND a sequenced sac-then-recall-with-counters
-    # primitive. Both are coupled (the end-step recall reads the
-    # ``exiled_by_source`` link populated by the DIES trigger).
+    # Sothera, the Supervoid — DIES trigger now decomposed into the
+    # generic ``EachOpponentExilesOwnCreature(link_to_source=True)``
+    # primitive (audit-per-opponent-choice). The end-step trigger
+    # remains in ``_NONAURA_LITERAL_TRIGGER_LINES`` pending two
+    # architectural pieces: a creatureless-player ``StateBound`` gate
+    # and a sequenced sac-then-recall-with-counters primitive (both
+    # coupled to the parallel ``exiled_with_this`` tracking work).
     "Sothera, the Supervoid",
 })
 
