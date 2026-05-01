@@ -411,21 +411,23 @@ def test_attack_in_the_box_carries_attacks_trigger_with_combinator_tree():
 # ---------- Wickerfolk Thresher ----------
 
 def test_wickerfolk_thresher_claimed_by_parser():
-    # Wickerfolk Thresher now claims via the oracle-text parser: all
-    # lines route through the unified grammar; the Delirium attack
-    # trigger is caught by ``_BESPOKE_TRIGGER_LINES`` and wires
-    # ``WickerfolkThresherAttackEffect``.
+    # Wickerfolk Thresher now claims via the oracle-text parser end-to-
+    # end: every line (mana cost, P/T, artifact type, Scarecrow
+    # subtype, Delirium attack trigger) routes through the unified
+    # grammar. The trigger body dispatches to the canonical
+    # ``PeekTopMayBattlefieldIfLandElseHand`` primitive via a multi-
+    # sentence literal recognizer in ``effects._parse_effect``.
+    # Migrated in audit-litdispatch-creatures.
     assert "Wickerfolk Thresher" in _claimed_names()
 
 
 def test_wickerfolk_thresher_carries_attacks_trigger_with_delirium_gate():
     # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the attack trigger via the bespoke
-    # ``WickerfolkThresherAttackEffect`` engine class, with the
-    # ``StateBound(Delirium())`` predicate composed as an intervening-if gate.
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.effects.state_predicates import (
-        Delirium,
+    # the attack trigger as ``PeekTopMayBattlefieldIfLandElseHand``,
+    # with the ``StateBound(Delirium())`` predicate composed as an
+    # intervening-if gate on top of the ``IsSelf()`` base.
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
     )
 
     p = OracleParserCardSource().get_printings()["Wickerfolk Thresher"]
@@ -436,168 +438,12 @@ def test_wickerfolk_thresher_carries_attacks_trigger_with_delirium_gate():
         t for t in p.triggered_abilities if t.event == Event.ATTACKS
     ]
     assert len(attacks) == 1
-    assert isinstance(attacks[0].effect, WickerfolkThresherAttackEffect)
+    assert isinstance(
+        attacks[0].effect, PeekTopMayBattlefieldIfLandElseHand,
+    )
     # StateBound(Delirium()) should be present in the predicate tree.
     pred_repr = repr(attacks[0].predicate)
     assert "Delirium" in pred_repr
-
-
-# ---------- WickerfolkThresherAttackEffect engine class ----------
-
-def test_wickerfolk_thresher_effect_describe():
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-
-    desc = WickerfolkThresherAttackEffect().describe()
-    assert "top card" in desc
-    assert "land card" in desc
-    assert "hand" in desc
-
-
-def test_wickerfolk_thresher_puts_land_onto_battlefield_when_accept():
-    # Top card is a land + agent accepts → land enters the battlefield
-    # under the controller's control.
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.cards.base import make_basic_land
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
-
-    class _Accept:
-        def choose_yes_no(self, state, pid, prompt):
-            return True
-
-    thresher_pr = make_creature(
-        "Wickerfolk Thresher", "{3}{G}", 5, 4,
-        artifact=True, subtypes=("Scarecrow",),
-    )
-    thresher = GameObject(
-        id=1, printing=thresher_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    forest_pr = make_basic_land("Forest", "G")
-    top = GameObject(
-        id=2, printing=forest_pr, owner_id=0, controller_id=0,
-        zone=Zone.LIBRARY,
-    )
-    p0 = Player(id=0, agent=_Accept(), library=[top])
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1],
-        battlefield=[thresher],
-        resolving_source=thresher,
-    )
-    WickerfolkThresherAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    assert top in state.battlefield
-    assert top not in p0.library
-    assert top not in p0.hand
-    assert top.controller_id == 0
-
-
-def test_wickerfolk_thresher_puts_land_into_hand_when_decline():
-    # Top card is a land + agent declines → the land goes to hand
-    # instead.
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.cards.base import make_basic_land
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
-
-    class _Decline:
-        def choose_yes_no(self, state, pid, prompt):
-            return False
-
-    thresher_pr = make_creature(
-        "Wickerfolk Thresher", "{3}{G}", 5, 4,
-        artifact=True, subtypes=("Scarecrow",),
-    )
-    thresher = GameObject(
-        id=1, printing=thresher_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    forest_pr = make_basic_land("Forest", "G")
-    top = GameObject(
-        id=2, printing=forest_pr, owner_id=0, controller_id=0,
-        zone=Zone.LIBRARY,
-    )
-    p0 = Player(id=0, agent=_Decline(), library=[top])
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1],
-        battlefield=[thresher],
-        resolving_source=thresher,
-    )
-    WickerfolkThresherAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    assert top in p0.hand
-    assert top not in state.battlefield
-
-
-def test_wickerfolk_thresher_puts_nonland_into_hand():
-    # Top card is a creature (non-land) → straight to hand without
-    # consulting the agent.
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
-
-    class _Accept:
-        # If the agent is queried this test should fail (we don't want
-        # the agent consulted on non-land top cards).
-        def choose_yes_no(self, state, pid, prompt):
-            raise AssertionError(
-                "choose_yes_no should not fire on non-land top"
-            )
-
-    thresher_pr = make_creature(
-        "Wickerfolk Thresher", "{3}{G}", 5, 4,
-        artifact=True, subtypes=("Scarecrow",),
-    )
-    thresher = GameObject(
-        id=1, printing=thresher_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    bear_pr = make_creature("Bear", "{1}{G}", 2, 2)
-    top = GameObject(
-        id=2, printing=bear_pr, owner_id=0, controller_id=0,
-        zone=Zone.LIBRARY,
-    )
-    p0 = Player(id=0, agent=_Accept(), library=[top])
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1],
-        battlefield=[thresher],
-        resolving_source=thresher,
-    )
-    WickerfolkThresherAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    assert top in p0.hand
-
-
-def test_wickerfolk_thresher_no_op_on_empty_library():
-    # Empty library → silent no-op (no exception).
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import WickerfolkThresherAttackEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
-
-    thresher_pr = make_creature(
-        "Wickerfolk Thresher", "{3}{G}", 5, 4,
-        artifact=True, subtypes=("Scarecrow",),
-    )
-    thresher = GameObject(
-        id=1, printing=thresher_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    p0 = Player(id=0, library=[])
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1],
-        battlefield=[thresher],
-        resolving_source=thresher,
-    )
-    WickerfolkThresherAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
 
 
 # ---------- Osseous Sticktwister ----------

@@ -72,7 +72,6 @@ from mtg_bot.cards.base import (
     SearchLibraryForCard,
     SelfMill,
     Sequence,
-    WickerfolkThresherAttackEffect,
     StaticAbility,
     StaticScope,
     TerrapactIntimidatorETBEffect,
@@ -333,10 +332,12 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
       ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
       ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
       via the standard keyword line. Migrated in bespoke-delirium.
-    - Wickerfolk Thresher — literal trigger-line dispatch in
-      ``_BESPOKE_TRIGGER_LINES`` routes the Delirium attack trigger to
-      ``WickerfolkThresherAttackEffect``; all other oracle lines parse
-      via the unified grammar. Migrated in bespoke-delirium.
+    - Wickerfolk Thresher — multi-sentence literal recognizer in
+      ``_parse_effect`` dispatches the printed body to the canonical
+      ``PeekTopMayBattlefieldIfLandElseHand`` primitive; the trigger
+      header (Delirium gate + attack event + IsSelf predicate) parses
+      via the unified intervening-if grammar. Migrated in
+      audit-litdispatch-creatures.
     - Splitskin Doll — fully decomposed via the parser's multi-sentence
       literal recognizer in ``effects._parse_effect`` (audit-
       litdispatch-easy). The ETB body returns a generic
@@ -710,18 +711,6 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 #   is the only card in the current pool with this exact shape;
 #   generalize when a second example exists.
 #
-# * **Wickerfolk Thresher** — "Delirium — Whenever this creature
-#   attacks, if there are four or more card types among cards in your
-#   graveyard, look at the top card of your library. If it's a land
-#   card, you may put it onto the battlefield. If you don't put the
-#   card onto the battlefield, put it into your hand." The three-
-#   sentence peek-and-branch body (look + if-land-may-put-to-battlefield
-#   + else-put-to-hand) is encoded in ``WickerfolkThresherAttackEffect``;
-#   no grammar effect primitive covers the peek-top-card conditional-
-#   land-battlefield-ramp shape. The literal is the only card in the
-#   current pool with this exact shape; generalize when a second
-#   example exists.
-#
 # Migrated to the unified grammar (no longer in this table):
 #
 # * **Attack-in-the-Box** — multi-sentence literal recognizer in
@@ -730,6 +719,13 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 #   ScheduleSelfSacAtNextEndStep())`` composition. The trigger header
 #   parses via the unified ``Whenever this creature attacks`` grammar.
 #   Migrated in audit-litdispatch-creatures.
+#
+# * **Wickerfolk Thresher** — multi-sentence literal recognizer in
+#   ``effects._parse_effect`` dispatches the printed body to the
+#   canonical ``PeekTopMayBattlefieldIfLandElseHand`` primitive. The
+#   trigger header (Delirium gate + attack event + IsSelf predicate)
+#   parses via the unified intervening-if grammar. Migrated in
+#   audit-litdispatch-creatures.
 _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
     # Osseous Sticktwister: Delirium-gated end-step per-opponent
     # sac-or-discard-or-take-damage. Only card in pool with this
@@ -743,18 +739,6 @@ _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
         event=Event.BEGINNING_OF_END_STEP,
         predicate=Controlled(YOU) & StateBound(Delirium()),
         effect=OsseousSticktwisterEndStepEffect(),
-    ),
-    # Wickerfolk Thresher: Delirium-gated attack peek-top-then-branch.
-    # Only card in pool with the "look at top; if land, may put to
-    # battlefield; else put to hand" peek-branch shape.
-    "Delirium — Whenever this creature attacks, if there are four "
-    "or more card types among cards in your graveyard, look at the top "
-    "card of your library. If it's a land card, you may put it onto "
-    "the battlefield. If you don't put the card onto the battlefield, "
-    "put it into your hand.": TriggeredAbility(
-        event=Event.ATTACKS,
-        predicate=IsSelf() & StateBound(Delirium()),
-        effect=WickerfolkThresherAttackEffect(),
     ),
     # Monoist Circuit-Feeder (EoE): ETB dual-target +X/-X buff where X
     # is the controller's artifact count at resolve time. Two required

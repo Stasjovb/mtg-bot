@@ -3693,6 +3693,77 @@ class LookTopNPutOneInHandRestToGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class PeekTopMayBattlefieldIfLandElseHand(Effect):
+    """Peek-and-route primitive for the printed surface "Look at the top
+    card of your library. If it's a land card, you may put it onto the
+    battlefield. If you don't put the card onto the battlefield, put it
+    into your hand."
+
+    Resolution flow:
+
+    1. Peek the top card of the controller's library. If the library is
+       empty, silent no-op.
+    2. If the top card is a land, ask the controller's agent via
+       ``choose_yes_no`` whether to put it onto the battlefield. On
+       accept, the land enters untapped (no printed "tapped" rider) via
+       ``put_into_battlefield`` so landfall and other ETB triggers fire
+       cleanly.
+    3. Otherwise (non-land top, OR controller declines the optional
+       battlefield-put), the card goes to the controller's hand.
+
+    Wickerfolk Thresher's Delirium attack body is the canonical surface
+    today. Named generically so future cards reusing the
+    "peek-then-may-route-to-battlefield-if-land-else-hand" shape can
+    share the primitive — no per-card class needed.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        if not p.library:
+            return
+        top = p.library[0]
+        is_land = top.printing.is_land
+        put_on_battlefield = False
+        if is_land and p.agent is not None:
+            put_on_battlefield = p.agent.choose_yes_no(
+                state, controller_id,
+                f"Put {top.printing.name} onto the battlefield?",
+            )
+        # Pop the card now that the decision is made.
+        p.library.pop(0)
+        if is_land and put_on_battlefield:
+            # Route through ``put_into_battlefield`` so landfall (and
+            # any other ETB triggers on this entering land) fire via
+            # the standard pipeline.
+            put_into_battlefield(state, top, controller_id)
+            state.log.append(
+                f"P{controller_id} puts {top.printing.name} onto the "
+                f"battlefield (peek-top)"
+            )
+        else:
+            top.zone = Zone.HAND
+            p.hand.append(top)
+            state.log.append(
+                f"P{controller_id} puts {top.printing.name} into "
+                f"hand (peek-top)"
+            )
+
+    def describe(self) -> str:
+        return (
+            "look at the top card of your library; if it's a land "
+            "card, you may put it onto the battlefield; if you don't "
+            "put the card onto the battlefield, put it into your hand"
+        )
+
+
+
+@dataclass(frozen=True)
 class ManifestDread(Effect):
     """CR 701.55: To manifest dread, look at the top two cards of your
     library, manifest one of them, then put the other into your

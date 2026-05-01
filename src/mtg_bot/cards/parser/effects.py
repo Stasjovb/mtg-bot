@@ -181,6 +181,7 @@ from mtg_bot.effects.conditions import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     EachOpponentExilesCardFromHandWithCastPermission,
+    PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
 )
@@ -3581,6 +3582,27 @@ def _parse_effect(phrase: str) -> Effect | None:
             ),
             then_action=ScheduleSelfSacAtNextEndStep(),
         )
+    # Wickerfolk Thresher's Delirium attack-trigger body — the three-
+    # sentence peek-and-route compound: "look at the top card of your
+    # library. If it's a land card, you may put it onto the
+    # battlefield. If you don't put the card onto the battlefield, put
+    # it into your hand." Sentences 2 and 3 are anaphoric to the
+    # peeked card in sentence 1 ("it", "the card"); the conditional
+    # branch on land-vs-non-land and on accept-vs-decline are intra-
+    # primitive choices that the sentence-splitting grammar can't carve
+    # into independent clauses. Matched as a single literal here so the
+    # body dispatches to the canonical
+    # ``PeekTopMayBattlefieldIfLandElseHand`` primitive — no per-card
+    # class needed. Only Wickerfolk Thresher in the DSK pool has this
+    # exact peek-and-route shape today; broader grammar deferred until a
+    # second example exists.
+    if phrase == (
+        "look at the top card of your library. "
+        "If it's a land card, you may put it onto the battlefield. "
+        "If you don't put the card onto the battlefield, put it into "
+        "your hand"
+    ):
+        return PeekTopMayBattlefieldIfLandElseHand()
     # Systems Override's five-sentence body — gain control of target artifact
     # or creature UEOT, untap it, grant haste UEOT (the Threaten core), plus
     # a Spacecraft-conditional charge-counter rider: put ten charge counters

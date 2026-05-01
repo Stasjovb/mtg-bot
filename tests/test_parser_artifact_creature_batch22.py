@@ -31,10 +31,12 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
     ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
     via the standard keyword line. Migrated in bespoke-delirium.
-  - Wickerfolk Thresher — literal trigger-line dispatch in
-    ``_BESPOKE_TRIGGER_LINES`` routes the Delirium attack trigger to
-    ``WickerfolkThresherAttackEffect``; all other oracle lines parse
-    via the unified grammar. Migrated in bespoke-delirium.
+  - Wickerfolk Thresher — multi-sentence literal recognizer in
+    ``effects._parse_effect`` dispatches the printed body to the
+    canonical ``PeekTopMayBattlefieldIfLandElseHand`` primitive. The
+    trigger header (Delirium gate + ATTACKS + IsSelf predicate) parses
+    via the unified intervening-if grammar. Migrated in
+    audit-litdispatch-creatures.
 
 Migrated to grammar in engine-kavaron-elevator:
   - Kavaron Harrier — ``_CREATE_CREATURE_TOKEN`` extended with

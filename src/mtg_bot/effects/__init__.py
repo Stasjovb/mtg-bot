@@ -123,6 +123,7 @@ from mtg_bot.effects.generic import (
     MoveSelfCountersToTargetCreatureYouControl,
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+    PeekTopMayBattlefieldIfLandElseHand,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
@@ -279,6 +280,5 @@ from mtg_bot.effects.bespoke import (
     TerminalVelocityEffect,
     DealSelfMVDamageToEachCreature,
     WeftwalkingETBEffect,
-    WickerfolkThresherAttackEffect,
     ZeroPointBalladEffect,
 )

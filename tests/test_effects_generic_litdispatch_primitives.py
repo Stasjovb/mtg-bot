@@ -9,6 +9,10 @@ engine-level building blocks:
   is sacrificed at the next end step. Composes with ``IfYouDo`` /
   ``MayDo`` for the "if you do, sacrifice it at the beginning of the
   next end step" rider shape (Attack-in-the-Box).
+- ``PeekTopMayBattlefieldIfLandElseHand`` — peek the top card of the
+  controller's library; if it's a land the controller may put it onto
+  the battlefield (``choose_yes_no``), else (or on decline) put it
+  into their hand (Wickerfolk Thresher).
 """
 
 from __future__ import annotations
@@ -109,6 +113,157 @@ def test_schedule_self_sac_then_resolve_actually_sacrifices_source():
     )
     # Sanity: the helper exists and accepts our state shape.
     run_delayed_end_step_triggers(state)
+
+
+# ---------- PeekTopMayBattlefieldIfLandElseHand ----------
+
+def test_peek_top_may_battlefield_if_land_else_hand_accept_land():
+    # Top is a land + agent accepts → land enters the battlefield
+    # under the controller's control via the standard
+    # put_into_battlefield pipeline (lands_entered_this_turn ticks).
+    from mtg_bot.cards.base import make_basic_land, make_creature
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _Accept:
+        def choose_yes_no(self, state, pid, prompt):
+            return True
+
+    holder_pr = make_creature("Holder", "{1}", 1, 1)
+    holder = GameObject(
+        id=1, printing=holder_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    forest_pr = make_basic_land("Forest", "G")
+    top = GameObject(
+        id=2, printing=forest_pr, owner_id=0, controller_id=0,
+        zone=Zone.LIBRARY,
+    )
+    p0 = Player(id=0, agent=_Accept(), library=[top])
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[holder], resolving_source=holder,
+    )
+    PeekTopMayBattlefieldIfLandElseHand().resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert top in state.battlefield
+    assert top not in p0.library
+    assert top not in p0.hand
+    assert top.controller_id == 0
+    # ``lands_entered_this_turn`` ticks because the put-on-battlefield
+    # path goes through ``put_into_battlefield`` (the bespoke
+    # implementation it replaced bypassed this).
+    assert p0.lands_entered_this_turn == 1
+
+
+def test_peek_top_may_battlefield_if_land_else_hand_decline_land():
+    # Top is a land + agent declines → land goes to controller's hand.
+    from mtg_bot.cards.base import make_basic_land, make_creature
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _Decline:
+        def choose_yes_no(self, state, pid, prompt):
+            return False
+
+    holder_pr = make_creature("Holder", "{1}", 1, 1)
+    holder = GameObject(
+        id=1, printing=holder_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    forest_pr = make_basic_land("Forest", "G")
+    top = GameObject(
+        id=2, printing=forest_pr, owner_id=0, controller_id=0,
+        zone=Zone.LIBRARY,
+    )
+    p0 = Player(id=0, agent=_Decline(), library=[top])
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[holder], resolving_source=holder,
+    )
+    PeekTopMayBattlefieldIfLandElseHand().resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert top in p0.hand
+    assert top not in state.battlefield
+    assert top not in p0.library
+
+
+def test_peek_top_may_battlefield_if_land_else_hand_nonland_to_hand():
+    # Top is a creature (non-land) → straight to hand without
+    # consulting the agent. The agent's choose_yes_no should not fire
+    # for a non-land top.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _AssertNotCalled:
+        def choose_yes_no(self, state, pid, prompt):
+            raise AssertionError(
+                "choose_yes_no should not fire on non-land top"
+            )
+
+    holder_pr = make_creature("Holder", "{1}", 1, 1)
+    holder = GameObject(
+        id=1, printing=holder_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    bear_pr = make_creature("Bear", "{1}{G}", 2, 2)
+    top = GameObject(
+        id=2, printing=bear_pr, owner_id=0, controller_id=0,
+        zone=Zone.LIBRARY,
+    )
+    p0 = Player(id=0, agent=_AssertNotCalled(), library=[top])
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[holder], resolving_source=holder,
+    )
+    PeekTopMayBattlefieldIfLandElseHand().resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert top in p0.hand
+    assert top not in state.battlefield
+
+
+def test_peek_top_may_battlefield_if_land_else_hand_empty_library_no_op():
+    # Empty library → silent no-op (no exception).
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
+    )
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    holder_pr = make_creature("Holder", "{1}", 1, 1)
+    holder = GameObject(
+        id=1, printing=holder_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    p0 = Player(id=0, library=[])
+    p1 = Player(id=1)
+    state = GameState(
+        players=[p0, p1], battlefield=[holder], resolving_source=holder,
+    )
+    PeekTopMayBattlefieldIfLandElseHand().resolve(
+        state, controller_id=0, targets=(),
+    )
+
+
+def test_peek_top_may_battlefield_if_land_else_hand_describe():
+    from mtg_bot.effects.generic import (
+        PeekTopMayBattlefieldIfLandElseHand,
+    )
+
+    desc = PeekTopMayBattlefieldIfLandElseHand().describe()
+    assert "top card" in desc
+    assert "land card" in desc
+    assert "hand" in desc
 
 
 # ---------- Behavioral tests for the IfYouDo / MayDo composition ----------
