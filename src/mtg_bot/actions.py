@@ -2677,6 +2677,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         state.resolving_counter_amount = item.counter_amount
         state.resolving_modes = item.chosen_modes
         state.resolving_cost_paid_objects = item.cost_paid_objects
+        state.last_exile_recall_count = 0
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
@@ -2689,6 +2690,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             state.resolving_counter_amount = 0
             state.resolving_modes = ()
             state.resolving_cost_paid_objects = ()
+            state.last_exile_recall_count = 0
         return
 
     # Spell resolution

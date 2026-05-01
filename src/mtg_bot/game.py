@@ -2159,6 +2159,17 @@ class GameState:
     # built). Used by ``MVOfCostPaidObjectPlus`` and any future formula
     # that reads a per-object property of a cost-paid object.
     resolving_cost_paid_objects: tuple[GameObject, ...] = ()
+    # Number of cards moved by the most recent
+    # ``MoveEachExiledWithSourceToOwnersGraveyard`` resolve in the
+    # current resolving ability. Lets a follow-up
+    # ``CreateNTokensFromLastExileRecall`` (used by Pinnacle Starcage's
+    # "create one Robot per moved card" sequence step) read the count
+    # without coupling the two effects into one combined class. Set
+    # by the recall effect at the start of every resolve (so a stale
+    # value from a prior ability never leaks); reset to 0 by
+    # ``resolve_top_of_stack`` after each ability resolves so it never
+    # bleeds across ability boundaries.
+    last_exile_recall_count: int = 0
     # IDs of permanents scheduled to be sacrificed at end of combat.
     # Cleared during clear_combat_state after processing.
     # Used by Kavaron Harrier's attack token.

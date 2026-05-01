@@ -86,14 +86,19 @@ post-reminder-strip oracle line:
   exile all artifacts and creatures with mana value 2 or less until
   this artifact leaves the battlefield.`` claims through the unified
   clause grammar via the existing ``"this artifact enters"`` predicate
-  trigger phrase plus the new ``_EXILE_ALL_MATCHING_UNTIL_LEAVES``
-  effect-phrase regex in ``effects.py`` (mapping to the new generic
+  trigger phrase plus the ``_EXILE_ALL_MATCHING_UNTIL_LEAVES``
+  effect-phrase regex in ``effects.py`` (mapping to the generic
   ``ExileAllMatchingUntilSourceLeaves(match_artifact=True,
   match_creature=True, max_mv=2)`` engine class). The activation
   ``{6}{W}{W}: Put each card exiled ... Sacrifice this artifact.``
-  remains literal-matched — its body is bespoke (``PinnacleStarcage
-  SacEffect``, with the sacrifice clause part of the effect body, not
-  the cost).
+  decomposes into a ``Sequence`` of three new generic primitives via
+  the multi-sentence literal-effect recognizer in ``effects.py``:
+  ``MoveEachExiledWithSourceToOwnersGraveyard`` (the recall side of
+  the new "exiled-with-this" infrastructure), ``CreateNTokensFromLast
+  ExileRecall(token_name="Robot")`` (reads
+  ``state.last_exile_recall_count`` set by the recall step), and
+  ``SacrificeSelf`` (effect-body sacrifice; the printed
+  ``Sacrifice this artifact`` is part of the body, not the cost).
 
 Two additional cards are claimed via the expanded unified grammar
 (migrated from ``_BESPOKE_ARTIFACT_BUILDERS`` in this round):
@@ -137,7 +142,6 @@ from mtg_bot.cards.base import (
     DrawCards,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
-    PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
     StaticAbility,
     StaticScope,
@@ -204,26 +208,6 @@ def _requiem_monolith_activation() -> ActivatedAbility:
         cost=ActivationCost(tap_self=True),
         effect=RequiemMonolithActivatedEffect(),
         sorcery_speed=True,
-    )
-
-
-def _pinnacle_starcage_sac_activation() -> ActivatedAbility:
-    """Build Pinnacle Starcage's ``{6}{W}{W}`` activated ability.
-
-    The printed body — "Put each card exiled with this artifact into
-    its owner's graveyard, then create a 2/2 colorless Robot artifact
-    creature token for each card put into a graveyard this way.
-    Sacrifice this artifact." — is wrapped in a single bespoke
-    ``PinnacleStarcageSacEffect``. The ``Sacrifice this artifact``
-    clause is part of the effect body (not the cost), so the cost is
-    just the mana piece — matching the static registry shape exactly.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(
-            mana=parse_mana_cost("{6}{W}{W}"),
-            mana_str="{6}{W}{W}",
-        ),
-        effect=PinnacleStarcageSacEffect(),
     )
 
 
@@ -312,37 +296,14 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "that much life.\" That creature's controller may have this "
     "artifact deal 1 damage to it. Activate only as a sorcery.":
         _requiem_monolith_activation,
-    # Pinnacle Starcage — bespoke "put exiled-with-this-artifact into
-    # graveyard, mint a Robot per, sacrifice this" body. Cost atom
-    # (``{6}{W}{W}``) parses via the unified activated grammar.
-    #
-    # Decomposition blocker: the body chains three card-tracking
-    # operations that don't yet have generic primitives:
-    #
-    #   1. **Exiled-with-this-source recall.** ``Put each card exiled
-    #      with this artifact into its owner's graveyard.`` walks every
-    #      player's exile zone for cards tagged with
-    #      ``GameObject.exiled_by_source == source.id``. The tagging
-    #      side exists today (used by ``ExileAllMatchingUntilSourceLeaves``
-    #      and ``ExileTargetCreatureUntilSourceLeaves``) but no generic
-    #      "move all exiled-with-this to <zone>" primitive consumes it.
-    #   2. **Per-card token creation.** ``Then create a 2/2 colorless
-    #      Robot artifact creature token for each card put into a
-    #      graveyard this way.`` needs a ``CreateTokenPerXMoved``
-    #      combinator parameterized by the prior step's count.
-    #   3. **Sacrifice-this-artifact as part of the body** (not cost).
-    #      The printed ``Sacrifice this artifact.`` is the LAST clause,
-    #      so it's part of the effect, not a cost atom. ``Sequence``
-    #      can compose with ``SacrificeSelf`` once it exists, but no
-    #      such primitive ships today.
-    #
-    # No second EoE/DSK printing chains all three pieces; the bespoke
-    # class earns its keep until a second example ships.
-    "{6}{W}{W}: Put each card exiled with this artifact into its "
-    "owner's graveyard, then create a 2/2 colorless Robot artifact "
-    "creature token for each card put into a graveyard this way. "
-    "Sacrifice this artifact.":
-        _pinnacle_starcage_sac_activation,
+    # Pinnacle Starcage's ``{6}{W}{W}`` activation migrated out of the
+    # literal table when the generic "exiled-with-this" recall
+    # infrastructure landed. The activation now decomposes into a
+    # Sequence of ``MoveEachExiledWithSourceToOwnersGraveyard`` +
+    # ``CreateNTokensFromLastExileRecall(token_name="Robot")`` +
+    # ``SacrificeSelf`` via the multi-sentence literal recognizer in
+    # ``effects.py``. The bespoke ``PinnacleStarcageSacEffect`` is
+    # deleted.
     # Ghost Vacuum — bespoke "recall creature cards exiled with this
     # artifact, each becomes a 1/1 Spirit with a flying counter" body.
     # Cost is parser-grammar standard; only the body needs the literal
@@ -354,8 +315,8 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     # Decomposition blocker: the body chains four operations that
     # don't yet have generic primitives:
     #
-    #   1. **Exiled-with-this-source filtered recall.** Same missing
-    #      primitive Pinnacle Starcage hits — walk every exile zone for
+    #   1. **Exiled-with-this-source filtered recall.** Same primitive
+    #      Pinnacle Starcage hits — walk every exile zone for
     #      ``exiled_by_source == source.id`` cards, with an additional
     #      filter (creatures only, by ``printing.is_creature``).
     #   2. **Recall to controller's battlefield with per-card

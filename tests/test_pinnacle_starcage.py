@@ -5,8 +5,11 @@ from mtg_bot.actions import put_into_battlefield, resolve_top_of_stack
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
+    CreateNTokensFromLastExileRecall,
     ExileAllMatchingUntilSourceLeaves,
-    PinnacleStarcageSacEffect,
+    MoveEachExiledWithSourceToOwnersGraveyard,
+    SacrificeSelf,
+    Sequence,
 )
 
 
@@ -19,6 +22,20 @@ def _starcage_etb_effect():
     return ExileAllMatchingUntilSourceLeaves(
         match_artifact=True, match_creature=True, max_mv=2,
     )
+
+
+def _starcage_sac_effect():
+    """Return the decomposed sac-activation effect for Pinnacle Starcage.
+
+    The bespoke ``PinnacleStarcageSacEffect`` was replaced by a
+    Sequence of three generic primitives (recall to graveyard, mint
+    one Robot per moved card, sacrifice self) when the
+    "exiled-with-this" infrastructure landed."""
+    return Sequence(effects=(
+        MoveEachExiledWithSourceToOwnersGraveyard(),
+        CreateNTokensFromLastExileRecall(token_name="Robot"),
+        SacrificeSelf(),
+    ))
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import destroy
 
@@ -101,7 +118,7 @@ def test_sac_moves_exiled_to_graveyards_and_creates_robots():
     # Now activate the sac ability.
     state.resolving_source = cage
     try:
-        PinnacleStarcageSacEffect().resolve(state, 0, ())
+        _starcage_sac_effect().resolve(state, 0, ())
     finally:
         state.resolving_source = None
     # Bear moved to graveyard.

@@ -1572,58 +1572,6 @@ class ConsultTheStarChartsEffect(Effect):
 
 
 @dataclass(frozen=True)
-class PinnacleStarcageSacEffect(Effect):
-    """Pinnacle Starcage's {6}{W}{W} activated ability: "Put each card
-    exiled with this artifact into its owner's graveyard, then create
-    a 2/2 colorless Robot artifact creature token for each card put
-    into a graveyard this way. Sacrifice this artifact."
-
-    The Starcage is sacrificed at the end, which also releases any
-    remaining exiled-by-it cards back — but we've already moved them
-    to graveyards explicitly, so the release-on-leave is a no-op here.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.cards import TOKEN_PRINTINGS
-        from mtg_bot.game import Zone
-
-        source = state.resolving_source
-        if source is None:
-            return
-        moved = 0
-        for p in state.players:
-            still_exiled = [c for c in p.exile if c.exiled_by_source == source.id]
-            for card in still_exiled:
-                p.exile.remove(card)
-                card.zone = Zone.GRAVEYARD
-                card.exiled_by_source = None
-                p.graveyard.append(card)
-                moved += 1
-        state.log.append(
-            f"{source.printing.name} moves {moved} exiled cards to "
-            f"graveyards; creates {moved} Robot tokens"
-        )
-        robot = TOKEN_PRINTINGS["Robot"]
-        for _ in range(moved):
-            token = state.new_object(robot, controller_id, Zone.BATTLEFIELD)
-            state.battlefield.append(token)
-        # Sacrifice the Starcage itself.
-        from mtg_bot.turn import sacrifice as _sacrifice
-        _sacrifice(state, source)
-
-    def describe(self) -> str:
-        return (
-            "put each card exiled with this artifact into its owner's "
-            "graveyard, then create a 2/2 Robot for each; sacrifice "
-            "this artifact"
-        )
-
-
-
-@dataclass(frozen=True)
 class SeedshipImpactEffect(Effect):
     """Destroy target artifact or enchantment. If its mana value was 2
     or less, create a Lander token.

@@ -63,9 +63,12 @@ from mtg_bot.cards.base import (
     EachPlayerDraws,
     Effect,
     EnduringDiesReturnAsEnchantmentEffect,
+    CreateNTokensFromLastExileRecall,
     ExileAllArtifactsWithManaValueAtMost,
     ExileAllCreaturesAndSpacecraft,
     ExileAllMatchingUntilSourceLeaves,
+    MoveEachExiledWithSourceToOwnersGraveyard,
+    SacrificeSelf,
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
@@ -4056,6 +4059,45 @@ def _parse_effect(phrase: str) -> Effect | None:
                 attacking=True,
                 schedule_end_of_combat_sacrifice=True,
             )
+    # Pinnacle Starcage's ``{6}{W}{W}`` activation body. Three printed
+    # operations:
+    #   1. Put each card exiled with this artifact into its owner's
+    #      graveyard.
+    #   2. For each card moved that way, create a 2/2 colorless Robot
+    #      artifact creature token.
+    #   3. Sacrifice this artifact.
+    # The decomposition uses a Sequence of three generic primitives:
+    # ``MoveEachExiledWithSourceToOwnersGraveyard`` (sets
+    # ``state.last_exile_recall_count``), ``CreateNTokensFromLastExile
+    # Recall(token_name="Robot")`` (reads that count), and
+    # ``SacrificeSelf`` (sacrifices the source). The Robot token printing
+    # is the same one Kavaron Harrier already uses.
+    #
+    # Matched as a multi-sentence literal here (rather than via the
+    # compound-effect splitter) because the second sentence's count
+    # source (``for each card put into a graveyard this way``) is an
+    # anaphoric back-reference to the first sentence's recall step —
+    # the splitter has no way to thread the count from one sub-effect
+    # to the next, and the third sentence is a bare ``Sacrifice this
+    # artifact`` body whose printed surface only standalone-parses with
+    # the surrounding context. Currently only Pinnacle Starcage in the
+    # EoE pool prints this exact three-step shape; broader grammar
+    # deferred until a second card with a varying piece (different
+    # token type, different sacrifice-self placement) ships, at which
+    # point a parameterized recognizer for "<recall>; <create-N-of-
+    # <token>>; <sacrifice-self>" would replace this literal.
+    if phrase == (
+        "put each card exiled with this artifact into its owner's "
+        "graveyard, then create a 2/2 colorless Robot artifact creature "
+        "token for each card put into a graveyard this way. Sacrifice "
+        "this artifact"
+    ):
+        if "Robot" in TOKEN_PRINTINGS:
+            return Sequence(effects=(
+                MoveEachExiledWithSourceToOwnersGraveyard(),
+                CreateNTokensFromLastExileRecall(token_name="Robot"),
+                SacrificeSelf(),
+            ))
     # ----------------------------------------------------------------
     # Aura-context effect-phrase recognizers (audit-litdispatch-auras).
     # Each entry routes a single Aura trigger body to its existing

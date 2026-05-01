@@ -9990,6 +9990,160 @@ class ExileAllMatchingUntilSourceLeaves(Effect):
 
 
 @dataclass(frozen=True)
+class MoveEachExiledWithSourceToOwnersGraveyard(Effect):
+    """Generic "put each card exiled with this permanent into its owner's
+    graveyard" primitive.
+
+    Walks every player's exile zone for cards tagged with
+    ``GameObject.exiled_by_source == state.resolving_source.id`` and moves
+    each one to its respective owner's graveyard. The
+    ``exiled_by_source`` linkage is the same one used by the
+    ``ExileAllMatchingUntilSourceLeaves`` and
+    ``ExileTargetCreatureUntilSourceLeaves`` exile-side primitives — this
+    primitive is the recall-side consumer that turns the linkage into a
+    queryable runtime API.
+
+    Records the count of cards moved on
+    ``state.last_exile_recall_count`` so a follow-up sequence step
+    (``CreateNTokensFromLastExileRecall``) can mint a token per card
+    moved without coupling the two operations into a single effect class.
+    The count is reset to 0 at the start of every ability resolve in
+    ``actions.resolve_top_of_stack`` and overwritten here on every
+    invocation, so the value is fresh per resolve and never bleeds
+    across ability boundaries.
+
+    Used by Pinnacle Starcage's ``{6}{W}{W}`` activation: "Put each
+    card exiled with this artifact into its owner's graveyard, ..."
+    Reusable for any future "put each card exiled with <source> into
+    its owner's graveyard" printing.
+
+    No-op (silent count of 0, never raises) if ``state.resolving_source``
+    is None — the engine's resolution pipeline always sets it for
+    ability resolution, so a None here would be programmer error
+    upstream rather than a normal flow.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        state.last_exile_recall_count = 0
+        source = state.resolving_source
+        if source is None:
+            return
+        moved = 0
+        for p in state.players:
+            tagged = [c for c in p.exile if c.exiled_by_source == source.id]
+            for card in tagged:
+                p.exile.remove(card)
+                card.zone = Zone.GRAVEYARD
+                card.exiled_by_source = None
+                p.graveyard.append(card)
+                moved += 1
+        state.last_exile_recall_count = moved
+        if source is not None:
+            state.log.append(
+                f"{source.printing.name} moves {moved} exiled cards to "
+                f"their owners' graveyards"
+            )
+
+    def describe(self) -> str:
+        return (
+            "put each card exiled with this permanent into its "
+            "owner's graveyard"
+        )
+
+
+
+@dataclass(frozen=True)
+class CreateNTokensFromLastExileRecall(Effect):
+    """Generic "create N <token> tokens, where N is the number of cards
+    just moved out of exile by the prior sequence step" primitive.
+
+    Reads ``state.last_exile_recall_count`` (set by the immediately
+    prior ``MoveEachExiledWithSourceToOwnersGraveyard`` resolve in the
+    same ability) and creates that many tokens using the named token
+    printing from ``TOKEN_PRINTINGS``. Ordering matters: this primitive
+    must follow the recall primitive in a ``Sequence``; running it
+    standalone (with no prior recall) creates zero tokens — the same
+    behavior as creating zero tokens from a zero-count source.
+
+    Used by Pinnacle Starcage's ``{6}{W}{W}`` activation: "..., then
+    create a 2/2 colorless Robot artifact creature token for each card
+    put into a graveyard this way." Reusable for any future "create
+    one <token> per card just moved" surface — the count source is
+    abstracted into the engine state field, so the parser only needs
+    to plumb the token name.
+    """
+
+    token_name: str
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        from mtg_bot.game import Zone
+
+        count = state.last_exile_recall_count
+        if count <= 0:
+            return
+        printing = TOKEN_PRINTINGS[self.token_name]
+        for _ in range(count):
+            token = state.new_object(printing, controller_id, Zone.BATTLEFIELD)
+            state.battlefield.append(token)
+        state.log.append(
+            f"P{controller_id} creates {count} {self.token_name} tokens "
+            f"(one per card just put into a graveyard from exile)"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"create a {self.token_name} token for each card put into a "
+            f"graveyard this way"
+        )
+
+
+
+@dataclass(frozen=True)
+class SacrificeSelf(Effect):
+    """Generic "sacrifice this permanent" effect-body primitive.
+
+    Used as the LAST step of an effect Sequence whose printed body ends
+    in ``Sacrifice this <permanent type>.`` (Pinnacle Starcage's
+    ``{6}{W}{W}: ... Sacrifice this artifact.``). Distinct from
+    ``ActivationCost.sacrifice_self`` (which is paid at activation time,
+    before the ability hits the stack) and from
+    ``SacrificeSourceDelayed`` (which fires from a delayed-trigger
+    schedule).
+
+    Reads ``state.resolving_source`` and routes through
+    ``mtg_bot.turn.sacrifice``. No-op if the source has already left
+    the battlefield (e.g. an earlier sequence step destroyed it) or if
+    ``resolving_source`` is None.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None:
+            return
+        if source not in state.battlefield:
+            return
+        _sacrifice(state, source)
+
+    def describe(self) -> str:
+        return "sacrifice this permanent"
+
+
+
+@dataclass(frozen=True)
 class DrawCardsByConditionMultiplier(Effect):
     """Draw X cards, where X is the ``multiplier`` of a structural
     ``Condition``.
