@@ -371,18 +371,24 @@ def test_tannuk_steadfast_second_claimed_by_grammar():
     # Tannuk, Steadfast Second is now claimed by the oracle-text grammar:
     # Line 1 ("Other creatures you control have haste.") parses via the
     # keyword-only anthem recognizer; line 2 ("Artifact cards and red
-    # creature cards in your hand have warp {2}{R}.") parses via the new
-    # _parse_hand_warp_grant_line recognizer — the (type_filter, cost)
-    # pair is stored in grants_warp_in_hand_to on the printing. The engine
-    # does not yet enforce the dynamic warp grant; the field is populated
-    # for oracle-text fidelity.
+    # creature cards in your hand have warp {2}{R}.") parses via the
+    # _parse_hand_warp_grant_line recognizer — produces a structured
+    # HandAbilityGrant on the printing's hand_ability_grants tuple.
+    # The engine consults the grant in legal.py to offer warp-cast
+    # actions for matching hand cards.
     from mtg_bot.cards.parser.source import OracleParserCardSource
     p = OracleParserCardSource().get_printings()["Tannuk, Steadfast Second"]
     assert "Tannuk, Steadfast Second" in OracleParserCardSource().claimed_names
-    assert p.grants_warp_in_hand_to is not None
-    type_filter, cost = p.grants_warp_in_hand_to
-    assert "Artifact" in type_filter
-    assert cost == "{2}{R}"
+    assert len(p.hand_ability_grants) == 1
+    grant = p.hand_ability_grants[0]
+    # Filter is a disjunction of (type, optional color) predicates.
+    pred_set = set(grant.card_filter.predicates)
+    assert ("Artifact", None) in pred_set
+    assert ("Creature", "R") in pred_set
+    # Granted warp cost is parsed into a ManaCost.
+    assert grant.granted_warp_cost is not None
+    assert grant.granted_warp_cost_str == "{2}{R}"
+    assert grant.granted_warp_cost.total == 3
     # Haste anthem static still present.
     from mtg_bot.cards.base import StaticScope
     haste_statics = [

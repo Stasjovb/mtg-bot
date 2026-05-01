@@ -54,6 +54,7 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureUntilSourceLeaves,
     ExternalCostReduction,
     FanaticOfTheHarrowingETBEffect,
+    HandAbilityGrant,
     HouseCartographerSurvivalEffect,
     KavaronHarrierAttackEffect,
     ModalChooseOne,
@@ -625,12 +626,15 @@ def _make_bespoke_legendary_creatures() -> dict[str, CardPrinting]:
         # the keyword-only anthem recognizer (``_ANTHEM_KEYWORD_LINE`` in
         # ``statics.py``) with scope ``OTHER_CREATURES_YOU_CONTROL``.
         # Line 2 — "Artifact cards and red creature cards in your hand
-        # have warp {2}{R}." parses via the new
+        # have warp {2}{R}." parses via the
         # ``_parse_hand_warp_grant_line`` recognizer in
-        # ``printing_keywords.py``; result stored in
-        # ``grants_warp_in_hand_to`` on the printing. The engine's
-        # warp-cast pipeline does not yet enforce the dynamic warp grant;
-        # the field is populated for oracle-text fidelity.
+        # ``printing_keywords.py``; produces a ``HandAbilityGrant``
+        # stored on the printing's ``hand_ability_grants`` tuple.
+        # ``legal.py`` walks the controller's battlefield for grants
+        # at cast-time and offers warp-cast actions for hand cards
+        # matching the grant's ``HandCardFilter``; the cast pipeline
+        # in ``actions.py`` reads the granted cost via
+        # ``effective_warp_cost``.
         # Removed from this table so the grammar path claims it.
         # Ragost, Deft Gastronaut migrated to parameterized grammar:
         # Line 1 — "Artifacts you control are Foods in addition to their
@@ -942,7 +946,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     combat_damage_cant_be_prevented = False
     grants_toughness_as_damage_for_creatures_you_control = False
     grants_toughness_as_station_power_for_creatures_you_control = False
-    grants_warp_in_hand_to: "tuple[str, str] | None" = None
+    hand_ability_grants: "tuple[HandAbilityGrant, ...]" = ()
     grants_food_to_your_artifacts = False
     grants_food_ability_to_your_artifacts = False
     text = card.get("oracle_text", "")
@@ -1011,14 +1015,12 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         hand_warp = _parse_hand_warp_grant_line(line)
         if hand_warp is not None:
             # ``<types> cards in your hand have warp {cost}.`` — Tannuk,
-            # Steadfast Second's printed hand-warp grant. Stores the
-            # (type_filter_str, cost_str) pair in ``grants_warp_in_hand_to``
-            # on the printing. The engine does not yet enforce the warp
-            # grant at cast time (the warp-cast pipeline currently reads
-            # warp costs from the card's own printing, not from battlefield
-            # sources); the field is populated here for oracle-text
-            # fidelity. Keep the last-seen pair if somehow two appear.
-            grants_warp_in_hand_to = hand_warp
+            # Steadfast Second's printed hand-warp grant. ``hand_warp``
+            # is a structured ``HandAbilityGrant`` carrying both the
+            # type filter and the granted warp cost. The legal-actions
+            # enumerator in ``legal.py`` walks this tuple to offer
+            # warp-cast actions for matching hand cards.
+            hand_ability_grants = hand_ability_grants + (hand_warp,)
             continue
         if _parse_warp_castable_from_graveyard_line(line):
             # ``You may cast this card from your graveyard using its warp
@@ -1446,7 +1448,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         grants_toughness_as_station_power_for_creatures_you_control=(
             grants_toughness_as_station_power_for_creatures_you_control
         ),
-        grants_warp_in_hand_to=grants_warp_in_hand_to,
+        hand_ability_grants=hand_ability_grants,
         grants_food_to_your_artifacts=grants_food_to_your_artifacts,
         grants_food_ability_to_your_artifacts=(
             grants_food_ability_to_your_artifacts

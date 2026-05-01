@@ -400,6 +400,72 @@ def parse_mana_cost(s: str) -> ManaCost:
 
 
 @dataclass(frozen=True)
+class HandCardFilter:
+    """Predicate for which cards in a player's hand a hand-ability
+    grant applies to.
+
+    A grant's filter is a disjunction of typed predicates: each entry
+    is a ``(card_type, optional_color)`` pair. A hand card matches the
+    filter if it matches at least one entry.
+
+    Tannuk, Steadfast Second's "Artifact cards and red creature cards"
+    encodes as::
+
+        HandCardFilter((("Artifact", None), ("Creature", "R")))
+
+    — any artifact card OR any red creature card. The ``None`` color
+    means "no color restriction" (matches by type only).
+
+    The filter is structural rather than free-text so the engine can
+    evaluate it at cast time. Adding a new card with a similar shape
+    (e.g. "blue instant cards in your hand have flashback {U}") is
+    one new ``HandCardFilter`` literal — no engine changes.
+    """
+
+    predicates: tuple[tuple[str, "str | None"], ...] = ()
+
+    def matches(self, printing: "CardPrinting") -> bool:
+        for card_type, color in self.predicates:
+            if card_type not in printing.card_types:
+                continue
+            if color is None:
+                return True
+            # Color match against printed mana cost colors. We use the
+            # printed cost's colors rather than effective color identity
+            # because hand grants in the pool today key on color of the
+            # casting cost (Tannuk: "red creature cards" = creature with
+            # R in its cost).
+            if color in printing.mana_cost.colors:
+                return True
+        return False
+
+
+@dataclass(frozen=True)
+class HandAbilityGrant:
+    """A static effect granting an alternative casting ability to
+    cards in the controller's hand that match a filter.
+
+    Currently models granted-warp (Tannuk, Steadfast Second).
+    Extension points (kept as tagged optional fields rather than a
+    union so adding a new granted ability is a single new field
+    rather than a new type):
+
+    - ``granted_warp_cost``: cards in hand matching the filter become
+      warp-castable for this cost (paid like a printed warp cost,
+      including the end-step exile after resolution).
+
+    Future granted abilities (flash, flashback, suspend, cycling)
+    each become one optional field; ``legal.py`` adds an enumeration
+    branch keyed on the field; ``actions.py`` reads the granted
+    parameter at cast time. No new type per ability.
+    """
+
+    card_filter: HandCardFilter
+    granted_warp_cost: "ManaCost | None" = None
+    granted_warp_cost_str: str = ""
+
+
+@dataclass(frozen=True)
 class RoomHalf:
     """One door/half of a Duskmourn Room card (CR 207.2g + 715).
 
@@ -627,16 +693,24 @@ class CardPrinting:
     # pre-built MMNEMON_BLUE_MANA_GRANTED_ABILITY to artifact
     # activations.
     grants_blue_mana_ability_to_your_artifacts: bool = False
-    # "Artifact cards and red creature cards in your hand have warp
-    # {cost}." Tannuk, Steadfast Second's hand-warp grant. Stored as a
-    # tuple of (type_filter_str, warp_cost_str) where type_filter_str is
-    # a canonical description of the affected card types (e.g. "artifact
-    # or red creature"). The engine's warp-cast pipeline does not yet
-    # consult this field — the mechanic requires per-hand-card dynamic
-    # warp-cost injection which is deferred until that pipeline lands.
-    # The field is populated at parse time so the printing faithfully
-    # reflects the oracle line; the engine gap is acknowledged here.
-    grants_warp_in_hand_to: tuple[str, str] | None = None
+    # "X cards in your hand have <ability>." Static effects that grant
+    # an alternative casting ability (warp today; flashback, suspend,
+    # cycling, etc. as the pool grows) to cards in the controller's
+    # hand matching a filter. Each ``HandAbilityGrant`` carries a
+    # ``HandCardFilter`` (which hand cards are affected) plus the
+    # granted ability's parameter (currently just ``granted_warp_cost``).
+    #
+    # Tannuk, Steadfast Second is the canonical example: "Artifact
+    # cards and red creature cards in your hand have warp {2}{R}."
+    # encodes as ``(HandAbilityGrant(HandCardFilter((("Artifact", None),
+    # ("Creature", "R"))), granted_warp_cost=parse_mana_cost("{2}{R}"),
+    # granted_warp_cost_str="{2}{R}"),)``.
+    #
+    # The legal-actions enumerator walks each battlefield permanent
+    # the controller controls and offers warp-cast actions for matching
+    # hand cards (see ``legal.py``); the cast pipeline reads the granted
+    # cost from the matching grant via ``effective_warp_cost``.
+    hand_ability_grants: tuple[HandAbilityGrant, ...] = ()
     # Equipment flag. When this equipment is attached to a creature,
     # that creature gains an activated ability to control the next
     # turn of a target opponent (The Dominion Bracelet). The full
@@ -1087,7 +1161,7 @@ def make_creature(
     grants_food_to_your_artifacts: bool = False,
     grants_food_ability_to_your_artifacts: bool = False,
     grants_blue_mana_ability_to_your_artifacts: bool = False,
-    grants_warp_in_hand_to: "tuple[str, str] | None" = None,
+    hand_ability_grants: tuple[HandAbilityGrant, ...] = (),
     artifact: bool = False,
     cost_reductions: tuple[CostReduction, ...] = (),
     external_cost_reductions: tuple[ExternalCostReduction, ...] = (),
@@ -1152,7 +1226,7 @@ def make_creature(
         grants_blue_mana_ability_to_your_artifacts=(
             grants_blue_mana_ability_to_your_artifacts
         ),
-        grants_warp_in_hand_to=grants_warp_in_hand_to,
+        hand_ability_grants=hand_ability_grants,
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),

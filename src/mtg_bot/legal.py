@@ -241,6 +241,27 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             and p.life > card.printing.warp_additional_life_cost
         ):
             actions.append(CastSpell(card.id, use_warp=True))
+        # Battlefield-granted warp: a permanent the controller controls
+        # may grant warp to cards in hand matching a filter (Tannuk,
+        # Steadfast Second). The grant only applies when the card has
+        # no innate warp_cost — innate warp wins at the legal-actions
+        # layer so the player isn't offered both options for the same
+        # spell. ``effective_warp_cost`` looks up the grant; if it
+        # returns a cost (and there's no innate warp already proposed
+        # above), offer warp-cast.
+        if card.printing.warp_cost is None:
+            from mtg_bot.actions import effective_warp_cost
+            warp_lookup = effective_warp_cost(state, player_id, card)
+            if (
+                warp_lookup is not None
+                and _can_cast(
+                    state, player_id, card,
+                    _effective_cost(card, warp_lookup[0]),
+                )
+                and _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                actions.append(CastSpell(card.id, use_warp=True))
         # Weftwalking free-cast variant. Skips the mana-cost payable
         # check (it's free) but still gates on targets / additional
         # non-mana costs.
@@ -327,6 +348,22 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and p.life > card.printing.warp_additional_life_cost
             ):
                 actions.append(CastSpell(card.id, use_warp=True))
+            # Battlefield-granted warp (sorcery-speed mirror of the
+            # instant-speed block above). Same priority: grant only
+            # applies when no innate warp_cost is present.
+            if card.printing.warp_cost is None:
+                from mtg_bot.actions import effective_warp_cost
+                warp_lookup = effective_warp_cost(state, player_id, card)
+                if (
+                    warp_lookup is not None
+                    and _can_cast(
+                        state, player_id, card,
+                        _effective_cost(card, warp_lookup[0]),
+                    )
+                    and _targets_are_satisfiable(state, player_id, card)
+                    and _additional_costs_payable(state, player_id, card)
+                ):
+                    actions.append(CastSpell(card.id, use_warp=True))
             # Impending alt-cost (Duskmourn Overlord cycle). Sorcery-
             # speed only — mirrors the printed text; offered when
             # the card has an impending cost the caster can pay,

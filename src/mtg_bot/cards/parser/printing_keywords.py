@@ -929,15 +929,17 @@ def _parse_grants_food_and_ability_line(line: str) -> bool:
 # ``<Type(s)> cards in your hand have warp {cost}.`` — Tannuk, Steadfast
 # Second's hand-warp grant. The subject phrase describes the type filter
 # (e.g. ``"Artifact cards and red creature cards"``); the cost is a mana
-# cost string. Both are captured so the printing records the oracle line
-# faithfully in ``grants_warp_in_hand_to=(type_filter, cost_str)``.
+# cost string. Both are parsed: the type filter into a structured
+# ``HandCardFilter`` (see ``cards.base``), and the cost into a
+# ``ManaCost``. The pair becomes a ``HandAbilityGrant`` on the printing's
+# ``hand_ability_grants`` tuple, which ``legal.py`` walks at cast time
+# to offer warp-cast actions for matching hand cards.
 #
-# The engine's warp-cast pipeline does not yet consult this field (warp
-# costs are currently a static property of the printed card, not a
-# dynamic grant from a battlefield permanent). The field is stored
-# honestly so the printing reflects oracle text; the engine gap is
-# acknowledged here. Only Tannuk, Steadfast Second in the pool today;
-# broader grammar deferred until a second example exists.
+# The type filter currently parses two surface forms used in the EoE/DSK
+# pool: "Artifact cards" (type-only) and "<color> creature cards"
+# (type + color), joined by " and " when both apply. Future cards with
+# different filter forms (e.g. "Instant cards", "Spells with mana value
+# 3 or less in your hand") would extend the parser here.
 _HAND_WARP_GRANT_LINE = re.compile(
     r"^(.+?) cards in your hand have warp "
     r"(\{[^}]+\}(?:\{[^}]+\})*)(?: \([^)]*\))?(?:\.)?"
@@ -945,16 +947,80 @@ _HAND_WARP_GRANT_LINE = re.compile(
 )
 
 
-def _parse_hand_warp_grant_line(line: str) -> "tuple[str, str] | None":
-    """Return ``(type_filter_str, warp_cost_str)`` if ``line`` is a
-    ``<types> cards in your hand have warp {cost}.`` clause, else
-    ``None``. The creature builder stores the result in
-    ``grants_warp_in_hand_to`` on ``make_creature``.
+_HAND_WARP_FILTER_COLORS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
 
-    The engine does not yet enforce the warp grant at cast time;
-    the field is populated at parse time for oracle-text fidelity.
+
+def _parse_hand_card_filter_phrase(phrase: str):
+    """Parse a hand-card-filter phrase like ``"Artifact"`` or
+    ``"red creature"`` into a single ``(card_type, color | None)``
+    predicate tuple. Returns ``None`` if the phrase doesn't match a
+    supported shape.
+
+    Supported forms:
+    - ``"Artifact"`` → ``("Artifact", None)``
+    - ``"<color> creature"`` → ``("Creature", "<COLOR>")``
+    - ``"Creature"`` → ``("Creature", None)`` (color-agnostic)
+
+    Future shapes (e.g. ``"Instant"``, ``"<color> Instant"``,
+    ``"Spell"``) extend this function. Each new shape is one new
+    branch — no engine changes.
     """
+    parts = phrase.strip().split()
+    # "<color> creature" form: e.g. "red creature"
+    if len(parts) == 2 and parts[0].lower() in _HAND_WARP_FILTER_COLORS:
+        color = _HAND_WARP_FILTER_COLORS[parts[0].lower()]
+        if parts[1].lower() == "creature":
+            return ("Creature", color)
+    # Bare type form: "Artifact" / "Creature" / "Instant" / "Sorcery" /
+    # "Enchantment".
+    if len(parts) == 1:
+        cap = parts[0].capitalize()
+        if cap in {"Artifact", "Creature", "Instant", "Sorcery",
+                   "Enchantment", "Land", "Planeswalker"}:
+            return (cap, None)
+    return None
+
+
+def _parse_hand_warp_grant_line(line: str):
+    """Return a ``HandAbilityGrant`` if ``line`` is a
+    ``<types> cards in your hand have warp {cost}.`` clause, else
+    ``None``. The creature builder stores the grant in
+    ``hand_ability_grants`` on ``make_creature``.
+
+    The type-filter phrase is split on ``" and "`` to support the
+    Tannuk shape ``"Artifact cards and red creature cards"`` (a
+    disjunction of two predicates). Each subphrase parses via
+    ``_parse_hand_card_filter_phrase``; if any subphrase fails to
+    parse, the whole line is rejected so the parser doesn't silently
+    accept a partial filter.
+    """
+    from mtg_bot.cards.base import (
+        HandAbilityGrant, HandCardFilter, parse_mana_cost,
+    )
     m = _HAND_WARP_GRANT_LINE.match(line.strip())
     if m is None:
         return None
-    return m.group(1), m.group(2)
+    filter_str, cost_str = m.group(1), m.group(2)
+    # Strip trailing " cards" from each subphrase (the regex captures
+    # ``Artifact cards and red creature cards`` — the type word is what
+    # we care about).
+    subphrases = [s.strip() for s in filter_str.split(" and ")]
+    predicates: list[tuple[str, "str | None"]] = []
+    for sub in subphrases:
+        # Each subphrase ends in "cards"; drop that suffix before parsing
+        # the type/color shape.
+        if sub.lower().endswith(" cards"):
+            sub = sub[: -len(" cards")]
+        elif sub.lower().endswith(" card"):
+            sub = sub[: -len(" card")]
+        pred = _parse_hand_card_filter_phrase(sub)
+        if pred is None:
+            return None
+        predicates.append(pred)
+    return HandAbilityGrant(
+        card_filter=HandCardFilter(predicates=tuple(predicates)),
+        granted_warp_cost=parse_mana_cost(cost_str),
+        granted_warp_cost_str=cost_str,
+    )

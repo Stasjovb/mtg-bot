@@ -301,6 +301,38 @@ def _coin_satisfies_context(
     return False
 
 
+def effective_warp_cost(
+    state: GameState, controller_id: int, card: GameObject,
+) -> "tuple[ManaCost, str] | None":
+    """Return the effective warp cost (and its printed string) for
+    casting ``card`` from hand via warp, or ``None`` if no warp is
+    available.
+
+    The warp cost is, in priority order:
+    1. The card's own printed ``warp_cost`` (innate warp).
+    2. The first matching grant from a battlefield permanent the
+       controller controls (``hand_ability_grants``). For Tannuk,
+       Steadfast Second this lets artifact / red-creature cards in
+       hand be warp-cast for the granted ``{2}{R}``.
+
+    If both apply (rare), the innate cost wins — granting an
+    alternative cost on top of an alternative cost is exotic and
+    not in the current pool. Future cards with this overlap can
+    refine the priority here.
+    """
+    if card.printing.warp_cost is not None:
+        return (card.printing.warp_cost, card.printing.warp_cost_str)
+    for permanent in state.battlefield:
+        if permanent.controller_id != controller_id:
+            continue
+        for grant in permanent.printing.hand_ability_grants:
+            if grant.granted_warp_cost is None:
+                continue
+            if grant.card_filter.matches(card.printing):
+                return (grant.granted_warp_cost, grant.granted_warp_cost_str)
+    return None
+
+
 def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
@@ -1359,7 +1391,13 @@ def _cast_spell(
         elif use_impending:
             cost = card.printing.impending_cost
         elif use_warp:
-            cost = card.printing.warp_cost
+            # Innate warp first, then battlefield-granted warp
+            # (Tannuk, Steadfast Second's hand-warp grant). The
+            # ``effective_warp_cost`` helper consolidates the lookup
+            # so legal-actions enumeration and the cast pipeline
+            # agree on the cost.
+            warp_lookup = effective_warp_cost(state, player_id, card)
+            cost = warp_lookup[0] if warp_lookup is not None else None
         else:
             cost = card.printing.mana_cost
         p.hand.remove(card)
