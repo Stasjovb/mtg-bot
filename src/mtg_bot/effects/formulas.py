@@ -1,0 +1,88 @@
+"""Formula grammar — integer expressions evaluated at resolve time.
+
+A ``Formula`` returns an ``int`` given the resolving game state and
+the resolving controller. Effects that need a "where X is …" amount
+that depends on runtime data (the mana value of a sacrificed
+artifact, the power of a discarded creature, the number of cards in
+a player's hand at resolve time, etc.) carry a ``Formula`` field
+instead of a fixed ``int`` and call ``formula.value(state, controller_id)``
+when they fire.
+
+This module is deliberately small. The first concrete formula —
+``MVOfCostPaidObjectPlus`` — reads the mana value of the first
+GameObject in ``state.resolving_cost_paid_objects`` and adds a
+constant. Future cards can compose new formulas (``PowerOfCostPaid
+Object`` for "where X is the sacrificed creature's power",
+``CountInZone(zone, predicate)`` for "where X is the number of
+cards…", etc.) without disturbing the existing call sites.
+
+Why a dedicated grammar rather than ``Condition.multiplier``: the
+``Condition`` grammar is gated on a boolean ``matches`` and serves
+cost-reduction rules; ``Formula`` is unconditional and serves
+resolve-time amount calculation. Keeping them separate avoids
+overloading either grammar with the other's semantics.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mtg_bot.game import GameState
+
+
+class Formula(ABC):
+    """A non-negative integer expression evaluated against the
+    currently-resolving game state.
+
+    Subclasses implement :meth:`value`. Effects that need a runtime
+    amount (variable-X "exile X cards", "draw X cards where X is …")
+    accept a ``Formula`` field and call its ``value`` at resolve time.
+    """
+
+    @abstractmethod
+    def value(self, state: "GameState", controller_id: int) -> int:
+        ...
+
+
+@dataclass(frozen=True)
+class Constant(Formula):
+    """A fixed integer. Useful as a default and in tests where a
+    formula slot expects a ``Formula`` but the amount is known at
+    parse time."""
+
+    amount: int = 0
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        return self.amount
+
+
+@dataclass(frozen=True)
+class MVOfCostPaidObjectPlus(Formula):
+    """``Mana value of the first cost-paid object, plus ``constant``.
+
+    Reads ``state.resolving_cost_paid_objects[0]`` (the GameObject
+    sacrificed / exiled / tapped as part of the resolving ability's
+    cost) and returns its printing's mana value plus the configured
+    constant. Memorial Vault uses ``MVOfCostPaidObjectPlus(constant=1)``
+    for its "where X is one plus the mana value of the sacrificed
+    artifact" body.
+
+    If the cost-paid-objects tuple is empty (defensive — the cost
+    grammar should have populated it before resolve), returns
+    ``constant`` alone. The cost gate (``sacrifice_another_artifact``
+    in Memorial Vault's case) guarantees at least one object is paid
+    when the ability legally activates, so the empty branch only
+    matters if a future call site invokes the formula without a paid
+    object.
+    """
+
+    constant: int = 0
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        paid = state.resolving_cost_paid_objects
+        if not paid:
+            return self.constant
+        return paid[0].printing.mana_cost.total + self.constant

@@ -103,6 +103,7 @@ from mtg_bot.effects.generic import (
     ExileTargetCreatureUntilSourceLeaves,
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileTopOfLibraryMayPlayThisTurn,
+    ExileTopXOfLibraryMayPlayThisTurn,
     GainControlOfTargetSliverPermanently,
     GainLife,
     GrantLifeToEachOpponent,
@@ -204,6 +205,11 @@ from mtg_bot.effects.generic import (
     UntapTargetOtherPermanent,
     WarpExileSelf,
 )
+from mtg_bot.effects.formulas import (
+    Constant,
+    Formula,
+    MVOfCostPaidObjectPlus,
+)
 from mtg_bot.effects.combinators import (
     ConditionalIfCastFromHand,
     ConditionalIfOpponentHasMoreLands,
@@ -255,7 +261,6 @@ from mtg_bot.effects.bespoke import (
     HauntedScreenActivatedEffect,
     HouseCartographerSurvivalEffect,
     KavaronHarrierAttackEffect,
-    MemorialVaultActivatedEffect,
     MonoistCircuitFeederETBEffect,
     MutinousMassacreEffect,
     OsseousSticktwisterEndStepEffect,

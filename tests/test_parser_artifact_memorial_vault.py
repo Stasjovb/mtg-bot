@@ -1,4 +1,5 @@
-"""Parser claims Memorial Vault via literal-line bespoke-effect dispatch.
+"""Parser claims Memorial Vault via the unified activated-grammar
+plus the formula-driven generic ``ExileTopXOfLibraryMayPlayThisTurn``.
 
 Memorial Vault prints:
 
@@ -6,18 +7,13 @@ Memorial Vault prints:
     library, where X is one plus the mana value of the sacrificed
     artifact. You may play those cards this turn.
 
-The cost atom ``{T}, Sacrifice another artifact`` is already a
-recognized unified-grammar shape, but the effect body is a bespoke
-single-card behavior (``MemorialVaultActivatedEffect`` reads X from
-the most-recently-graveyarded artifact at resolution time and grants
-"may play this turn" to each exiled card). Rather than push the body
-into the unified ``_parse_effect`` grammar, the artifact builder's new
-``_LITERAL_ACTIVATED_LINES`` table maps the full post-reminder-strip
-oracle line to a factory that returns the canonical static-shape
-``ActivatedAbility``.
-
-Same "literal match for bespoke effect text" pattern Round 18 used for
-Hylderblade and Robe of Stars in the equipment_builder.
+Cost atom ``{T}, Sacrifice another artifact`` parses through the
+unified activated grammar. The body composes the new generic
+``ExileTopXOfLibraryMayPlayThisTurn(amount=MVOfCostPaidObjectPlus
+(constant=1))``: the ``MVOfCostPaidObjectPlus`` formula reads
+``state.resolving_cost_paid_objects[0]`` (the artifact threaded onto
+the StackItem by the cost-payment pipeline) and adds 1, giving the
+"X is one plus the mana value of the sacrificed artifact" semantics.
 """
 
 from __future__ import annotations
@@ -25,9 +21,10 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    MemorialVaultActivatedEffect,
 )
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
+from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+from mtg_bot.effects.generic import ExileTopXOfLibraryMayPlayThisTurn
 
 
 _MEMORIAL_VAULT_CARD = {
@@ -43,10 +40,10 @@ _MEMORIAL_VAULT_CARD = {
 
 
 def test_build_artifact_printing_claims_memorial_vault():
-    """The Scryfall-shaped Memorial Vault record builds an Artifact
-    with the canonical ``{T}, Sacrifice another artifact`` activation
-    plus the bespoke ``MemorialVaultActivatedEffect`` payload — same
-    shape as the static registry's ``make_artifact(...)``."""
+    """The Scryfall-shaped Memorial Vault record now builds via the
+    unified clause grammar — cost atom through the activated cost
+    parser, body through ``_parse_effect``'s literal-multi-sentence
+    recognizer mapping to the generic primitive."""
     printing = _build_artifact_printing(_MEMORIAL_VAULT_CARD)
     assert printing is not None
     assert printing.name == "Memorial Vault"
@@ -56,12 +53,12 @@ def test_build_artifact_printing_claims_memorial_vault():
                 tap_self=True,
                 sacrifice_another_artifact=True,
             ),
-            effect=MemorialVaultActivatedEffect(),
+            effect=ExileTopXOfLibraryMayPlayThisTurn(
+                amount=MVOfCostPaidObjectPlus(constant=1),
+            ),
         ),
     )
     # Memorial Vault has no triggered/static abilities or keywords.
     assert printing.triggered_abilities == ()
     assert printing.static_abilities == ()
     assert printing.keywords == frozenset()
-
-

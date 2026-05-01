@@ -190,12 +190,14 @@ from mtg_bot.effects.conditions import (
     ControlsAnotherCreatureWithPowerAtMost,
     PerDifferentlyNamedLand,
 )
+from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     DestroyEnchantedPermanent,
     DrawCardsByConditionMultiplier,
     EachOpponentExilesCardFromHandWithCastPermission,
+    ExileTopXOfLibraryMayPlayThisTurn,
     LockOrUnlockDoorOfTargetRoomYouControl,
     PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
@@ -3370,6 +3372,32 @@ def _parse_effect(phrase: str) -> Effect | None:
         "nonland card. You may cast that card this turn"
     ):
         return TerritorialBruntarLandfallEffect()
+    # Memorial Vault's activation body — "exile the top X cards of
+    # your library, where X is one plus the mana value of the
+    # sacrificed artifact. You may play those cards this turn."
+    # Decomposes cleanly into the generic
+    # ``ExileTopXOfLibraryMayPlayThisTurn`` primitive driven by the
+    # ``MVOfCostPaidObjectPlus(constant=1)`` formula. The formula reads
+    # ``state.resolving_cost_paid_objects[0]`` at resolve time — the
+    # ``Sacrifice another artifact`` cost atom populates the tuple via
+    # the cost-payment plumbing in ``_activate_ability``. Multi-
+    # sentence literal recognizer because the body crosses an internal
+    # period (the comma + "where X is …" fragment + ". You may play
+    # …" continuation) that no single-sentence regex would tolerate;
+    # broader grammar (parameterized "exile the top X cards of your
+    # library, where X is <formula>; you may play those cards this
+    # turn") deferred until a second card with a varying formula
+    # ships. The recognizer maps any future card with this exact
+    # printed body to the same composition, so a re-print would claim
+    # automatically.
+    if phrase == (
+        "exile the top X cards of your library, where X is one plus "
+        "the mana value of the sacrificed artifact. You may play "
+        "those cards this turn"
+    ):
+        return ExileTopXOfLibraryMayPlayThisTurn(
+            amount=MVOfCostPaidObjectPlus(constant=1),
+        )
     # Perigee Beckoner's ETB body (only EoE card with the "pump another
     # target creature you control + grant dies-return-tapped trigger"
     # shape; broader grammar deferred until a second example exists).

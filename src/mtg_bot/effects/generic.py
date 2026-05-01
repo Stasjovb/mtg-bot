@@ -16,6 +16,7 @@ from mtg_bot.effects.base import (
 
 if TYPE_CHECKING:
     from mtg_bot.cards import ManaCost
+    from mtg_bot.effects.formulas import Formula
     from mtg_bot.game import GameState
 
 
@@ -4107,6 +4108,64 @@ class ExileTopOfLibraryMayPlayThisTurn(Effect):
         return (
             f"exile the top {self.amount} cards of your library; you "
             f"may play them this turn"
+        )
+
+
+
+@dataclass(frozen=True)
+class ExileTopXOfLibraryMayPlayThisTurn(Effect):
+    """Formula-driven sibling of ``ExileTopOfLibraryMayPlayThisTurn``.
+
+    Evaluates ``amount`` (a ``Formula``) at resolve time, exiles that
+    many cards off the top of the controller's library, and marks each
+    with ``playable_from_exile_this_turn`` so the controller can cast /
+    play them until cleanup of the resolving turn. Same lifetime and
+    castability semantics as the fixed-amount sibling — the cleanup
+    loop in ``turn.run_cleanup_step`` clears the flag for every card
+    sitting in exile at end of turn.
+
+    Memorial Vault uses ``amount=MVOfCostPaidObjectPlus(constant=1)`` to
+    pull X from the sacrificed artifact's mana value at resolve time.
+    Any future card whose body says "exile the top X cards of your
+    library, where X is <runtime expression>; you may play them this
+    turn" composes a different ``Formula`` and reuses this engine
+    class. Running out of cards mid-exile simply stops; no empty-
+    library loss is triggered (impulse-cast at sorcery speed doesn't
+    draw, so the empty-library loss check doesn't fire here).
+    """
+
+    amount: "Formula | None" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if self.amount is None:
+            return
+        n = self.amount.value(state, controller_id)
+        if n < 0:
+            n = 0
+        p = state.player_by_id(controller_id)
+        exiled = 0
+        for _ in range(n):
+            if not p.library:
+                break
+            top = p.library.pop(0)
+            top.zone = Zone.EXILE
+            top.playable_from_exile_this_turn = True
+            p.exile.append(top)
+            exiled += 1
+        state.log.append(
+            f"P{controller_id} exiles {exiled} card(s) from top of "
+            f"library (may play this turn)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "exile the top X cards of your library; "
+            "you may play them this turn"
         )
 
 

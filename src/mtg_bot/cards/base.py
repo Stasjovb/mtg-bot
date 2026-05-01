@@ -72,7 +72,6 @@ from mtg_bot.effects import (
     KavaronHarrierAttackEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
-    MemorialVaultActivatedEffect,
     PerigeeBeckonerDiesReturnTappedEffect,
     PossibilityTechnicianETBEffect,
     TerritorialBruntarLandfallEffect,

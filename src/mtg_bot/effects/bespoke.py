@@ -442,57 +442,6 @@ class TerritorialBruntarLandfallEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class MemorialVaultActivatedEffect(Effect):
-    """Memorial Vault's activated effect: "Exile the top X cards of
-    your library, where X is one plus the mana value of the sacrificed
-    artifact. You may play those cards this turn."
-
-    The ``sacrifice_another_artifact`` ActivationCost (artifact-only
-    filter) pays the cost, so the most-recently-graveyarded artifact
-    in the controller's graveyard at resolution time is exactly the
-    one we just sacrificed. X = 1 + that artifact's mana value. The
-    cost gate guarantees an artifact is present; the X=1 fallback only
-    matters if defensive code is ever called without the cost paid.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        # X reads the most-recently-graveyarded artifact's mana value.
-        # Cost payment runs immediately before resolve, so this is the
-        # artifact we just sacrificed.
-        p = state.player_by_id(controller_id)
-        x = 1
-        for c in reversed(p.graveyard):
-            if c.printing.is_artifact:
-                x = 1 + c.printing.mana_cost.total
-                break
-        exiled_names = []
-        for _ in range(x):
-            if not p.library:
-                break
-            top = p.library.pop(0)
-            top.zone = Zone.EXILE
-            top.playable_from_exile_this_turn = True
-            p.exile.append(top)
-            exiled_names.append(top.printing.name)
-        state.log.append(
-            f"Memorial Vault exiles {len(exiled_names)} cards "
-            f"(may play this turn)"
-        )
-
-    def describe(self) -> str:
-        return (
-            "exile the top X cards of your library, where X is one "
-            "plus the mana value of the sacrificed artifact; you may "
-            "play those cards this turn"
-        )
-
-
 
 @dataclass(frozen=True)
 class PainForAllETBEffect(Effect):

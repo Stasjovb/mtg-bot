@@ -6,10 +6,9 @@ from mtg_bot import legal_moves
 from mtg_bot.actions import CastSpell, apply_action
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
-from mtg_bot.effects import (
-    MemorialVaultActivatedEffect,
-    TerritorialBruntarLandfallEffect,
-)
+from mtg_bot.effects import TerritorialBruntarLandfallEffect
+from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+from mtg_bot.effects.generic import ExileTopXOfLibraryMayPlayThisTurn
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import Step, run_cleanup_step
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
@@ -123,24 +122,36 @@ def test_bruntar_describe():
 
 
 def test_memorial_vault_effect_exiles_top_X_and_marks_playable():
+    """The generic ``ExileTopXOfLibraryMayPlayThisTurn`` driven by
+    ``MVOfCostPaidObjectPlus(constant=1)`` reads the cost-paid
+    artifact's MV via ``state.resolving_cost_paid_objects`` and exiles
+    1+MV cards, marking each impulse-cast for the turn."""
     state = _new_state()
     p = state.players[0]
-    # Pretend a 3 CMC artifact was sacrificed into graveyard.
-    vault = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD)
-    p.graveyard.append(vault)  # MV 4 → X = 5
-    # Stock library.
+    # Simulate a paid MV-4 artifact (Memorial Vault itself, MV 4).
+    paid = state.new_object(_PRINTINGS["Memorial Vault"], 0, Zone.GRAVEYARD)
+    p.graveyard.append(paid)
+    state.resolving_cost_paid_objects = (paid,)
+    # Stock library with seven cards.
     for _ in range(7):
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         p.library.append(c)
-    MemorialVaultActivatedEffect().resolve(state, 0, ())
-    # 5 cards exiled, all marked playable.
+    try:
+        ExileTopXOfLibraryMayPlayThisTurn(
+            amount=MVOfCostPaidObjectPlus(constant=1),
+        ).resolve(state, 0, ())
+    finally:
+        state.resolving_cost_paid_objects = ()
+    # 5 cards exiled (1 + MV 4), all marked playable.
     assert len(p.exile) == 5
     for c in p.exile:
         assert c.playable_from_exile_this_turn is True
 
 
 def test_memorial_vault_describe():
-    d = MemorialVaultActivatedEffect().describe()
+    d = ExileTopXOfLibraryMayPlayThisTurn(
+        amount=MVOfCostPaidObjectPlus(constant=1),
+    ).describe()
     assert "exile" in d and "X cards" in d
 
 

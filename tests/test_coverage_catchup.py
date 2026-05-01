@@ -495,18 +495,28 @@ def test_anticausal_vestige_noop_when_agent_declines_picker():
 
 
 def test_memorial_vault_effect_library_empty_stops_early():
-    """MemorialVaultActivatedEffect: exits cleanly if library runs out
-    before hitting X."""
-    from mtg_bot.effects import MemorialVaultActivatedEffect
+    """ExileTopXOfLibraryMayPlayThisTurn driven by
+    MVOfCostPaidObjectPlus: exits cleanly when the library has fewer
+    than X cards. Mirrors the cost-paid-object plumbing the engine
+    threads through ``state.resolving_cost_paid_objects`` at resolve
+    time."""
+    from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+    from mtg_bot.effects.generic import ExileTopXOfLibraryMayPlayThisTurn
 
     state = _new_state()
-    # Graveyard has an artifact of MV 1 → X=2.
+    # Simulate a paid MV-1 artifact sitting on the resolving slot.
     art = state.new_object(_PRINTINGS["Nutrient Block"], 0, Zone.GRAVEYARD)
     state.players[0].graveyard.append(art)
-    # Library has only 1 card.
+    state.resolving_cost_paid_objects = (art,)
+    # Library has only 1 card; formula asks for 1 + 1 = 2.
     c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
     state.players[0].library.append(c)
-    MemorialVaultActivatedEffect().resolve(state, 0, ())
+    try:
+        ExileTopXOfLibraryMayPlayThisTurn(
+            amount=MVOfCostPaidObjectPlus(constant=1),
+        ).resolve(state, 0, ())
+    finally:
+        state.resolving_cost_paid_objects = ()
     assert len(state.players[0].exile) == 1
 
 

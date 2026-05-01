@@ -1,5 +1,8 @@
 """Tests for Memorial Vault — strict "Sacrifice another artifact"
-activation cost + X-from-sacrificed-artifact-mana-value resolve."""
+activation cost + formula-driven X-from-sacrificed-artifact-mana-value
+resolve via the generic ``ExileTopXOfLibraryMayPlayThisTurn`` plus
+``MVOfCostPaidObjectPlus`` primitives.
+"""
 
 from mtg_bot.actions import (
     ActivateAbility,
@@ -8,10 +11,12 @@ from mtg_bot.actions import (
 )
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
-from mtg_bot.effects import ActivationCost, MemorialVaultActivatedEffect
+from mtg_bot.effects import ActivationCost
+from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+from mtg_bot.effects.generic import ExileTopXOfLibraryMayPlayThisTurn
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
-from mtg_bot.turn import Step
+from mtg_bot.turn import Step, run_cleanup_step
 
 from mtg_bot.cards.source import get_active_source
 
@@ -129,10 +134,100 @@ def test_resolve_exiles_x_equals_one_plus_sacrificed_mv():
         assert ex.playable_from_exile_this_turn is True
 
 
+def test_resolve_with_mv4_artifact_exiles_five():
+    """Sacrificing an MV-4 artifact means X = 1 + 4 = 5 cards exiled."""
+    state = _new_state(num_mountains=8)
+    state.step = Step.PRECOMBAT_MAIN
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
+    vault.summoning_sick = False
+    # Wedgelight Rammer is a Spacecraft (artifact card) with MV 4.
+    # Spacecraft are artifacts, so the strict ``Sacrifice another
+    # artifact`` cost accepts them.
+    spacecraft = _put(state, _PRINTINGS["Wedgelight Rammer"])
+    spacecraft.summoning_sick = False
+    _stock_library(state, 0, 6)
+
+    acts = [
+        a for a in legal_actions(state, 0)
+        if isinstance(a, ActivateAbility) and a.source_id == vault.id
+    ]
+    assert acts
+    apply_action(state, 0, acts[0])
+    resolve_top_of_stack(state)
+
+    # X = 1 + 4 = 5.
+    assert len(state.players[0].exile) == 5
+    for ex in state.players[0].exile:
+        assert ex.playable_from_exile_this_turn is True
+
+
+def test_resolve_with_mv0_artifact_exiles_one():
+    """An MV-0 artifact still pays the cost; X = 1 + 0 = 1 card exiled."""
+    state = _new_state(num_mountains=4)
+    state.step = Step.PRECOMBAT_MAIN
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
+    vault.summoning_sick = False
+    # Power Depot is the only EoE pure-artifact non-Equipment, non-
+    # Spacecraft printing with MV 0.
+    depot = _put(state, _PRINTINGS["Power Depot"])
+    depot.summoning_sick = False
+    _stock_library(state, 0, 3)
+
+    acts = [
+        a for a in legal_actions(state, 0)
+        if isinstance(a, ActivateAbility) and a.source_id == vault.id
+    ]
+    assert acts
+    apply_action(state, 0, acts[0])
+    resolve_top_of_stack(state)
+
+    # Power Depot is MV 0 → X = 1 + 0 = 1.
+    assert len(state.players[0].exile) == 1
+    assert state.players[0].exile[0].playable_from_exile_this_turn is True
+
+
+def test_play_this_turn_permission_expires_at_cleanup():
+    """The ``playable_from_exile_this_turn`` flag granted by the body
+    is cleared at end-of-turn cleanup, mirroring the standard impulse-
+    cast lifetime."""
+    state = _new_state(num_mountains=4)
+    state.step = Step.PRECOMBAT_MAIN
+    vault = _put(state, _PRINTINGS["Memorial Vault"])
+    vault.summoning_sick = False
+    block = _put(state, _PRINTINGS["Nutrient Block"])  # MV 1
+    block.summoning_sick = False
+    _stock_library(state, 0, 4)
+
+    acts = [
+        a for a in legal_actions(state, 0)
+        if isinstance(a, ActivateAbility) and a.source_id == vault.id
+    ]
+    apply_action(state, 0, acts[0])
+    resolve_top_of_stack(state)
+
+    # Pre-cleanup: every exiled card is playable this turn.
+    for ex in state.players[0].exile:
+        assert ex.playable_from_exile_this_turn is True
+
+    # After cleanup, the flag clears.
+    state.step = Step.CLEANUP
+    run_cleanup_step(state)
+    for ex in state.players[0].exile:
+        assert ex.playable_from_exile_this_turn is False
+
+
+# -----------------------
+# Engine primitive sanity
+# -----------------------
+
+
 def test_describe_mentions_x_and_play_clause():
-    desc = MemorialVaultActivatedEffect().describe()
+    """The generic primitive's describe still surfaces X and 'play'."""
+    desc = ExileTopXOfLibraryMayPlayThisTurn(
+        amount=MVOfCostPaidObjectPlus(constant=1),
+    ).describe()
     assert "X" in desc
-    assert "play those cards" in desc
+    assert "play" in desc
 
 
 def test_activation_cost_describe_includes_sacrifice_another_artifact():

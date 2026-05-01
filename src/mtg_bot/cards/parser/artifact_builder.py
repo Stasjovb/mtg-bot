@@ -54,13 +54,6 @@ literal strings and dispatched to bespoke effect classes (the same
 Hylderblade and Robe of Stars). Each entry is keyed on the full,
 post-reminder-strip oracle line:
 
-* **Memorial Vault** — ``{T}, Sacrifice another artifact: Exile the
-  top X cards of your library, where X is one plus the mana value of
-  the sacrificed artifact. You may play those cards this turn.`` →
-  ``MemorialVaultActivatedEffect`` with a strict
-  ``sacrifice_another_artifact`` cost atom (cost shape is already
-  recognized by the unified activation grammar; only the bespoke
-  effect body is matched literally).
 * **Requiem Monolith** — ``{T}: Until end of turn, target creature
   gains '...' That creature's controller may have this artifact deal
   1 damage to it. Activate only as a sorcery.`` →
@@ -144,7 +137,6 @@ from mtg_bot.cards.base import (
     DrawCards,
     GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
-    MemorialVaultActivatedEffect,
     PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
     StaticAbility,
@@ -199,24 +191,6 @@ _LITERAL_FLAG_LINES: dict[str, str] = {
 # unified ``_parse_clause`` so the bespoke effect class survives
 # end-to-end. A line not in this table falls through to the unified
 # clause grammar as usual.
-def _memorial_vault_activation() -> ActivatedAbility:
-    """Build Memorial Vault's activated ability.
-
-    Cost shape ``{T}, Sacrifice another artifact`` is otherwise a
-    valid unified-grammar cost; only the effect body is bespoke
-    (``MemorialVaultActivatedEffect`` reads X from the most-recently-
-    graveyarded artifact at resolution time and lets the controller
-    play those exiled cards this turn).
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(
-            tap_self=True,
-            sacrifice_another_artifact=True,
-        ),
-        effect=MemorialVaultActivatedEffect(),
-    )
-
-
 def _requiem_monolith_activation() -> ActivatedAbility:
     """Build Requiem Monolith's sorcery-speed activation.
 
@@ -306,42 +280,6 @@ def _haunted_screen_once_only_activation() -> ActivatedAbility:
 
 
 _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
-    # Memorial Vault — bespoke "exile X-from-top, may play this turn"
-    # body. Cost atom (``{T}, Sacrifice another artifact``) parses via
-    # the unified activated grammar.
-    #
-    # Decomposition blocker: the body has two pieces that don't yet
-    # have a generic engine primitive:
-    #
-    #   1. **MV-of-most-recently-sacrificed-as-cost formula.** ``X``
-    #      reads the mana value of the artifact that paid the
-    #      ``Sacrifice another artifact`` cost atom. The engine has no
-    #      first-class "objects sacrificed as cost for this resolving
-    #      ability" slot today — ``MemorialVaultActivatedEffect`` reads
-    #      the most-recently-graveyarded artifact in the controller's
-    #      graveyard at resolve time as a heuristic, which works
-    #      because cost payment runs immediately before resolve. A
-    #      proper decomposition would need
-    #      ``ResolvingAbility.cost_paid_objects`` (a tuple of
-    #      ``GameObject`` references threaded by the cost-payment
-    #      pipeline) plus a ``MVOfCostPaidObjectPlus(constant)``
-    #      formula primitive.
-    #   2. **Variable-amount exile-top-may-play.** The existing generic
-    #      ``ExileTopOfLibraryMayPlayThisTurn`` takes a fixed
-    #      ``amount`` set at parse time. Memorial Vault needs a
-    #      formula-driven sibling: ``ExileTopXOfLibraryMayPlayThisTurn
-    #      (amount_formula)`` that calls ``amount_formula(state,
-    #      controller_id)`` at resolve time.
-    #
-    # Once both primitives land, the body decomposes to
-    # ``ExileTopXOfLibraryMayPlayThisTurn(amount_formula=
-    # MVOfCostPaidObjectPlus(1))`` and the literal entry can be
-    # deleted. No second EoE/DSK printing prints either piece today,
-    # so the bespoke class earns its keep until a second example ships.
-    "{T}, Sacrifice another artifact: Exile the top X cards of your "
-    "library, where X is one plus the mana value of the sacrificed "
-    "artifact. You may play those cards this turn.":
-        _memorial_vault_activation,
     # Requiem Monolith — bespoke UEOT-grant-plus-optional-ping body.
     # Sorcery-speed rider flips ``sorcery_speed=True`` at the activated-
     # ability layer; the cost atom (``{T}``) parses via the unified
@@ -633,8 +571,8 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
             cost_reductions.append(affinity_reduction)
             continue
         # Literal-line dispatch for bespoke single-card effect bodies
-        # (Memorial Vault, Requiem Monolith, All-Fates Scroll, The
-        # Endstone). Tried FIRST (relative to the unified clause grammar)
+        # (Requiem Monolith, Pinnacle Starcage, Ghost Vacuum, Haunted
+        # Screen). Tried FIRST (relative to the unified clause grammar)
         # so the bespoke effect class survives — the unified
         # ``_parse_clause`` would either reject the body (no matching
         # primitive) or, in pathological cases, claim a near-miss
