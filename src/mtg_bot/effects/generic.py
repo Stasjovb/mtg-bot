@@ -11083,6 +11083,86 @@ class BecomeType(Effect):
 
 
 @dataclass(frozen=True)
+class GrantKeywords(Effect):
+    """Target gains the listed keywords.
+
+    Always writes layer-6 ``grant_keyword`` registry entries with
+    ``expires_at=None`` (the entries persist until the source leaves
+    play). Wrap with ``ApplyEffect(GrantKeywords(...), ends_at=
+    <Duration>)`` to give the grants a finite lifetime — ``ApplyEffect``
+    rewrites the lifetime fields of every entry written here. The
+    common UEOT shape is ``ApplyEffect(GrantKeywords(keywords=...),
+    EndOfTurn())``.
+
+    Registry writes (one per keyword, in sorted order for stable
+    ``description`` output): layer 6 ``grant_keyword`` with
+    ``params=(keyword,)``. Read by ``effective_keywords`` walking the
+    registry in CR-613 timestamp order, so any duration is faithfully
+    respected.
+
+    Target selection: when ``targets`` carries a ``(kind, id)`` pair,
+    the registry entries target that object — the spell/ability source
+    (``state.resolving_source``) is still recorded as the
+    registry-entry ``source_id``, so the entry is dropped when the
+    spell/ability source leaves play. With no targets, the effect
+    falls back to self-target (manland animation grants haste to
+    itself, etc.): both ``source_id`` and ``target_id`` are
+    ``state.resolving_source.id``.
+
+    No-op when ``keywords`` is empty, or when neither ``targets`` nor
+    ``state.resolving_source`` yields a battlefield object.
+
+    This primitive does NOT mirror onto the legacy
+    ``GameObject.temp_keywords`` field — that field still exists for
+    other production sites (``Pump`` and a handful of bespoke
+    primitives that haven't migrated yet) but the registry path alone
+    is enough for ``effective_keywords`` to see the grants here.
+    """
+
+    keywords: frozenset[str] = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not self.keywords:
+            return
+        source = state.resolving_source
+        if targets:
+            _, target_id = targets[0]
+            target = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+        else:
+            target = source
+        if target is None:
+            return
+        # Registry ``source_id`` = the spell/ability source (so its
+        # leave-play drops the entry); falls back to the target itself
+        # for self-target callers that resolve outside a stack frame.
+        source_id = source.id if source is not None else target.id
+        source_name = (
+            source.printing.name if source is not None
+            else target.printing.name
+        )
+        for kw in sorted(self.keywords):
+            state.add_continuous_effect(
+                source_id=source_id, layer=6, kind="grant_keyword",
+                target_id=target.id, params=(kw,),
+                expires_at=None,
+                description=(
+                    f"{source_name} grants {kw} to {target.printing.name}"
+                ),
+            )
+
+    def describe(self) -> str:
+        if not self.keywords:
+            return "gains no keywords"
+        return f"gains {', '.join(sorted(self.keywords))}"
+
+
+
+@dataclass(frozen=True)
 class ReanimateOneExiledWithSourceWithCounters(Effect):
     """Generic "put one creature card exiled with this permanent onto the
     battlefield under your control with N additional +1/+1 counters"

@@ -124,6 +124,7 @@ from mtg_bot.effects.generic import (
     SacrificeSelfPreservingExileLink,
     GainControlOfTargetSliverPermanently,
     GainLife,
+    GrantKeywords,
     GrantLifeToEachOpponent,
     GrantTriggeredAbilityUEOT,
     GrantUnblockable,
