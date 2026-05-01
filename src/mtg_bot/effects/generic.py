@@ -429,9 +429,15 @@ class Pump(Effect):
                 obj.temp_power_bonus += self.power_bonus
                 obj.temp_toughness_bonus += self.toughness_bonus
                 if self.granted_keywords:
-                    obj.temp_keywords = (
-                        obj.temp_keywords | self.granted_keywords
-                    )
+                    from mtg_bot.effects.combinators import ApplyEffect
+                    from mtg_bot.effects.durations import EndOfTurn
+
+                    ApplyEffect(
+                        inner=GrantKeywords(
+                            keywords=self.granted_keywords,
+                        ),
+                        ends_at=EndOfTurn(),
+                    ).resolve(state, controller_id, (chosen,))
                 kw_note = (
                     f" and gains "
                     f"{', '.join(sorted(self.granted_keywords))}"
