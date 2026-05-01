@@ -133,7 +133,6 @@ class GameObject:
     # multiple pumps hit the same object.
     temp_power_bonus: int = 0
     temp_toughness_bonus: int = 0
-    temp_keywords: frozenset[str] = field(default_factory=frozenset)
     # Extended-temporal-scope bonuses: "until your next turn" — expire
     # at the START (untap step) of player ``extended_temp_expires_at_player_id``,
     # NOT at this turn's cleanup. Stacked additively, contribute to
@@ -668,8 +667,9 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     model):
     - ``obj.printing.keywords``
     - ``obj.printing.stationed_keywords`` if stationed
-    - ``obj.temp_keywords`` and ``obj.extended_temp_keywords``
-      (legacy UEOT grants from non-registry effects)
+    - ``obj.extended_temp_keywords`` (legacy "until your next turn"
+      grants — the UEOT path now flows through layer-6 ``grant_keyword``
+      registry entries written by ``GrantKeywords``)
 
     Layer-6 entries (real + synthesized via
     ``_layer6_entries_for``) walked in timestamp order:
@@ -692,7 +692,6 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     kws: set[str] = set(obj.printing.keywords)
     if is_stationed(obj):
         kws |= set(obj.printing.stationed_keywords)
-    kws |= set(obj.temp_keywords)
     kws |= set(obj.extended_temp_keywords)
     layer6 = sorted(_layer6_entries_for(state, obj), key=lambda ce: ce.timestamp)
     for ce in layer6:

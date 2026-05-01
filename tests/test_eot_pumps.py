@@ -33,12 +33,25 @@ def _put_bear(state, controller_id=0):
     return obj
 
 
+def _grant_keywords_ueot(state, obj, keywords):
+    """Test helper: grant ``keywords`` to ``obj`` until end of turn via
+    the production ``ApplyEffect(GrantKeywords(...), EndOfTurn())``
+    path. Mirrors ``_animate_ueot`` for the layer-6 ``grant_keyword``
+    registry."""
+    from mtg_bot.effects import ApplyEffect, EndOfTurn, GrantKeywords
+
+    ApplyEffect(
+        inner=GrantKeywords(keywords=frozenset(keywords)),
+        ends_at=EndOfTurn(),
+    ).resolve(state, obj.controller_id, (("permanent", obj.id),))
+
+
 def test_temp_power_toughness_bonuses_default_to_zero():
     state = _arena()
     bear = _put_bear(state)
     assert bear.temp_power_bonus == 0
     assert bear.temp_toughness_bonus == 0
-    assert bear.temp_keywords == frozenset()
+    assert effective_keywords(state, bear) == frozenset()
 
 
 def test_effective_pt_folds_in_temp_bonuses():
@@ -50,10 +63,10 @@ def test_effective_pt_folds_in_temp_bonuses():
     assert effective_toughness(state, bear) == 3
 
 
-def test_effective_keywords_folds_in_temp_keywords():
+def test_effective_keywords_folds_in_grant_keywords_ueot():
     state = _arena()
     bear = _put_bear(state)
-    bear.temp_keywords = frozenset({"first strike"})
+    _grant_keywords_ueot(state, bear, {"first strike"})
     assert "first strike" in effective_keywords(state, bear)
 
 
@@ -62,11 +75,11 @@ def test_cleanup_clears_all_temp_bonuses():
     bear = _put_bear(state)
     bear.temp_power_bonus = 3
     bear.temp_toughness_bonus = 2
-    bear.temp_keywords = frozenset({"haste", "trample"})
+    _grant_keywords_ueot(state, bear, {"haste", "trample"})
     run_cleanup_step(state)
     assert bear.temp_power_bonus == 0
     assert bear.temp_toughness_bonus == 0
-    assert bear.temp_keywords == frozenset()
+    assert effective_keywords(state, bear) == frozenset()
 
 
 def test_pump_target_creature_applies_bonuses():

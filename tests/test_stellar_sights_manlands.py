@@ -1,7 +1,8 @@
 """Tests for Stellar Sights manlands — 13 lands that animate into
 creatures UEOT. Shared mechanic: ``ApplyEffect(BecomeType(...),
-EndOfTurn())`` for type/subtype/PT, plus the legacy ``temp_keywords``
-field for granted keywords. Covers:
+EndOfTurn())`` for type/subtype/PT, plus
+``ApplyEffect(GrantKeywords(...), EndOfTurn())`` for keyword grants.
+Covers:
 - Core mechanic (activate, animate, cleanup reverts)
 - Each of the 13 manlands' activation produces the expected
   P/T and keywords

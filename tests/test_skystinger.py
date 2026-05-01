@@ -19,6 +19,8 @@ def _new_state():
 
 
 def test_skystinger_pumps_when_blocking_flier():
+    from mtg_bot.effects import ApplyEffect, EndOfTurn, GrantKeywords
+
     state = _new_state()
     stinger = state.new_object(
         _PRINTINGS["Skystinger"], 0, Zone.BATTLEFIELD,
@@ -28,12 +30,13 @@ def test_skystinger_pumps_when_blocking_flier():
     flier = state.new_object(
         SYNTHETIC_CREATURES["Sky Sentinel"], 1, Zone.BATTLEFIELD,
     )
-    # Sky Sentinel is 1/3 with no flying baseline — give it flying.
-    # Wait actually check keywords.
+    # Sky Sentinel has no flying baseline — give it flying via the
+    # registry-backed UEOT grant for this test.
     state.battlefield.append(flier)
-    # Use Scale Drake (2/3) or similar with flying. Check keywords.
-    # Let me just give this one flying manually for the test.
-    flier.temp_keywords = flier.temp_keywords | frozenset({"flying"})
+    ApplyEffect(
+        inner=GrantKeywords(keywords=frozenset({"flying"})),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 1, (("permanent", flier.id),))
     flier.attacking = True
     declare_blockers(state, {stinger.id: flier.id})
     drain_stack(state)

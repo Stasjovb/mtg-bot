@@ -232,12 +232,17 @@ def test_keyword_block_counts_creatures_with_each_keyword():
 
 
 def test_keyword_block_picks_up_added_keywords():
-    """Force-add a keyword via temp_keywords and verify the count
-    increments. This sidesteps needing a specific card with the
-    keyword in our test fixtures."""
+    """Force-add keywords via the GrantKeywords registry-backed UEOT
+    path and verify the count increments. This sidesteps needing a
+    specific card with the keyword in our test fixtures."""
+    from mtg_bot.effects import ApplyEffect, EndOfTurn, GrantKeywords
+
     state = _empty_two_player_state()
     obj = _put_on_battlefield(state, "Battlefield Recruit", 0)
-    obj.temp_keywords = frozenset({"flying", "trample"})
+    ApplyEffect(
+        inner=GrantKeywords(keywords=frozenset({"flying", "trample"})),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", obj.id),))
     features = extract_features(state, viewer_id=0)
     # Viewer keyword block: flying = offset 0, trample = offset 5.
     assert features[32 + 0] == 1  # flying

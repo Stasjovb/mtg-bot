@@ -212,13 +212,12 @@ def test_lignify_strips_temp_granted_abilities():
     from mtg_bot.effects.combinators import ApplyEffect
     from mtg_bot.effects.durations import EndOfTurn
     from mtg_bot.effects.generic import (
-        GrantActivatedAbility, GrantTriggeredAbility,
+        GrantActivatedAbility, GrantKeywords, GrantTriggeredAbility,
     )
 
     state = _new_state()
     aura = _put(state, LIGNIFY, owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    bear.temp_keywords = frozenset({"trample"})
     granted_trig = TriggeredAbility(
         trigger="etb", effect=DrawCards(amount=1),
     )
@@ -231,6 +230,10 @@ def test_lignify_strips_temp_granted_abilities():
     )
     state.resolving_source = bear
     try:
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({"trample"})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, 0, ())
         ApplyEffect(
             inner=GrantTriggeredAbility(ability=granted_trig),
             ends_at=EndOfTurn(),

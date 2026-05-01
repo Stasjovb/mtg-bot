@@ -233,7 +233,6 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     obj.charge_counters = 0
     obj.temp_power_bonus = 0
     obj.temp_toughness_bonus = 0
-    obj.temp_keywords = frozenset()
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
     if obj.printing.is_token:
@@ -1109,7 +1108,6 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         obj.charge_counters = 0
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
-        obj.temp_keywords = frozenset()
         obj.attached_to = None
         if not obj.printing.is_land:
             state.permanent_left_battlefield_this_turn = True
@@ -1376,7 +1374,6 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             obj.charge_counters = 0
             obj.temp_power_bonus = 0
             obj.temp_toughness_bonus = 0
-            obj.temp_keywords = frozenset()
             obj.attached_to = None
             if not obj.printing.is_land:
                 state.permanent_left_battlefield_this_turn = True
@@ -11146,11 +11143,11 @@ class GrantKeywords(Effect):
     No-op when ``keywords`` is empty, or when neither ``targets`` nor
     ``state.resolving_source`` yields a battlefield object.
 
-    This primitive does NOT mirror onto the legacy
-    ``GameObject.temp_keywords`` field — that field still exists for
-    other production sites (``Pump`` and a handful of bespoke
-    primitives that haven't migrated yet) but the registry path alone
-    is enough for ``effective_keywords`` to see the grants here.
+    The registry path is the only writer for keyword grants: the
+    legacy ``GameObject.temp_keywords`` field has been retired.
+    ``effective_keywords`` reads layer-6 ``grant_keyword`` entries in
+    CR-613 timestamp order, so any duration declared via
+    ``ApplyEffect`` is faithfully respected.
     """
 
     keywords: frozenset[str] = frozenset()

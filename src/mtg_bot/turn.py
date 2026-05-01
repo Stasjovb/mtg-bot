@@ -1050,7 +1050,6 @@ def run_cleanup_step(state: GameState) -> None:
         obj.damaged_this_turn = False
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
-        obj.temp_keywords = frozenset()
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
         # Revert "gain control until end of turn" effects.

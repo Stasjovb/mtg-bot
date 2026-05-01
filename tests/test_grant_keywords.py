@@ -66,7 +66,7 @@ def test_grant_keywords_self_target_writes_one_entry_per_keyword():
 
 def test_grant_keywords_self_target_visible_via_effective_keywords():
     """Sanity check: the registry write is observable through
-    ``effective_keywords`` without touching ``temp_keywords``."""
+    ``effective_keywords``."""
     from mtg_bot.cards.base import make_artifact
     from mtg_bot.effects import GrantKeywords
     from mtg_bot.game import effective_keywords
@@ -77,8 +77,6 @@ def test_grant_keywords_self_target_visible_via_effective_keywords():
         keywords=frozenset({"haste"}),
     ).resolve(state, controller_id=0, targets=())
     assert "haste" in effective_keywords(state, source_obj)
-    # ``temp_keywords`` was NOT mirrored.
-    assert source_obj.temp_keywords == frozenset()
 
 
 # ---------- Explicit target ----------

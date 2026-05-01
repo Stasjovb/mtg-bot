@@ -22,7 +22,7 @@ from mtg_bot.effects import (
     TargetOpponentDiscards,
     TriggeredAbility,
 )
-from mtg_bot.game import GameState, Player, StackItem, Zone
+from mtg_bot.game import GameState, Player, StackItem, Zone, effective_keywords
 from mtg_bot.turn import (
     Step,
     draw_card,
@@ -200,7 +200,7 @@ def test_rig_for_war_grants_first_strike_ueot():
         return
     resolve_top_of_stack(state)
     assert bear.temp_power_bonus == 3
-    assert "first strike" in bear.temp_keywords
+    assert "first strike" in effective_keywords(state, bear)
 
     # Now attack with the buffed bear vs the 3/3 giant.
     state.step = Step.DECLARE_ATTACKERS
@@ -1398,14 +1398,14 @@ def test_shattered_wings_noop_paths_and_lost_legality():
     e.resolve(state, controller_id=0, targets=(("creature", 1),))
     e.resolve(state, controller_id=0, targets=(("permanent", 99999),))
 
-    # Target (a Wild Bear with temporarily-granted flying) loses flying
-    # between cast and resolve → fizzles.
+    # Target (a Wild Bear without flying) is illegal at resolution
+    # → fizzles. The Bear has no innate flying, no temp grant, no
+    # static anthem grant on the battlefield, so the legality check
+    # at resolution rejects it.
     victim = state.new_object(
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.BATTLEFIELD
     )
-    victim.temp_keywords = frozenset({"flying"})
     state.battlefield.append(victim)
-    victim.temp_keywords = frozenset()  # lost flying
     e.resolve(state, controller_id=0, targets=(("permanent", victim.id),))
     assert victim in state.battlefield
 
