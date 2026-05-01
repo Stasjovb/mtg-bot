@@ -748,6 +748,10 @@ class AtomicMicrosizerAttackEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic import BecomeType
+
         if not targets:
             return
         kind, target_id = targets[0]
@@ -759,26 +763,15 @@ class AtomicMicrosizerAttackEffect(Effect):
         if obj is None:
             return
         obj.temp_unblockable = True
-        # Layer-7a "set base P/T to 1/1 UEOT" — write a registry
-        # entry so timestamp ordering with other layer-7a effects
-        # (Lignify, manland animation, Wandering Fumarole switch)
-        # is correct: the most recent set_base_pt wins, regardless
-        # of which writer's lifetime is longer. The legacy
-        # ``temp_base_pt_override`` field is mirrored as a
-        # write-through cache for any non-registry reader.
-        src = state.resolving_source
-        source_id = src.id if src is not None else obj.id
-        state.add_continuous_effect(
-            source_id=source_id,
-            layer=7, sublayer=1, kind="set_base_pt",
-            target_id=obj.id,
-            params=(1, 1),
-            expires_at="cleanup",
-            description=(
-                f"{obj.printing.name} has base P/T 1/1 UEOT"
-            ),
-        )
-        obj.temp_base_pt_override = (1, 1)
+        # Layer-7b "set base P/T to 1/1 UEOT" — composes the production
+        # ``ApplyEffect(BecomeType(...), EndOfTurn())`` pattern with the
+        # equipped creature as the explicit target so the registry entry
+        # is anchored to the equipped creature, not to
+        # ``state.resolving_source``.
+        ApplyEffect(
+            inner=BecomeType(base_pt=(1, 1)),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, targets)
         state.log.append(
             f"{obj.printing.name} can't be blocked this turn and has "
             f"base P/T 1/1 UEOT"

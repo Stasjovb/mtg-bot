@@ -57,20 +57,25 @@ def test_effect_sets_unblockable_and_base_pt_1_1():
         state, 0, (("creature", bear.id),),
     )
     assert bear.temp_unblockable
-    assert bear.temp_base_pt_override == (1, 1)
-    # effective P/T reflects override (base 1/1, no counters, no pumps).
+    # effective P/T reflects the layer-7b set_base_pt registry entry
+    # (base 1/1, no counters, no pumps).
     assert effective_power(state, bear) == 1
     assert effective_toughness(state, bear) == 1
 
 
-def test_cleanup_clears_override_and_unblockable():
+def test_cleanup_clears_base_pt_and_unblockable():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
-    bear.temp_unblockable = True
-    bear.temp_base_pt_override = (1, 1)
+    AtomicMicrosizerAttackEffect().resolve(
+        state, 0, (("creature", bear.id),),
+    )
+    assert bear.temp_unblockable
+    assert effective_power(state, bear) == 1
     run_cleanup_step(state)
     assert bear.temp_unblockable is False
-    assert bear.temp_base_pt_override is None
+    # Registry entry expired; bear back to printed 2/2.
+    assert effective_power(state, bear) == 2
+    assert effective_toughness(state, bear) == 2
 
 
 def test_effect_describe():
@@ -112,12 +117,21 @@ def test_equipment_attacks_trigger_fires():
     declare_attackers(state, [bear.id])
     drain_stack(state)
     # PickFirst chooses first legal target — either bear or enemy.
-    # Either way, the effect applies to exactly one of them.
-    targets_with_override = [
-        o for o in [bear, enemy] if o.temp_base_pt_override is not None
+    # Either way, the effect applies to exactly one of them: that one
+    # has its base toughness set to 1 by the layer-7b registry entry
+    # (the bear also has the equipment +1/+0 attack-pump on top, so
+    # power-side asserts aren't a stable signal) and carries the
+    # temp_unblockable flag.
+    affected = [
+        o for o in [bear, enemy]
+        if any(
+            ce.layer == 7 and ce.sublayer == 1 and ce.kind == "set_base_pt"
+            and ce.target_id == o.id and ce.params == (1, 1)
+            for ce in state.continuous_effects
+        )
     ]
-    assert len(targets_with_override) == 1
-    assert targets_with_override[0].temp_unblockable
+    assert len(affected) == 1
+    assert affected[0].temp_unblockable
 
 
 def test_microsizer_printing_has_attack_trigger():
