@@ -5995,13 +5995,15 @@ class BecomeLandCreatureUEOT(Effect):
     False once the registry entries expire, so the land returns to
     its non-creature state at end of turn.
 
-    Keyword grants ride the new ``ApplyEffect(GrantKeywords(...),
-    EndOfTurn())`` primitive (layer-6 ``grant_keyword`` registry
-    entries with ``expires_at="cleanup"``). ``unblockable`` still sets
-    ``temp_unblockable`` directly; ``granted_activated_abilities`` /
-    ``granted_triggered_abilities`` flow through
-    ``state.grant_*_ability_ueot``. Migrating those last two to
-    dedicated primitives is a separate sweep.
+    Keyword grants ride ``ApplyEffect(GrantKeywords(...),
+    EndOfTurn())`` (layer-6 ``grant_keyword`` registry entries).
+    Granted activated / triggered abilities ride
+    ``ApplyEffect(GrantActivatedAbility(...), EndOfTurn())`` /
+    ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` (layer-6
+    ``grant_*_ability`` registry entries). ``unblockable`` still sets
+    ``temp_unblockable`` directly — that's the last legacy ``temp_*``
+    write on this animation path; migrating it to a dedicated
+    primitive is a separate sweep.
     """
 
     power: int = 0
@@ -6015,10 +6017,13 @@ class BecomeLandCreatureUEOT(Effect):
     # cleanup.
     granted_subtype: str | None = None
     # Activated / triggered abilities granted UEOT to the source while
-    # animated. Appended to ``temp_activated_abilities`` /
-    # ``temp_triggered_abilities``; cleared at cleanup. Used by manlands
-    # whose printed text grants per-card abilities only while the land
-    # is a creature (Lavaclaw Reaches, Wandering Fumarole, Raging Ravine).
+    # animated. Composed via
+    # ``ApplyEffect(GrantActivatedAbility(...), EndOfTurn())`` /
+    # ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` — each
+    # writes a layer-6 registry entry with ``expires_at="cleanup"``.
+    # Used by manlands whose printed text grants per-card abilities
+    # only while the land is a creature (Lavaclaw Reaches, Wandering
+    # Fumarole, Raging Ravine).
     granted_activated_abilities: tuple = ()
     granted_triggered_abilities: tuple = ()
 
@@ -6051,25 +6056,15 @@ class BecomeLandCreatureUEOT(Effect):
         if self.unblockable:
             source.temp_unblockable = True
         for ab in self.granted_activated_abilities:
-            state.grant_activated_ability_ueot(
-                source_id=source.id,
-                target_id=source.id,
-                ability=ab,
-                description=(
-                    f"{source.printing.name} grants activated ability "
-                    f"UEOT to itself (manland animation)"
-                ),
-            )
+            ApplyEffect(
+                inner=GrantActivatedAbility(ability=ab),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, ())
         for ab in self.granted_triggered_abilities:
-            state.grant_triggered_ability_ueot(
-                source_id=source.id,
-                target_id=source.id,
-                ability=ab,
-                description=(
-                    f"{source.printing.name} grants triggered ability "
-                    f"UEOT to itself (manland animation)"
-                ),
-            )
+            ApplyEffect(
+                inner=GrantTriggeredAbility(ability=ab),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, ())
         kw_note = (
             f" with {', '.join(sorted(self.granted_keywords))}"
             if self.granted_keywords else ""
