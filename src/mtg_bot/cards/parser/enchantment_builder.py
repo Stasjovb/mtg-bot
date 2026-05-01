@@ -950,21 +950,15 @@ _CRYOSHATTER_COMPOUND_LINE = (
 # the lookup — keys must be reminder-text-stripped.
 _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # ---------------------------------------------------------------
-    # Meltstrider's Resolve
-    # ETB: "enchanted creature fights up to one target creature an
-    # opponent controls" → EnchantedCreatureFightsTargetEffect.
-    # Only card in the pool with an Aura-ETB fights trigger today;
-    # generalization (a "fights" surface in the grammar with "enchanted
-    # creature" as actor) deferred until a second example exists.
+    # (audit-litdispatch-auras) Meltstrider's Resolve fight ETB
+    # ("When this Aura enters, enchanted creature fights up to one
+    # target creature an opponent controls.") migrated to the
+    # unified ``_parse_triggered_ability_line`` path: ``this Aura
+    # enters`` lives in ``_PREDICATE_TRIGGER_PHRASES`` and the body
+    # is now claimed by an Aura-context effect-phrase recognizer in
+    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
+    # ``EnchantedCreatureFightsTargetEffect``.
     # ---------------------------------------------------------------
-    (
-        "When this Aura enters, enchanted creature fights up to one "
-        "target creature an opponent controls."
-    ): TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=EnchantedCreatureFightsTargetEffect(),
-    ),
     # ---------------------------------------------------------------
     # Pain for All — ETB trigger
     # "When this Aura enters, enchanted creature deals damage equal to

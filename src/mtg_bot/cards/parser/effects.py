@@ -174,6 +174,7 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
     CloseEncounterEffect,
+    EnchantedCreatureFightsTargetEffect,
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
@@ -4005,6 +4006,21 @@ def _parse_effect(phrase: str) -> Effect | None:
     # (e.g. ``destroy enchanted creature``) ships.
     if phrase == "destroy it":
         return DestroyEnchantedPermanent()
+    # ``enchanted creature fights up to one target creature an
+    # opponent controls`` — Meltstrider's Resolve's ETB body. Maps
+    # to ``EnchantedCreatureFightsTargetEffect`` which reads the
+    # Aura's enchanted host as the fighter and lets the controller
+    # pick up to one opposing creature as the other fighter; both
+    # fighters deal damage equal to their power simultaneously per
+    # CR 701.12. Only Meltstrider's Resolve in the pool ships this
+    # surface today; broader generalization (a parameterized
+    # ``<source-actor> fights <target-pool>`` recognizer) deferred
+    # until a second Aura with a similar fight body ships.
+    if phrase == (
+        "enchanted creature fights up to one target creature an "
+        "opponent controls"
+    ):
+        return EnchantedCreatureFightsTargetEffect()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
