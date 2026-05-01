@@ -1115,6 +1115,20 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
         (Event.ENTERS, IsSelf()),
         (Event.ENTERS, Subject(None, HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()),
     ),
+    # ``Whenever you play a land or cast a spell`` (The Endstone) —
+    # composite play-land-or-cast-spell trigger. Two arms fire on the
+    # same line, each carrying the same effect at the line level; the
+    # parser produces one ``TriggeredAbility`` per arm so the engine's
+    # per-event dispatch sees them as independent observers (matching
+    # the static registry's two-entry layout). ``Event.PLAYS_LAND``
+    # carries ``("land", "controller")`` subjects and ``Event.IS_CAST``
+    # carries ``("spell", "controller")``; both are gated on
+    # ``Controlled(YOU, subject="controller")`` so the trigger fires
+    # only on the source controller's own plays/casts (not opponents').
+    "you play a land or cast a spell": (
+        (Event.PLAYS_LAND, Controlled(YOU, subject="controller")),
+        (Event.IS_CAST, Controlled(YOU, subject="controller")),
+    ),
 }
 
 

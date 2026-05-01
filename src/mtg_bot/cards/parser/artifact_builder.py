@@ -74,15 +74,19 @@ post-reminder-strip oracle line:
   ``{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the
   number of differently named lands you control.`` activation →
   ``AllFatesScrollDrawEffect``.
-* **The Endstone** (Legendary) — two literal-matched trigger lines:
-  the composite ``Whenever you play a land or cast a spell, draw a
-  card.`` fans out into two ``TriggeredAbility`` primitives (one per
-  event — IS_CAST and PLAYS_LAND, both gated on
-  ``Controlled(YOU, subject="controller")``), and ``At the beginning
-  of your end step, your life total becomes half your starting life
-  total, rounded up.`` maps to ``SetLifeToHalfStartingRoundedUp``.
-  Same per-arm fan-out shape Cryogen Relic uses for its compound
-  enters-or-leaves trigger.
+* **The Endstone** (Legendary) — both trigger lines now claim through
+  the unified ``_parse_clause`` grammar. The composite ``Whenever you
+  play a land or cast a spell, draw a card.`` parses via the new
+  ``"you play a land or cast a spell"`` entry in
+  ``_COMPOUND_PREDICATE_TRIGGER_PHRASES`` (one ``TriggeredAbility``
+  per arm — IS_CAST and PLAYS_LAND, both gated on
+  ``Controlled(YOU, subject="controller")``); ``At the beginning of
+  your end step, your life total becomes half your starting life
+  total, rounded up.`` parses via the existing ``"your end step"``
+  ``_AT_BEGINNING_OF_PHRASES`` entry plus the new
+  ``"your life total becomes half your starting life total, rounded
+  up"`` literal-phrase recognizer in ``effects.py`` mapping to the
+  generic ``SetLifeToHalfStartingRoundedUp`` engine class.
 * **Pinnacle Starcage** — both lines are literal-matched. The ETB
   ``When this artifact enters, exile all artifacts and creatures
   with mana value 2 or less until this artifact leaves the
@@ -144,7 +148,6 @@ from mtg_bot.cards.base import (
     PinnacleStarcageETBEffect,
     PinnacleStarcageSacEffect,
     RequiemMonolithActivatedEffect,
-    SetLifeToHalfStartingRoundedUp,
     StaticAbility,
     StaticScope,
     TriggeredAbility,
@@ -469,30 +472,8 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
 # ``_LITERAL_ACTIVATED_LINES`` but emits a tuple of ``TriggeredAbility``
 # (one or more arms) instead of a single ``ActivatedAbility``. Used for
 # trigger lines whose surface form falls outside the unified
-# ``_parse_clause`` grammar (composite ``play a land or cast a spell``
-# events, bespoke effect bodies that can't be expressed as primitives).
-def _endstone_play_or_cast_triggers() -> tuple[TriggeredAbility, ...]:
-    """The Endstone's composite play-land-or-cast-spell trigger fans
-    out into two ``TriggeredAbility`` primitives — same per-arm shape
-    Cryogen Relic uses for its compound enters-or-leaves trigger and
-    the static registry uses for The Endstone (one IS_CAST arm, one
-    PLAYS_LAND arm). The legacy ``cast_spell_or_play_land`` fused
-    trigger key is intentionally not introduced; predicate vocabulary
-    stays primitive (one event per ability)."""
-    return (
-        TriggeredAbility(
-            event=Event.IS_CAST,
-            predicate=Controlled(YOU, subject="controller"),
-            effect=DrawCards(amount=1),
-        ),
-        TriggeredAbility(
-            event=Event.PLAYS_LAND,
-            predicate=Controlled(YOU, subject="controller"),
-            effect=DrawCards(amount=1),
-        ),
-    )
-
-
+# ``_parse_clause`` grammar (bespoke effect bodies that can't be
+# expressed as primitives).
 def _pinnacle_starcage_etb_trigger() -> tuple[TriggeredAbility, ...]:
     """Pinnacle Starcage's ETB exile-until-leaves trigger. The bespoke
     ``PinnacleStarcageETBEffect`` engine class encodes both halves of
@@ -510,27 +491,7 @@ def _pinnacle_starcage_etb_trigger() -> tuple[TriggeredAbility, ...]:
     )
 
 
-def _endstone_end_step_set_life_trigger() -> tuple[TriggeredAbility, ...]:
-    """The Endstone's beginning-of-end-step "life = half starting,
-    rounded up" trigger. Bespoke ``SetLifeToHalfStartingRoundedUp``
-    effect class — the body isn't a unified-grammar primitive."""
-    return (
-        TriggeredAbility(
-            event=Event.BEGINNING_OF_END_STEP,
-            predicate=Controlled(YOU),
-            effect=SetLifeToHalfStartingRoundedUp(),
-        ),
-    )
-
-
 _LITERAL_TRIGGER_LINES: dict[str, "callable"] = {
-    # The Endstone — composite play-land-or-cast-spell trigger.
-    "Whenever you play a land or cast a spell, draw a card.":
-        _endstone_play_or_cast_triggers,
-    # The Endstone — bespoke "life = half starting, rounded up" body.
-    "At the beginning of your end step, your life total becomes "
-    "half your starting life total, rounded up.":
-        _endstone_end_step_set_life_trigger,
     # Pinnacle Starcage — bespoke "exile artifacts/creatures MV<=2
     # until this leaves" ETB. The "until this artifact leaves" return
     # is wired by the bespoke effect class, not by a separate trigger.

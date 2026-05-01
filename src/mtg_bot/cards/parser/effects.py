@@ -135,6 +135,7 @@ from mtg_bot.cards.base import (
     SeedshipImpactEffect,
     SetBasePTUntilEOT,
     SetBasePTConditionalUntilEOT,
+    SetLifeToHalfStartingRoundedUp,
     TakeExtraTurnAfterThisOne,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
@@ -4061,6 +4062,18 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))
+    # ``your life total becomes half your starting life total, rounded
+    # up`` — The Endstone's end-step trigger body. Single-card literal
+    # in the EoE pool; broader grammar (``life total becomes <expr>``
+    # with parameterized fraction/rounding) deferred until a second
+    # printing with this shape exists. Maps to the generic
+    # ``SetLifeToHalfStartingRoundedUp`` engine class which reads
+    # ``starting_life`` on the controller's Player at resolve time —
+    # no parameters needed today.
+    if phrase == (
+        "your life total becomes half your starting life total, rounded up"
+    ):
+        return SetLifeToHalfStartingRoundedUp()
     # ``put a +1/+1 counter on each of up to N target creatures`` —
     # multi-target counter spread (Weftblade Enhancer). Tried BEFORE
     # the bare-target regex below because the bare regex's ``target
