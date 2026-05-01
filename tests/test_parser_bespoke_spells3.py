@@ -435,10 +435,17 @@ def test_scrounge_for_eternity_parses_via_per_clause_grammar():
 def test_optional_discard_then_draw_still_parses():
     # "You may discard a card. If you do, draw a card." — must still
     # be recognized by ``_OPTIONAL_DISCARD_THEN_DRAW`` after our changes
-    # (regression for the ``If you do,`` boundary guard).
-    from mtg_bot.cards.base import OptionalDiscardCardThenDrawN
+    # (regression for the ``If you do,`` boundary guard). The shape
+    # composes the generic ``IfYouDo(MayDo(DiscardSelf(1)),
+    # DrawCards(N))`` directly.
+    from mtg_bot.cards.base import (
+        DiscardSelf, DrawCards, IfYouDo, MayDo,
+    )
     eff = _parse_effect("you may discard a card. If you do, draw a card")
-    assert eff == OptionalDiscardCardThenDrawN(amount=1)
+    assert eff == IfYouDo(
+        do_action=MayDo(DiscardSelf(amount=1)),
+        then_action=DrawCards(amount=1),
+    )
 
 
 def test_you_may_pay_then_effect_still_parses():

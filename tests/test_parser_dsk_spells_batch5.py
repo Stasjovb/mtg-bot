@@ -139,35 +139,25 @@ def test_jump_scare_is_instant():
     assert "Instant" in p.card_types
 
 
-# ---------- VengefulPossessionEffect engine class ----------
+# ---------- ThreatenTargetCreatureUEOT (the threaten core extracted
+# from the former VengefulPossessionEffect / SystemsOverrideEffect
+# duplicates) ----------
 
-def test_vengeful_possession_effect_exists():
-    # New bespoke engine class wired in ``mtg_bot.effects.bespoke``
-    # next to ``SystemsOverrideEffect``. Imports cleanly and is
-    # exposed via ``mtg_bot.effects``.
-    from mtg_bot.effects import VengefulPossessionEffect
+def test_threaten_target_creature_ueot_describe():
+    from mtg_bot.effects import ThreatenTargetCreatureUEOT
 
-    eff = VengefulPossessionEffect()
-    assert eff.requires_target() is True
-
-
-def test_vengeful_possession_describe():
-    from mtg_bot.effects import VengefulPossessionEffect
-
-    desc = VengefulPossessionEffect().describe()
+    desc = ThreatenTargetCreatureUEOT().describe()
     assert "gain control" in desc
     assert "untap" in desc
     assert "haste" in desc
 
 
-def test_vengeful_possession_legal_targets_creatures_only():
-    # Vengeful Possession's legal-target pool is creatures only —
-    # narrowed from Systems Override's "artifact or creature" scope.
-    # Belt-and-suspenders: a non-creature artifact on the battlefield
-    # is NOT a legal target for Vengeful Possession (whereas it would
-    # be for Systems Override).
+def test_threaten_target_creature_ueot_creatures_only():
+    # The threaten primitive only targets creatures. (The wider
+    # artifact-or-creature scope used by Systems Override is a
+    # separate primitive.)
     from mtg_bot.cards.base import make_artifact, make_creature
-    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.effects import ThreatenTargetCreatureUEOT
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
@@ -184,17 +174,17 @@ def test_vengeful_possession_legal_targets_creatures_only():
         players=[Player(id=0), Player(id=1)],
         battlefield=[bear, art],
     )
-    legal = VengefulPossessionEffect().legal_targets(state, 0)
+    legal = ThreatenTargetCreatureUEOT().legal_targets(state, 0)
     ids = {t[1] for t in legal}
     assert bear.id in ids
     assert art.id not in ids
 
 
-def test_vengeful_possession_resolves_gain_control_untap_haste():
+def test_threaten_target_creature_ueot_resolves_gain_control_untap_haste():
     # End-to-end resolve sanity: target opponent's tapped creature
     # gets controlled by us, untaps, and gains haste UEOT.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.effects import ThreatenTargetCreatureUEOT
     from mtg_bot.game import (
         GameObject, GameState, Player, Zone, effective_keywords,
     )
@@ -208,7 +198,7 @@ def test_vengeful_possession_resolves_gain_control_untap_haste():
         players=[Player(id=0), Player(id=1)],
         battlefield=[bear],
     )
-    VengefulPossessionEffect().resolve(
+    ThreatenTargetCreatureUEOT().resolve(
         state, controller_id=0, targets=(("creature", bear.id),)
     )
     assert bear.controller_id == 0
@@ -216,62 +206,128 @@ def test_vengeful_possession_resolves_gain_control_untap_haste():
     assert "haste" in effective_keywords(state, bear)
 
 
-def test_vengeful_possession_no_target_noop():
-    # Defensive: empty targets tuple resolves without raising.
-    from mtg_bot.effects import VengefulPossessionEffect
-    from mtg_bot.game import GameState, Player
+# ---------- Vengeful Possession end-to-end behavior (looter actually
+# fires through the parser-built Sequence) ----------
 
-    state = GameState(players=[Player(id=0), Player(id=1)])
-    VengefulPossessionEffect().resolve(
-        state, controller_id=0, targets=()
+def test_vengeful_possession_optional_looter_fires():
+    # Honesty: the printed text says "You may discard a card. If you
+    # do, draw a card." The parser builds a Sequence whose second
+    # element is ``IfYouDo(MayDo(DiscardSelf(1)), DrawCards(1))``.
+    # Base ``Agent.choose_yes_no`` returns True, so a controller with
+    # a non-empty hand discards and draws.
+    from mtg_bot.agents import Agent
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    class _AlwaysYesPicksFirst(Agent):
+        def choose_discard(self, state, player_id, hand_card_ids):
+            return hand_card_ids[0]
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=1, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
     )
-
-
-def test_vengeful_possession_wrong_kind_noop():
-    # Defensive: a non-creature target kind (e.g. ``permanent`` from
-    # a Systems-Override-style invocation) resolves without raising
-    # — Vengeful Possession only honors ``creature`` targets.
-    from mtg_bot.effects import VengefulPossessionEffect
-    from mtg_bot.game import GameState, Player
-
-    state = GameState(players=[Player(id=0), Player(id=1)])
-    VengefulPossessionEffect().resolve(
-        state, controller_id=0, targets=(("permanent", 999),)
+    junk_pr = make_creature("Junk", "{1}", power=1, toughness=1)
+    junk_in_hand = GameObject(
+        id=2, printing=junk_pr, owner_id=0, controller_id=0,
+        zone=Zone.HAND,
     )
-
-
-def test_vengeful_possession_missing_target_noop():
-    # Defensive: a target id that doesn't exist on the battlefield
-    # (the chosen creature was bounced/destroyed before resolution)
-    # resolves without raising.
-    from mtg_bot.effects import VengefulPossessionEffect
-    from mtg_bot.game import GameState, Player
-
-    state = GameState(players=[Player(id=0), Player(id=1)])
-    VengefulPossessionEffect().resolve(
-        state, controller_id=0, targets=(("creature", 999),)
+    library_a = GameObject(
+        id=3, printing=junk_pr, owner_id=0, controller_id=0,
+        zone=Zone.LIBRARY,
     )
+    p0 = Player(id=0, agent=_AlwaysYesPicksFirst())
+    p0.hand = [junk_in_hand]
+    p0.library = [library_a]
+    state = GameState(
+        players=[p0, Player(id=1)],
+        battlefield=[bear],
+    )
+    parser = OracleParserCardSource()
+    spell_effect = parser.get_printings()["Vengeful Possession"].spell_effect
+    spell_effect.resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    # Threaten core fired.
+    assert bear.controller_id == 0
+    # Looter rider: the hand card is discarded (now in graveyard),
+    # and one card is drawn from the library.
+    assert junk_in_hand in p0.graveyard
+    assert junk_in_hand not in p0.hand
+    assert library_a in p0.hand
+
+
+def test_vengeful_possession_optional_looter_empty_hand_fizzles():
+    # When the controller has no cards to discard, the rider's "if
+    # you do" gate fizzles — no draw. The IfYouDo combinator reads
+    # the bool returned by DiscardSelf (False on empty hand) and
+    # skips the DrawCards follow-up.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    bear = GameObject(
+        id=1, printing=bear_pr, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    junk_pr = make_creature("Junk", "{1}", power=1, toughness=1)
+    library_a = GameObject(
+        id=3, printing=junk_pr, owner_id=0, controller_id=0,
+        zone=Zone.LIBRARY,
+    )
+    p0 = Player(id=0)
+    p0.library = [library_a]
+    # Empty hand.
+    state = GameState(
+        players=[p0, Player(id=1)],
+        battlefield=[bear],
+    )
+    parser = OracleParserCardSource()
+    spell_effect = parser.get_printings()["Vengeful Possession"].spell_effect
+    spell_effect.resolve(
+        state, controller_id=0, targets=(("creature", bear.id),)
+    )
+    assert bear.controller_id == 0
+    # Library card is NOT drawn — the gated draw fizzled with the
+    # empty-hand discard.
+    assert library_a in p0.library
+    assert library_a not in p0.hand
 
 
 # ---------- Vengeful Possession parser claim ----------
 
 def test_vengeful_possession_claimed_by_parser():
     # Vengeful Possession ``{2}{R}`` Sorcery — claimed via the per-clause
-    # grammar's multi-sentence literal in ``effects.py`` (migrated from
-    # the whole-spell exact-text tier in bespoke-spells4). The full
+    # grammar's multi-sentence literal in ``effects.py``. The full
     # four-sentence body (Threaten core + optional-looter rider) maps to
-    # ``VengefulPossessionEffect()``.
+    # ``Sequence(ThreatenTargetCreatureUEOT(),
+    #            IfYouDo(MayDo(DiscardSelf(amount=1)),
+    #                    DrawCards(amount=1)))`` —
+    # two generic primitives, no per-card bespoke class.
     assert "Vengeful Possession" in _claimed_names()
 
 
-def test_vengeful_possession_engine_class():
-    # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the ``VengefulPossessionEffect`` engine class.
-    from mtg_bot.effects import VengefulPossessionEffect
+def test_vengeful_possession_spell_effect_is_decomposed_sequence():
+    # The spell_effect is a Sequence of two generic primitives — the
+    # threaten core and the looter rider — not a per-card bespoke
+    # class. This is the architectural anchor: future cards that print
+    # the threaten core or the looter rider get them for free.
+    from mtg_bot.effects import (
+        DiscardSelf, DrawCards, IfYouDo, MayDo,
+        Sequence, ThreatenTargetCreatureUEOT,
+    )
 
     parser = OracleParserCardSource()
     p = parser.get_printings()["Vengeful Possession"]
-    assert p.spell_effect == VengefulPossessionEffect()
+    assert isinstance(p.spell_effect, Sequence)
+    assert p.spell_effect.effects == (
+        ThreatenTargetCreatureUEOT(),
+        IfYouDo(
+            do_action=MayDo(DiscardSelf(amount=1)),
+            then_action=DrawCards(amount=1),
+        ),
+    )
 
 
 def test_vengeful_possession_is_sorcery():
@@ -294,17 +350,26 @@ def test_dispatch_vengeful_possession_no_bespoke_entry():
 def test_vengeful_possession_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the full four-sentence body
-    # (Threaten core + optional-looter rider) as
-    # ``VengefulPossessionEffect()``.
+    # and decomposes into Sequence(threaten, IfYouDo(MayDo(discard),
+    # draw)).
     from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
-    from mtg_bot.effects import VengefulPossessionEffect
+    from mtg_bot.effects import (
+        DiscardSelf, DrawCards, IfYouDo, MayDo,
+        Sequence, ThreatenTargetCreatureUEOT,
+    )
     body = (
         "Gain control of target creature until end of turn. "
         "Untap it. It gains haste until end of turn. "
         "You may discard a card. If you do, draw a card."
     )
     eff = _parse_spell_effect_phrase(body, "Vengeful Possession")
-    assert eff == VengefulPossessionEffect()
+    assert eff == Sequence((
+        ThreatenTargetCreatureUEOT(),
+        IfYouDo(
+            do_action=MayDo(DiscardSelf(amount=1)),
+            then_action=DrawCards(amount=1),
+        ),
+    ))
 
 
 # ---------- ExorciseEffect engine class ----------

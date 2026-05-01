@@ -1118,12 +1118,13 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # precedent (Unravel, Divert Disaster).
     # Vengeful Possession (Duskmourn) — "Gain control of target creature
     # until end of turn. Untap it. It gains haste until end of turn.
-    # You may discard a card. If you do, draw a card." — migrated to
-    # per-clause grammar: the new multi-sentence literal recognizer in
-    # ``effects.py`` claims the full four-sentence body (Threaten core
-    # + optional-looter rider) as ``VengefulPossessionEffect()``,
-    # matching the parser-is-right simplification the old bespoke entry
-    # made (optional-looter dropped; engine models only the Threaten core).
+    # You may discard a card. If you do, draw a card." — claimed via
+    # the multi-sentence literal in ``effects.py`` which returns a
+    # ``Sequence(ThreatenTargetCreatureUEOT(),
+    # IfYouDo(MayDo(DiscardSelf(amount=1)), DrawCards(amount=1)))`` —
+    # two generic primitives, no per-card bespoke class. The optional
+    # looter rider runs faithfully (no clauses dropped); empty hand
+    # fizzles via the IfYouDo gate.
     # Coordinated Clobbering (Duskmourn) — "Tap one or two target
     # untapped creatures you control. They each deal damage equal to
     # their power to target creature an opponent controls." — migrated

@@ -849,18 +849,26 @@ class EachOpponentLosesLife(Effect):
 @dataclass(frozen=True)
 class DiscardSelf(Effect):
     """Controller discards ``amount`` card(s) from their hand. The discarding
-    player's agent picks which cards via ``choose_discard``."""
+    player's agent picks which cards via ``choose_discard``.
+
+    Returns ``True`` if at least one card was actually discarded,
+    ``False`` if the hand was empty before any discard could happen.
+    The bool signal lets ``IfYouDo``/``Optional`` combinators gate
+    follow-up effects on whether the discard accomplished anything
+    (e.g. "If you do, draw a card." fizzles on empty hand).
+    """
 
     amount: int = 1
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
-    ) -> None:
+    ) -> bool:
         from mtg_bot.game import Zone
         from mtg_bot.turn import fire_opponent_discards_triggers
 
         p = state.player_by_id(controller_id)
+        discarded_any = False
         for _ in range(self.amount):
             if not p.hand:
                 break
@@ -872,6 +880,8 @@ class DiscardSelf(Effect):
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
             fire_opponent_discards_triggers(state, p.id)
+            discarded_any = True
+        return discarded_any
 
     def describe(self) -> str:
         if self.amount == 1:
@@ -9579,5 +9589,94 @@ class LockOrUnlockDoorOfTargetRoomYouControl(Effect):
 
     def describe(self) -> str:
         return "lock or unlock a door of target Room you control"
+
+
+
+# ---------------------------------------------------------------------------
+# Threaten core (gain control + untap + grant haste UEOT, on a single target)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ThreatenTargetCreatureUEOT(Effect):
+    """Generic Threaten core: "Gain control of target creature until end
+    of turn. Untap it. It gains haste until end of turn."
+
+    Decomposes the three anaphoric sentences into one targeted Effect
+    so multi-sentence parser literals can compose this with riders via
+    ``Sequence`` (e.g., Vengeful Possession adds an
+    ``IfYouDo(MayDo(DiscardSelf(1)), DrawCards(1))`` looter rider after
+    this core resolves).
+
+    Control reverts on cleanup via the layer-2 control_change registry
+    (``state.grant_control_change_ueot``); haste rides
+    ``grant_keywords_ueot`` UEOT. Source-name in the log lines is
+    pulled from ``state.resolving_source.printing.name`` so the same
+    class fires correctly for any spell whose printed text matches the
+    Threaten core (currently Vengeful Possession; future cards with
+    the same surface get this for free).
+
+    Target slot: ``("creature", id)`` — for the wider
+    artifact-or-creature variant (Systems Override), use a separate
+    threaten primitive or pass an alternate target filter.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        src = state.resolving_source
+        spell_id = src.id if src is not None else obj.id
+        source_name = (
+            src.printing.name if src is not None else "Threaten effect"
+        )
+        state.grant_control_change_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            new_controller_id=controller_id,
+            description=(
+                f"{source_name}: P{controller_id} controls "
+                f"{obj.printing.name} UEOT"
+            ),
+        )
+        obj.tapped = False
+        state.grant_keywords_ueot(
+            source_id=spell_id,
+            target_id=obj.id,
+            keywords=frozenset({"haste"}),
+            log_source_name=source_name,
+            log_target_name=obj.printing.name,
+        )
+        state.log.append(
+            f"P{controller_id} takes control of {obj.printing.name} "
+            f"UEOT; untaps + gains haste"
+        )
+
+    def describe(self) -> str:
+        return (
+            "gain control of target creature until end of turn; "
+            "untap it; it gains haste until end of turn"
+        )
 
 

@@ -4,9 +4,10 @@
   until end of turn`` — pump + grant-keywords compound that produces
   ``PumpTargetCreatureUntilEOT(power_bonus, toughness_bonus,
   granted_keywords, you_control_only)``.
-* ``you may discard a card. If you do, draw N cards`` —
-  ``OptionalDiscardCardThenDrawN(amount=N)`` wrapper. Singular ``draw a
-  card`` and spelled-out small cardinals supported.
+* ``you may discard a card. If you do, draw N cards`` — composes the
+  generic ``IfYouDo(MayDo(DiscardSelf(amount=1)),
+  DrawCards(amount=N))`` shape. Singular ``draw a card`` and
+  spelled-out small cardinals supported.
 * ``you may sacrifice another creature or artifact. If you do, this
   creature gets +N/+M until end of turn`` — specialized self-pump
   wrapper ``OptionalSacAnotherForPumpSelfUEOT(power_bonus,
@@ -30,8 +31,10 @@ Swarm Culler, Kavaron Turbodrone).
 from __future__ import annotations
 
 from mtg_bot.cards.base import (
+    DiscardSelf,
     DrawCards,
-    OptionalDiscardCardThenDrawN,
+    IfYouDo,
+    MayDo,
     OptionalSacAnotherForEffect,
     OptionalSacAnotherForPumpSelfUEOT,
     PumpTargetCreatureUntilEOT,
@@ -147,33 +150,43 @@ def test_parse_effect_returns_none_for_pump_and_gains_missing_sign():
 
 # ---------- you may discard a card. If you do, draw N cards ----------
 
+def _looter(amount: int):
+    """Helper: the parser-built shape for "you may discard a card.
+    If you do, draw <amount> cards." Composes the generic combinators
+    the parser produces."""
+    return IfYouDo(
+        do_action=MayDo(DiscardSelf(amount=1)),
+        then_action=DrawCards(amount=amount),
+    )
+
+
 def test_parse_effect_recognizes_optional_discard_then_draw_two():
     # Melded Moxite's printed surface form (the ``two`` spelled-out
     # cardinal is the Scryfall convention for small counts).
     assert _parse_effect(
         "you may discard a card. If you do, draw two cards"
-    ) == OptionalDiscardCardThenDrawN(amount=2)
+    ) == _looter(2)
 
 
 def test_parse_effect_recognizes_optional_discard_then_draw_singular():
     # ``draw a card`` collapses to amount=1.
     assert _parse_effect(
         "you may discard a card. If you do, draw a card"
-    ) == OptionalDiscardCardThenDrawN(amount=1)
+    ) == _looter(1)
 
 
 def test_parse_effect_recognizes_optional_discard_then_draw_digit():
     # Forward-compat: digits parse via ``_parse_amount`` too.
     assert _parse_effect(
         "you may discard a card. If you do, draw 3 cards"
-    ) == OptionalDiscardCardThenDrawN(amount=3)
+    ) == _looter(3)
 
 
 def test_parse_effect_phrase_recognizes_optional_discard_then_draw():
     # Creature-trigger surface form.
     assert _parse_effect_phrase(
         "you may discard a card. If you do, draw two cards"
-    ) == OptionalDiscardCardThenDrawN(amount=2)
+    ) == _looter(2)
 
 
 def test_parse_spell_effect_phrase_recognizes_optional_discard_then_draw():
@@ -181,7 +194,7 @@ def test_parse_spell_effect_phrase_recognizes_optional_discard_then_draw():
     assert _parse_spell_effect_phrase(
         "You may discard a card. If you do, draw two cards.",
         "Bogus Looter",
-    ) == OptionalDiscardCardThenDrawN(amount=2)
+    ) == _looter(2)
 
 
 def test_parse_effect_returns_none_for_malformed_optional_discard():

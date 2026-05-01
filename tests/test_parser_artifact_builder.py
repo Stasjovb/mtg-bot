@@ -27,8 +27,8 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.combinators import OptionalDiscardCardThenDrawN
-from mtg_bot.effects.generic import GainLife
+from mtg_bot.effects.combinators import IfYouDo, MayDo
+from mtg_bot.effects.generic import DiscardSelf, DrawCards, GainLife
 from mtg_bot.effects.predicates import (
     Event,
     IsSelf,
@@ -61,12 +61,16 @@ def test_build_artifact_printing_claims_melded_moxite():
     assert "Creature" not in printing.card_types
     assert "Legendary" not in printing.supertypes
     # ETB trigger uses the canonical IsSelf-ENTERS predicate path with
-    # the OptionalDiscardCardThenDrawN combinator effect - the same
-    # shape the static side already wires for this card.
+    # the IfYouDo(MayDo(DiscardSelf(1)), DrawCards(2)) compound — the
+    # generic combinators that compose "you may discard a card. If you
+    # do, draw two cards."
     assert printing.triggered_abilities == (
         TriggeredAbility(
             event=Event.ENTERS, predicate=IsSelf(),
-            effect=OptionalDiscardCardThenDrawN(amount=2),
+            effect=IfYouDo(
+                do_action=MayDo(DiscardSelf(amount=1)),
+                then_action=DrawCards(amount=2),
+            ),
         ),
     )
     # The {3}, Sacrifice this artifact activated ability creates a
@@ -86,7 +90,10 @@ def test_build_artifact_printing_matches_static_make_artifact():
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.ENTERS, predicate=IsSelf(),
-                effect=OptionalDiscardCardThenDrawN(amount=2),
+                effect=IfYouDo(
+                do_action=MayDo(DiscardSelf(amount=1)),
+                then_action=DrawCards(amount=2),
+            ),
             ),
         ),
         activated_abilities=(

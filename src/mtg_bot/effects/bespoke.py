@@ -2869,94 +2869,14 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class VengefulPossessionEffect(Effect):
-    """Vengeful Possession ``{2}{R}`` (Duskmourn): "Gain control of
-    target creature until end of turn. Untap it. It gains haste until
-    end of turn. You may discard a card. If you do, draw a card."
-
-    Mirrors ``SystemsOverrideEffect``'s gain-control + untap + haste
-    skeleton, but narrows the target to ``creature`` (rather than
-    artifact-or-creature) and drops the Spacecraft charge-counter
-    rider that Systems Override carries.
-
-    The trailing ``You may discard a card. If you do, draw a card.``
-    rider is dropped on the parser side (parser-is-right precedent
-    set by Unravel / Divert Disaster) — the bare base mechanic
-    (gain-control + untap + haste UEOT) is what the engine models
-    cleanly, and the optional looter rider would need a new
-    ``OptionalDiscardThenDraw`` primitive that no other DSK spell in
-    the pool needs today.
-
-    Control reverts on cleanup via the layer-2 control_change
-    registry (``state.grant_control_change_ueot``), the same
-    mechanism Systems Override uses; haste rides
-    ``grant_keywords_ueot`` UEOT.
-    """
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "creature":
-            return
-        obj = next(
-            (o for o in state.battlefield if o.id == target_id), None
-        )
-        if obj is None:
-            return
-        # Gain control UEOT via the layer-2 control_change registry
-        # entry; haste via grant_keywords_ueot. Both expire at
-        # cleanup, with controller refresh handled in
-        # ``run_cleanup_step``. Mirrors ``SystemsOverrideEffect`` —
-        # the source-id back-reference falls back to the target's id
-        # when no resolving_source is set (defensive: a unit-test
-        # path that resolves the effect without setting up the
-        # spell on the stack).
-        src = state.resolving_source
-        spell_id = src.id if src is not None else obj.id
-        state.grant_control_change_ueot(
-            source_id=spell_id,
-            target_id=obj.id,
-            new_controller_id=controller_id,
-            description=(
-                f"Vengeful Possession: P{controller_id} controls "
-                f"{obj.printing.name} UEOT"
-            ),
-        )
-        obj.tapped = False
-        state.grant_keywords_ueot(
-            source_id=spell_id,
-            target_id=obj.id,
-            keywords=frozenset({"haste"}),
-            log_source_name="Vengeful Possession",
-            log_target_name=obj.printing.name,
-        )
-        state.log.append(
-            f"P{controller_id} takes control of {obj.printing.name} "
-            f"UEOT; untaps + gains haste"
-        )
-
-    def describe(self) -> str:
-        return (
-            "gain control of target creature until end of turn; "
-            "untap it; it gains haste until end of turn"
-        )
+# VengefulPossessionEffect was deleted in the cleanup pass: the card's
+# four-sentence body now decomposes at the parser layer into
+# ``Sequence(ThreatenTargetCreatureUEOT(),
+#            IfYouDo(MayDo(DiscardSelf(amount=1)), DrawCards(amount=1)))``,
+# composing four generic primitives instead of carrying a per-card
+# bespoke class. Future Threaten-style cards reuse the threaten
+# primitive without code; future may-do-X-if-you-do-Y cards reuse the
+# IfYouDo + MayDo combinators without code.
 
 
 

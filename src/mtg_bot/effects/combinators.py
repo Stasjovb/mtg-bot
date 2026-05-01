@@ -423,61 +423,133 @@ class OptionalSacAnotherForPumpSelfUEOT(Effect):
 
 
 @dataclass(frozen=True)
-class OptionalDiscardCardThenDrawN(Effect):
-    """"You may discard a card. If you do, draw ``amount`` cards."
+class MayDo(Effect):
+    """Wraps an inner effect to make it gated by ``Agent.choose_yes_no``.
 
-    Matches Melded Moxite's printed ETB rider. Distinct from
-    ``DiscardHandThenDrawN`` (Vaultguard Trooper) in two ways:
+    Named ``MayDo`` rather than ``Optional`` to avoid confusion with
+    ``typing.Optional``.
 
-    1. The discard is singular ("a card"), not the entire hand.
-    2. "If you do" is gated on whether a card was actually discarded,
-       so an empty hand makes the rider fizzle entirely — even an
-       agent that says yes can't satisfy "if you do" with no card to
-       toss.
+    ``resolve`` returns:
+    - ``False`` if the agent declined the may.
+    - Whatever the inner effect's ``resolve`` returned (``True``,
+      ``False``, or ``None``) if the agent accepted.
 
-    The "may" is exposed via ``Agent.choose_yes_no``; the default base
-    Agent returns True (matching the codebase's "may → always yes"
-    convention). Once yes, ``DiscardSelf(amount=1)`` picks WHICH card
-    via ``choose_discard``; if the hand is empty the discard is a
-    no-op and the dependent draw is skipped.
+    Any inner Effect can be wrapped — the "may X" decoration is
+    independent of the inner action's specifics. Combine with
+    ``IfYouDo`` for the "you may X. If you do, Y." idiom common in
+    MTG oracle text.
     """
 
-    amount: int = 2
+    inner: Effect
+    prompt: str = ""
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner.legal_targets(state, controller_id)
+
+    def target_count_range(self) -> tuple[int, int]:
+        # Optional inheriting min=0 max=inner_max — caller may decline.
+        lo, hi = self.inner.target_count_range()
+        return (0, hi)
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.effects.generic import DiscardSelf, DrawCards
-
+    ) -> bool | None:
         p = state.player_by_id(controller_id)
+        prompt = self.prompt or self.inner.describe()
         if p.agent is not None and not p.agent.choose_yes_no(
-            state, controller_id,
-            f"Discard a card to draw {self.amount}?",
+            state, controller_id, prompt
         ):
             state.log.append(
-                f"P{controller_id} declines optional discard "
-                f"(OptionalDiscardCardThenDrawN)"
+                f"P{controller_id} declines optional: {self.inner.describe()}"
             )
-            return
-        if not p.hand:
-            state.log.append(
-                f"P{controller_id} has empty hand; can't discard, "
-                f"draw skipped"
-            )
-            return
-        before = len(p.graveyard)
-        DiscardSelf(amount=1).resolve(state, controller_id, ())
-        if len(p.graveyard) == before:
-            # Defensive: discard didn't fire (shouldn't happen with a
-            # non-empty hand, but matches "if you do" semantics).
-            return
-        DrawCards(amount=self.amount).resolve(state, controller_id, ())
+            return False
+        return self.inner.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"you may {self.inner.describe()}"
+
+
+@dataclass(frozen=True)
+class IfYouDo(Effect):
+    """Run ``do_action``; run ``then_action`` only if ``do_action``
+    accomplished something. The "if you do" gate of MTG oracle text.
+
+    ``do_action.resolve`` is interpreted as:
+    - ``True`` or ``None`` (default for effects that don't signal
+      completion) → ``then_action`` fires.
+    - ``False`` → ``then_action`` is skipped.
+
+    Effects that can fail in legal ways (empty hand, no legal sac
+    targets, etc.) should override their ``resolve`` to return
+    ``False`` so this gate fires correctly. ``DiscardSelf`` and
+    ``Optional`` already do.
+
+    Examples:
+    - "You may discard a card. If you do, draw a card."
+        IfYouDo(MayDo(DiscardSelf(amount=1)), DrawCards(amount=1))
+    - "Sacrifice a creature. If you do, draw a card."
+        IfYouDo(SacrificeACreature(), DrawCards(amount=1))
+    """
+
+    do_action: Effect
+    then_action: Effect
+
+    def requires_target(self) -> bool:
+        return (
+            self.do_action.requires_target()
+            or self.then_action.requires_target()
+        )
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        if self.do_action.requires_target():
+            return self.do_action.legal_targets(state, controller_id)
+        if self.then_action.requires_target():
+            return self.then_action.legal_targets(state, controller_id)
+        return []
+
+    def target_count_range(self) -> tuple[int, int]:
+        a_min, a_max = self.do_action.target_count_range()
+        t_min, t_max = self.then_action.target_count_range()
+        return (a_min + t_min, a_max + t_max)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> bool | None:
+        result = self.do_action.resolve(state, controller_id, targets)
+        # None defaults to "did something" — back-compat for effects
+        # that don't yet signal completion explicitly.
+        if result is False:
+            return False
+        # then_action gets empty targets unless it's the targeted arm.
+        then_targets = (
+            targets if self.then_action.requires_target() else ()
+        )
+        self.then_action.resolve(state, controller_id, then_targets)
+        return True
 
     def describe(self) -> str:
         return (
-            f"you may discard a card; if you do, draw {self.amount} cards"
+            f"{self.do_action.describe()}; if you do, "
+            f"{self.then_action.describe()}"
         )
+
+
+# OptionalDiscardCardThenDrawN was deleted in the cleanup pass: the
+# generic ``IfYouDo(MayDo(DiscardSelf(1)), DrawCards(N))`` composes
+# the same shape directly. ``DiscardSelf`` returns a bool (``True`` if
+# any card was discarded, ``False`` on empty hand) so the IfYouDo gate
+# fizzles correctly. Any callsite that previously instantiated
+# ``OptionalDiscardCardThenDrawN(amount=N)`` should compose the
+# combinators directly.
 
 
 

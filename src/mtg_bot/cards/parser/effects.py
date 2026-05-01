@@ -87,7 +87,6 @@ from mtg_bot.cards.base import (
     ManifestDreadThenPutPlusOneCountersOnIt,
     MillTargetPlayer,
     MoveSelfCountersToTargetCreatureYouControl,
-    OptionalDiscardCardThenDrawN,
     OptionalManaCostThenEffect,
     OptionalPutCreatureFromHandOntoBattlefield,
     OptionalPutLandFromHandOntoBattlefield,
@@ -155,8 +154,8 @@ from mtg_bot.cards.base import (
     TargetPlayerLosesLife,
     TannukEnsignLandfallEffect,
     UntapTargetOtherPermanent,
+    ThreatenTargetCreatureUEOT,
     BiosynthicBurstEffect,
-    VengefulPossessionEffect,
     SystemsOverrideEffect,
     CutPropulsionEffect,
     DiplomaticRelationsEffect,
@@ -175,6 +174,7 @@ from mtg_bot.effects.bespoke import (
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
+from mtg_bot.effects.combinators import IfYouDo, MayDo
 from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor, TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -2202,15 +2202,14 @@ _PUMP_AND_GAIN_KEYWORDS_UEOT = re.compile(
     r"gets ([+-]\d+)/([+-]\d+) and gains "
     r"(.+) until end of turn$"
 )
-# "You may discard a card. If you do, draw N cards." — the
-# ``OptionalDiscardCardThenDrawN`` wrapper. The amount tail accepts the
-# Scryfall standard variants for "1": the article ``a`` for the singular
-# ``draw a card`` and the spelled-out small cardinals (``draw two
-# cards`` is Melded Moxite's printed form) plus bare digits for any
-# future card that uses ``draw 3 cards``. Inner-effect parsing is NOT
-# delegated to ``_parse_effect`` here because the engine class hardcodes
-# the inner draw — only the count needs to be extracted from the
-# surface text.
+# "You may discard a card. If you do, draw N cards." — composes
+# ``IfYouDo(MayDo(DiscardSelf(1)), DrawCards(N))`` from the generic
+# combinators. The amount tail accepts the Scryfall standard variants
+# for the count: the article ``a`` for the singular ``draw a card``,
+# spelled-out small cardinals (``draw two cards`` is Melded Moxite's
+# printed form), and bare digits for any future card with ``draw 3
+# cards``. Only the count is captured from the surface text — the
+# rest is wired structurally via the generic combinators.
 _OPTIONAL_DISCARD_THEN_DRAW = re.compile(
     rf"^you may discard a card\. If you do, "
     rf"draw (a|\d+|{_SMALL_CARDINAL_PATTERN}) cards?$"
@@ -3472,18 +3471,24 @@ def _parse_effect(phrase: str) -> Effect | None:
     # draw a card."). The anaphoric "it" in sentences 2–3 refers to the
     # target of sentence 1; the optional-looter sentence-pair stays joined
     # by the sentence-splitter's "If you do," negative lookahead. Matched
-    # as a single literal so ``VengefulPossessionEffect`` is wired faithfully
-    # to the printed text (parser-is-right: the engine models only the
-    # Threaten core; the optional-looter rider is silently dropped, same
-    # simplification as the former ``_WHOLE_SPELL_EXACT_TEXT`` entry). Only
-    # Vengeful Possession (Duskmourn) in the pool fits this exact surface;
-    # broader grammar deferred until a second card with this shape ships.
+    # as a single literal so the parser can hand the body to a Sequence
+    # of two generic primitives — the Threaten core
+    # (``ThreatenTargetCreatureUEOT()``) and the looter rider
+    # (``IfYouDo(MayDo(DiscardSelf(amount=1)), DrawCards(amount=1))``)
+    # — no per-card class needed. Future cards that print the same
+    # Threaten core or the same looter rider get them for free.
     if phrase == (
         "gain control of target creature until end of turn. "
         "Untap it. It gains haste until end of turn. "
         "You may discard a card. If you do, draw a card"
     ):
-        return VengefulPossessionEffect()
+        return Sequence((
+            ThreatenTargetCreatureUEOT(),
+            IfYouDo(
+                do_action=MayDo(DiscardSelf(amount=1)),
+                then_action=DrawCards(amount=1),
+            ),
+        ))
     # Systems Override's five-sentence body — gain control of target artifact
     # or creature UEOT, untap it, grant haste UEOT (the Threaten core), plus
     # a Spacecraft-conditional charge-counter rider: put ten charge counters
@@ -5573,12 +5578,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         return OptionalSacArtifactForEffect(inner_effect=inner)
     m = _OPTIONAL_DISCARD_THEN_DRAW.match(phrase)
     if m is not None:
-        # ``draw a card`` / ``draw N cards`` / ``draw <word> cards`` —
-        # ``a`` collapses to 1, digits and spelled-out small cardinals
-        # go through ``_parse_amount``.
+        # ``you may discard a card. If you do, draw N cards.`` →
+        # composes the generic ``IfYouDo(MayDo(DiscardSelf(1)),
+        # DrawCards(N))`` shape directly. Replaces the former
+        # ``OptionalDiscardCardThenDrawN`` specialty class — the
+        # combinators are general enough that we don't need a
+        # discard-specific wrapper.
         token = m.group(1)
         amount = 1 if token == "a" else _parse_amount(token)
-        return OptionalDiscardCardThenDrawN(amount=amount)
+        return IfYouDo(
+            do_action=MayDo(DiscardSelf(amount=1)),
+            then_action=DrawCards(amount=amount),
+        )
     m = _OPTIONAL_DISCARD_HAND_THEN_DRAW.match(phrase)
     if m is not None:
         # ``you may discard your hand. If you do, draw N cards`` —
