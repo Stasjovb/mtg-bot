@@ -265,7 +265,6 @@ from mtg_bot.effects.bespoke import (
     KavaronHarrierAttackEffect,
     MonoistCircuitFeederETBEffect,
     MutinousMassacreEffect,
-    OsseousSticktwisterEndStepEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
     PerigeeBeckonerDiesReturnTappedEffect,

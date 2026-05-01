@@ -58,7 +58,6 @@ from mtg_bot.cards.base import (
     ModalChooseOne,
     MonoistCircuitFeederETBEffect,
     MoveSelfCountersToTargetCreatureYouControl,
-    OsseousSticktwisterEndStepEffect,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     PerigeeBeckonerDiesReturnTappedEffect,
     PossibilityTechnicianETBEffect,
@@ -328,10 +327,15 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
       ScheduleSelfSacAtNextEndStep())``; the trigger header parses
       via the unified ``Whenever this creature attacks`` grammar.
       Migrated in audit-litdispatch-creatures.
-    - Osseous Sticktwister — literal trigger-line dispatch in
-      ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
-      ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
-      via the standard keyword line. Migrated in bespoke-delirium.
+    - Osseous Sticktwister — multi-sentence literal recognizer in
+      ``effects._parse_effect`` dispatches the printed body to the
+      generic ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage``
+      primitive; the trigger header (Delirium gate + end-step event +
+      ``Controlled(YOU)`` predicate) parses via the unified
+      ``_parse_at_the_beginning_of_line`` grammar with
+      ``StateBound(Delirium())`` AND-ed on. ``Lifelink`` keyword parses
+      via the standard keyword line. Migrated in
+      audit-per-opponent-choice.
     - Wickerfolk Thresher — multi-sentence literal recognizer in
       ``_parse_effect`` dispatches the printed body to the canonical
       ``PeekTopMayBattlefieldIfLandElseHand`` primitive; the trigger
@@ -693,23 +697,7 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 # - Exactly one card in the current pool fits that printed surface, AND
 # - The surrounding comment explains why generalization is deferred.
 #
-# Current entries:
-#
-# * **Osseous Sticktwister** — "Delirium — At the beginning of your
-#   end step, if there are four or more card types among cards in your
-#   graveyard, each opponent may sacrifice a nonland permanent of their
-#   choice or discard a card. Then this creature deals damage equal to
-#   its power to each opponent who didn't sacrifice a permanent or
-#   discard a card this way." The per-opponent three-mode choice (sac /
-#   discard / take damage) plus conditional damage to non-compliers is
-#   encoded in ``OsseousSticktwisterEndStepEffect``; no grammar
-#   primitive covers the per-player mode-selection +
-#   conditional-damage-to-non-compliers shape. The Delirium gate and
-#   end-step event ARE now supported by the unified grammar
-#   (``_DELIRIUM_PREFIX`` + ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` in
-#   ``triggers.py``) but the effect body remains bespoke. The literal
-#   is the only card in the current pool with this exact shape;
-#   generalize when a second example exists.
+# Current entries: Monoist Circuit-Feeder (see inline comment).
 #
 # Migrated to the unified grammar (no longer in this table):
 #
@@ -726,20 +714,17 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 #   trigger header (Delirium gate + attack event + IsSelf predicate)
 #   parses via the unified intervening-if grammar. Migrated in
 #   audit-litdispatch-creatures.
+#
+# * **Osseous Sticktwister** — multi-sentence literal recognizer in
+#   ``effects._parse_effect`` dispatches the post-Delirium-gate body
+#   to the new generic
+#   ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`` primitive.
+#   The trigger header (Delirium gate + ``BEGINNING_OF_END_STEP``
+#   event + ``Controlled(YOU)`` predicate) parses via the unified
+#   ``_parse_at_the_beginning_of_line`` grammar with the
+#   ``StateBound(Delirium())`` predicate composed on. Migrated in
+#   audit-per-opponent-choice.
 _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
-    # Osseous Sticktwister: Delirium-gated end-step per-opponent
-    # sac-or-discard-or-take-damage. Only card in pool with this
-    # per-opponent choice + conditional damage shape.
-    "Delirium — At the beginning of your end step, if there are "
-    "four or more card types among cards in your graveyard, each "
-    "opponent may sacrifice a nonland permanent of their choice or "
-    "discard a card. Then this creature deals damage equal to its "
-    "power to each opponent who didn't sacrifice a permanent or "
-    "discard a card this way.": TriggeredAbility(
-        event=Event.BEGINNING_OF_END_STEP,
-        predicate=Controlled(YOU) & StateBound(Delirium()),
-        effect=OsseousSticktwisterEndStepEffect(),
-    ),
     # Monoist Circuit-Feeder (EoE): ETB dual-target +X/-X buff where X
     # is the controller's artifact count at resolve time. Two required
     # targets with opposite polarity (+X/+0 on a friendly creature,

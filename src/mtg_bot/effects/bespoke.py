@@ -3585,125 +3585,14 @@ class ArabellaAttackEffect(Effect):
 # ``Event.ENTERS`` dispatch.
 
 
-@dataclass(frozen=True)
-class OsseousSticktwisterEndStepEffect(Effect):
-    """Osseous Sticktwister's Delirium end-step trigger:
-
-    "At the beginning of your end step, if there are four or more card
-    types among cards in your graveyard, each opponent may sacrifice a
-    nonland permanent of their choice or discard a card. Then this
-    creature deals damage equal to its power to each opponent who
-    didn't sacrifice a permanent or discard a card this way."
-
-    The Delirium gate is enforced at trigger-time by the ``Delirium()``
-    predicate composed onto the ``TriggeredAbility``; this resolve body
-    executes unconditionally once the trigger has passed the gate.
-
-    Per opponent, the agent picks one of three options via
-    ``choose_mode``:
-    - 0 = sacrifice a nonland permanent (only available when the
-      opponent controls one)
-    - 1 = discard a card (only available when the opponent has at
-      least one card in hand)
-    - 2 = decline (always available; the opponent then takes damage
-      equal to the source's effective power)
-
-    Source damage is dealt via ``_apply_damage`` so lifelink fires off
-    the source — Osseous Sticktwister's printed lifelink keyword
-    interacts with this damage cleanly.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone, effective_power
-        from mtg_bot.turn import (
-            fire_opponent_discards_triggers, sacrifice as _sacrifice,
-        )
-
-        source = state.resolving_source
-        if source is None:
-            return
-        non_compliant: list[int] = []
-        for opp in state.players:
-            if opp.id == controller_id or opp.has_lost:
-                continue
-            if opp.agent is None:
-                # Defensive: a missing agent counts as decline.
-                non_compliant.append(opp.id)
-                continue
-            sac_candidates = [
-                o for o in state.battlefield
-                if o.controller_id == opp.id
-                and not o.printing.is_land
-            ]
-            modes: list[str] = []
-            options: list[str] = []  # parallel tags for resolution branch
-            if sac_candidates:
-                modes.append(
-                    "sacrifice a nonland permanent of your choice"
-                )
-                options.append("sac")
-            if opp.hand:
-                modes.append("discard a card")
-                options.append("discard")
-            modes.append("decline (take damage)")
-            options.append("decline")
-            choice = opp.agent.choose_mode(state, opp.id, modes)
-            choice = max(0, min(choice, len(modes) - 1))
-            chosen_tag = options[choice]
-            if chosen_tag == "sac":
-                # Agent picks which nonland permanent to sacrifice.
-                pick_id = opp.agent.choose_sacrifice(
-                    state, opp.id, [o.id for o in sac_candidates],
-                )
-                chosen = next(
-                    (o for o in sac_candidates if o.id == pick_id),
-                    sac_candidates[0],
-                )
-                state.log.append(
-                    f"P{opp.id} sacrifices {chosen.printing.name} "
-                    f"(Osseous Sticktwister)"
-                )
-                _sacrifice(state, chosen)
-            elif chosen_tag == "discard":
-                hand_ids = [c.id for c in opp.hand]
-                pick_id = opp.agent.choose_discard(
-                    state, opp.id, hand_ids,
-                )
-                card = next(
-                    (c for c in opp.hand if c.id == pick_id), None,
-                )
-                if card is not None:
-                    opp.hand.remove(card)
-                    card.zone = Zone.GRAVEYARD
-                    opp.graveyard.append(card)
-                    state.log.append(
-                        f"P{opp.id} discards {card.printing.name} "
-                        f"(Osseous Sticktwister)"
-                    )
-                    fire_opponent_discards_triggers(state, opp.id)
-            else:
-                non_compliant.append(opp.id)
-        # Damage equal to source power to each non-compliant opponent.
-        if not non_compliant:
-            return
-        damage = max(0, effective_power(state, source))
-        if damage <= 0:
-            return
-        for opp_id in non_compliant:
-            _apply_damage(state, ("player", opp_id), damage)
-            state.log.append(
-                f"Osseous Sticktwister deals {damage} to P{opp_id}"
-            )
-
-    def describe(self) -> str:
-        return (
-            "each opponent may sacrifice a nonland permanent or discard "
-            "a card; this creature deals damage equal to its power to "
-            "each opponent who did neither"
-        )
+# NOTE: ``OsseousSticktwisterEndStepEffect`` was deleted in
+# audit-per-opponent-choice. Osseous Sticktwister's Delirium-gated
+# end-step body now decomposes into the generic
+# ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`` primitive (in
+# ``effects/generic.py``) via a multi-sentence literal recognizer in
+# ``cards/parser/effects.py``. The Delirium intervening-if gate parses
+# via the unified ``_DELIRIUM_AT_BEGINNING_GATE_PREFIX`` and is composed
+# onto the trigger predicate as ``StateBound(Delirium())``.
 
 
 

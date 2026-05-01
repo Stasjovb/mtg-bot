@@ -471,9 +471,12 @@ def test_delirium_false_when_source_controller_unknown():
 # GATE_PREFIX`` to ``triggers.py`` so any ``Delirium — At the beginning of
 # <when>, if there are four or more card types..., <effect>.`` line whose
 # effect body is expressible by the unified grammar can claim end-to-end.
-# The three DSK cards whose trigger bodies are bespoke (Osseous Sticktwister)
-# still land via ``_BESPOKE_TRIGGER_LINES``, but the new grammar path is
-# tested here with a synthetic parseable effect.
+# Osseous Sticktwister's multi-sentence body is now decomposed into the
+# generic ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage``
+# primitive (audit-per-opponent-choice), so the entire Delirium-gated
+# end-step trigger now routes through the unified grammar — no
+# remaining ``_BESPOKE_TRIGGER_LINES`` entry. The synthetic-draw test
+# below still pins the gate-strip + predicate-compose mechanics.
 
 
 def test_delirium_at_beginning_of_end_step_parses_with_draw_effect():

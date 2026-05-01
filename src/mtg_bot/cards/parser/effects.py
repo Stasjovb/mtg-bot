@@ -59,6 +59,7 @@ from mtg_bot.cards.base import (
     EachOpponentLosesLife,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
+    EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,
     EachPlayerDraws,
     Effect,
     EnduringDiesReturnAsEnchantmentEffect,
@@ -3763,6 +3764,35 @@ def _parse_effect(phrase: str) -> Effect | None:
         "your hand"
     ):
         return PeekTopMayBattlefieldIfLandElseHand()
+    # Osseous Sticktwister's Delirium end-step body — the per-opponent
+    # three-mode-choice + conditional source-power damage to non-
+    # compliers compound: "each opponent may sacrifice a nonland
+    # permanent of their choice or discard a card. Then this creature
+    # deals damage equal to its power to each opponent who didn't
+    # sacrifice a permanent or discard a card this way." Sentence 2 is
+    # anaphoric to sentence 1 ("each opponent who didn't ... this way"
+    # references the per-opponent sac-or-discard choice from sentence 1),
+    # so the two must stay coupled — the sentence-splitter would carve
+    # the body and produce a damage clause whose "this way" reference
+    # has no antecedent. Matched as a single literal here so the body
+    # dispatches to the new generic
+    # ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`` primitive
+    # — no per-card class needed. The Delirium gate at trigger-time is
+    # AND-ed onto the predicate via ``StateBound(Delirium())`` upstream
+    # in ``_parse_at_the_beginning_of_line``, so this site only sees the
+    # post-gate-strip body. Only Osseous Sticktwister in the EoE/DSK
+    # pool has this exact "may sac or discard, else take source-power
+    # damage" surface today; broader grammar deferred until a second
+    # example exists (e.g. a card with a different damage formula —
+    # fixed N, source toughness — at which point the right move is to
+    # parameterize the engine primitive's damage-resolver).
+    if phrase == (
+        "each opponent may sacrifice a nonland permanent of their "
+        "choice or discard a card. Then this creature deals damage "
+        "equal to its power to each opponent who didn't sacrifice a "
+        "permanent or discard a card this way"
+    ):
+        return EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()
     # Systems Override's five-sentence body — gain control of target artifact
     # or creature UEOT, untap it, grant haste UEOT (the Threaten core), plus
     # a Spacecraft-conditional charge-counter rider: put ten charge counters

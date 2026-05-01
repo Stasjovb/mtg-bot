@@ -27,10 +27,15 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     ScheduleSelfSacAtNextEndStep())``. The trigger header (ATTACKS +
     IsSelf) parses via the unified grammar. Migrated in
     audit-litdispatch-creatures.
-  - Osseous Sticktwister — literal trigger-line dispatch in
-    ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
-    ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
-    via the standard keyword line. Migrated in bespoke-delirium.
+  - Osseous Sticktwister — multi-sentence literal recognizer in
+    ``effects._parse_effect`` dispatches the printed body to the
+    generic ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage``
+    primitive; the trigger header (Delirium gate + end-step event +
+    ``Controlled(YOU)`` predicate) parses via the unified
+    ``_parse_at_the_beginning_of_line`` grammar with
+    ``StateBound(Delirium())`` AND-ed on. ``Lifelink`` keyword parses
+    via the standard keyword line. Migrated in
+    audit-per-opponent-choice.
   - Wickerfolk Thresher — multi-sentence literal recognizer in
     ``effects._parse_effect`` dispatches the printed body to the
     canonical ``PeekTopMayBattlefieldIfLandElseHand`` primitive. The
