@@ -32,22 +32,25 @@ def _claimed_names() -> frozenset[str]:
 # ---------- Splitskin Doll ----------
 
 def test_splitskin_doll_claimed_by_parser():
-    # Splitskin Doll now claims via the oracle-text parser: the ETB
-    # trigger line is caught by ``_BESPOKE_TRIGGER_LINES`` and routes to
-    # ``SplitskinDollETBEffect``; all other oracle lines parse via the
-    # unified grammar. Migrated from ``_BESPOKE_ARTIFACT_CREATURES`` in
-    # bespoke-splitskin-monoist.
+    # Splitskin Doll claims via the oracle-text parser end-to-end. The
+    # ETB body is decomposed by the parser's multi-sentence literal
+    # recognizer in ``effects._parse_effect`` into a generic
+    # ``Sequence((DrawCards, IfNot(ControlsAnother..., DiscardSelf)))``.
+    # No entry in ``_BESPOKE_TRIGGER_LINES`` and no bespoke engine class.
     assert "Splitskin Doll" in _claimed_names()
 
 
-def test_splitskin_doll_carries_etb_with_bespoke_effect():
+def test_splitskin_doll_carries_etb_with_decomposed_sequence():
     # Belt-and-suspenders that the produced ``CardPrinting`` carries a
-    # single ENTERS trigger via the bespoke ``SplitskinDollETBEffect``
-    # engine class. The effect handles both halves of the printed
-    # body — the unconditional draw and the conditional discard — in
-    # one resolve step. The card now routes through the unified grammar
-    # with the ETB trigger claimed by ``_BESPOKE_TRIGGER_LINES``.
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
+    # single ENTERS trigger whose effect is a generic ``Sequence`` of
+    # ``DrawCards(amount=1)`` and an ``IfNot`` gating ``DiscardSelf(
+    # amount=1)`` on
+    # ``ControlsAnotherCreatureWithPowerAtMost(threshold=2)``.
+    from mtg_bot.effects.combinators import IfNot, Sequence
+    from mtg_bot.effects.conditions import (
+        ControlsAnotherCreatureWithPowerAtMost,
+    )
+    from mtg_bot.effects.generic import DiscardSelf, DrawCards
 
     p = OracleParserCardSource().get_printings()["Splitskin Doll"]
     assert p.power == 2 and p.toughness == 1
@@ -55,25 +58,36 @@ def test_splitskin_doll_carries_etb_with_bespoke_effect():
     assert "Toy" in p.subtypes
     etb = [t for t in p.triggered_abilities if t.event == Event.ENTERS]
     assert len(etb) == 1
-    assert isinstance(etb[0].effect, SplitskinDollETBEffect)
+    eff = etb[0].effect
+    assert isinstance(eff, Sequence)
+    assert len(eff.effects) == 2
+    assert eff.effects[0] == DrawCards(amount=1)
+    second = eff.effects[1]
+    assert isinstance(second, IfNot)
+    assert second.condition == ControlsAnotherCreatureWithPowerAtMost(
+        threshold=2,
+    )
+    assert second.then == DiscardSelf(amount=1)
 
 
-# ---------- SplitskinDollETBEffect engine class ----------
+# ---------- Splitskin Doll behavioral tests ----------
 
-def test_splitskin_effect_describe():
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
-
-    desc = SplitskinDollETBEffect().describe()
-    assert "draw a card" in desc
-    assert "discard" in desc
-    assert "power 2 or less" in desc
+def _resolve_splitskin_etb(state, controller_id):
+    """Helper: resolve Splitskin Doll's ETB by fetching the parser-
+    produced trigger effect and resolving it directly. Mirrors how the
+    engine's trigger machinery would invoke it at resolve time.
+    """
+    p = OracleParserCardSource().get_printings()["Splitskin Doll"]
+    etb = [
+        t for t in p.triggered_abilities if t.event == Event.ENTERS
+    ][0]
+    etb.effect.resolve(state, controller_id=controller_id, targets=())
 
 
 def test_splitskin_effect_dodges_discard_when_another_creature_with_power_2_present():
     # When the controller controls another creature whose effective
     # power is 2 or less, the discard is dodged — only the draw fires.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     class _Agent:
@@ -108,7 +122,7 @@ def test_splitskin_effect_dodges_discard_when_another_creature_with_power_2_pres
         battlefield=[doll, other],
         resolving_source=doll,
     )
-    SplitskinDollETBEffect().resolve(state, controller_id=0, targets=())
+    _resolve_splitskin_etb(state, controller_id=0)
     # Drew the deck card; discard was dodged so hand_card stays.
     assert deck in p0.hand
     assert hand_card in p0.hand
@@ -119,7 +133,6 @@ def test_splitskin_effect_discards_when_no_other_small_creature():
     # Without another creature of power 2 or less, the discard fires
     # — the controller's agent picks via ``choose_discard``.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     class _Agent:
@@ -155,7 +168,7 @@ def test_splitskin_effect_discards_when_no_other_small_creature():
         battlefield=[doll, big],
         resolving_source=doll,
     )
-    SplitskinDollETBEffect().resolve(state, controller_id=0, targets=())
+    _resolve_splitskin_etb(state, controller_id=0)
     # Drew the deck card; discarded the hand card (no dodger present —
     # the doll itself is excluded by the "another creature" clause and
     # ``big`` has power 5).
@@ -170,7 +183,6 @@ def test_splitskin_effect_doll_does_not_count_as_its_own_dodger():
     # dodger pool. With the doll as the only creature, the discard
     # fires.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     class _Agent:
@@ -201,16 +213,15 @@ def test_splitskin_effect_doll_does_not_count_as_its_own_dodger():
         battlefield=[doll],
         resolving_source=doll,
     )
-    SplitskinDollETBEffect().resolve(state, controller_id=0, targets=())
+    _resolve_splitskin_etb(state, controller_id=0)
     assert hand_card in p0.graveyard
 
 
 def test_splitskin_effect_no_op_on_empty_hand_after_no_dodger_path():
     # No dodger and an empty hand → the discard branch silently no-ops
-    # (no exception, nothing to discard). ``p.agent`` is None so the
-    # discard branch's guard short-circuits anyway.
+    # (no exception, nothing to discard). ``DiscardSelf`` returns False
+    # on empty hand, which is the standard generic behavior.
     from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import SplitskinDollETBEffect
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     doll_pr = make_creature(
@@ -228,7 +239,7 @@ def test_splitskin_effect_no_op_on_empty_hand_after_no_dodger_path():
         battlefield=[doll],
         resolving_source=doll,
     )
-    SplitskinDollETBEffect().resolve(state, controller_id=0, targets=())
+    _resolve_splitskin_etb(state, controller_id=0)
 
 
 # ---------- Arabella, Abandoned Doll ----------

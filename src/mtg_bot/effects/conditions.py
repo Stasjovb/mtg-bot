@@ -158,6 +158,52 @@ class ControlPermanent(Condition):
 
 
 @dataclass(frozen=True)
+class ControlsAnotherCreatureWithPowerAtMost(Condition):
+    """``viewer_id`` controls at least one creature OTHER than
+    ``state.resolving_source`` whose effective power is ``<= threshold``.
+
+    The "another" qualifier excludes the source object — the creature
+    whose triggered or resolving ability is consulting this condition.
+    Models oracle clauses like Splitskin Doll's "unless you control
+    another creature with power 2 or less", where the source itself
+    (a 2/1) would otherwise trivially satisfy the printed surface.
+
+    Reads through ``mtg_bot.game.effective_power`` so a creature whose
+    base power is reduced or boosted by counters / pump / anthems is
+    measured by its current power. If ``state.resolving_source`` is
+    ``None`` (defensive: missing source) the "another" exclusion has
+    no effect — every controlled creature qualifies, which matches the
+    fall-back of treating the gate as met when the engine can't tell
+    which object would otherwise be excluded.
+
+    Non-creature permanents are excluded by checking ``printing
+    .is_creature``; tokens, equipped creatures, etc. count if they
+    are creatures the viewer controls.
+    """
+
+    threshold: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        from mtg_bot.game import effective_power
+
+        source = getattr(state, "resolving_source", None)
+        for obj in state.battlefield:
+            if obj.controller_id != viewer_id:
+                continue
+            if not obj.printing.is_creature:
+                continue
+            if source is not None and obj.id == source.id:
+                continue
+            try:
+                power = effective_power(state, obj)
+            except Exception:
+                continue
+            if power <= self.threshold:
+                return True
+        return False
+
+
+@dataclass(frozen=True)
 class OpponentsControlAtLeast(Condition):
     """Some opponent of ``viewer_id`` controls at least ``n`` total
     permanents matching ``filter`` (summed across all opponents).

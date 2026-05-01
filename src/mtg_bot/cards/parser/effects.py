@@ -174,7 +174,10 @@ from mtg_bot.effects.bespoke import (
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
-from mtg_bot.effects.combinators import IfYouDo, MayDo
+from mtg_bot.effects.combinators import IfNot, IfYouDo, MayDo
+from mtg_bot.effects.conditions import (
+    ControlsAnotherCreatureWithPowerAtMost,
+)
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     EachOpponentExilesCardFromHandWithCastPermission,
@@ -3305,6 +3308,39 @@ def _parse_effect(phrase: str) -> Effect | None:
         "tapped"
     ):
         return EachOpponentExilesCardFromHandWithCastPermission()
+    # Splitskin Doll's ETB body — two sentences: an unconditional draw
+    # followed by a "Then discard a card unless you control another
+    # creature with power 2 or less" rider. Decomposes into a generic
+    # Sequence of two primitives:
+    #   - DrawCards(amount=1)
+    #   - IfNot(condition=ControlsAnotherCreatureWithPowerAtMost(2),
+    #           then=DiscardSelf(amount=1))
+    # The "another" excludes ``state.resolving_source`` (the Doll itself,
+    # printed 2/1) so the printed surface is honored. Tried BEFORE
+    # ``_parse_compound_effect`` because the second sentence's
+    # ``discard a card unless you control another creature ...`` shape
+    # has no standalone single-effect recognizer in the grammar today —
+    # the sentence-splitter would carve at the ``. Then`` boundary and
+    # fail to parse the second piece. Only Splitskin Doll in the DSK/EoE
+    # pool prints this exact two-sentence "draw + conditional discard
+    # gated on another small creature" surface; broader grammar deferred
+    # until a second card ships with this shape, at which point the
+    # right move is a parameterized recognizer for the bare
+    # ``discard a card unless <condition>`` second sentence so the
+    # compound splitter claims it without a literal here.
+    if phrase == (
+        "draw a card. Then discard a card unless you control "
+        "another creature with power 2 or less"
+    ):
+        return Sequence((
+            DrawCards(amount=1),
+            IfNot(
+                condition=ControlsAnotherCreatureWithPowerAtMost(
+                    threshold=2,
+                ),
+                then=DiscardSelf(amount=1),
+            ),
+        ))
     # Starfield Shepherd's ETB body (only EoE card with the
     # "search for basic Plains OR creature MV≤1" shape; broader grammar
     # deferred until a second example exists). The "or" clause is a

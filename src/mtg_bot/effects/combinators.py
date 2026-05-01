@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic import SearchLibraryForBasicLandTapped
 
 if TYPE_CHECKING:
@@ -541,6 +542,67 @@ class IfYouDo(Effect):
             f"{self.do_action.describe()}; if you do, "
             f"{self.then_action.describe()}"
         )
+
+
+@dataclass(frozen=True)
+class IfNot(Effect):
+    """Run ``then`` only if ``condition`` is False at resolve time.
+    The "unless <condition>" gate of MTG oracle text.
+
+    Inverse of an ``if <condition>, do X`` rider: when
+    ``condition.matches(state, controller_id)`` is True, the effect is
+    a no-op (the unless-clause "dodges" the inner action). When the
+    condition is False, ``then`` resolves normally.
+
+    The viewer for the ``Condition.matches`` call is the effect's
+    controller (the player resolving the trigger / spell). The
+    ``chosen_targets`` parameter is left at its default (None) — these
+    "unless you control X" clauses are evaluated against static state at
+    resolve time, not against the spell's chosen targets.
+
+    Examples:
+    - "Discard a card unless you control another creature with power 2
+      or less." (Splitskin Doll)
+        IfNot(
+            condition=ControlsAnotherCreatureWithPowerAtMost(2),
+            then=DiscardSelf(amount=1),
+        )
+
+    Note that ``IfNot`` carries a Condition (a structural state predicate
+    from ``effects.conditions``) rather than another Effect — so it
+    composes with the same gate vocabulary used for cost reductions and
+    static continuous effects, rather than re-implementing predicates
+    inside the combinator.
+    """
+
+    condition: Condition
+    then: Effect
+
+    def requires_target(self) -> bool:
+        return self.then.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.then.legal_targets(state, controller_id)
+
+    def target_count_range(self) -> tuple[int, int]:
+        return self.then.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> bool | None:
+        if self.condition.matches(state, controller_id):
+            state.log.append(
+                f"P{controller_id} skips '{self.then.describe()}' "
+                f"(unless-condition met)"
+            )
+            return False
+        return self.then.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"{self.then.describe()} unless {self.condition!r}"
 
 
 # OptionalDiscardCardThenDrawN was deleted in the cleanup pass: the

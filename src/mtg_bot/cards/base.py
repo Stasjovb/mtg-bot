@@ -232,7 +232,6 @@ from mtg_bot.effects import (
     SearchLibraryForGreenCreatureWithMVAtMostX,
     TakeExtraTurnAfterThisOne,
     SelfcraftMechanETBEffect,
-    SplitskinDollETBEffect,
     TannukEnsignLandfallEffect,
     Sequence,
     StaticAbility,

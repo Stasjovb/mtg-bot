@@ -54,9 +54,12 @@ Migrated to grammar in bespoke-roving-actuator:
     ``_parse_effect`` → ``RovingActuatorETBEffect(max_mv=2)``.
 
 Migrated to ``_BESPOKE_TRIGGER_LINES`` in bespoke-splitskin-monoist:
-  - Splitskin Doll — ETB trigger line matched verbatim routes to
-    ``SplitskinDollETBEffect``; all other oracle lines parse via the
-    unified grammar.
+  - Splitskin Doll — initial migration was to ``_BESPOKE_TRIGGER_LINES``;
+    fully decomposed in audit-litdispatch-easy via the parser's multi-
+    sentence literal recognizer in ``effects._parse_effect`` returning a
+    generic ``Sequence((DrawCards(amount=1), IfNot(
+    ControlsAnotherCreatureWithPowerAtMost(2),
+    DiscardSelf(amount=1))))``. No bespoke engine class remains.
   - Monoist Circuit-Feeder — ETB trigger line matched verbatim routes to
     ``MonoistCircuitFeederETBEffect``; ``Flying`` keyword and all other
     oracle lines parse via the unified grammar.

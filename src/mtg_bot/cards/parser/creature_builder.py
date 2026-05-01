@@ -73,7 +73,6 @@ from mtg_bot.cards.base import (
     SearchLibraryForCard,
     SelfMill,
     Sequence,
-    SplitskinDollETBEffect,
     WickerfolkThresherAttackEffect,
     StaticAbility,
     StaticScope,
@@ -338,11 +337,13 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
       ``_BESPOKE_TRIGGER_LINES`` routes the Delirium attack trigger to
       ``WickerfolkThresherAttackEffect``; all other oracle lines parse
       via the unified grammar. Migrated in bespoke-delirium.
-    - Splitskin Doll — literal trigger-line dispatch in
-      ``_BESPOKE_TRIGGER_LINES`` routes the ETB trigger to
-      ``SplitskinDollETBEffect``; all other oracle lines (mana cost, P/T,
-      artifact type, Toy subtype) parse via the unified grammar. Migrated
-      in bespoke-splitskin-monoist.
+    - Splitskin Doll — fully decomposed via the parser's multi-sentence
+      literal recognizer in ``effects._parse_effect`` (audit-
+      litdispatch-easy). The ETB body returns a generic
+      ``Sequence((DrawCards(amount=1), IfNot(condition=
+      ControlsAnotherCreatureWithPowerAtMost(2),
+      then=DiscardSelf(amount=1))))``; no bespoke engine class
+      remains. Initial migration in bespoke-splitskin-monoist.
     - Monoist Circuit-Feeder — literal trigger-line dispatch in
       ``_BESPOKE_TRIGGER_LINES`` routes the ETB trigger to
       ``MonoistCircuitFeederETBEffect``; ``Flying`` keyword and all other
@@ -468,15 +469,16 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
         # Removed from this table so the oracle parser claims it directly.
         # ── DSK artifacts batch 3 ─────────────────────────────────────
         # Splitskin Doll {1}{W} 2/1 Toy.
-        # Migrated to ``_BESPOKE_TRIGGER_LINES`` (bespoke-splitskin-monoist).
-        # The ETB line "When this creature enters, draw a card. Then
-        # discard a card unless you control another creature with power
-        # 2 or less." is matched verbatim by the trigger-line dispatch,
-        # which routes to ``SplitskinDollETBEffect``. All other oracle
-        # lines (mana cost, P/T, artifact type, Toy subtype) parse via
-        # the unified grammar. Removed from this table so the oracle
-        # parser claims it end-to-end via ``_build_creature_printing``'s
-        # main line loop.
+        # Decomposed via the parser's multi-sentence literal recognizer
+        # in ``effects._parse_effect`` (audit-litdispatch-easy). The ETB
+        # body "When this creature enters, draw a card. Then discard a
+        # card unless you control another creature with power 2 or less."
+        # claims through the unified grammar: the trigger header parses
+        # as a standard ETB; the body returns a generic
+        # ``Sequence((DrawCards(amount=1), IfNot(
+        # ControlsAnotherCreatureWithPowerAtMost(2),
+        # DiscardSelf(amount=1))))`` composition. No bespoke engine class
+        # is required; the prior ``SplitskinDollETBEffect`` was deleted.
         #
         # Attack-in-the-Box, Osseous Sticktwister, Wickerfolk Thresher
         # migrated to the literal trigger-line dispatch in
@@ -765,21 +767,6 @@ _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
         event=Event.ATTACKS,
         predicate=IsSelf() & StateBound(Delirium()),
         effect=WickerfolkThresherAttackEffect(),
-    ),
-    # Splitskin Doll (DSK): ETB draw + source-relative conditional
-    # discard. The "discard a card unless you control another creature
-    # with power 2 or less" gate excludes the source itself (the doll
-    # is printed 2/1 so it would otherwise trivially satisfy the
-    # condition). ``SplitskinDollETBEffect`` handles both the
-    # unconditional draw and the conditional discard with the correct
-    # source-exclusion logic. Only card in the DSK/EoE pool with the
-    # "draw then discard unless another creature with power N or less"
-    # shape; broader grammar deferred until a second example exists.
-    "When this creature enters, draw a card. Then discard a card "
-    "unless you control another creature with power 2 or less.": TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=SplitskinDollETBEffect(),
     ),
     # Monoist Circuit-Feeder (EoE): ETB dual-target +X/-X buff where X
     # is the controller's artifact count at resolve time. Two required

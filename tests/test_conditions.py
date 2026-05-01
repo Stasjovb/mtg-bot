@@ -21,6 +21,7 @@ from mtg_bot.effects.conditions import (
     Condition,
     ControlledArtifactEnteredThisTurn,
     ControlPermanent,
+    ControlsAnotherCreatureWithPowerAtMost,
     DuringYourTurn,
     NotCondition,
     NthSpellThisTurn,
@@ -199,6 +200,123 @@ def test_control_permanent_scopes_to_viewer():
     cond = ControlPermanent(IsCreature() & HasCounter("+1/+1"))
     assert cond.matches(state, 0) is False
     assert cond.matches(state, 1) is True
+
+
+# ---------- ControlsAnotherCreatureWithPowerAtMost ----------
+
+
+def test_controls_another_with_power_at_most_matches_when_other_qualifies():
+    # Two creatures the viewer controls: a 2/1 source and a 2/2 sidekick.
+    # ``state.resolving_source`` points at the source, so the sidekick
+    # qualifies as "another creature with power 2 or less".
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    source = state.new_object(
+        make_creature("Source", "{1}{W}", 2, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(source)
+    sidekick = state.new_object(
+        make_creature("Bear", "{1}{G}", 2, 2), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(sidekick)
+    state.resolving_source = source
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is True
+
+
+def test_controls_another_with_power_at_most_excludes_source():
+    # Only the source itself is on the battlefield. The "another" clause
+    # excludes it, so the condition is False even though the source's
+    # power (2) satisfies the threshold.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    source = state.new_object(
+        make_creature("Doll", "{1}{W}", 2, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(source)
+    state.resolving_source = source
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is False
+
+
+def test_controls_another_with_power_at_most_rejects_high_power():
+    # The other creature has power 5, above the threshold of 2 — fails.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    source = state.new_object(
+        make_creature("Source", "{1}{W}", 2, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(source)
+    big = state.new_object(
+        make_creature("Big", "{4}{G}", 5, 5), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(big)
+    state.resolving_source = source
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is False
+
+
+def test_controls_another_with_power_at_most_scopes_to_viewer():
+    # The opponent's small creature doesn't count for the viewer's gate.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    source = state.new_object(
+        make_creature("Source", "{1}{W}", 2, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(source)
+    enemy_bear = state.new_object(
+        make_creature("Enemy Bear", "{1}{G}", 2, 2), 1, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(enemy_bear)
+    state.resolving_source = source
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is False
+
+
+def test_controls_another_with_power_at_most_ignores_noncreatures():
+    # A bare artifact (non-creature) the viewer controls doesn't satisfy
+    # the condition — the filter is creature-only.
+    from mtg_bot.cards.base import make_artifact, make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    source = state.new_object(
+        make_creature("Source", "{1}{W}", 2, 1), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(source)
+    artifact = state.new_object(
+        make_artifact("Trinket", "{1}"), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(artifact)
+    state.resolving_source = source
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is False
+
+
+def test_controls_another_with_power_at_most_no_resolving_source_includes_all():
+    # Defensive: when ``state.resolving_source`` is None the "another"
+    # exclusion has no anchor, so the gate falls back to "any creature
+    # the viewer controls with power N or less qualifies". A single
+    # small creature satisfies the condition.
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.game import Zone
+
+    state = _new_state()
+    bear = state.new_object(
+        make_creature("Bear", "{1}{G}", 2, 2), 0, Zone.BATTLEFIELD,
+    )
+    state.battlefield.append(bear)
+    state.resolving_source = None
+    cond = ControlsAnotherCreatureWithPowerAtMost(threshold=2)
+    assert cond.matches(state, 0) is True
 
 
 # ---------- OpponentsControlAtLeast ----------
