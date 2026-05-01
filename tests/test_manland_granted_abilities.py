@@ -122,7 +122,8 @@ def test_lavaclaw_granted_pump_clears_at_cleanup():
     post = effective_activated_abilities(state, land)
     granted_post = [a for a in post if a not in land.printing.activated_abilities]
     assert granted_post == []
-    assert land.temp_is_creature is False
+    from mtg_bot.game import is_creature_now
+    assert not is_creature_now(land)
 
 
 # -----------------------

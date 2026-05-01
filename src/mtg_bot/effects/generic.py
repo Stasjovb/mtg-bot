@@ -4362,11 +4362,13 @@ class PumpTargetCreatureUntilEOT(Effect):
         from mtg_bot.game import effective_subtypes
 
         source = state.resolving_source if self.exclude_self else None
+        from mtg_bot.game import is_creature_now
+
         source_id = source.id if source is not None else -1
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if (o.printing.is_creature or o.temp_is_creature)
+            if is_creature_now(o)
             and (not self.you_control_only or o.controller_id == controller_id)
             and (not self.opponents_only or o.controller_id != controller_id)
             and (not self.attacking_only or o.attacking)
@@ -4500,10 +4502,12 @@ class SetBasePTUntilEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list["Target"]:
+        from mtg_bot.game import is_creature_now
+
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature or o.temp_is_creature
+            if is_creature_now(o)
         ]
 
     def resolve(
@@ -4580,10 +4584,12 @@ class SetBasePTConditionalUntilEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list["Target"]:
+        from mtg_bot.game import is_creature_now
+
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if o.printing.is_creature or o.temp_is_creature
+            if is_creature_now(o)
         ]
 
     def _land_count(self, state: "GameState", controller_id: int) -> int:
@@ -5988,16 +5994,23 @@ class DestroyTargetNoncreaturePermanent(Destroy):
 class BecomeLandCreatureUEOT(Effect):
     """Animate a land into a creature until end of turn.
 
-    The shared manland primitive: sets temp_is_creature, overrides
-    the source's base P/T via temp_base_pt_override, and grants any
-    keywords via temp_keywords. Also optionally sets temp_unblockable
-    (Creeping Tar Pit: "It can't be blocked this turn").
+    Composes the new ``ApplyEffect(BecomeType(...), EndOfTurn())``
+    primitive for the type/subtype/PT side: writes layer-4
+    ``add_type "creature"`` (+ optional ``add_subtype``) and layer-7
+    ``set_base_pt`` registry entries with ``expires_at="cleanup"``,
+    flipping ``permanent_is_creature`` for the duration. The
+    cleanup-step rebuild in ``run_cleanup_step`` reverts the cache to
+    False once the registry entries expire, so the land returns to
+    its non-creature state at end of turn.
 
-    Per-manland abilities granted "while animated" are folded in via
-    ``granted_activated_abilities`` (Lavaclaw Reaches' X-pump, Wandering
-    Fumarole's P/T swap) and ``granted_triggered_abilities`` (Raging
-    Ravine's "whenever this attacks, +1/+1 counter"). Both clear at
-    cleanup with the rest of the temp_* fields.
+    Keyword grants, unblockable, and per-manland granted abilities
+    remain on the legacy ``temp_*`` field path (the keyword-grant
+    helper still mirrors onto ``temp_keywords``; ``unblockable`` sets
+    ``temp_unblockable`` directly; ``granted_activated_abilities`` /
+    ``granted_triggered_abilities`` flow through
+    ``state.grant_*_ability_ueot``). Migrating those to dedicated
+    primitives is a separate sweep — they aren't blocking the
+    type/subtype/PT side from using the new pattern.
     """
 
     power: int = 0
@@ -6005,9 +6018,10 @@ class BecomeLandCreatureUEOT(Effect):
     granted_keywords: frozenset[str] = frozenset()
     unblockable: bool = False
     # Subtype the animated creature gains UEOT (e.g., "Blinkmoth" for
-    # Blinkmoth Nexus, "Elemental" for Lavaclaw Reaches). Stored on
-    # ``GameObject.temp_subtype`` and cleared at cleanup. Read by
-    # target filters (e.g. PumpTargetCreatureUntilEOT.target_subtype).
+    # Blinkmoth Nexus, "Elemental" for Lavaclaw Reaches). Written as
+    # a layer-4 ``add_subtype`` registry entry (read by
+    # ``effective_subtypes``); reverts when the entry expires at
+    # cleanup.
     granted_subtype: str | None = None
     # Activated / triggered abilities granted UEOT to the source while
     # animated. Appended to ``temp_activated_abilities`` /
@@ -6021,20 +6035,23 @@ class BecomeLandCreatureUEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+
         source = state.resolving_source
         if source is None:
             return
-        state.grant_become_creature_ueot(
-            source_id=source.id,
-            target_id=source.id,
-            power=self.power,
-            toughness=self.toughness,
-            subtype=self.granted_subtype,
-            description=(
-                f"{source.printing.name} becomes a "
-                f"{self.power}/{self.toughness} creature UEOT"
-            ),
+        subtypes = (
+            (self.granted_subtype,) if self.granted_subtype else ()
         )
+        ApplyEffect(
+            inner=BecomeType(
+                types_to_add=("creature",),
+                subtypes_to_add=subtypes,
+                base_pt=(self.power, self.toughness),
+            ),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, ())
         if self.granted_keywords:
             state.grant_keywords_ueot(
                 source_id=source.id,

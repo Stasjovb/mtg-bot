@@ -55,7 +55,14 @@ def _mana(state, count, color="Forest"):
 # -----------------------
 
 
-def test_become_land_creature_sets_temp_flags():
+def test_become_land_creature_animates_via_registry():
+    """``BecomeLandCreatureUEOT`` now composes
+    ``ApplyEffect(BecomeType(...), EndOfTurn())`` for the type/PT side.
+    Reads through registry-walking helpers
+    (``is_creature_now``, ``_compute_effective_pt``,
+    ``effective_keywords``) all observe the animated state."""
+    from mtg_bot.game import _compute_effective_pt, effective_keywords
+
     state = _new_state()
     land = _put(state, BASIC_LANDS["Forest"])
     state.resolving_source = land
@@ -66,13 +73,10 @@ def test_become_land_creature_sets_temp_flags():
         ).resolve(state, 0, ())
     finally:
         state.resolving_source = None
-    assert land.temp_is_creature
-    assert land.temp_base_pt_override == (3, 3)
-    # Granted keyword now lives in the layer-6 registry; query via
-    # effective_keywords (Phase 2 migration).
-    from mtg_bot.game import effective_keywords
-    assert "flying" in effective_keywords(state, land)
     assert is_creature_now(land)
+    assert _compute_effective_pt(state, land) == (3, 3)
+    # Granted keyword lives in the layer-6 registry.
+    assert "flying" in effective_keywords(state, land)
 
 
 def test_cleanup_clears_temp_is_creature():
@@ -319,6 +323,7 @@ def test_blinkmoth_nexus_animates_with_blinkmoth_subtype():
     """The animated Nexus carries the granted subtype 'Blinkmoth' so
     it qualifies as a target for its own +1/+1 pump."""
     from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import effective_subtypes
 
     state = _new_state()
     nexus = _put(state, _PRINTINGS["Blinkmoth Nexus"])
@@ -328,8 +333,8 @@ def test_blinkmoth_nexus_animates_with_blinkmoth_subtype():
     )
     while state.stack:
         resolve_top_of_stack(state)
-    assert nexus.temp_is_creature
-    assert nexus.temp_subtype == "Blinkmoth"
+    assert is_creature_now(nexus)
+    assert "Blinkmoth" in effective_subtypes(state, nexus)
 
 
 def test_blinkmoth_nexus_pump_targets_only_blinkmoth_creatures():
