@@ -364,7 +364,9 @@ def dispatch_replacement(
     # this dispatch don't recursively trigger further replacement
     # collection on the SAME event. Each replacement applies at most
     # once per event.
-    candidates = _collect_replacement_effects(state, event, subjects)
+    candidates = _collect_replacement_effects(
+        state, event, subjects, affected_player_id,
+    )
 
     if not candidates:
         return cur_payload
@@ -414,40 +416,65 @@ def _collect_replacement_effects(
     state: "GameState",
     event: "Event",
     subjects: Mapping[str, Any],
+    affected_player_id: int,
 ) -> list[tuple[int, "ReplacementEffect"]]:
     """Walk the battlefield + per-printing flags + dynamic synthesis
     sites, returning ``(source_id, ReplacementEffect)`` pairs whose
-    ``event_pattern`` matches and whose subject filters accept the
-    firing.
+    ``event_pattern`` matches and whose subject / scope / source-
+    controller filters accept the firing.
 
-    Legacy printing-level boolean flags synthesise matching
-    ``ReplacementEffect`` instances — this keeps existing parser
-    output working unchanged while the per-card boolean-flag anti-
-    pattern collapses behind a single dispatcher. Native
-    declarations on each printing's static abilities replace the
-    synthesis paths in PR D.
+    Native ``StaticAbility.replacement_effect`` declarations on a
+    printing are gated by the implicit "your X" check ``source.
+    controller_id == affected_player_id`` — every replacement-flag
+    surface in the EoE pool today reads as "if a token would be
+    created under YOUR control, …" / "if YOU would draw a card, …",
+    so making this gate the default lets the StaticAbility
+    declarations stay free of repetitive controller-match plumbing.
+    The wrapping ``StaticAbility.condition`` is also evaluated via
+    ``condition.matches(state, source.controller_id)`` so cards with
+    state-evaluated gates (Quantum Riddler's hand-size threshold)
+    can declare them compositionally.
+
+    Legacy printing-level boolean flags still synthesise matching
+    ``ReplacementEffect`` instances for the cards that haven't yet
+    migrated to native declarations — the synthesis paths are the
+    PR-D-shaped retirement targets, one card / one flag per commit.
     """
     from mtg_bot.effects.predicates import Event
 
     out: list[tuple[int, "ReplacementEffect"]] = []
     for obj in state.battlefield:
         # Native replacement effects on the printing's static
-        # abilities (PR-D-and-later — empty for now).
-        for static in getattr(obj.printing, "static_abilities", ()) or ():
-            re = getattr(static, "replacement_effect", None)
-            if re is None:
-                continue
-            if re.event_pattern.event != event:
-                continue
-            if not _subject_filters_match(
-                re.event_pattern.subject_filters, subjects, state,
-            ):
-                continue
-            if re.scope_filter is not None and not re.scope_filter.test(
-                obj, state,
-            ):
-                continue
-            out.append((obj.id, re))
+        # abilities. Implicit gate: source's controller IS the
+        # affected player. Every "your X would happen" replacement
+        # in the current pool has this shape; per-card overrides
+        # live in subject_filters / scope_filter for cards that
+        # narrow the gate further (none today).
+        if obj.controller_id == affected_player_id:
+            for static in getattr(
+                obj.printing, "static_abilities", (),
+            ) or ():
+                re = getattr(static, "replacement_effect", None)
+                if re is None:
+                    continue
+                if re.event_pattern.event != event:
+                    continue
+                # Optional ``StaticAbility.condition`` gate
+                # (state-aware, viewer = source's controller).
+                cond = getattr(static, "condition", None)
+                if cond is not None and not cond.matches(
+                    state, obj.controller_id,
+                ):
+                    continue
+                if not _subject_filters_match(
+                    re.event_pattern.subject_filters, subjects, state,
+                ):
+                    continue
+                if re.scope_filter is not None and not re.scope_filter.test(
+                    obj, state,
+                ):
+                    continue
+                out.append((obj.id, re))
         # ── Legacy synthesis paths ─────────────────────────────────
         # Token-doubler flag → MultiplyCount(2) on WOULD_CREATE_TOKEN.
         if event == Event.WOULD_CREATE_TOKEN and getattr(
