@@ -379,9 +379,23 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
     """Move any objects from exile back to the battlefield under their
     owner's control if they were exiled by the given source (Oblivion-
     Ring-style). Returns them as fresh ETBs so ETB triggers fire again.
+
+    Honors the one-shot ``state.suppress_exiled_by_source_on_leave_for``
+    flag: when it equals ``source_id``, the auto-return is skipped for
+    THIS leave event and the flag is cleared. Used by
+    ``SacrificeSelfPreservingExileLink`` to defeat the auto-return
+    during Sothera, the Supervoid's end-step recall (the recall step
+    pulls one tagged card out of exile manually BEFORE the source is
+    sacrificed; without suppression, the remaining tagged cards would
+    race back to their owners' battlefields, which the printed text
+    doesn't say).
     """
     from mtg_bot.actions import put_into_battlefield
 
+    if state.suppress_exiled_by_source_on_leave_for == source_id:
+        # One-shot suppression: clear and skip.
+        state.suppress_exiled_by_source_on_leave_for = None
+        return
     for p in state.players:
         released = [c for c in p.exile if c.exiled_by_source == source_id]
         for c in released:

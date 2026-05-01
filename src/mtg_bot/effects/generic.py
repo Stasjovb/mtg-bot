@@ -11034,3 +11034,159 @@ class BecomeCreatureWithSubtypeAndPTPermanently(Effect):
         )
 
 
+
+@dataclass(frozen=True)
+class ReanimateOneExiledWithSourceWithCounters(Effect):
+    """Generic "put one creature card exiled with this permanent onto the
+    battlefield under your control with N additional +1/+1 counters"
+    primitive.
+
+    Walks every player's exile zone for cards tagged with
+    ``GameObject.exiled_by_source == state.resolving_source.id`` filtered
+    to creature cards (``printing.is_creature``), asks the resolving
+    controller's agent to pick ONE via ``choose_target`` (the natural
+    "pick one from a list of GameObject ids" prompt — re-used for non-
+    spell choices the same way ``choose_sacrifice`` is re-used elsewhere),
+    pulls it out of exile, and brings it onto the controller's
+    battlefield via ``put_into_battlefield`` (so ETBs fire normally) with
+    ``counter_amount`` extra +1/+1 counters added on top of whatever the
+    creature's printed body would otherwise place.
+
+    Differs from ``PutEachCreatureCardExiledWithSourceOntoBattlefield
+    UnderYourControl`` (which recalls every tagged creature) in two
+    ways: (a) only ONE card is recalled, picked by the controller; and
+    (b) the recalled creature gets +N +1/+1 counters added at ETB time.
+    Matches Sothera, the Supervoid's end-step recall surface verbatim.
+
+    The ``exiled_by_source`` linkage is cleared on the recalled card so
+    a future leave-the-battlefield event on the source doesn't try to
+    release it again. Other tagged cards remain in exile with their
+    linkage intact (so a sibling ability — none in the EoE pool today,
+    but the contract is honest — could still find them).
+
+    No-op (no log spam, no error) when ``state.resolving_source`` is
+    None, when no tagged creature card exists in any exile zone, or
+    when the resolving controller has no agent (defensive — every
+    real game seat has one).
+    """
+
+    counter_amount: int = 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import add_plus_one_counters
+
+        source = state.resolving_source
+        if source is None:
+            return
+        # Collect every tagged creature card across all exile zones,
+        # paired with its owner so we can remove it cleanly later.
+        candidates: list[tuple["GameObject", "Player"]] = []  # noqa: F821
+        for p in state.players:
+            for c in p.exile:
+                if (
+                    c.exiled_by_source == source.id
+                    and c.printing.is_creature
+                ):
+                    candidates.append((c, p))
+        if not candidates:
+            return
+        # Ask the controller's agent to pick one. Re-use ``choose_target``
+        # — the (kind, id) tuple shape is the natural fit for a "pick
+        # one from a list" prompt; the ``"exile_creature"`` kind tag
+        # is parser-side bookkeeping (the engine never re-validates it
+        # because the candidate list is built right above).
+        ctrl = state.player_by_id(controller_id)
+        legal = [("exile_creature", obj.id) for obj, _ in candidates]
+        chosen_obj = candidates[0][0]
+        chosen_owner = candidates[0][1]
+        if ctrl.agent is not None:
+            picked = ctrl.agent.choose_target(state, controller_id, legal)
+            if picked is not None:
+                pick_id = picked[1]
+                for obj, owner in candidates:
+                    if obj.id == pick_id:
+                        chosen_obj = obj
+                        chosen_owner = owner
+                        break
+        chosen_owner.exile.remove(chosen_obj)
+        chosen_obj.exiled_by_source = None
+        state.log.append(
+            f"{source.printing.name} puts {chosen_obj.printing.name} onto "
+            f"the battlefield under P{controller_id}'s control"
+        )
+        put_into_battlefield(state, chosen_obj, controller_id)
+        if self.counter_amount > 0:
+            add_plus_one_counters(state, chosen_obj, self.counter_amount)
+
+    def describe(self) -> str:
+        rider = (
+            f" with {self.counter_amount} additional +1/+1 counters on it"
+            if self.counter_amount > 0 else ""
+        )
+        return (
+            "put a creature card exiled with this permanent onto the "
+            "battlefield under your control" + rider
+        )
+
+
+
+@dataclass(frozen=True)
+class SacrificeSelfPreservingExileLink(Effect):
+    """Sacrifice this permanent, suppressing the on-leave auto-return of
+    cards still tagged ``exiled_by_source = source.id``.
+
+    Companion to ``ReanimateOneExiledWithSourceWithCounters``: Sothera,
+    the Supervoid's printed end-step body says "sacrifice Sothera, then
+    put a creature card exiled with it onto the battlefield...". A
+    naive Sequence(SacrificeSelf, recall) would lose the source link —
+    the engine's ``_release_exiled_until_leaves`` hook fires the moment
+    Sothera leaves the battlefield, racing every tagged card back to
+    its owner's battlefield BEFORE the recall step gets to read the
+    exile zone. The engine-level fix is to invert the order at
+    composition time (recall first, sac second) AND suppress the
+    on-leave hook so the OTHER tagged cards (the ones not picked by the
+    recall) don't race back either — the printed text doesn't say they
+    should.
+
+    The suppression flag ``state.suppress_exiled_by_source_on_leave_for``
+    is one-shot: this effect sets it to the source's id immediately
+    before sacrificing; ``_release_exiled_until_leaves`` clears the flag
+    the first time it observes the matching source-id leave event and
+    skips its auto-return loop for that one event. Subsequent leave
+    events for the same source (impossible after a sac, but the contract
+    is local) would auto-return any cards still linked, so the
+    suppression's blast radius is exactly one leave event.
+
+    No-op when ``state.resolving_source`` is None or the source has
+    already left the battlefield (e.g. an earlier sequence step
+    destroyed it — defensive; Sothera's body never composes with such
+    a step today).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None:
+            return
+        if source not in state.battlefield:
+            return
+        # Arm the one-shot suppression so the auto-return hook stays
+        # idle for the leave event triggered by the sacrifice below.
+        state.suppress_exiled_by_source_on_leave_for = source.id
+        _sacrifice(state, source)
+
+    def describe(self) -> str:
+        return (
+            "sacrifice this permanent (preserving the source-link on "
+            "any cards still in exile)"
+        )
+
+

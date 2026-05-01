@@ -99,6 +99,7 @@ from mtg_bot.effects.object_predicates import (
     IsTapped,
 )
 from mtg_bot.effects.state_predicates import (
+    AnyPlayerControlsNoCreatures,
     Delirium,
     OpponentControlsMoreLandsThanYou,
     SpellsCastThisTurn,
@@ -467,6 +468,33 @@ _SURVIVAL_PREFIX = "Survival — "
 # ``"this creature"`` form by ``_substitute_self_name`` before this
 # lookup runs, so we only need to recognize the canonical phrase here.
 _SURVIVAL_GATE_PREFIX = "if this creature is tapped, "
+
+
+# Generic intervening-if prefix on the body of an
+# ``At the beginning of <when>, if <gate>, <inner>.`` line. When the
+# body starts with ``if `` and the comma-bounded gate phrase is
+# claimed by ``_INTERVENING_IF_PHRASES``, the gate's predicate is
+# AND-ed onto the trigger's base predicate and the inner body parses
+# through the unified ``_parse_effect_phrase`` path. Mirrors the
+# parallel ``When/Whenever <condition>, if <gate>, <effect>.``
+# dispatch in ``_parse_triggered_ability_line`` exactly — same
+# phrasebook, same predicate-AND composition. Tried AFTER the
+# more-specific Void / Survival / Delirium / tapped-creatures
+# branches so those keep their dedicated handling; a body that
+# starts with ``if `` but whose gate phrase isn't in the phrasebook
+# is rejected outright (we never silently drop a printed gate).
+#
+# The non-greedy comma split stops at the FIRST ``, `` boundary so
+# the gate phrase stays minimal; the ``inner`` capture takes the
+# rest of the body. A body like ``if a player controls no creatures,
+# sacrifice this creature, then put a creature card …`` carves into
+# gate ``"a player controls no creatures"`` and inner ``"sacrifice
+# this creature, then put a creature card …"`` — the inner's own
+# ``, then `` stays inside the inner capture so the compound parser
+# downstream can split it as a ``Sequence``.
+_AT_BEGINNING_INTERVENING_IF = re.compile(
+    r"^if (.+?), (.+)$"
+)
 
 
 # Time-condition phrases for the ``At the beginning of`` line shape →
@@ -1265,6 +1293,19 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
         StateBound(Delirium())
     ),
+    # Sothera, the Supervoid's end-step intervening-if gate:
+    # "if a player controls no creatures" — at least one (non-eliminated)
+    # player controls zero creatures on the battlefield. Models the
+    # printed pivot phrase that fires Sothera's end-step recall only
+    # when somebody has been wiped of creatures. The matching
+    # ``StateBound(AnyPlayerControlsNoCreatures())`` predicate evaluates
+    # at trigger time per CR 603.4 (the engine's intervening-if dispatch
+    # is trigger-time only today; the resolve-time recheck is enforced
+    # inside the effect-body primitives so the printed gate stays
+    # honest at both checkpoints).
+    "a player controls no creatures": (
+        StateBound(AnyPlayerControlsNoCreatures())
+    ),
     # DSK Enduring cycle: "When this creature dies, if it was a
     # creature, return it to the battlefield under its owner's
     # control. It's an enchantment." Every Enduring creature in DSK
@@ -1693,6 +1734,33 @@ def _parse_at_the_beginning_of_line(
                 threshold=threshold, inner=inner,
             ),
         )
+    # Generic intervening-if gate: ``if <gate>, <inner>``. Tried after
+    # the dedicated Void / Survival / Delirium / tapped-creatures
+    # branches above so those keep their bespoke handling; this
+    # branch covers any other gate phrase claimed by
+    # ``_INTERVENING_IF_PHRASES``. Sothera, the Supervoid's end-step
+    # gate ``if a player controls no creatures`` lands here; a future
+    # ``At the beginning of your end step, if <some other gate>, ...``
+    # printing reuses this branch automatically once its gate phrase
+    # ships in the phrasebook. An ``if ``-prefixed body whose gate
+    # phrase isn't in the phrasebook is rejected outright — we never
+    # silently drop a printed gate clause.
+    if body.startswith("if "):
+        iif_m = _AT_BEGINNING_INTERVENING_IF.match(body)
+        if iif_m is not None:
+            gate_phrase = iif_m.group(1)
+            inner_phrase = iif_m.group(2)
+            gate_pred = _parse_intervening_if_phrase(gate_phrase)
+            if gate_pred is None:
+                return None
+            inner = _parse_effect_phrase(inner_phrase)
+            if inner is None:
+                return None
+            return TriggeredAbility(
+                event=event,
+                predicate=predicate & gate_pred,
+                effect=inner,
+            )
     effect = _parse_effect_phrase(body)
     if effect is None:
         return None

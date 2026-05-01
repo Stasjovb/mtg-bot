@@ -289,78 +289,21 @@ class SelfcraftMechanETBEffect(Effect):
 # you control dies, each opponent chooses a creature they control and
 # exiles it.") now decomposes into the generic
 # ``EachOpponentExilesOwnCreature(link_to_source=True)`` primitive (in
-# ``effects/generic.py``) via the unified parser grammar. The
-# ``link_to_source=True`` flag preserves the ``exiled_by_source`` link
-# that the sibling ``SotheraEndStepReanimateEffect`` reads via the
-# "creature card exiled with it" anaphoric reference.
-
-
-@dataclass(frozen=True)
-class SotheraEndStepReanimateEffect(Effect):
-    """Sothera's end-step: "If a player controls no creatures, sacrifice
-    Sothera, then put a creature card exiled with it onto the
-    battlefield under your control with two additional +1/+1 counters
-    on it."
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.actions import put_into_battlefield
-        from mtg_bot.game import Zone, add_plus_one_counters
-        from mtg_bot.turn import sacrifice as _sacrifice
-
-        source = state.resolving_source
-        if source is None:
-            return
-        # Gate: does any player control zero creatures?
-        any_empty = any(
-            not [
-                o for o in state.battlefield
-                if o.controller_id == p.id and o.printing.is_creature
-            ]
-            for p in state.players
-            if not p.has_lost
-        )
-        if not any_empty:
-            return
-        # Find a creature card exiled by this Sothera, and pull it out
-        # of exile BEFORE sacrificing Sothera — the release-on-leave
-        # hook would otherwise auto-return it to the owner's bf.
-        exiled_creature = None
-        owner = None
-        for p in state.players:
-            for c in p.exile:
-                if (
-                    c.exiled_by_source == source.id
-                    and c.printing.is_creature
-                ):
-                    exiled_creature = c
-                    owner = p
-                    break
-            if exiled_creature is not None:
-                break
-        if exiled_creature is not None and owner is not None:
-            owner.exile.remove(exiled_creature)
-            exiled_creature.exiled_by_source = None
-        _sacrifice(state, source)
-        if exiled_creature is None:
-            return
-        state.log.append(
-            f"Sothera puts {exiled_creature.printing.name} onto the "
-            f"battlefield under P{controller_id}'s control"
-        )
-        put_into_battlefield(state, exiled_creature, controller_id)
-        add_plus_one_counters(state, exiled_creature, 2)
-
-    def describe(self) -> str:
-        return (
-            "if a player controls no creatures, sacrifice Sothera, "
-            "then put a creature card exiled with it onto the "
-            "battlefield under your control with two +1/+1 counters"
-        )
-
+# ``effects/generic.py``) via the unified parser grammar.
+#
+# NOTE: ``SotheraEndStepReanimateEffect`` was deleted in
+# audit-sothera-foundfootage. Sothera's end-step trigger ("At the
+# beginning of your end step, if a player controls no creatures,
+# sacrifice Sothera, then put a creature card exiled with it onto the
+# battlefield under your control with two additional +1/+1 counters on
+# it.") now decomposes into the generic primitives
+# ``ReanimateOneExiledWithSourceWithCounters(counter_amount=2)`` and
+# ``SacrificeSelfPreservingExileLink`` (both in ``effects/generic.py``)
+# composed in a ``Sequence`` (recall first, sacrifice second — see
+# ``Sequence`` ordering rationale in the parser-side recognizer
+# comment). The intervening-if gate "if a player controls no creatures"
+# resolves through the new ``StateBound(AnyPlayerControlsNoCreatures())``
+# entry in ``_INTERVENING_IF_PHRASES``.
 
 
 @dataclass(frozen=True)

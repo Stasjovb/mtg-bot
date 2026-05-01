@@ -539,9 +539,20 @@ def test_memorial_vault_effect_library_empty_stops_early():
 
 def test_sothera_end_step_noop_when_no_exiled_creature():
     """Sothera end-step with no creature card exiled-by-it: sacrifices
-    self but doesn't reanimate (covers the `if exiled_creature is
-    None: return` branch)."""
-    from mtg_bot.effects import SotheraEndStepReanimateEffect
+    self but doesn't reanimate (covers the no-tagged-creature recall
+    branch in ``ReanimateOneExiledWithSourceWithCounters`` and the
+    sac-then-suppress branch in ``SacrificeSelfPreservingExileLink``).
+
+    Post audit-sothera-foundfootage the body is decomposed into two
+    primitives composed in a Sequence: the recall step is a no-op when
+    no creature is tagged ``exiled_by_source = sothera.id``; the sac
+    step always fires.
+    """
+    from mtg_bot.effects import (
+        ReanimateOneExiledWithSourceWithCounters,
+        SacrificeSelfPreservingExileLink,
+    )
+    from mtg_bot.effects.combinators import Sequence
 
     state = _new_state()
     sothera = _put(state, _PRINTINGS["Sothera, the Supervoid"])
@@ -549,7 +560,10 @@ def test_sothera_end_step_noop_when_no_exiled_creature():
     # sothera sacrifices itself; no exiled creature to reanimate.
     state.resolving_source = sothera
     try:
-        SotheraEndStepReanimateEffect().resolve(state, 0, ())
+        Sequence(effects=(
+            ReanimateOneExiledWithSourceWithCounters(counter_amount=2),
+            SacrificeSelfPreservingExileLink(),
+        )).resolve(state, 0, ())
     finally:
         state.resolving_source = None
     assert sothera not in state.battlefield

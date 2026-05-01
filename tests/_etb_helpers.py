@@ -412,6 +412,20 @@ def _legacy_key_for_player_phase(ability, your_key: str) -> str | None:
         and leaves[0].subject is None
     ):
         return your_key
+    # Intervening-if gate: ``Controlled(YOU) & StateBound(...)`` — the
+    # turn-structure predicate is still the "your <phase>" form, just
+    # with a state-predicate gate AND-ed on top (Sothera's
+    # ``AnyPlayerControlsNoCreatures()`` end-step gate). The base
+    # predicate is the same legacy event, so map to the same key.
+    if (
+        len(leaves) == 2
+        and any(
+            isinstance(leaf, Controlled) and leaf.subject is None
+            for leaf in leaves
+        )
+        and any(isinstance(leaf, StateBound) for leaf in leaves)
+    ):
+        return your_key
     if (
         your_key == "beginning_of_end_step"
         and len(leaves) == 1

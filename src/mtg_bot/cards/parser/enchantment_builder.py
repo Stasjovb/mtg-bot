@@ -83,7 +83,6 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
     CreateToken,
     DestroyEnchantedPermanent,
-    EachOpponentExilesOwnCreature,
     EnchantedCreatureFightsTargetEffect,
     ExileOpponentsNonlandPermanentUntilLeaves,
     ExileTargetCreatureUntilSourceLeaves,
@@ -91,7 +90,6 @@ from mtg_bot.effects import (
     PainForAllETBEffect,
     ReanimateTargetCreatureCardFromDefendersGraveyard,
     SacrificeSelfUnlessVoidActive,
-    SotheraEndStepReanimateEffect,
     TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
@@ -154,31 +152,6 @@ def _build_loading_zone() -> CardPrinting:
         "Loading Zone", "{3}{G}",
         warp="{G}",
         is_counter_doubler=True,
-    )
-
-
-def _build_sothera_the_supervoid() -> CardPrinting:
-    # NOTE: this builder is unused — Sothera now claims through the
-    # unified non-Aura enchantment grammar via
-    # ``_build_enchantment_via_oracle_text`` (gated on the name being in
-    # ``_UNIFIED_ENCHANTMENT_NAMES``). The DIES trigger decomposes into
-    # ``EachOpponentExilesOwnCreature(link_to_source=True)`` (generic);
-    # the end-step trigger remains in ``_NONAURA_LITERAL_TRIGGER_LINES``
-    # pending the parallel ``exiled_with_this`` tracking work.
-    return make_enchantment(
-        "Sothera, the Supervoid", "{2}{B}{B}",
-        legendary=True,
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.DIES,
-                predicate=Subject(None, IsCreature()) & Controlled(YOU),
-                effect=EachOpponentExilesOwnCreature(link_to_source=True),
-            ),
-            TriggeredAbility(
-                event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
-                effect=SotheraEndStepReanimateEffect(),
-            ),
-        ),
     )
 
 
@@ -1358,77 +1331,16 @@ _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES: frozenset[str] = frozenset({
 # Literal trigger-line recognizers for non-Aura enchantments whose ETB
 # uses a bespoke engine class not yet in the general grammar. Parallel to
 # ``_AURA_LITERAL_TRIGGER_LINES`` for non-Aura paths.
-_NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
-    # Sothera, the Supervoid — DIES trigger:
-    # MIGRATED to the unified grammar in audit-per-opponent-choice.
-    # "Whenever a creature you control dies, each opponent chooses a
-    # creature they control and exiles it." now claims through the
-    # standard ``_parse_predicate_trigger_phrase`` path:
-    #   - ``a creature you control dies`` → ``(Event.DIES, Subject(
-    #     None, IsCreature()) & Controlled(YOU))``
-    #   - ``each opponent chooses a creature they control and exiles it``
-    #     → ``EachOpponentExilesOwnCreature(link_to_source=True)``
-    #     (new generic primitive in ``effects/generic.py``).
-    # The ``link_to_source=True`` flag tags exiled objects with
-    # ``exiled_by_source = state.resolving_source.id`` so Sothera's
-    # end-step recall ("creature card exiled with it") still finds them.
-    #
-    # Sothera, the Supervoid — end-step trigger.
-    #
-    # "At the beginning of your end step, if a player controls no
-    # creatures, sacrifice Sothera, then put a creature card exiled
-    # with it onto the battlefield under your control with two
-    # additional +1/+1 counters on it." → bespoke
-    # ``SotheraEndStepReanimateEffect``.
-    #
-    # ARCHITECTURAL BLOCKERS (multiple, all on the same ability):
-    #
-    #   1. The intervening-``if`` gate "if a player controls no
-    #      creatures" is a creatureless-player check. The unified
-    #      ``_INTERVENING_IF_PHRASES`` table only has ``StateBound``
-    #      gates (``OpponentControlsMoreLandsThanYou``, ``VoidActive``,
-    #      ``Delirium``); a "any player controls zero creatures"
-    #      predicate would need a new ``StateBound`` primitive.
-    #      Furthermore, this gate must be re-checked at RESOLVE time
-    #      (not just trigger time), per the bespoke's actual behavior
-    #      — the ``_INTERVENING_IF_PHRASES`` predicate is checked only
-    #      at trigger time today, so even adding the predicate would
-    #      drop the resolve-time recheck (a state change between
-    #      trigger and resolve would mis-fire).
-    #
-    #   2. The body composes three sequential operations that share
-    #      anaphoric state: (a) sacrifice the source, (b) find a
-    #      creature card "exiled with it" (the source-link from the
-    #      DIES-trigger sibling above), pull it out of exile BEFORE
-    #      the sacrifice triggers the on-leave release path, (c) put
-    #      the chosen exiled card onto the battlefield under YOUR
-    #      control with +2 +1/+1 counters. The ``Sequence``
-    #      combinator can't model the (b)-before-(a) ordering
-    #      (sequence runs strictly in order, but the sac-then-recall
-    #      reading of the printed text requires recall-then-sac at
-    #      the engine level to defeat the auto-return). A
-    #      ``SacrificeSelfThenReturnExiledByMeWithCounters`` primitive
-    #      would solve it; until that primitive exists, the bespoke
-    #      effect is the only correct claim.
-    #
-    #   3. The "creature card exiled with it" anaphoric reference
-    #      depends on the ``exiled_by_source`` bookkeeping populated
-    #      by the DIES trigger's bespoke effect — i.e. these two
-    #      bespoke classes are coupled, and migrating either one in
-    #      isolation would break the other. The migration must land
-    #      both new primitives in the same change so the source-link
-    #      contract stays consistent.
-    (
-        "At the beginning of your end step, if a player controls no "
-        "creatures, sacrifice Sothera, then put a creature card exiled "
-        "with it onto the battlefield under your control with two "
-        "additional +1/+1 counters on it."
-    ): TriggeredAbility(
-        event=Event.BEGINNING_OF_END_STEP,
-        predicate=Controlled(YOU),
-        effect=SotheraEndStepReanimateEffect(),
-    ),
-}
+#
+# Empty today — Sothera's DIES trigger migrated to the unified grammar
+# in audit-per-opponent-choice (``EachOpponentExilesOwnCreature(
+# link_to_source=True)``); Sothera's end-step trigger migrated to the
+# unified grammar in audit-sothera-foundfootage via the new
+# ``_SOTHERA_END_STEP_BODY`` literal-line recognizer in
+# ``effects.py`` plus the ``"a player controls no creatures"`` entry
+# in ``_INTERVENING_IF_PHRASES``. Future bespoke ETB triggers that
+# don't fit the general grammar would land here.
+_NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {}
 
 
 _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
@@ -1471,13 +1383,15 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # to ``DrawCardsEqualToResolvingCounterAmount`` when the trigger
     # event is COUNTERS_ADDED.
     "Terrasymbiosis",
-    # Sothera, the Supervoid — DIES trigger now decomposed into the
+    # Sothera, the Supervoid — DIES trigger decomposed into the
     # generic ``EachOpponentExilesOwnCreature(link_to_source=True)``
     # primitive (audit-per-opponent-choice). The end-step trigger
-    # remains in ``_NONAURA_LITERAL_TRIGGER_LINES`` pending two
-    # architectural pieces: a creatureless-player ``StateBound`` gate
-    # and a sequenced sac-then-recall-with-counters primitive (both
-    # coupled to the parallel ``exiled_with_this`` tracking work).
+    # decomposed into the generic
+    # ``Sequence(ReanimateOneExiledWithSourceWithCounters(
+    # counter_amount=2), SacrificeSelfPreservingExileLink())`` plus
+    # the ``StateBound(AnyPlayerControlsNoCreatures())`` intervening-if
+    # gate (audit-sothera-foundfootage). Both triggers now claim
+    # through the unified parser grammar.
     "Sothera, the Supervoid",
 })
 

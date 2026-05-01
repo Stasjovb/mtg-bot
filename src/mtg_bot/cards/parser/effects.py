@@ -69,7 +69,9 @@ from mtg_bot.cards.base import (
     ExileAllMatchingUntilSourceLeaves,
     MoveEachExiledWithSourceToOwnersGraveyard,
     PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    ReanimateOneExiledWithSourceWithCounters,
     SacrificeSelf,
+    SacrificeSelfPreservingExileLink,
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
     ExileTargetCreature,
@@ -4189,6 +4191,45 @@ def _parse_effect(phrase: str) -> Effect | None:
             grant_flying_counter=True,
             grant_subtype_and_pt=("Spirit", 1, 1),
         )
+    # Sothera, the Supervoid's end-step body (after the
+    # ``_substitute_self_name`` rewrite turns the short name "Sothera"
+    # into "this creature" and the trigger-line regex strips the
+    # leading time-condition phrase + the intervening-if gate clause
+    # ``if a player controls no creatures, ``):
+    #   ``sacrifice this creature, then put a creature card exiled with
+    #   it onto the battlefield under your control with two additional
+    #   +1/+1 counters on it``
+    # The printed reading is sac-then-recall, but at the engine level
+    # we have to invert the order: Sothera's DIES-trigger sibling tags
+    # opponent-exiled creatures with ``exiled_by_source = sothera.id``,
+    # and the engine's ``_release_exiled_until_leaves`` on-leave hook
+    # would race in and auto-return EVERY tagged card the moment
+    # Sothera leaves the battlefield — defeating the recall step's
+    # ability to pick one (and racing the others back too, which the
+    # printed text doesn't say). The fix:
+    #
+    #   1. Run the recall step FIRST (``ReanimateOneExiledWithSource
+    #      WithCounters(counter_amount=2)``): pick one tagged creature,
+    #      pull it out of exile, put it onto the battlefield with +2
+    #      +1/+1 counters.
+    #   2. Run a sacrifice step that arms a one-shot suppression flag
+    #      on the on-leave hook (``SacrificeSelfPreservingExileLink``):
+    #      sets ``state.suppress_exiled_by_source_on_leave_for =
+    #      source.id`` immediately before sacrificing, so the auto-
+    #      return loop skips its first invocation for this source.
+    #
+    # Multi-effect literal recognizer: only Sothera in the EoE pool
+    # ships this exact recall+sac shape today. Deferred generalization
+    # until a second card with a similar order-inversion need ships.
+    if phrase == (
+        "sacrifice this creature, then put a creature card exiled with "
+        "it onto the battlefield under your control with two additional "
+        "+1/+1 counters on it"
+    ):
+        return Sequence(effects=(
+            ReanimateOneExiledWithSourceWithCounters(counter_amount=2),
+            SacrificeSelfPreservingExileLink(),
+        ))
     # Requiem Monolith's ``{T}`` activation body (after the inline
     # ``Activate only as a sorcery.`` rider strip in
     # ``_parse_activated_ability_line`` flips ``sorcery_speed=True``

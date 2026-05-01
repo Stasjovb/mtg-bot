@@ -225,3 +225,35 @@ class LoneAttackerForYou(StatePredicate):
         if len(attackers) != 1:
             return False
         return attackers[0].controller_id == viewer_id
+
+
+@dataclass(frozen=True)
+class AnyPlayerControlsNoCreatures(StatePredicate):
+    """At least one (non-eliminated) player controls zero creatures on
+    the battlefield.
+
+    Viewer-independent: the predicate walks every active player and
+    returns True the moment one of them owns no battlefield creatures.
+    Any creature on the battlefield (printed creature, animated land,
+    stationed Spacecraft) counts via ``printing.is_creature``; the
+    legacy bespoke effect used the same surface check, so we mirror
+    that scope here.
+
+    Models the intervening-if gate "if a player controls no creatures"
+    on Sothera, the Supervoid's end-step trigger. The trigger fires only
+    when, at the beginning of the controller's end step, at least one
+    player has been wiped of creatures — the gate is the printed
+    "give up your last creature, get one back" pivot.
+    """
+
+    def test(self, state, viewer_id):
+        for p in state.players:
+            if getattr(p, "has_lost", False):
+                continue
+            has_creature = any(
+                o.controller_id == p.id and o.printing.is_creature
+                for o in state.battlefield
+            )
+            if not has_creature:
+                return True
+        return False

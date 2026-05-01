@@ -2170,6 +2170,19 @@ class GameState:
     # ``resolve_top_of_stack`` after each ability resolves so it never
     # bleeds across ability boundaries.
     last_exile_recall_count: int = 0
+    # When set to a source-object id, the engine's
+    # ``_release_exiled_until_leaves`` on-leave hook (turn.py) suppresses
+    # the auto-return of cards exiled with that source — for the next
+    # leave-the-battlefield event on that source only. Used by
+    # ``SacrificeSelfPreservingExileLink``: Sothera, the Supervoid's
+    # end-step recall reads the cards "exiled with it" BEFORE Sothera
+    # is sacrificed (so the controller can pick which one to recall),
+    # then sacs the source; without the suppression flag, the on-leave
+    # hook would race in and auto-return every remaining tagged card
+    # to its owner's battlefield, which the printed text doesn't say.
+    # Cleared by the on-leave hook itself once a leave event for the
+    # matching source has been observed (one-shot suppression).
+    suppress_exiled_by_source_on_leave_for: int | None = None
     # IDs of permanents scheduled to be sacrificed at end of combat.
     # Cleared during clear_combat_state after processing.
     # Used by Kavaron Harrier's attack token.
