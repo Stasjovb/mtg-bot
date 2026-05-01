@@ -708,8 +708,7 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     # grant_keyword / lose_all_abilities ordering is preserved.  The
     # modifier grammar's GrantKeyword / RemoveKeyword payloads are
     # layer-6 operations; for the current EoE pool (Mechan Shieldmate
-    # RemoveKeyword("defender"), Illvoi Infiltrator
-    # GrantKeyword("unblockable")) no interaction with lose_all_abilities
+    # RemoveKeyword("defender")) no interaction with lose_all_abilities
     # exists, so post-walk application is CR-correct.
     from mtg_bot.effects.modifiers import GrantKeyword, RemoveKeyword, walk_continuous_modifiers
     for _src_id, mod in walk_continuous_modifiers(state, obj):
@@ -732,6 +731,49 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     if obj.flying_counters > 0:
         kws.add("flying")
     return frozenset(kws)
+
+
+def is_cant_be_blocked(state: GameState, obj: GameObject) -> bool:
+    """Return True iff ``obj`` currently has the "can't be blocked"
+    continuous effect — the structural counterpart to
+    :func:`effective_keywords` for the can't-be-blocked restriction.
+
+    "Unblockable" is NOT a keyword in MTG — it's a layer-6 continuous
+    effect that imposes a gameplay-action restriction (CR 509.1b
+    blocker-declaration rejects the assignment). The bot models it
+    via two parallel sources, mirroring how
+    :func:`effective_keywords` walks both registry entries and
+    ``ContinuousModifier`` declarations:
+
+    1. Registry-side: layer-6 ``cant_be_blocked`` continuous-effect
+       entries (written by :class:`GrantUnblockable` and the manland
+       / Atomic Microsizer animation paths).
+    2. Modifier-grammar side: layer-6 ``ContinuousModifier`` whose
+       payload is :class:`CantBeBlocked`, walked via
+       :func:`walk_continuous_modifiers` (Illvoi Infiltrator's printed
+       conditional-unblockable static).
+
+    A face-down permanent has no abilities (CR 701.34 / 707.2) and
+    therefore can't carry continuous-effect declarations from its
+    own static abilities; registry entries written by other sources
+    still apply, mirroring the asymmetry on the keyword side.
+    """
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "cant_be_blocked"
+            and ce.target_id == obj.id
+        ):
+            return True
+    if obj.face_down:
+        return False
+    from mtg_bot.effects.modifiers import (
+        CantBeBlocked, walk_continuous_modifiers,
+    )
+    for _src_id, mod in walk_continuous_modifiers(state, obj):
+        if isinstance(mod.payload, CantBeBlocked):
+            return True
+    return False
 
 
 def effective_ward_cost(

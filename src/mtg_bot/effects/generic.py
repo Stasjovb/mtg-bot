@@ -4658,16 +4658,20 @@ class GrantUnblockable(Effect):
     :class:`Pump` / :class:`Bounce` / :class:`PutPlusOneCounters`
     for the can't-be-blocked family. The unified resolve walks each
     slot, re-verifies legality at resolution per CR 608.2b, and writes
-    a layer-6 ``grant_keyword`` registry entry with ``params=
-    ("unblockable",)`` and ``expires_at=None`` (permanent until source
-    leaves play) for each surviving target. Wrap with ``ApplyEffect(
+    a layer-6 ``cant_be_blocked`` registry entry with empty ``params``
+    and ``expires_at=None`` (permanent until source leaves play) for
+    each surviving target. Wrap with ``ApplyEffect(
     GrantUnblockable(...), EndOfTurn())`` (or use the
     :class:`GrantUnblockableUEOT` sugar) to give the grants a UEOT
     lifetime — ``ApplyEffect`` rewrites the ``expires_at`` of every
     entry written here.
 
-    The "unblockable" keyword is read by ``combat.eligible_blockers``
-    via ``"unblockable" in effective_keywords(state, attacker)``.
+    "Can't be blocked" is NOT a keyword in MTG; it is a layer-6
+    continuous effect that imposes a blocker-declaration restriction
+    (CR 509.1b). The registry kind ``cant_be_blocked`` is therefore
+    structurally distinct from ``grant_keyword``, and is read by
+    :func:`mtg_bot.game.is_cant_be_blocked` (consumed by
+    ``combat.can_block`` / ``combat.declare_blockers``).
     """
 
     targets: tuple = ()
@@ -4684,17 +4688,35 @@ class GrantUnblockable(Effect):
         prior = getattr(state, "resolving_controller_id", None)
         try:
             state.resolving_controller_id = controller_id
-            for slot, chosen in zip(self.targets, targets):
+            # Two callers shapes — mirroring ``GrantKeywords``:
+            # 1. Targeted spell/ability path: ``self.targets`` carries
+            #    ``TargetSpec`` slots, ``targets`` carries the resolved
+            #    ``(kind, id)`` choices; re-verify legality at resolve.
+            # 2. Direct/self-target path (manland animation, Atomic
+            #    Microsizer attack trigger): ``self.targets`` is empty
+            #    or shorter than the passed ``targets``, and the caller
+            #    has already chosen the affected permanent. In this
+            #    case there is no target-pick to re-verify (CR 608.2b
+            #    only requires re-check for chosen targets); write the
+            #    registry entry against each passed ``(kind, id)``.
+            if not self.targets:
+                slots = (None,) * len(targets)
+            else:
+                slots = self.targets
+            for slot, chosen in zip(slots, targets):
                 if isinstance(slot, SlotRef):
                     continue
-                if not isinstance(slot, TargetSpec):
-                    continue
-                if not _slot_target_still_legal(state, slot, chosen):
-                    state.log.append(
-                        _fizzle_message(
-                            state, chosen, action="unblockable grant",
+                if isinstance(slot, TargetSpec):
+                    if not _slot_target_still_legal(state, slot, chosen):
+                        state.log.append(
+                            _fizzle_message(
+                                state, chosen,
+                                action="unblockable grant",
+                            )
                         )
-                    )
+                        continue
+                elif slot is not None:
+                    # Unknown slot shape — be conservative.
                     continue
                 _, target_id = chosen
                 obj = next(
@@ -4709,12 +4731,12 @@ class GrantUnblockable(Effect):
                     else obj.printing.name
                 )
                 state.add_continuous_effect(
-                    source_id=source_id, layer=6, kind="grant_keyword",
-                    target_id=obj.id, params=("unblockable",),
+                    source_id=source_id, layer=6, kind="cant_be_blocked",
+                    target_id=obj.id, params=(),
                     expires_at=None,
                     description=(
-                        f"{source_name} grants unblockable to "
-                        f"{obj.printing.name}"
+                        f"{source_name} makes {obj.printing.name} "
+                        f"unblockable"
                     ),
                 )
                 state.log.append(
@@ -6032,10 +6054,13 @@ class BecomeLandCreatureUEOT(Effect):
     its non-creature state at end of turn.
 
     Keyword grants ride ``ApplyEffect(GrantKeywords(...),
-    EndOfTurn())`` (layer-6 ``grant_keyword`` registry entries) — the
-    ``unblockable`` rider for Creeping Tar Pit folds the keyword into
-    ``GrantKeywords`` alongside any other granted keywords. Granted
-    activated / triggered abilities ride
+    EndOfTurn())`` (layer-6 ``grant_keyword`` registry entries). The
+    ``unblockable`` rider for Creeping Tar Pit is structurally
+    distinct from real keywords — "can't be blocked" is a continuous
+    gameplay-action restriction, not an ability — so it composes via
+    ``ApplyEffect(GrantUnblockable(...), EndOfTurn())`` (layer-6
+    ``cant_be_blocked`` registry entry), separately from the keyword
+    grants. Granted activated / triggered abilities ride
     ``ApplyEffect(GrantActivatedAbility(...), EndOfTurn())`` /
     ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` (layer-6
     ``grant_*_ability`` registry entries).
@@ -6084,13 +6109,22 @@ class BecomeLandCreatureUEOT(Effect):
             ends_at=EndOfTurn(),
         ).resolve(state, controller_id, ())
         kws = self.granted_keywords
-        if self.unblockable:
-            kws = kws | frozenset({"unblockable"})
         if kws:
             ApplyEffect(
                 inner=GrantKeywords(keywords=kws),
                 ends_at=EndOfTurn(),
             ).resolve(state, controller_id, ())
+        if self.unblockable:
+            # "Can't be blocked" is a continuous effect, not a keyword
+            # — composes via the dedicated ``GrantUnblockable``
+            # primitive (direct / self-target shape: ``self.targets``
+            # empty, runtime ``targets`` carries the animated land),
+            # which writes a layer-6 ``cant_be_blocked`` registry
+            # entry (read by ``game.is_cant_be_blocked``).
+            ApplyEffect(
+                inner=GrantUnblockable(),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, (("permanent", source.id),))
         for ab in self.granted_activated_abilities:
             ApplyEffect(
                 inner=GrantActivatedAbility(ability=ab),
@@ -6101,8 +6135,11 @@ class BecomeLandCreatureUEOT(Effect):
                 inner=GrantTriggeredAbility(ability=ab),
                 ends_at=EndOfTurn(),
             ).resolve(state, controller_id, ())
+        kw_parts = sorted(kws)
+        if self.unblockable:
+            kw_parts.append("unblockable")
         kw_note = (
-            f" with {', '.join(sorted(kws))}" if kws else ""
+            f" with {', '.join(kw_parts)}" if kw_parts else ""
         )
         state.log.append(
             f"{source.printing.name} becomes a {self.power}/{self.toughness}"

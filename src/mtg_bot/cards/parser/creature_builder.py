@@ -143,9 +143,9 @@ from mtg_bot.effects.conditions import (
 from mtg_bot.effects.modifiers import (
     AddInstances,
     AddToCount,
+    CantBeBlocked,
     ContinuousModifier,
     EventPattern,
-    GrantKeyword,
     MultiplyCount,
     RemoveKeyword,
     ReplacementEffect,
@@ -1141,17 +1141,19 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # ``This creature can't be blocked if you've cast two or
             # more spells this turn.`` — Illvoi Infiltrator's printed
             # conditional-unblockable. Expressed as a SELF-scope
-            # StaticAbility carrying a ContinuousModifier that grants
-            # "unblockable" while AtLeastNSpellsCastThisTurn(2) holds.
-            # combat.can_block checks "unblockable" in
-            # effective_keywords(state, attacker) and rejects all
-            # blocks; declare_blockers does the same safety check.
+            # StaticAbility carrying a ContinuousModifier whose
+            # payload is ``CantBeBlocked()`` (a layer-6 continuous
+            # gameplay-action restriction, structurally distinct from
+            # real keyword grants) while AtLeastNSpellsCastThisTurn(2)
+            # holds. combat.can_block / declare_blockers reach this
+            # via game.is_cant_be_blocked, which walks
+            # walk_continuous_modifiers for ``CantBeBlocked`` payloads.
             statics.append(StaticAbility(
                 scope=StaticScope.SELF,
                 condition=AtLeastNSpellsCastThisTurn(2),
                 continuous_effect=ContinuousModifier(
                     layer=6,
-                    payload=GrantKeyword("unblockable"),
+                    payload=CantBeBlocked(),
                 ),
             ))
             continue

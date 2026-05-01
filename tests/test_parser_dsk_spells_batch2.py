@@ -378,12 +378,15 @@ def test_grant_unblockable_ueot_legal_targets_lists_creatures_only():
 
 def test_grant_unblockable_ueot_resolve_grants_keyword():
     # End-to-end resolve sanity: pick a target creature, run resolve,
-    # verify a layer-6 grant_keyword "unblockable" registry entry
-    # appears for the target. ``effective_keywords`` reads this entry,
-    # and ``combat.eligible_blockers`` reads ``effective_keywords``.
+    # verify a layer-6 ``cant_be_blocked`` registry entry appears for
+    # the target. ``is_cant_be_blocked`` reads this entry, and
+    # ``combat.can_block`` / ``combat.declare_blockers`` consult
+    # ``is_cant_be_blocked`` rather than ``effective_keywords``
+    # because "can't be blocked" is a continuous gameplay-action
+    # restriction (CR 509.1b), not a keyword ability.
     from mtg_bot.cards.base import make_creature
     from mtg_bot.game import (
-        GameObject, GameState, Player, Zone, effective_keywords,
+        GameObject, GameState, Player, Zone, is_cant_be_blocked,
     )
 
     bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
@@ -396,9 +399,9 @@ def test_grant_unblockable_ueot_resolve_grants_keyword():
         battlefield=[bear_obj],
     )
     eff = GrantUnblockableUEOT()
-    assert "unblockable" not in effective_keywords(state, bear_obj)
+    assert not is_cant_be_blocked(state, bear_obj)
     eff.resolve(state, controller_id=0, targets=(("creature", 1),))
-    assert "unblockable" in effective_keywords(state, bear_obj)
+    assert is_cant_be_blocked(state, bear_obj)
 
 
 def test_grant_unblockable_ueot_resolve_no_target_is_no_op():

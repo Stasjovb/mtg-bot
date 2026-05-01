@@ -204,10 +204,13 @@ class LayerPayload(ABC):
 class GrantKeyword(LayerPayload):
     """CR 613 layer 6 — grant a keyword ability.
 
-    Models the Illvoi-Infiltrator-shape "while [condition], this
-    creature has unblockable" and the anthem-family "creatures you
-    control have flying" — same payload, different scope_filter on
-    the wrapping :class:`ContinuousModifier`.
+    Models the anthem-family "creatures you control have flying" —
+    the wrapping :class:`ContinuousModifier`'s ``scope_filter`` /
+    surrounding ``StaticAbility.scope`` chooses who the grant lands
+    on. Reserved for *real* MTG keywords that the rules layer treats
+    generically (flying, lifelink, defender, trample, reach, …); the
+    "this creature can't be blocked" continuous effect is structurally
+    distinct and lives on :class:`CantBeBlocked` instead.
     """
 
     keyword: str
@@ -260,6 +263,26 @@ class SetBasePowerToughness(LayerPayload):
 
     power: int
     toughness: int
+
+
+@dataclass(frozen=True)
+class CantBeBlocked(LayerPayload):
+    """CR 613 layer 6 — the affected creature can't be blocked.
+
+    "Unblockable" is NOT a keyword in real MTG — it's a continuous
+    effect that imposes a gameplay-action restriction on the creature
+    (CR 509.1b: "the active player declares attackers, then the
+    defending player declares blockers; a creature with this effect
+    can't be blocked"). Structurally distinct from
+    :class:`GrantKeyword` / :class:`RemoveKeyword` which manipulate
+    the creature's effective keyword set.
+
+    Models the Illvoi-Infiltrator-shape "while [condition], this
+    creature can't be blocked" via a SELF-scope ``StaticAbility``
+    carrying ``ContinuousModifier(layer=6, payload=CantBeBlocked())``.
+    Read by ``mtg_bot.game.is_cant_be_blocked`` (and indirectly by
+    ``combat.can_block`` / ``combat.declare_blockers``).
+    """
 
 
 @dataclass(frozen=True)
@@ -589,6 +612,7 @@ __all__ = [
     "RemoveKeyword",
     "PowerToughnessBonus",
     "SetBasePowerToughness",
+    "CantBeBlocked",
     "AddSubtype",
     "ContinuousModifier",
     "ReplacementEffect",

@@ -33,6 +33,7 @@ from mtg_bot.effects.modifiers import (
     AddInstances,
     AddSubtype,
     AddToCount,
+    CantBeBlocked,
     ContinuousModifier,
     EventPattern,
     EventTransform,
@@ -444,7 +445,11 @@ def test_walk_continuous_modifiers_condition_gates():
     from dataclasses import replace as dc_replace
 
     state = _make_arena_for_walker()
-    cm = ContinuousModifier(layer=6, payload=GrantKeyword("unblockable"))
+    # Illvoi-Infiltrator-shape conditional unblockable: the payload
+    # is ``CantBeBlocked()`` (a continuous gameplay-action restriction,
+    # NOT a keyword grant). The condition gating is what's being
+    # exercised here; the specific payload is incidental.
+    cm = ContinuousModifier(layer=6, payload=CantBeBlocked())
     sa = StaticAbility(
         scope=StaticScope.SELF,
         condition=AtLeastNSpellsCastThisTurn(2),

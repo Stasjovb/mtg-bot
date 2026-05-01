@@ -40,11 +40,14 @@ def can_block(
     Flying: a creature with flying can only be blocked by creatures with flying
     or reach.
 
-    Unblockable: an attacker with "unblockable" in its effective keywords
-    rejects all blocks. The "unblockable" keyword is granted by
-    ContinuousModifier declarations (e.g. Illvoi Infiltrator's
-    "can't be blocked if you've cast two or more spells this turn") via
-    walk_continuous_modifiers inside effective_keywords.
+    Unblockable: an attacker that ``game.is_cant_be_blocked`` returns
+    True for rejects all blocks. "Can't be blocked" is NOT a keyword
+    in MTG — it's a layer-6 continuous gameplay-action restriction
+    (CR 509.1b) sourced from either a ``cant_be_blocked`` registry
+    entry (GrantUnblockable / manland animation / Atomic Microsizer)
+    or a ``ContinuousModifier(payload=CantBeBlocked())`` declaration
+    (Illvoi Infiltrator's "can't be blocked if you've cast two or
+    more spells this turn"). The helper walks both sources.
 
     "Can block only creatures with flying" (EoE Drone token): a blocker
     whose printing carries this flag may only declare blocks against
@@ -59,6 +62,7 @@ def can_block(
     """
     from mtg_bot.game import (
         effective_colors, effective_protection_from_colors,
+        is_cant_be_blocked,
     )
 
     attacker_kws = effective_keywords(state, attacker)
@@ -66,7 +70,7 @@ def can_block(
     if "flying" in attacker_kws:
         if not ("flying" in blocker_kws or "reach" in blocker_kws):
             return False
-    if "unblockable" in attacker_kws:
+    if is_cant_be_blocked(state, attacker):
         return False
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
@@ -247,11 +251,12 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
     """
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import is_cant_be_blocked
 
     for blocker_id, attacker_id in assignments.items():
         blocker = next(o for o in state.battlefield if o.id == blocker_id)
         attacker = next(o for o in state.battlefield if o.id == attacker_id)
-        if "unblockable" in effective_keywords(state, attacker):
+        if is_cant_be_blocked(state, attacker):
             state.log.append(
                 f"{attacker.printing.name} can't be blocked — "
                 f"{blocker.printing.name}'s block is ignored"

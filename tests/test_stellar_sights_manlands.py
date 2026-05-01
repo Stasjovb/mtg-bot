@@ -17,7 +17,7 @@ from mtg_bot.effects import BecomeLandCreatureUEOT
 from mtg_bot.game import (
     GameState, Player, Zone,
     effective_keywords, effective_power, effective_toughness,
-    is_creature_now,
+    is_cant_be_blocked, is_creature_now,
 )
 from mtg_bot.turn import Step, run_cleanup_step
 
@@ -251,7 +251,10 @@ def test_every_manland_animates_to_expected_pt_and_keywords():
         for k in kws:
             assert k in eff_kws, f"{name} missing keyword {k!r}"
         if unblockable:
-            assert "unblockable" in eff_kws, (
+            # "Unblockable" is a continuous gameplay-action
+            # restriction, not a keyword — read via the dedicated
+            # ``is_cant_be_blocked`` helper.
+            assert is_cant_be_blocked(state, land), (
                 f"{name} should be unblockable"
             )
 
