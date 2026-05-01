@@ -4309,12 +4309,13 @@ class PumpTargetCreatureUntilEOT(Effect):
     # draw a card." Matches Dual-Sun Technique. The controller of the
     # spell does the drawing. Inspected at resolution time.
     draw_if_target_has_plus_one_counter: int = 0
-    # Target subtype filter: when set, only creatures whose subtypes
-    # (printed OR runtime-granted via ``GameObject.temp_subtype``)
-    # include this value are legal targets. Matches oracle text like
-    # "Target Blinkmoth creature gets +1/+1 until end of turn"
-    # (Blinkmoth Nexus — the animated Nexus carries the Blinkmoth
-    # subtype as a temp grant from BecomeLandCreatureUEOT).
+    # Target subtype filter: when set, only creatures whose effective
+    # subtypes (printed plus any layer-3/4 registry-granted entries via
+    # ``effective_subtypes``) include this value are legal targets.
+    # Matches oracle text like "Target Blinkmoth creature gets +1/+1
+    # until end of turn" (Blinkmoth Nexus — the animated Nexus carries
+    # the Blinkmoth subtype as a registry entry written by the
+    # ``ApplyEffect(BecomeType, EndOfTurn())`` manland animation).
     target_subtype: str | None = None
     # Granted triggered ability that's appended to the target's
     # ``temp_triggered_abilities`` UEOT. Matches oracle text like

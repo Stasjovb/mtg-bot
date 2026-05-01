@@ -865,7 +865,7 @@ class CardPrinting:
     # Consumed by game.effective_land_produces and
     # game.effective_activated_abilities. Simplification: subtypes
     # aren't rewritten, and already-animated manlands keep their
-    # temp_is_creature state (no layers yet).
+    # animated creature state (no layers yet).
     nonbasic_lands_are_mountains: bool = False
     # Dryad of the Ilysian Grove: "Lands you control are every basic
     # land type in addition to their other types." A printing with

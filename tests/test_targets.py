@@ -155,7 +155,6 @@ class FakeObject:
     etb_timestamp: int = 0
     impending_active: bool = False
     enduring_returned_as_enchantment: bool = False
-    temp_is_creature: bool = False
     permanent_is_creature: bool = False
     charge_counters: int = 0
 

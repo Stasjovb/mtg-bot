@@ -80,7 +80,6 @@ class FakeObject:
     face_down: bool = False
     impending_active: bool = False
     enduring_returned_as_enchantment: bool = False
-    temp_is_creature: bool = False
     permanent_is_creature: bool = False
 
 

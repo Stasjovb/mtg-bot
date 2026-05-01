@@ -53,7 +53,6 @@ class FakeObject:
     # Read by ``is_creature_now`` — runtime type-line overrides.
     impending_active: bool = False
     enduring_returned_as_enchantment: bool = False
-    temp_is_creature: bool = False
     permanent_is_creature: bool = False
 
 

@@ -870,9 +870,10 @@ class ConditionalIfYouControlSubtype(Effect):
     """Run ``then_effect`` if the effect's controller controls at least one
     permanent with ``subtype`` at resolution; otherwise run ``else_effect``.
 
-    Reads each battlefield permanent's printing-level ``subtypes`` AND its
-    runtime-granted ``temp_subtype`` so a creature whose subtype was added
-    by a Conspiracy-style or Cytoshape effect counts. Matches DSK's
+    Reads each battlefield permanent's effective subtypes (printed plus
+    any layer-3/4 registry-granted entries via ``effective_subtypes``) so
+    a creature whose subtype was added by a Conspiracy-style or Cytoshape
+    effect counts. Matches DSK's
     "If you control a Demon, ..., otherwise, ..." gate on Unholy Annex
     (Unholy Annex // Ritual Chamber): the upkeep / end-step rider
     "If you control a Demon, each opponent loses 2 life and you gain

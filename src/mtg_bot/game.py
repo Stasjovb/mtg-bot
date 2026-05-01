@@ -60,17 +60,6 @@ class GameObject:
     minus_one_counters: int = 0
     # "Can't be blocked this turn" marker (cleared at cleanup).
     temp_unblockable: bool = False
-    # "Until end of turn, this land becomes a creature." Manlands
-    # (Celestial Colonnade, Blinkmoth Nexus, etc.). When True, the
-    # object counts as a creature for combat/targeting purposes.
-    # Cleared at cleanup. Pair with temp_base_pt_override + temp_keywords.
-    temp_is_creature: bool = False
-    # Subtype granted UEOT — typically by an animation effect like
-    # Blinkmoth Nexus's "becomes a 1/1 Blinkmoth artifact creature".
-    # Cleared at cleanup. Consumed by target-subtype filters that
-    # need to recognize creatures whose subtype is granted at runtime
-    # (e.g. PumpTargetCreatureUntilEOT.target_subtype="Blinkmoth").
-    temp_subtype: str | None = None
     # "You may play this card this turn" — set on cards exiled by
     # impulse-style effects (Territorial Bruntar landfall, Memorial
     # Vault activated). Cleared at cleanup. legal_actions honors it
@@ -91,10 +80,6 @@ class GameObject:
     # NOT cleared at cleanup — persists until the card leaves exile.
     # Cleared in _cast_spell / _play_land on use.
     cast_from_exile_with_lightstall_surcharge: bool = False
-    # Base P/T override ("has base power and toughness 1/1 until end of
-    # turn") — Atomic Microsizer. None = use printed P/T. Cleared at
-    # cleanup.
-    temp_base_pt_override: "tuple[int, int] | None" = None
     # Warp-cast state. ``cast_via_warp`` is set True when this card was cast
     # for its warp cost (from hand or, for Timeline Culler, from graveyard).
     # The end-step exile is scheduled as a proper delayed triggered ability
@@ -328,18 +313,16 @@ class GameObject:
     # one-shot — matches CR 706.2 ("a permanent that has changed zones
     # is a new object").
     has_activated_once_only_ability: bool = False
-    # Permanent layer-4 ``add_type "creature"`` write-through cache.
-    # Set by effects that turn a non-creature permanent into a
-    # creature INDEFINITELY (Haunted Screen's ``It becomes a 0/0
-    # Spirit creature in addition to its other types.``), as opposed
-    # to the UEOT manland-animation flow that uses ``temp_is_creature``
-    # and is cleared at cleanup. ``is_creature_now`` consults both
-    # caches; cleanup leaves this one alone so the type-change persists
-    # across turns. Mirrors a layer-4 ``add_type`` registry entry with
-    # ``expires_at=None`` — the cache is the read path, the registry
-    # entry holds the layer metadata for future layer-aware ordering
-    # work. Distinct from ``temp_is_creature`` because each one's
-    # cleanup story is different.
+    # Layer-4 ``add_type "creature"`` write-through cache. Set by
+    # ``BecomeType`` whenever it adds the "creature" type (Haunted
+    # Screen's "It becomes a 0/0 Spirit creature in addition to its
+    # other types." — permanent — and the UEOT manland-animation flow
+    # via ``ApplyEffect(BecomeType(...), EndOfTurn())``).
+    # ``is_creature_now`` reads this cache; ``run_cleanup_step`` rebuilds
+    # it from the registry after expiring cleanup-scoped entries, so a
+    # finite-lifetime ``BecomeType`` correctly reverts the cache when
+    # its registry entry expires. Indefinite-lifetime entries persist
+    # across cleanup so a permanent type-change survives.
     permanent_is_creature: bool = False
 
 
@@ -447,8 +430,12 @@ def is_creature_now(obj: GameObject) -> bool:
 
     True for printed creatures, for Spacecraft whose charge-counter
     threshold has been crossed (they're artifact creatures while
-    stationed), and for lands animated by a manland activation
-    (``temp_is_creature`` set until cleanup).
+    stationed), and for any object whose layer-4 ``add_type "creature"``
+    write-through cache (``permanent_is_creature``) is set — covers both
+    UEOT manland animations (via ``ApplyEffect(BecomeType, EndOfTurn())``,
+    rebuilt to False at cleanup once the registry entry expires) and
+    indefinite type-changes (Haunted Screen's "becomes a 0/0 Spirit
+    creature in addition to its other types").
 
     A face-down permanent (``obj.face_down=True``, set by Manifest
     Dread / Morph) is always a 2/2 creature regardless of the
@@ -461,9 +448,9 @@ def is_creature_now(obj: GameObject) -> bool:
     this helper returns False until the last time counter is
     removed at the controller's end step (see
     ``run_impending_decrement_turn_based_action``). Impending takes
-    precedence over ``temp_is_creature`` / ``is_stationed`` so a
-    future card animating an impending Overlord wouldn't wake it
-    early — those are independent mechanics.
+    precedence over ``is_stationed`` so a future card animating an
+    impending Overlord wouldn't wake it early — those are independent
+    mechanics.
     """
     if obj.face_down:
         return True
@@ -480,7 +467,6 @@ def is_creature_now(obj: GameObject) -> bool:
     return (
         obj.printing.is_creature
         or is_stationed(obj)
-        or obj.temp_is_creature
         or obj.permanent_is_creature
     )
 
@@ -1637,9 +1623,8 @@ def _compute_effective_pt(
     sublayers in CR-613 order:
 
       - 7b (sublayer 1): set base P/T — most-recent registry
-        ``"set_base_pt"`` wins; falls back to legacy
-        ``temp_base_pt_override``, then dynamic P/T formula, then
-        printed.
+        ``"set_base_pt"`` wins; falls back to dynamic P/T formula,
+        then printed.
       - 7c (sublayer 2): modify P/T — anthem static bonuses + UEOT
         pump bonuses (legacy fields).
       - 7d (sublayer 3): counters — +1/+1 counters add equally.
@@ -1655,10 +1640,9 @@ def _compute_effective_pt(
     A face-down permanent (CR 701.34) is a 2/2 vanilla creature.
     +1/+1 / -1/-1 counters still modify the printed-2/2 base, so
     we apply layer 7d on top; layers 7b (set base) and 7c (anthem
-    pumps from this source's ignored static abilities) and the
-    legacy temp pump-bonus fields don't apply because face-down
-    objects have no abilities and no name to anchor static effects
-    that target by name.
+    pumps from this source's ignored static abilities) don't apply
+    because face-down objects have no abilities and no name to
+    anchor static effects that target by name.
     """
     if obj.face_down:
         # 2/2 base + counters (layer 7d). Switch entries (7e) still
@@ -1704,8 +1688,6 @@ def _compute_effective_pt(
     layer7b = _registry_set_base_pt(state, obj)
     if layer7b is not None:
         base_p, base_t = layer7b
-    elif obj.temp_base_pt_override is not None:
-        base_p, base_t = obj.temp_base_pt_override
     else:
         dynamic = _dynamic_base_pt(state, obj)
         if dynamic is not None:

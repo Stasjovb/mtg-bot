@@ -1,6 +1,7 @@
 """Tests for Stellar Sights manlands — 13 lands that animate into
-creatures UEOT. Shared mechanic: temp_is_creature + temp_base_pt_override
-+ temp_keywords. Covers:
+creatures UEOT. Shared mechanic: ``ApplyEffect(BecomeType(...),
+EndOfTurn())`` for type/subtype/PT, plus the legacy ``temp_keywords``
+field for granted keywords. Covers:
 - Core mechanic (activate, animate, cleanup reverts)
 - Each of the 13 manlands' activation produces the expected
   P/T and keywords
@@ -79,14 +80,28 @@ def test_become_land_creature_animates_via_registry():
     assert "flying" in effective_keywords(state, land)
 
 
-def test_cleanup_clears_temp_is_creature():
+def test_cleanup_reverts_animation():
+    """Animating a land via the production
+    ``ApplyEffect(BecomeType, EndOfTurn())`` path makes it a creature
+    with the granted base P/T; ``run_cleanup_step`` expires the registry
+    entries, the cleanup-step rebuild flips ``permanent_is_creature``
+    back to False, and the layer-7b reads return to the printed P/T."""
+    from mtg_bot.effects import ApplyEffect, BecomeType, EndOfTurn
+
     state = _new_state()
     land = _put(state, BASIC_LANDS["Forest"])
-    land.temp_is_creature = True
-    land.temp_base_pt_override = (3, 3)
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            base_pt=(3, 3),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", land.id),))
+    assert is_creature_now(land)
+    assert effective_power(state, land) == 3
+    assert effective_toughness(state, land) == 3
     run_cleanup_step(state)
-    assert land.temp_is_creature is False
-    assert land.temp_base_pt_override is None
+    assert not is_creature_now(land)
 
 
 def test_become_land_creature_noop_without_source():

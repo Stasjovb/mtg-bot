@@ -8,8 +8,8 @@ creature artifacts). The proper oracle reads "up to one OTHER target
 artifact you control becomes an artifact creature with base P/T 2/2
 and gains flying until end of turn" — applicable to non-creature
 artifacts too. This file pins that fixed behavior end-to-end via the
-manland animation primitives (temp_is_creature +
-temp_base_pt_override + temp_keywords).
+production ``ApplyEffect(BecomeType(...), EndOfTurn())`` path plus
+``state.grant_keywords_ueot`` for the keyword grant.
 """
 
 from mtg_bot.actions import drain_stack

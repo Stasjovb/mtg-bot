@@ -1052,9 +1052,6 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_keywords = frozenset()
         obj.temp_triggered_abilities = ()
         obj.temp_unblockable = False
-        obj.temp_base_pt_override = None
-        obj.temp_is_creature = False
-        obj.temp_subtype = None
         # UEOT-granted abilities from manland animations (Lavaclaw,
         # Wandering Fumarole, Raging Ravine) wear off at cleanup. Note
         # ``temp_triggered_abilities`` is already cleared above.

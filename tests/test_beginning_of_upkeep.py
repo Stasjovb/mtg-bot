@@ -41,6 +41,23 @@ def _put(state, printing, owner_id=0):
     return obj
 
 
+def _animate_ueot(state, obj, *, power, toughness, subtype=None):
+    """Test helper: animate ``obj`` as a creature (optionally with a
+    granted subtype) and base P/T until end of turn, via the production
+    ``ApplyEffect(BecomeType(...), EndOfTurn())`` path."""
+    from mtg_bot.effects import ApplyEffect, BecomeType, EndOfTurn
+
+    subtypes = (subtype,) if subtype else ()
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            subtypes_to_add=subtypes,
+            base_pt=(power, toughness),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", obj.id),))
+
+
 # -----------------------
 # run_beginning_of_upkeep_triggers
 # -----------------------
@@ -111,13 +128,14 @@ def test_conditional_controls_n_artifacts_misses_threshold():
 
 
 def test_conditional_controls_n_creatures_counts_manlands_as_creatures():
-    """When a manland is animated (temp_is_creature=True), it should
-    count as a creature for the conditional."""
+    """When a manland is animated via the production
+    ``ApplyEffect(BecomeType, EndOfTurn())`` path, it should count as a
+    creature for the conditional."""
     state = _new_state()
     bear = _put(state, make_creature("Test Bear", "{1}{G}", 2, 2))
-    # Land animated UEOT.
+    # Land animated UEOT via the production path.
     land = _put(state, BASIC_LANDS["Forest"])
-    land.temp_is_creature = True
+    _animate_ueot(state, land, power=2, toughness=2)
     eff = ConditionalIfYouControlAtLeast(
         threshold=2, predicate="creature", inner=GainLife(amount=4),
     )

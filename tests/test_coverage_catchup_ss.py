@@ -240,7 +240,7 @@ def test_broader_simulation_sweep_for_stellar_sights_paths():
     registry is part of all_printings() but not in the mono-color
     deck builder, so these games don't draw SS lands directly — the
     sweep is here to make sure the new plumbing (tap_permanent via
-    auto_tap, infect damage in combat, temp_is_creature cleanup)
+    auto_tap, infect damage in combat, manland animation cleanup)
     doesn't break broader simulation."""
     from mtg_bot.agents import RandomAgent
     from mtg_bot.simulate import simulate_game
