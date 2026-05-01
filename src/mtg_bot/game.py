@@ -2414,57 +2414,6 @@ class GameState:
             description=description,
         )
 
-    def grant_become_creature_ueot(
-        self,
-        *,
-        source_id: int,
-        target_id: int,
-        power: int,
-        toughness: int,
-        subtype: Optional[str] = None,
-        description: str = "",
-    ) -> None:
-        """Helper for the manland-animation pattern: target becomes a
-        creature with base P/T (and optional subtype) until end of
-        turn. Writes three registry entries —
-
-          - layer 4 ``"add_type"`` params=("creature",)
-          - layer 4 ``"add_subtype"`` params=(subtype,) if given
-          - layer 7 sublayer 1 ``"set_base_pt"`` params=(power, toughness)
-
-        — all with ``expires_at="cleanup"``. Mirrors the deltas onto
-        the legacy ``temp_is_creature`` / ``temp_base_pt_override`` /
-        ``temp_subtype`` cache fields so existing read sites
-        (``is_creature_now``, ``effective_power``, etc.) keep
-        working unchanged. The split-by-layer recording lets a
-        future layer-aware refactor replay the manland animation in
-        proper CR-613 order (layer 4 type before layer 7 P/T).
-        """
-        target = next(
-            (o for o in self.battlefield if o.id == target_id), None,
-        )
-        if target is not None:
-            target.temp_is_creature = True
-            target.temp_base_pt_override = (power, toughness)
-            if subtype is not None:
-                target.temp_subtype = subtype
-        self.add_continuous_effect(
-            source_id=source_id, layer=4, kind="add_type",
-            target_id=target_id, params=("creature",),
-            expires_at="cleanup", description=description,
-        )
-        if subtype is not None:
-            self.add_continuous_effect(
-                source_id=source_id, layer=4, kind="add_subtype",
-                target_id=target_id, params=(subtype,),
-                expires_at="cleanup", description=description,
-            )
-        self.add_continuous_effect(
-            source_id=source_id, layer=7, sublayer=1, kind="set_base_pt",
-            target_id=target_id, params=(power, toughness),
-            expires_at="cleanup", description=description,
-        )
-
     def grant_pt_pump_until_player_next_turn(
         self,
         *,

@@ -91,6 +91,23 @@ def _attach(state, aura, target):
     apply_aura_static_grants_on_attach(state, aura, target, aura.controller_id)
 
 
+def _animate_ueot(state, obj, *, power, toughness, subtype=None):
+    """Test helper: animate ``obj`` as a creature (optionally with a
+    granted subtype) and base P/T until end of turn, via the production
+    ``ApplyEffect(BecomeType(...), EndOfTurn())`` path."""
+    from mtg_bot.effects import ApplyEffect, BecomeType, EndOfTurn
+
+    subtypes = (subtype,) if subtype else ()
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            subtypes_to_add=subtypes,
+            base_pt=(power, toughness),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", obj.id),))
+
+
 # =====================================================================
 # A. Same-layer timestamp ordering
 # =====================================================================
@@ -1003,12 +1020,7 @@ def test_lignified_animated_manland_keeps_animation_at_1_1():
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
     forest.etb_timestamp = 1
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=4, toughness=4,
-        subtype="Elemental",
-        description="manland animation",
-    )
+    _animate_ueot(state, forest, power=4, toughness=4, subtype="Elemental")
     assert effective_power(state, forest) == 4
     assert effective_toughness(state, forest) == 4
     assert is_creature_now(forest)
@@ -1815,11 +1827,7 @@ def test_wandering_fumarole_switch_after_lignify():
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
     # Animate Forest into a 1/4 creature (manland-style) UEOT.
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=1, toughness=4,
-        description="manland animation",
-    )
+    _animate_ueot(state, forest, power=1, toughness=4)
     # Lignify the animated land.
     aura = _put(state, LIGNIFY, owner_id=0)
     _attach(state, aura, forest)
@@ -1873,11 +1881,7 @@ def test_asymmetric_pump_before_switch_pump_applies_to_unswapped_base():
 
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=1, toughness=4,
-        description="manland animation",
-    )
+    _animate_ueot(state, forest, power=1, toughness=4)
     # Pump first: +3/+1 (Titan's Strength shape).
     forest.temp_power_bonus = 3
     forest.temp_toughness_bonus = 1
@@ -1905,11 +1909,7 @@ def test_asymmetric_pump_after_switch_same_result():
 
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=1, toughness=4,
-        description="manland animation",
-    )
+    _animate_ueot(state, forest, power=1, toughness=4)
     # Switch first.
     state.resolving_source = forest
     SwitchSourcePowerToughnessUEOT().resolve(state, 0)
@@ -1932,11 +1932,7 @@ def test_two_switches_cancel():
 
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=1, toughness=4,
-        description="manland animation",
-    )
+    _animate_ueot(state, forest, power=1, toughness=4)
     assert (effective_power(state, forest), effective_toughness(state, forest)) \
         == (1, 4)
 

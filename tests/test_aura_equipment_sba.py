@@ -50,6 +50,23 @@ def _attach(state, aura, target):
     apply_aura_static_grants_on_attach(state, aura, target, aura.controller_id)
 
 
+def _animate_ueot(state, obj, *, power, toughness, subtype=None):
+    """Test helper: animate ``obj`` as a creature (optionally with a
+    granted subtype) and base P/T until end of turn, via the production
+    ``ApplyEffect(BecomeType(...), EndOfTurn())`` path."""
+    from mtg_bot.effects import ApplyEffect, BecomeType, EndOfTurn
+
+    subtypes = (subtype,) if subtype else ()
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            subtypes_to_add=subtypes,
+            base_pt=(power, toughness),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", obj.id),))
+
+
 # ---------- Aura legality ----------
 
 
@@ -91,11 +108,7 @@ def test_lignified_animated_manland_aura_falls_off_when_animation_expires():
     """
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), 0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=4, toughness=4,
-        description="Forest animated 4/4 UEOT",
-    )
+    _animate_ueot(state, forest, power=4, toughness=4)
     aura = _put(state, LIGNIFY, 0)
     _attach(state, aura, forest)
     # Pre-cleanup: legal attachment.
@@ -225,11 +238,7 @@ def test_sba_iterates_until_quiescent_aura_chain():
     """
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), 0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=4, toughness=4,
-        description="Forest animated 4/4 UEOT",
-    )
+    _animate_ueot(state, forest, power=4, toughness=4)
     aura = _put(state, LIGNIFY, 0)
     _attach(state, aura, forest)
     run_cleanup_step(state)
@@ -250,11 +259,7 @@ def test_equipment_on_animated_manland_stays_then_unattaches_at_cleanup():
     )
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), 0)
-    state.grant_become_creature_ueot(
-        source_id=forest.id, target_id=forest.id,
-        power=4, toughness=4,
-        description="Forest animated 4/4 UEOT",
-    )
+    _animate_ueot(state, forest, power=4, toughness=4)
     equipment = _put(state, eq, 0)
     equipment.attached_to = forest.id
     # While animated: legal.

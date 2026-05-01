@@ -84,6 +84,23 @@ def _put_clone_off_battlefield(state, owner_id=0):
     return state.new_object(CLONE, owner_id, Zone.STACK)
 
 
+def _animate_ueot(state, obj, *, power, toughness, subtype=None):
+    """Test helper: animate ``obj`` as a creature (optionally with a
+    granted subtype) and base P/T until end of turn, via the production
+    ``ApplyEffect(BecomeType(...), EndOfTurn())`` path."""
+    from mtg_bot.effects import ApplyEffect, BecomeType, EndOfTurn
+
+    subtypes = (subtype,) if subtype else ()
+    ApplyEffect(
+        inner=BecomeType(
+            types_to_add=("creature",),
+            subtypes_to_add=subtypes,
+            base_pt=(power, toughness),
+        ),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("permanent", obj.id),))
+
+
 # ---------- Printing shape ----------
 
 
@@ -235,13 +252,7 @@ def test_clone_of_animated_manland_copies_printed_land_type():
     state = _new_state()
     forest = _put(state, make_basic_land("Forest", "G"), owner_id=0)
     # Animate Forest into a 4/4 creature UEOT (manland-style).
-    state.grant_become_creature_ueot(
-        source_id=forest.id,
-        target_id=forest.id,
-        power=4, toughness=4,
-        subtype="Elemental",
-        description="Forest becomes a 4/4 Elemental UEOT",
-    )
+    _animate_ueot(state, forest, power=4, toughness=4, subtype="Elemental")
     # Forest is now a creature with effective P/T 4/4.
     assert is_creature_now(forest) is True
     assert effective_power(state, forest) == 4
