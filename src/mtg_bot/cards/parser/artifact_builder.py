@@ -99,6 +99,17 @@ post-reminder-strip oracle line:
   ``state.last_exile_recall_count`` set by the recall step), and
   ``SacrificeSelf`` (effect-body sacrifice; the printed
   ``Sacrifice this artifact`` is part of the body, not the cost).
+* **Ghost Vacuum** — two activations. The first ability
+  ``{T}: Exile target card from a graveyard.`` parses through the
+  unified activated grammar via the ``ExileTargetCardFromGraveyard``
+  primitive (which tags the chosen card with
+  ``exiled_by_source = source.id`` so the recall side has something
+  to consume). The second ``{6}, {T}, Sacrifice this artifact``
+  recall body decomposes into the parameterized
+  ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+  Control`` primitive (with ``grant_flying_counter=True`` and
+  ``grant_subtype_and_pt=("Spirit", 1, 1)``) via the multi-sentence
+  literal-effect recognizer in ``effects.py``.
 
 Two additional cards are claimed via the expanded unified grammar
 (migrated from ``_BESPOKE_ARTIFACT_BUILDERS`` in this round):
@@ -140,7 +151,6 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CostReduction,
     DrawCards,
-    GhostVacuumActivatedEffect,
     HauntedScreenActivatedEffect,
     RequiemMonolithActivatedEffect,
     StaticAbility,
@@ -211,36 +221,6 @@ def _requiem_monolith_activation() -> ActivatedAbility:
     )
 
 
-def _ghost_vacuum_recall_activation() -> ActivatedAbility:
-    """Build Ghost Vacuum's ``{6}, {T}, Sacrifice this artifact``
-    sorcery-speed activation.
-
-    The body — "Put each creature card exiled with this artifact onto
-    the battlefield under your control with a flying counter on it.
-    Each of them is a 1/1 Spirit in addition to its other types." — is
-    bespoke (the bespoke effect class folds the creature-filter recall,
-    the per-card flying-counter add, and the layer-4/7 type+subtype+P/T
-    grants into one resolve step). The ``Activate only as a sorcery.``
-    rider lifts to ``sorcery_speed=True`` on the ability. Cost shape
-    ``{6}, {T}, Sacrifice this artifact`` is otherwise standard
-    activated-grammar territory; only the body needs the literal
-    dispatch. The first ability ``{T}: Exile target card from a
-    graveyard.`` parses through the unified activated grammar via the
-    new ``ExileTargetCardFromGraveyard`` primitive — no literal entry
-    needed for that line.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(
-            mana=parse_mana_cost("{6}"),
-            mana_str="{6}",
-            tap_self=True,
-            sacrifice_self=True,
-        ),
-        effect=GhostVacuumActivatedEffect(),
-        sorcery_speed=True,
-    )
-
-
 def _haunted_screen_once_only_activation() -> ActivatedAbility:
     """Build Haunted Screen's ``{7}: Put seven +1/+1 counters on this
     artifact. It becomes a 0/0 Spirit creature in addition to its
@@ -296,47 +276,21 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "that much life.\" That creature's controller may have this "
     "artifact deal 1 damage to it. Activate only as a sorcery.":
         _requiem_monolith_activation,
-    # Pinnacle Starcage's ``{6}{W}{W}`` activation migrated out of the
-    # literal table when the generic "exiled-with-this" recall
-    # infrastructure landed. The activation now decomposes into a
-    # Sequence of ``MoveEachExiledWithSourceToOwnersGraveyard`` +
+    # Pinnacle Starcage and Ghost Vacuum migrated out of the literal
+    # table when the generic "exiled-with-this" recall infrastructure
+    # landed. Pinnacle Starcage's ``{6}{W}{W}`` activation now
+    # decomposes into a Sequence of
+    # ``MoveEachExiledWithSourceToOwnersGraveyard`` +
     # ``CreateNTokensFromLastExileRecall(token_name="Robot")`` +
     # ``SacrificeSelf`` via the multi-sentence literal recognizer in
-    # ``effects.py``. The bespoke ``PinnacleStarcageSacEffect`` is
-    # deleted.
-    # Ghost Vacuum — bespoke "recall creature cards exiled with this
-    # artifact, each becomes a 1/1 Spirit with a flying counter" body.
-    # Cost is parser-grammar standard; only the body needs the literal
-    # dispatch. The companion ``{T}: Exile target card from a
-    # graveyard.`` ability parses through the unified activated grammar
-    # via the existing ``ExileTargetCardFromGraveyard`` primitive — no
-    # literal entry needed for that one.
+    # ``effects.py``. Ghost Vacuum's ``{6}, {T}, Sacrifice this
+    # artifact`` activation now decomposes into the parameterized
+    # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    # Control`` primitive (with ``grant_flying_counter=True`` and
+    # ``grant_subtype_and_pt=("Spirit", 1, 1)``) via the same
+    # multi-sentence literal recognizer path. Both bespoke effect
+    # classes are deleted.
     #
-    # Decomposition blocker: the body chains four operations that
-    # don't yet have generic primitives:
-    #
-    #   1. **Exiled-with-this-source filtered recall.** Same primitive
-    #      Pinnacle Starcage hits — walk every exile zone for
-    #      ``exiled_by_source == source.id`` cards, with an additional
-    #      filter (creatures only, by ``printing.is_creature``).
-    #   2. **Recall to controller's battlefield with per-card
-    #      counter.** The recalled creatures enter under the activator's
-    #      control with a ``flying counter`` on each. No generic "put
-    #      onto battlefield with named counter" combinator today.
-    #   3. **Permanent layer-4/7 grant (1/1 Spirit in addition to its
-    #      other types).** Permanent registry writes for ``add_subtype
-    #      "Spirit"`` and ``set_base_pt (1, 1)`` with
-    #      ``expires_at=None``. The Haunted Screen body has the same
-    #      shape but on the source itself — the engine has no shared
-    #      "grant subtype + set base PT permanently" primitive yet.
-    #
-    # No second EoE/DSK printing chains all four pieces; the bespoke
-    # class earns its keep until a second example ships.
-    "{6}, {T}, Sacrifice this artifact: Put each creature card exiled "
-    "with this artifact onto the battlefield under your control with "
-    "a flying counter on it. Each of them is a 1/1 Spirit in addition "
-    "to its other types. Activate only as a sorcery.":
-        _ghost_vacuum_recall_activation,
     # Haunted Screen — three activations. The first two are mana
     # abilities (``{T}: Add {W} or {B}.`` and ``{T}, Pay 1 life: Add
     # {G}, {U}, or {R}.``) that now claim through the unified clause

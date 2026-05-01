@@ -68,6 +68,7 @@ from mtg_bot.cards.base import (
     ExileAllCreaturesAndSpacecraft,
     ExileAllMatchingUntilSourceLeaves,
     MoveEachExiledWithSourceToOwnersGraveyard,
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     SacrificeSelf,
     ExileEachOpponentsGraveyard,
     ExileTargetCardFromGraveyard,
@@ -4098,6 +4099,38 @@ def _parse_effect(phrase: str) -> Effect | None:
                 CreateNTokensFromLastExileRecall(token_name="Robot"),
                 SacrificeSelf(),
             ))
+    # Ghost Vacuum's ``{6}, {T}, Sacrifice this artifact`` activation
+    # body (the ``Activate only as a sorcery.`` rider is stripped by
+    # the activated-ability inline-rider handling before this lookup
+    # runs). Two printed operations:
+    #   1. Put each creature card exiled with this artifact onto the
+    #      battlefield under your control with a flying counter on it.
+    #   2. Each of them is a 1/1 Spirit in addition to its other types.
+    # Both clauses are anaphoric back-references to the cards moved in
+    # sentence 1 ("with a flying counter on it" qualifies the recall
+    # step; "Each of them" refers to those same cards). The sentence-
+    # splitting grammar would carve at the ``. E`` boundary and try to
+    # parse "each of them is a 1/1 Spirit ..." as a standalone effect,
+    # which has no standalone primitive. Matched as a single literal
+    # so the whole body dispatches in one step to the parameterized
+    # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    # Control`` recall primitive with the rider parameters set
+    # (``grant_flying_counter=True``,
+    # ``grant_subtype_and_pt=("Spirit", 1, 1)``). Currently only Ghost
+    # Vacuum in the DSK/EoE pool prints this exact recall+counter+
+    # type-grant shape; broader grammar deferred until a second card
+    # with a varying piece (different counter, different subtype/PT)
+    # ships, at which point a parameterized recognizer capturing the
+    # counter name and (subtype, P, T) tuple would replace this literal.
+    if phrase == (
+        "put each creature card exiled with this artifact onto the "
+        "battlefield under your control with a flying counter on it. "
+        "Each of them is a 1/1 Spirit in addition to its other types"
+    ):
+        return PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+            grant_flying_counter=True,
+            grant_subtype_and_pt=("Spirit", 1, 1),
+        )
     # ----------------------------------------------------------------
     # Aura-context effect-phrase recognizers (audit-litdispatch-auras).
     # Each entry routes a single Aura trigger body to its existing

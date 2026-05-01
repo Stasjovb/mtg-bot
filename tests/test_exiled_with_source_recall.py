@@ -1,7 +1,7 @@
 """Behavioral tests for the generic "exiled with this permanent" recall
 infrastructure.
 
-The infrastructure has three new generic effect primitives in
+The infrastructure has four new generic effect primitives in
 ``mtg_bot.effects.generic``:
 
 * ``MoveEachExiledWithSourceToOwnersGraveyard`` — walks every player's
@@ -15,10 +15,15 @@ The infrastructure has three new generic effect primitives in
   control.
 * ``SacrificeSelf`` (effect-body sacrifice; distinct from
   ``ActivationCost.sacrifice_self``).
+* ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl
+  (grant_flying_counter=..., grant_subtype_and_pt=(subtype, P, T))``
+  — walks every exile zone for ``exiled_by_source == source.id``
+  CREATURE cards and brings each onto the activator's battlefield.
+  Optional rider parameters add a flying counter and grant a
+  subtype + base PT continuous effect to each recalled card.
 
-The Pinnacle Starcage integration test lives in
-``test_pinnacle_starcage.py``; the per-card decomposition test in
-``test_parser_artifact_pinnacle_starcage.py``.
+The Pinnacle Starcage and Ghost Vacuum integration tests live in
+``test_pinnacle_starcage.py`` and ``test_parser_dsk_artifacts_batch2.py``.
 """
 
 from __future__ import annotations
@@ -27,11 +32,13 @@ from mtg_bot.cards.base import make_artifact, make_creature
 from mtg_bot.effects import (
     CreateNTokensFromLastExileRecall,
     MoveEachExiledWithSourceToOwnersGraveyard,
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     SacrificeSelf,
     Sequence,
 )
 from mtg_bot.game import (
-    GameObject, GameState, Player, Zone,
+    GameObject, GameState, Player, Zone, effective_keywords,
+    effective_subtypes,
 )
 
 
@@ -231,3 +238,113 @@ def test_sacrifice_self_already_off_battlefield_is_noop():
     assert source_obj in state.players[0].graveyard
 
 
+# ----------------------------------------------------------------------
+# PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl
+# ----------------------------------------------------------------------
+
+
+def test_put_creature_recall_filters_to_creatures_only():
+    state = _new_state()
+    source_pr = make_artifact("Source", "{2}")
+    source_obj = GameObject(
+        id=99, printing=source_pr, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,  # cost-time sacrifice is fine
+    )
+    state.resolving_source = source_obj
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    other_art_pr = make_artifact("Junk", "{1}")
+    creature = _put_in_exile(state, 1, bear_pr, source_obj.id, obj_id=1)
+    artifact = _put_in_exile(state, 1, other_art_pr, source_obj.id, obj_id=2)
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl().resolve(
+        state, controller_id=0, targets=(),
+    )
+    # Creature recalled under activator's control; artifact stayed.
+    assert creature in state.battlefield
+    assert creature.controller_id == 0
+    assert creature.exiled_by_source is None
+    assert artifact in state.players[1].exile
+
+
+def test_put_creature_recall_bare_no_riders_grants_no_counters_or_subtypes():
+    state = _new_state()
+    source_pr = make_artifact("Source", "{2}")
+    source_obj = GameObject(
+        id=99, printing=source_pr, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    )
+    state.resolving_source = source_obj
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    creature = _put_in_exile(state, 1, bear_pr, source_obj.id, obj_id=1)
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl().resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert creature.flying_counters == 0
+    assert "flying" not in effective_keywords(state, creature)
+    assert "Spirit" not in effective_subtypes(state, creature)
+
+
+def test_put_creature_recall_with_flying_counter_rider():
+    state = _new_state()
+    source_pr = make_artifact("Source", "{2}")
+    source_obj = GameObject(
+        id=99, printing=source_pr, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    )
+    state.resolving_source = source_obj
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    creature = _put_in_exile(state, 1, bear_pr, source_obj.id, obj_id=1)
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+    ).resolve(state, controller_id=0, targets=())
+    assert creature.flying_counters == 1
+    assert "flying" in effective_keywords(state, creature)
+
+
+def test_put_creature_recall_with_subtype_pt_rider():
+    state = _new_state()
+    source_pr = make_artifact("Source", "{2}")
+    source_obj = GameObject(
+        id=99, printing=source_pr, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    )
+    state.resolving_source = source_obj
+    bear_pr = make_creature("Bear", "{1}{G}", power=2, toughness=2)
+    creature = _put_in_exile(state, 1, bear_pr, source_obj.id, obj_id=1)
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).resolve(state, controller_id=0, targets=())
+    subs = effective_subtypes(state, creature)
+    assert "Spirit" in subs
+
+
+def test_put_creature_recall_no_creature_cards_is_silent_noop():
+    state = _new_state()
+    source_pr = make_artifact("Source", "{2}")
+    source_obj = GameObject(
+        id=99, printing=source_pr, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    )
+    state.resolving_source = source_obj
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).resolve(state, controller_id=0, targets=())
+    assert state.battlefield == []
+
+
+def test_put_creature_recall_no_source_is_noop():
+    state = _new_state()
+    # No resolving_source set.
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+    ).resolve(state, controller_id=0, targets=())
+
+
+def test_put_creature_recall_describe_with_riders():
+    desc = PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).describe()
+    assert "creature card exiled with this permanent" in desc
+    assert "flying counter" in desc
+    assert "1/1 Spirit" in desc

@@ -8,13 +8,17 @@ This commit lands **Ghost Vacuum** ``{1}`` Artifact — two activations.
 The first ``{T}: Exile target card from a graveyard.`` lands as the
 new ``ExileTargetCardFromGraveyard`` generic effect, parsed via the
 unified activated grammar (new primitive in ``effects.py``). The
-second ``{6}, {T}, Sacrifice this artifact: …`` recall body is a
-bespoke ``GhostVacuumActivatedEffect`` claimed by literal-line
-dispatch in ``artifact_builder``. The Round-1 "flying counter"
-custom counter type is realized as a new ``GameObject.flying_counters``
-integer field; ``effective_keywords`` adds ``"flying"`` to a bearer's
-keyword set whenever that field is positive (CR 122 named-counter
-grant).
+second ``{6}, {T}, Sacrifice this artifact: …`` recall body now
+decomposes into the parameterized
+``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl``
+primitive (with ``grant_flying_counter=True`` and
+``grant_subtype_and_pt=("Spirit", 1, 1)``) — the bespoke
+``GhostVacuumActivatedEffect`` was deleted when the
+"exiled-with-this" infrastructure landed. The Round-1 "flying
+counter" custom counter type is realized as a new
+``GameObject.flying_counters`` integer field; ``effective_keywords``
+adds ``"flying"`` to a bearer's keyword set whenever that field is
+positive (CR 122 named-counter grant).
 """
 
 from __future__ import annotations
@@ -38,16 +42,18 @@ def test_ghost_vacuum_claimed_by_parser():
 
 def test_ghost_vacuum_carries_two_activations():
     # First ability: ``{T}: Exile target card from a graveyard.``
-    # parses through the unified activated grammar via the new
+    # parses through the unified activated grammar via the
     # ``ExileTargetCardFromGraveyard`` primitive — bare ``{T}`` cost
     # (NOT a mana ability since the body doesn't add mana).
     # Second ability: ``{6}, {T}, Sacrifice this artifact:`` cost +
-    # ``GhostVacuumActivatedEffect`` body via the new literal-line
-    # dispatch. The trailing ``Activate only as a sorcery.`` rider
-    # lifts to ``sorcery_speed=True`` on the ability.
+    # parameterized
+    # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    # Control`` body via the multi-sentence literal-effect recognizer.
+    # The trailing ``Activate only as a sorcery.`` rider lifts to
+    # ``sorcery_speed=True`` on the ability.
     from mtg_bot.effects import (
         ExileTargetCardFromGraveyard,
-        GhostVacuumActivatedEffect,
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
 
     parser = OracleParserCardSource()
@@ -67,12 +73,19 @@ def test_ghost_vacuum_carries_two_activations():
 
     recall = next(
         a for a in p.activated_abilities
-        if isinstance(a.effect, GhostVacuumActivatedEffect)
+        if isinstance(
+            a.effect,
+            PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+        )
     )
     assert recall.cost.mana_str == "{6}"
     assert recall.cost.tap_self is True
     assert recall.cost.sacrifice_self is True
     assert recall.sorcery_speed is True
+    # Rider parameters carry through — flying counter grant + 1/1
+    # Spirit subtype/PT grant.
+    assert recall.effect.grant_flying_counter is True
+    assert recall.effect.grant_subtype_and_pt == ("Spirit", 1, 1)
 
 
 def test_ghost_vacuum_has_no_triggered_abilities_or_statics():
@@ -220,18 +233,30 @@ def test_exile_target_card_from_graveyard_no_source_skips_link():
     assert target.exiled_by_source is None
 
 
-# ---------- GhostVacuumActivatedEffect engine class ----------
+# ---------- PutEachCreatureCardExiledWithSourceOnto... engine class ----------
+# Ghost Vacuum's recall body now decomposes into the parameterized
+# ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl``
+# primitive (with the flying-counter and 1/1-Spirit-subtype/PT rider
+# parameters set). The behavioral expectations mirror what the bespoke
+# ``GhostVacuumActivatedEffect`` enforced — the rider parameters
+# preserve the same per-card grants — so the tests below validate the
+# integrated decomposition end-to-end.
 
-def test_ghost_vacuum_activated_effect_describe():
-    from mtg_bot.effects import GhostVacuumActivatedEffect
+def test_ghost_vacuum_decomposed_describe():
+    from mtg_bot.effects import (
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    )
 
-    desc = GhostVacuumActivatedEffect().describe()
-    assert "exiled with this artifact" in desc
+    desc = PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).describe()
+    assert "exiled with this permanent" in desc
     assert "flying counter" in desc
     assert "1/1 Spirit" in desc
 
 
-def test_ghost_vacuum_activated_effect_recalls_creatures_with_flying_counter():
+def test_ghost_vacuum_decomposed_recalls_creatures_with_flying_counter():
     # End-to-end: a creature card tagged ``exiled_by_source == source.id``
     # returns to the activator's battlefield with a flying counter and
     # the layer-4/7 grants for "1/1 Spirit". A non-creature card with
@@ -240,7 +265,9 @@ def test_ghost_vacuum_activated_effect_recalls_creatures_with_flying_counter():
     from mtg_bot.cards.base import (
         make_artifact, make_creature,
     )
-    from mtg_bot.effects import GhostVacuumActivatedEffect
+    from mtg_bot.effects import (
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    )
     from mtg_bot.game import (
         GameObject, GameState, Player, Zone, effective_keywords,
         effective_subtypes,
@@ -267,9 +294,10 @@ def test_ghost_vacuum_activated_effect_recalls_creatures_with_flying_counter():
         players=[p0, p1],
         resolving_source=source_obj,
     )
-    GhostVacuumActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).resolve(state, controller_id=0, targets=())
     # Creature returned, controlled by activator, with flying counter.
     assert exiled_creature in state.battlefield
     assert exiled_creature.controller_id == 0
@@ -282,10 +310,12 @@ def test_ghost_vacuum_activated_effect_recalls_creatures_with_flying_counter():
     assert exiled_artifact in p1.exile
 
 
-def test_ghost_vacuum_activated_effect_no_op_when_no_exiled_creatures():
+def test_ghost_vacuum_decomposed_no_op_when_no_exiled_creatures():
     # No tagged exile cards: silent log, no battlefield change.
     from mtg_bot.cards.base import make_artifact
-    from mtg_bot.effects import GhostVacuumActivatedEffect
+    from mtg_bot.effects import (
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    )
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
     art_pr = make_artifact("Ghost Vacuum", "{1}")
@@ -297,22 +327,26 @@ def test_ghost_vacuum_activated_effect_no_op_when_no_exiled_creatures():
         players=[Player(id=0), Player(id=1)],
         resolving_source=source_obj,
     )
-    GhostVacuumActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).resolve(state, controller_id=0, targets=())
     assert state.battlefield == []
 
 
-def test_ghost_vacuum_activated_effect_no_source_is_noop():
+def test_ghost_vacuum_decomposed_no_source_is_noop():
     # Defensive: ``resolving_source`` is None (engine misuse) → silent
     # no-op rather than raising.
-    from mtg_bot.effects import GhostVacuumActivatedEffect
+    from mtg_bot.effects import (
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    )
     from mtg_bot.game import GameState, Player
 
     state = GameState(players=[Player(id=0), Player(id=1)])
-    GhostVacuumActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+        grant_flying_counter=True,
+        grant_subtype_and_pt=("Spirit", 1, 1),
+    ).resolve(state, controller_id=0, targets=())
     # Nothing to assert beyond "didn't raise".
 
 

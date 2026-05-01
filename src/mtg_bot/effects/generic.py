@@ -10144,6 +10144,134 @@ class SacrificeSelf(Effect):
 
 
 @dataclass(frozen=True)
+class PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(Effect):
+    """Generic "put each creature card exiled with this permanent onto the
+    battlefield under your control" primitive.
+
+    Walks every player's exile zone for cards tagged with
+    ``GameObject.exiled_by_source == state.resolving_source.id`` filtered
+    to creature cards (``printing.is_creature``) and brings each onto
+    the activator's battlefield via ``put_into_battlefield`` (so ETBs
+    fire normally). The ``exiled_by_source`` linkage is cleared on each
+    recalled card so a future leave-the-battlefield event on the
+    source doesn't try to release them again.
+
+    Optional riders parameterize the per-card grants Ghost Vacuum's
+    activation prints ("with a flying counter on it" + "Each of them is
+    a 1/1 Spirit in addition to its other types"):
+
+    * ``grant_flying_counter=True`` — each recalled creature gets a
+      ``flying counter`` (``GameObject.flying_counters`` integer field;
+      ``effective_keywords`` adds ``"flying"`` whenever that field is
+      positive, per the named-counter grant rule CR 122).
+    * ``grant_subtype_and_pt=("Spirit", 1, 1)`` — each recalled
+      creature picks up a layer-4 ``add_subtype`` continuous effect
+      (so the printed creature's subtype list gains the named subtype
+      "in addition to its other types") and a layer-7 sublayer-1
+      ``set_base_pt`` continuous effect (overriding the printed P/T
+      to the supplied tuple per CR 613 sublayer 7b). Both entries
+      have ``expires_at=None`` so the grant persists.
+
+    Used by Ghost Vacuum's ``{6}, {T}, Sacrifice this artifact``
+    activation. Reusable for any future "put each creature card exiled
+    with <source> onto the battlefield under your control" printing —
+    the rider parameters are optional, so the bare recall surface is
+    just ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    Control()``.
+
+    Non-creature exile-tagged cards are left in exile (the printed
+    filter is "each creature card"). No-op when the source is None.
+    """
+
+    grant_flying_counter: bool = False
+    # Tuple of (subtype, base_power, base_toughness). When set, every
+    # recalled creature gets the layer-4/7 grants described above.
+    grant_subtype_and_pt: tuple[str, int, int] | None = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        source = state.resolving_source
+        if source is None:
+            return
+        moved = []
+        for p in state.players:
+            tagged = [c for c in p.exile if c.exiled_by_source == source.id]
+            for card in tagged:
+                if not card.printing.is_creature:
+                    continue
+                p.exile.remove(card)
+                card.exiled_by_source = None
+                moved.append(card)
+        if not moved:
+            state.log.append(
+                f"{source.printing.name} resolves: no exiled creature "
+                f"cards to recall"
+            )
+            return
+        for card in moved:
+            put_into_battlefield(state, card, controller_id)
+            if self.grant_flying_counter:
+                card.flying_counters += 1
+            if self.grant_subtype_and_pt is not None:
+                subtype, bp, bt = self.grant_subtype_and_pt
+                state.add_continuous_effect(
+                    source_id=source.id, layer=4, kind="add_subtype",
+                    target_id=card.id, params=(subtype,),
+                    expires_at=None,
+                    description=(
+                        f"{card.printing.name} is a {bp}/{bt} {subtype} "
+                        f"({source.printing.name})"
+                    ),
+                )
+                state.add_continuous_effect(
+                    source_id=source.id, layer=7, sublayer=1,
+                    kind="set_base_pt",
+                    target_id=card.id, params=(bp, bt),
+                    expires_at=None,
+                    description=(
+                        f"{card.printing.name} base {bp}/{bt} "
+                        f"({source.printing.name})"
+                    ),
+                )
+            state.log.append(
+                f"{card.printing.name} returns from exile to "
+                f"P{controller_id}'s battlefield"
+                + (
+                    f" as a {self.grant_subtype_and_pt[1]}/"
+                    f"{self.grant_subtype_and_pt[2]} "
+                    f"{self.grant_subtype_and_pt[0]}"
+                    if self.grant_subtype_and_pt is not None
+                    else ""
+                )
+                + (
+                    " with a flying counter"
+                    if self.grant_flying_counter else ""
+                )
+            )
+
+    def describe(self) -> str:
+        rider_bits = []
+        if self.grant_flying_counter:
+            rider_bits.append("with a flying counter on it")
+        if self.grant_subtype_and_pt is not None:
+            subtype, bp, bt = self.grant_subtype_and_pt
+            rider_bits.append(
+                f"each is a {bp}/{bt} {subtype} in addition to "
+                f"its other types"
+            )
+        rider = (" " + "; ".join(rider_bits)) if rider_bits else ""
+        return (
+            "put each creature card exiled with this permanent onto the "
+            "battlefield under your control" + rider
+        )
+
+
+
+@dataclass(frozen=True)
 class DrawCardsByConditionMultiplier(Effect):
     """Draw X cards, where X is the ``multiplier`` of a structural
     ``Condition``.
