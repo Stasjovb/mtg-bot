@@ -960,21 +960,15 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # ``EnchantedCreatureFightsTargetEffect``.
     # ---------------------------------------------------------------
     # ---------------------------------------------------------------
-    # Pain for All — ETB trigger
-    # "When this Aura enters, enchanted creature deals damage equal to
-    # its power to any other target." → PainForAllETBEffect.
-    # Only card in the pool with this "enchanted creature deals power
-    # damage to any other target" Aura ETB surface; generalization
-    # deferred until a second example exists.
+    # (audit-litdispatch-auras) Pain for All ETB
+    # ("When this Aura enters, enchanted creature deals damage equal
+    # to its power to any other target.") migrated to the unified
+    # ``_parse_triggered_ability_line`` path: ``this Aura enters``
+    # already lives in ``_PREDICATE_TRIGGER_PHRASES`` and the body
+    # is claimed by an Aura-context effect-phrase recognizer in
+    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
+    # ``PainForAllETBEffect``.
     # ---------------------------------------------------------------
-    (
-        "When this Aura enters, enchanted creature deals damage equal "
-        "to its power to any other target."
-    ): TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=PainForAllETBEffect(),
-    ),
     # ---------------------------------------------------------------
     # Pain for All — DEALT_DAMAGE trigger
     # "Whenever enchanted creature is dealt damage, it deals that much

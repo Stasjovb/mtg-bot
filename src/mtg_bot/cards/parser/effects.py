@@ -175,6 +175,7 @@ from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
     CloseEncounterEffect,
     EnchantedCreatureFightsTargetEffect,
+    PainForAllETBEffect,
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
@@ -4021,6 +4022,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         "opponent controls"
     ):
         return EnchantedCreatureFightsTargetEffect()
+    # ``enchanted creature deals damage equal to its power to any
+    # other target`` — Pain for All's ETB body. Maps to
+    # ``PainForAllETBEffect`` which damages the chosen target by the
+    # enchanted creature's effective power, excluding the enchanted
+    # creature itself from the legal-target pool ("any OTHER
+    # target"). Distinct from the source-power surface
+    # ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET`` (Infernal
+    # Phantom) because the damage source is the Aura's host, not
+    # the Aura itself. Generalization deferred until a second Aura
+    # with the same "host deals power damage" surface ships.
+    if phrase == (
+        "enchanted creature deals damage equal to its power to any "
+        "other target"
+    ):
+        return PainForAllETBEffect()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
