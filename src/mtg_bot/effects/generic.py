@@ -10952,34 +10952,39 @@ class MayHaveSourceDealDamageToTarget(Effect):
 
 
 @dataclass(frozen=True)
-class BecomeCreatureWithSubtypeAndPTPermanently(Effect):
-    """Source becomes a creature of ``subtype`` with base ``base_p``/
-    ``base_t`` IN ADDITION TO ITS OTHER TYPES, indefinitely (until it
-    leaves the battlefield).
+class BecomeType(Effect):
+    """Source gains the listed card-types and/or subtypes, optionally with
+    a new base P/T, IN ADDITION TO ITS OTHER TYPES.
 
-    Permanent layer-4/7 continuous effect — writes three registry
-    entries with ``expires_at=None`` so cleanup leaves them in place:
+    Always writes registry entries with ``expires_at=None`` (the entry
+    persists until the source leaves play). Wrap with
+    ``ApplyEffect(BecomeType(...), ends_at=<Duration>)`` to give the
+    change a finite lifetime — ``ApplyEffect`` rewrites the lifetime
+    fields of every entry written here.
 
-      - layer 4 ``add_type "creature"`` — read by ``is_creature_now``
-        via the ``GameObject.permanent_is_creature`` write-through
-        cache.
-      - layer 4 ``add_subtype <subtype>`` — read by
-        ``effective_subtypes`` walking the registry.
-      - layer 7 sublayer 1 ``set_base_pt (base_p, base_t)`` — read by
-        ``_compute_effective_pt`` via ``_registry_set_base_pt``.
+    Registry writes (each gated on its parameter being non-empty):
 
-    Distinct from ``BecomeLandCreatureUEOT`` (UEOT, ``temp_*`` fields,
-    cleared at cleanup). Used by Haunted Screen's once-only activation
-    body — the type-change persists across turns and is intended to
-    survive cleanup.
+      - For each entry in ``types_to_add``: layer 4 ``add_type``. When
+        the type is ``"creature"``, also flips the
+        ``GameObject.permanent_is_creature`` write-through cache that
+        ``is_creature_now`` reads. (Caveat: the cache flip is sticky
+        across cleanup — see ``ApplyEffect``'s docstring for the deferred
+        UEOT type-change story.)
+      - For each entry in ``subtypes_to_add``: layer 4 ``add_subtype``.
+        Read by ``effective_subtypes`` walking the registry, so any
+        duration is faithfully respected.
+      - When ``base_pt`` is set: layer 7 sublayer 1 ``set_base_pt``.
+        Read by ``_compute_effective_pt`` via
+        ``_registry_set_base_pt``, so any duration is faithfully
+        respected.
 
     No-op when ``state.resolving_source`` is None (defensive — the
     activated-ability resolve site sets it before the effect runs).
     """
 
-    subtype: str = ""
-    base_p: int = 0
-    base_t: int = 0
+    types_to_add: tuple[str, ...] = ()
+    subtypes_to_add: tuple[str, ...] = ()
+    base_pt: "tuple[int, int] | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -10988,50 +10993,53 @@ class BecomeCreatureWithSubtypeAndPTPermanently(Effect):
         source = state.resolving_source
         if source is None:
             return
-        # Permanent layer-4/7 grants. ``permanent_is_creature`` is the
-        # write-through cache so ``is_creature_now`` short-circuits
-        # without consulting the registry on every read; the registry
-        # entries hold the layer metadata for future layer-aware
-        # ordering work.
-        source.permanent_is_creature = True
-        state.add_continuous_effect(
-            source_id=source.id, layer=4, kind="add_type",
-            target_id=source.id, params=("creature",),
-            expires_at=None,
-            description=f"{source.printing.name} becomes a creature",
-        )
-        if self.subtype:
+        for type_name in self.types_to_add:
             state.add_continuous_effect(
-                source_id=source.id, layer=4, kind="add_subtype",
-                target_id=source.id, params=(self.subtype,),
+                source_id=source.id, layer=4, kind="add_type",
+                target_id=source.id, params=(type_name,),
                 expires_at=None,
                 description=(
-                    f"{source.printing.name} becomes a {self.subtype}"
+                    f"{source.printing.name} becomes a {type_name}"
                 ),
             )
-        state.add_continuous_effect(
-            source_id=source.id, layer=7, sublayer=1,
-            kind="set_base_pt",
-            target_id=source.id, params=(self.base_p, self.base_t),
-            expires_at=None,
-            description=(
-                f"{source.printing.name} base "
-                f"{self.base_p}/{self.base_t}"
-            ),
-        )
-        subtype_str = f" {self.subtype}" if self.subtype else ""
+            if type_name.lower() == "creature":
+                source.permanent_is_creature = True
+        for subtype in self.subtypes_to_add:
+            state.add_continuous_effect(
+                source_id=source.id, layer=4, kind="add_subtype",
+                target_id=source.id, params=(subtype,),
+                expires_at=None,
+                description=(
+                    f"{source.printing.name} becomes a {subtype}"
+                ),
+            )
+        if self.base_pt is not None:
+            base_p, base_t = self.base_pt
+            state.add_continuous_effect(
+                source_id=source.id, layer=7, sublayer=1,
+                kind="set_base_pt",
+                target_id=source.id, params=(base_p, base_t),
+                expires_at=None,
+                description=(
+                    f"{source.printing.name} base {base_p}/{base_t}"
+                ),
+            )
         state.log.append(
-            f"{source.printing.name} becomes a {self.base_p}/"
-            f"{self.base_t}{subtype_str} creature in addition to its "
-            f"other types"
+            f"{source.printing.name} {self.describe()}"
         )
 
     def describe(self) -> str:
-        subtype_str = f" {self.subtype}" if self.subtype else ""
-        return (
-            f"this artifact becomes a {self.base_p}/{self.base_t}"
-            f"{subtype_str} creature in addition to its other types"
-        )
+        parts: list[str] = []
+        if self.base_pt is not None:
+            parts.append(f"becomes a {self.base_pt[0]}/{self.base_pt[1]}")
+        else:
+            parts.append("becomes")
+        if self.subtypes_to_add:
+            parts.append(" ".join(self.subtypes_to_add))
+        if self.types_to_add:
+            parts.append(" ".join(self.types_to_add))
+        body = " ".join(parts)
+        return f"{body} in addition to its other types"
 
 
 

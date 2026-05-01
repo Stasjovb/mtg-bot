@@ -14,11 +14,11 @@ Haunted Screen prints three activations:
      0/0 Spirit creature in addition to its other types. Activate
      only once.`` — once-only activation. The body decomposes into
      ``Sequence(PutPlusOneCounterOnSelf(amount=7),
-     BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
-     base_p=0, base_t=0))`` via the multi-sentence literal recognizer
-     in ``effects.py``. The trailing ``Activate only once.`` rider
-     lifts to ``activate_only_once=True`` on the ability via the new
-     inline-rider strip in ``activated.py``.
+     BecomeType(types_to_add=("creature",),
+     subtypes_to_add=("Spirit",), base_pt=(0, 0)))`` via the
+     multi-sentence literal recognizer in ``effects.py``. The trailing
+     ``Activate only once.`` rider lifts to ``activate_only_once=True``
+     on the ability via the inline-rider strip in ``activated.py``.
 
 The per-source ``GameObject.has_activated_once_only_ability`` flag is
 latched at activation time (in ``_activate_ability`` in ``actions.py``)
@@ -46,7 +46,7 @@ def test_haunted_screen_claimed_by_parser():
 def test_haunted_screen_carries_three_activations():
     from mtg_bot.effects import (
         AddNManaOfChosenColor,
-        BecomeCreatureWithSubtypeAndPTPermanently,
+        BecomeType,
         PutPlusOneCounterOnSelf,
         Sequence,
     )
@@ -91,10 +91,10 @@ def test_haunted_screen_carries_three_activations():
     counters, become = third.effect.effects
     assert isinstance(counters, PutPlusOneCounterOnSelf)
     assert counters.amount == 7
-    assert isinstance(become, BecomeCreatureWithSubtypeAndPTPermanently)
-    assert become.subtype == "Spirit"
-    assert become.base_p == 0
-    assert become.base_t == 0
+    assert isinstance(become, BecomeType)
+    assert become.types_to_add == ("creature",)
+    assert become.subtypes_to_add == ("Spirit",)
+    assert become.base_pt == (0, 0)
 
 
 def test_haunted_screen_has_no_triggers_or_statics():
@@ -104,24 +104,26 @@ def test_haunted_screen_has_no_triggers_or_statics():
     assert p.static_abilities == ()
 
 
-# ---------- BecomeCreatureWithSubtypeAndPTPermanently engine class ----------
+# ---------- BecomeType engine class ----------
 
-def test_become_creature_with_subtype_describe():
-    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+def test_become_type_describe():
+    from mtg_bot.effects import BecomeType
 
-    desc = BecomeCreatureWithSubtypeAndPTPermanently(
-        subtype="Spirit", base_p=0, base_t=0,
+    desc = BecomeType(
+        types_to_add=("creature",),
+        subtypes_to_add=("Spirit",),
+        base_pt=(0, 0),
     ).describe()
     assert "Spirit" in desc
     assert "0/0" in desc
     assert "in addition to its other types" in desc
 
 
-def test_become_creature_with_subtype_first_resolve_transforms():
+def test_become_type_first_resolve_transforms():
     """First resolve writes the layer-4/7 registry entries with
     ``expires_at=None`` plus the ``permanent_is_creature`` cache."""
     from mtg_bot.cards.base import make_artifact
-    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+    from mtg_bot.effects import BecomeType
     from mtg_bot.game import (
         GameObject, GameState, Player, Zone,
         effective_subtypes, is_creature_now,
@@ -137,31 +139,41 @@ def test_become_creature_with_subtype_first_resolve_transforms():
         battlefield=[source_obj],
         resolving_source=source_obj,
     )
-    BecomeCreatureWithSubtypeAndPTPermanently(
-        subtype="Spirit", base_p=0, base_t=0,
+    BecomeType(
+        types_to_add=("creature",),
+        subtypes_to_add=("Spirit",),
+        base_pt=(0, 0),
     ).resolve(state, controller_id=0, targets=())
     assert source_obj.permanent_is_creature is True
     assert is_creature_now(source_obj)
     assert "Spirit" in effective_subtypes(state, source_obj)
+    # All written registry entries are permanent (expires_at=None).
+    assert all(
+        ce.expires_at is None for ce in state.continuous_effects
+    )
 
 
-def test_become_creature_with_subtype_no_source_is_noop():
+def test_become_type_no_source_is_noop():
     """``resolving_source`` is None → silent no-op."""
-    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+    from mtg_bot.effects import BecomeType
     from mtg_bot.game import GameState, Player
 
     state = GameState(players=[Player(id=0), Player(id=1)])
-    BecomeCreatureWithSubtypeAndPTPermanently(
-        subtype="Spirit", base_p=0, base_t=0,
+    BecomeType(
+        types_to_add=("creature",),
+        subtypes_to_add=("Spirit",),
+        base_pt=(0, 0),
     ).resolve(state, controller_id=0, targets=())
     # Nothing to assert beyond "didn't raise".
+    assert state.continuous_effects == []
 
 
-def test_become_creature_no_subtype_skips_subtype_grant():
-    """Empty ``subtype`` skips the layer-4 add_subtype registry entry
-    but still writes the layer-4 add_type and layer-7 set_base_pt."""
+def test_become_type_no_subtype_skips_subtype_grant():
+    """Empty ``subtypes_to_add`` skips the layer-4 add_subtype registry
+    entry but still writes the layer-4 add_type and layer-7
+    set_base_pt."""
     from mtg_bot.cards.base import make_artifact
-    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+    from mtg_bot.effects import BecomeType
     from mtg_bot.game import (
         GameObject, GameState, Player, Zone,
         is_creature_now,
@@ -177,10 +189,48 @@ def test_become_creature_no_subtype_skips_subtype_grant():
         battlefield=[source_obj],
         resolving_source=source_obj,
     )
-    BecomeCreatureWithSubtypeAndPTPermanently(
-        subtype="", base_p=2, base_t=2,
+    BecomeType(
+        types_to_add=("creature",),
+        base_pt=(2, 2),
     ).resolve(state, controller_id=0, targets=())
     assert is_creature_now(source_obj)
+    # No add_subtype entries.
+    add_subtype_entries = [
+        ce for ce in state.continuous_effects
+        if ce.kind == "add_subtype"
+    ]
+    assert add_subtype_entries == []
+
+
+def test_become_type_subtype_only_skips_pt_and_type_grants():
+    """Empty types_to_add and base_pt → only add_subtype entries written."""
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.effects import BecomeType
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone,
+        effective_subtypes,
+    )
+
+    art_pr = make_artifact("Curio", "{2}")
+    source_obj = GameObject(
+        id=11, printing=art_pr, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    state = GameState(
+        players=[Player(id=0), Player(id=1)],
+        battlefield=[source_obj],
+        resolving_source=source_obj,
+    )
+    BecomeType(subtypes_to_add=("Treasure",)).resolve(
+        state, controller_id=0, targets=(),
+    )
+    assert source_obj.permanent_is_creature is False
+    assert "Treasure" in effective_subtypes(state, source_obj)
+    set_base_pt_entries = [
+        ce for ce in state.continuous_effects
+        if ce.kind == "set_base_pt"
+    ]
+    assert set_base_pt_entries == []
 
 
 # ---------- Once-only activation gating ----------

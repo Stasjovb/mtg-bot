@@ -73,8 +73,8 @@ to a ``Sequence`` of generic primitives):
   ``{7}: Put seven +1/+1 counters on this artifact. It becomes a 0/0
   Spirit creature in addition to its other types. Activate only once.``
   decomposes into ``Sequence(PutPlusOneCounterOnSelf(amount=7),
-  BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
-  base_p=0, base_t=0))`` via a multi-sentence literal recognizer in
+  BecomeType(types_to_add=("creature",), subtypes_to_add=("Spirit",),
+  base_pt=(0, 0)))`` via a multi-sentence literal recognizer in
   ``effects.py``. The trailing ``Activate only once.`` rider flips
   ``activate_only_once=True`` via the new inline-rider strip in
   ``activated.py``; the per-source ``has_activated_once_only_ability``
@@ -230,8 +230,8 @@ from mtg_bot.effects.predicates import Controlled, Event, YOU
 #   once-rider strip in ``activated.py`` (sets ``activate_only_once=
 #   True`` on the ability) plus a multi-sentence literal recognizer in
 #   ``effects.py`` mapping to ``Sequence(PutPlusOneCounterOnSelf(
-#   amount=7), BecomeCreatureWithSubtypeAndPTPermanently(subtype=
-#   "Spirit", base_p=0, base_t=0))``.
+#   amount=7), BecomeType(types_to_add=("creature",),
+#   subtypes_to_add=("Spirit",), base_pt=(0, 0)))``.
 #
 # Pinnacle Starcage and Ghost Vacuum had previously been migrated out
 # via the generic "exiled-with-this" recall infrastructure (Sequence

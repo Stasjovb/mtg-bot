@@ -205,7 +205,7 @@ from mtg_bot.effects.formulas import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
-    BecomeCreatureWithSubtypeAndPTPermanently,
+    BecomeType,
     DestroyEnchantedPermanent,
     DrawCardsAndLoseLifeEqualToResolvingDamage,
     DrawCardsByConditionMultiplier,
@@ -4290,11 +4290,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     #   2. ``It becomes a 0/0 Spirit creature in addition to its
     #      other types.`` — anaphoric "It" refers to the source from
     #      sentence 1; modeled by
-    #      ``BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
-    #      base_p=0, base_t=0)`` which writes layer-4/7 registry
-    #      entries with ``expires_at=None`` so the type-change persists
-    #      across turns (matches the printed "in addition to its other
-    #      types" — the artifact stays an artifact).
+    #      ``BecomeType(types_to_add=("creature",),
+    #      subtypes_to_add=("Spirit",), base_pt=(0, 0))``. ``BecomeType``
+    #      always writes ``expires_at=None`` registry entries so the
+    #      type-change persists across turns (matches the printed "in
+    #      addition to its other types" — the artifact stays an
+    #      artifact). For finite-lifetime versions, wrap with
+    #      ``ApplyEffect(BecomeType(...), ends_at=<Duration>)``.
     #
     # Matched as a multi-sentence literal here (rather than via the
     # compound-effect splitter) because the second sentence's "It" is
@@ -4316,8 +4318,10 @@ def _parse_effect(phrase: str) -> Effect | None:
     ):
         return Sequence(effects=(
             PutPlusOneCounterOnSelf(amount=7),
-            BecomeCreatureWithSubtypeAndPTPermanently(
-                subtype="Spirit", base_p=0, base_t=0,
+            BecomeType(
+                types_to_add=("creature",),
+                subtypes_to_add=("Spirit",),
+                base_pt=(0, 0),
             ),
         ))
     # ----------------------------------------------------------------

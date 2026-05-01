@@ -25,6 +25,14 @@ from mtg_bot.effects.base import (
     _find_moonlit_replacement_source,
     _multicolored_permanents_count,
 )
+from mtg_bot.effects.durations import (
+    Duration,
+    EndOfCombat,
+    EndOfTurn,
+    EndOfYourNextTurn,
+    Permanent,
+    UntilSourceLeaves,
+)
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddManaToPool,
@@ -32,8 +40,8 @@ from mtg_bot.effects.generic import (
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
     AttachToTargetCreatureYouControl,
-    BecomeCreatureWithSubtypeAndPTPermanently,
     BecomeLandCreatureUEOT,
+    BecomeType,
     Bounce,
     BecomesCopyOfTargetLand,
     ChangeControllerToCombatDamageSource,
@@ -224,6 +232,7 @@ from mtg_bot.effects.formulas import (
     MVOfCostPaidObjectPlus,
 )
 from mtg_bot.effects.combinators import (
+    ApplyEffect,
     ConditionalIfCastFromHand,
     ConditionalIfOpponentHasMoreLands,
     ConditionalIfSourcePowerAtLeast,

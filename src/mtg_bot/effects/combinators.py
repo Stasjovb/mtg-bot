@@ -4,16 +4,91 @@ optional-sacrifice wrappers. Compose other Effects into bigger ones.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
+from mtg_bot.effects.durations import Duration, Permanent
 from mtg_bot.effects.generic import SearchLibraryForBasicLandTapped
 
 if TYPE_CHECKING:
     from mtg_bot.cards import ManaCost
     from mtg_bot.game import GameState
+
+
+@dataclass(frozen=True)
+class ApplyEffect(Effect):
+    """Wrap ``inner`` and rewrite the lifetime of every ``ContinuousEffect``
+    record it appends to ``state.continuous_effects``.
+
+    Separates WHAT-changes (the inner effect's registry writes) from
+    WHEN-it-ends (the ``ends_at`` ``Duration``). The inner effect resolves
+    normally — typically writing one or more registry entries with whatever
+    ``expires_at`` it always uses — and ``ApplyEffect`` rewrites each
+    newly-appended entry's ``expires_at`` / ``expires_at_player_id`` to the
+    pair declared by ``ends_at``.
+
+    Implementation: snapshot ``len(state.continuous_effects)`` before
+    ``inner.resolve``, then walk indices ``[before, after)`` after it
+    returns and replace each entry with a ``dataclasses.replace`` that
+    overrides only the lifetime fields. The registry's ``ContinuousEffect``
+    is ``frozen=True``; in-place reassignment of the list slot keeps the
+    timestamp/source/layer/etc. fields intact.
+
+    Example: ``ApplyEffect(BecomeType(types_to_add=("creature",)),
+    ends_at=EndOfTurn())`` writes a layer-4 ``add_type "creature"``
+    entry that expires at the next cleanup step.
+
+    Notes & known caveats for this PR's first migration:
+
+    - The PT and subtype read paths (``_compute_effective_pt``,
+      ``effective_subtypes``) consult the registry directly, so any
+      duration is faithfully respected for those changes.
+    - ``is_creature_now`` reads the ``GameObject.permanent_is_creature``
+      write-through cache rather than walking the registry. ``BecomeType``
+      sets that cache on resolve regardless of the wrapping
+      ``ApplyEffect``'s ``ends_at``. Migrating UEOT type-changes (so the
+      cache reverts when the registry entry expires) is deferred — for now
+      use ``BecomeLandCreatureUEOT`` (the legacy ``temp_*`` path) for any
+      "becomes a creature until end of turn" migration. The single
+      Haunted-Screen migration in this PR is permanent, so the caveat
+      doesn't bite.
+    """
+
+    inner: Effect
+    ends_at: Duration = Permanent()
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner.legal_targets(state, controller_id)
+
+    def target_count_range(self) -> tuple[int, int]:
+        return self.inner.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ):
+        before = len(state.continuous_effects)
+        result = self.inner.resolve(state, controller_id, targets)
+        expires_at, player_id = self.ends_at.to_expires(controller_id)
+        for i in range(before, len(state.continuous_effects)):
+            entry = state.continuous_effects[i]
+            state.continuous_effects[i] = dataclasses.replace(
+                entry,
+                expires_at=expires_at,
+                expires_at_player_id=player_id,
+            )
+        return result
+
+    def describe(self) -> str:
+        return f"{self.inner.describe()} {self.ends_at.describe()}"
 
 
 @dataclass(frozen=True)
