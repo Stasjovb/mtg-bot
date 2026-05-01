@@ -996,20 +996,16 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # multi-sentence body reaches the effect-grammar lookup verbatim.
     # ---------------------------------------------------------------
     # ---------------------------------------------------------------
-    # Sporogenic Infection — ETB target-opp-sacs trigger.
-    # "When this Aura enters, target player sacrifices a creature of
-    # their choice other than enchanted creature." →
-    # TargetOpponentSacrificesCreatureOtherThanEnchanted.
-    # Only card in the pool with this ETB Aura form.
+    # (audit-litdispatch-auras) Sporogenic Infection target-opp-sacs
+    # ETB ("When this Aura enters, target player sacrifices a
+    # creature of their choice other than enchanted creature.")
+    # migrated to the unified ``_parse_triggered_ability_line`` path:
+    # ``this Aura enters`` lives in ``_PREDICATE_TRIGGER_PHRASES``
+    # and the body is now claimed by an Aura-context effect-phrase
+    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
+    # mapping to
+    # ``TargetOpponentSacrificesCreatureOtherThanEnchanted``.
     # ---------------------------------------------------------------
-    (
-        "When this Aura enters, target player sacrifices a creature of "
-        "their choice other than enchanted creature."
-    ): TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
-    ),
     # ---------------------------------------------------------------
     # Chorale of the Void — attacks trigger (bespoke reanimate effect).
     # "Whenever enchanted creature attacks, put target creature card

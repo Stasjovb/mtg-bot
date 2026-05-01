@@ -196,6 +196,7 @@ from mtg_bot.effects.generic import (
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
+    TargetOpponentSacrificesCreatureOtherThanEnchanted,
 )
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -4072,6 +4073,23 @@ def _parse_effect(phrase: str) -> Effect | None:
         "That player discards that card"
     ):
         return TargetOpponentLookHandMayDiscard()
+    # ``target player sacrifices a creature of their choice other
+    # than enchanted creature`` — Sporogenic Infection's ETB body.
+    # Maps to ``TargetOpponentSacrificesCreatureOtherThanEnchanted``
+    # which excludes the Aura's host (read from
+    # ``state.resolving_source.attached_to``) from the target's sac
+    # options and routes the choice through the target's
+    # ``Agent.choose_sacrifice``. ``target player`` is narrowed to
+    # ``target opponent`` per the standard EoE/DSK simplification —
+    # self-targeting is never strategically correct for the
+    # controller. Generalization to a generic
+    # ``TargetPlayerSacrifices<filter>`` primitive deferred until a
+    # second card with a similar excluded-host sacrifice shape ships.
+    if phrase == (
+        "target player sacrifices a creature of their choice other "
+        "than enchanted creature"
+    ):
+        return TargetOpponentSacrificesCreatureOtherThanEnchanted()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
