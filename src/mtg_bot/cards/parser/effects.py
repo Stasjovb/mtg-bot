@@ -185,6 +185,7 @@ from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     EachOpponentExilesCardFromHandWithCastPermission,
+    LockOrUnlockDoorOfTargetRoomYouControl,
     PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
@@ -1597,6 +1598,21 @@ _THEY_LOSE_N_LIFE = re.compile(
 # spelled-out small cardinals (``two``) and bare digits.
 _THAT_PLAYER_GETS_N_POISON_COUNTERS = re.compile(
     rf"^that player gets (\d+|{_SMALL_CARDINAL_PATTERN}) poison counters?$"
+)
+# "Lock or unlock a door of target Room you control" — Keys to the
+# House's sorcery-speed activated body (``{3}, {T}, Sacrifice this
+# artifact: Lock or unlock a door of target Room you control. Activate
+# only as a sorcery.``). Maps directly to the generic engine class
+# ``LockOrUnlockDoorOfTargetRoomYouControl`` (already in
+# ``effects.generic`` for re-use). The "Room" subject is preserved with
+# its capital R because the activated-ability normalizer only
+# lowercases the first letter of the phrase, leaving ``Room`` intact.
+# Single-card surface in the EoE/DSK pool today — broader Room-action
+# grammar (``unlock a door of target Room`` without the ``lock or``
+# disjunction, etc.) deferred until a second printing with this shape
+# ships.
+_LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_YOU_CONTROL = re.compile(
+    r"^lock or unlock a door of target Room you control$"
 )
 # "Return up to one other target permanent you control to its owner's
 # hand" — Exosuit Savior's ETB. Maps to
@@ -5904,6 +5920,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         if inner is None:
             return None
         return OptionalSacAnotherForEffect(inner_effect=inner)
+    if _LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_YOU_CONTROL.match(phrase) is not None:
+        # ``lock or unlock a door of target Room you control`` — Keys to
+        # the House's sorcery-speed activation body. Maps to the generic
+        # ``LockOrUnlockDoorOfTargetRoomYouControl`` engine class which
+        # picks a Room target the controller controls and toggles one
+        # of its doors via ``choose_mode``. The ``Activate only as a
+        # sorcery.`` rider on the printed activation is consumed at the
+        # activated-ability layer (``sorcery_speed=True``), not in the
+        # effect body.
+        return LockOrUnlockDoorOfTargetRoomYouControl()
     return None
 
 

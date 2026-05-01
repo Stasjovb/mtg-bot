@@ -547,10 +547,13 @@ def test_make_artifact_face_down_default_false():
 # ---------- Keys to the House: Room lock/unlock activation ----------
 
 def test_keys_to_the_house_claimed_by_parser():
-    # Keys to the House ``{1}`` Artifact - claimed via the unified
-    # activated grammar for the first ability (basic-land tutor) plus
-    # the new literal-line dispatch for the second ability (lock/unlock
-    # door of target Room).
+    # Keys to the House ``{1}`` Artifact - both activations claim
+    # through the unified activated grammar: the first ability
+    # (basic-land tutor) via the ``SearchLibraryForCard`` recognizer,
+    # and the second ability (``lock or unlock a door of target Room
+    # you control``) via the new ``_LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_
+    # YOU_CONTROL`` regex in ``effects.py`` mapping to the generic
+    # ``LockOrUnlockDoorOfTargetRoomYouControl`` engine class.
     assert "Keys to the House" in _claimed_names()
 
 
@@ -559,8 +562,11 @@ def test_keys_to_the_house_carries_two_activations():
     # SearchLibraryForCard(filter_name="basic_land") body via the
     # unified activated grammar.
     # Second ability: ``{3}, {T}, Sacrifice this artifact`` cost
-    # (sorcery-speed) + LockOrUnlockDoorOfTargetRoomYouControl body
-    # via the new literal-line dispatch.
+    # (sorcery-speed) + LockOrUnlockDoorOfTargetRoomYouControl body —
+    # both pieces also via the unified activated grammar (cost atoms
+    # plus the new ``lock or unlock a door of target Room you control``
+    # effect-grammar recognizer); ``Activate only as a sorcery.``
+    # tail rider lifts to ``sorcery_speed=True`` on the ability.
     from mtg_bot.effects import (
         LockOrUnlockDoorOfTargetRoomYouControl,
         SearchLibraryForCard,
