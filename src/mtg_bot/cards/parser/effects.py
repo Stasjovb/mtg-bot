@@ -175,7 +175,7 @@ from mtg_bot.effects.bespoke import (
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
-from mtg_bot.effects.generic import TapEnchantedPermanent
+from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor, TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -1439,6 +1439,31 @@ _ADD_ONE_MANA_OF_ANY_COLOR = re.compile(r"^add one mana of any color$")
 # loop).
 _ADD_TWO_SAME_COLOR_MANA = re.compile(
     r"^add \{([WUBRG])\}\{([WUBRG])\}$"
+)
+# "Add {C}{C}…" — N colorless-mana coins (The Eternity Elevator's
+# ``{T}: Add {C}{C}{C}.`` mints three colorless coins). Captures the
+# entire brace sequence; the coin count is derived by counting ``{C}``
+# occurrences. The engine's ``AddManaToPool(produces=(("C", N),))``
+# represents this as a single (color, count) entry. Tried BEFORE the
+# bare single-color regex so the more-specific colorless shape wins;
+# the ``$`` anchor keeps a lone ``{C}`` from matching the wrong arm
+# (it would fail the colored ``[WUBRG]`` filter anyway, but explicit
+# ordering avoids reliance on that side-effect).
+_ADD_N_COLORLESS_MANA = re.compile(r"^add ((?:\{C\})+)$")
+# "Add X mana of any one color, where X is the number of charge counters
+# on this creature" — The Eternity Elevator's tier-gated activated
+# ability (``20+ | {T}: Add X mana of any one color, where X is the
+# number of charge counters on The Eternity Elevator.``). After
+# ``_substitute_self_name`` rewrites the card name to ``this creature``,
+# the normalized effect phrase matches this literal regex. Maps to
+# ``AddChargeCounterManaOfChosenColor`` whose ``resolve`` reads
+# ``state.resolving_source.charge_counters`` at fire time and mints that
+# many coins of the controller's chosen color. Only The Eternity Elevator
+# in the EoE pool prints this shape; broader grammar deferred until a
+# second card with a charge-counter-indexed mana amount appears.
+_ADD_X_MANA_ANY_COLOR_PER_CHARGE_COUNTER = re.compile(
+    r"^add X mana of any one color, where X is the number of "
+    r"charge counters on this creature$"
 )
 # "Add {<mana>}. Spend this mana only to <restriction>." —
 # restricted-mana ability whose produced coins are tagged with an
@@ -4757,6 +4782,21 @@ def _parse_effect(phrase: str) -> Effect | None:
             return None
         c = m.group(1)
         return AddManaToPool(produces=((c, 1), (c, 1)))
+    m = _ADD_N_COLORLESS_MANA.match(phrase)
+    if m is not None:
+        # ``add {C}{C}…`` — N colorless-mana coins (The Eternity
+        # Elevator's ``{T}: Add {C}{C}{C}.``). Count the ``{C}``
+        # occurrences in the captured sequence; each ``{C}`` is exactly
+        # 3 characters so the count is ``len(m.group(1)) // 3``.
+        n = m.group(1).count("{C}")
+        return AddManaToPool(produces=(("C", n),))
+    if _ADD_X_MANA_ANY_COLOR_PER_CHARGE_COUNTER.match(phrase) is not None:
+        # ``add X mana of any one color, where X is the number of charge
+        # counters on this creature`` — The Eternity Elevator's tier-gated
+        # activated ability. Maps to ``AddChargeCounterManaOfChosenColor``
+        # whose ``resolve`` reads the source's charge counter count at fire
+        # time and mints that many coins of the controller's chosen color.
+        return AddChargeCounterManaOfChosenColor()
     m = _ADD_SINGLE_COLOR_MANA.match(phrase)
     if m is not None:
         return AddManaToPool(produces=((m.group(1), 1),))

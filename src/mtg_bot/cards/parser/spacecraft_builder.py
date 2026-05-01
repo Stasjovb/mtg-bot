@@ -107,17 +107,44 @@ This builder grew in several slices:
   ``this creature deals 100 damage to up to one target creature or
   planeswalker`` effect phrase claims correctly.
 
-  The Eternity Elevator remains in the bespoke table with a ``# SKIP``
-  comment: it lacks printed P/T, uses a Station line without the
-  ``"It's an artifact creature at N+."`` sub-clause, and carries a
-  tier-gated X-mana activated ability — all outside the current grammar.
+- **Slice 7** (this batch) migrates The Eternity Elevator from
+  ``_BESPOKE_SPACECRAFT`` into the unified grammar. Three grammar gaps are
+  closed:
+
+  1. **Missing P/T**: non-animating Spacecraft have no printed P/T in
+     the Scryfall record; the builder now falls back to ``power=0,
+     toughness=0`` instead of bailing, matching ``make_spacecraft``'s
+     defaults for the non-creature case.
+  2. **Non-animating Station line**: a second regex
+     ``_STATION_LINE_NO_ANIMATION_RE`` matches the Station reminder text
+     without the ``"It's an artifact creature at N+."`` sub-clause.
+     Matching sets ``station_seen=True`` but leaves
+     ``station_threshold=None`` so the engine never animates the card.
+  3. **Tier-gated activated ability**: the ``"N+ | {cost}: <effect>"``
+     tier-line arm is widened to accept an activated ability (in addition
+     to the existing keyword / trigger / anthem-static arms). The
+     activation is tagged with ``tier_threshold=N`` so
+     ``effective_activated_abilities`` hides it below the threshold.
+     Two new effect-grammar entries support this:
+     - ``_ADD_N_COLORLESS_MANA`` matches ``add {C}{C}…`` and produces
+       ``AddManaToPool(produces=(("C", N),))`` — covering the Elevator's
+       always-on ``{T}: Add {C}{C}{C}`` ability as well.
+     - ``_ADD_X_MANA_ANY_COLOR_PER_CHARGE_COUNTER`` matches the normalized
+       ``add X mana of any one color, where X is the number of charge
+       counters on this creature`` phrase and produces
+       ``AddChargeCounterManaOfChosenColor``.
+     ``_is_mana_ability_effect`` in ``activated.py`` is widened to also
+     return True for ``AddChargeCounterManaOfChosenColor`` so the engine
+     bypasses the stack on activation per CR 605.
+
+  After this slice ``_BESPOKE_SPACECRAFT`` is empty.
 
 Anything outside the supported shape - lower-tier static/activated
 abilities, multiple tier-keyword lines (single-keyword-tier only is
 claimed today), an ``X+`` body that isn't a bare keyword list and
-isn't a self-trigger, or a missing Station line - falls through and
-the Spacecraft is silently skipped, mirroring the
-creature/spell/land/equipment builders.
+isn't a self-trigger, activated, or anthem-static, or a missing Station
+line - falls through and the Spacecraft is silently skipped, mirroring
+the creature/spell/land/equipment builders.
 
 Spacecraft live in their own module rather than extending the artifact/
 equipment builders because the printed grammar (Station reminder text
@@ -135,19 +162,15 @@ import re
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
-    ActivationCost,
     CardPrinting,
     StaticAbility,
     StaticScope,
     TriggeredAbility,
-    make_artifact,
     make_spacecraft,
-    parse_mana_cost,
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor, AddManaToPool
 from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU, Predicate
 
 
@@ -161,67 +184,12 @@ from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU,
 # Every entry mirrors the corresponding ``make_spacecraft(...)`` call in
 # ``eoe_creatures.py`` exactly — same cost, power, toughness, thresholds,
 # frozenset keywords, and trigger tuple.
+#
+# Currently empty: all EoE Spacecraft printings are claimed by the unified
+# grammar. The table and the lookup code remain in place for future
+# printings that may require bespoke handling.
 # ---------------------------------------------------------------------------
-_BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
-    c.name: c
-    for c in [
-        # The Eternity Elevator {5} — Legendary Artifact — Spacecraft.
-        # Never animates: no printed P/T, Station line lacks "It's an
-        # artifact creature at N+." so it never becomes a creature.
-        # Three grammar gaps prevent the unified builder from claiming it:
-        #   1. No P/T: the builder requires ``int(card["power"])`` /
-        #      ``int(card["toughness"])`` to succeed; The Eternity Elevator
-        #      has no P/T fields in the Scryfall record, so the try/except
-        #      returns None before the oracle-text parse begins.
-        #   2. Station line has no "It's an artifact creature" clause:
-        #      ``_STATION_LINE_RE`` requires the ``It's an artifact creature
-        #      at N+.`` sub-clause, but The Eternity Elevator's Station line
-        #      omits it. The regex match fails and the builder bails.
-        #   3. Tier-gated activated ability: ``20+ | {T}: Add X mana of any
-        #      one color, where X is the number of charge counters on The
-        #      Eternity Elevator.`` — dynamic X-mana tied to charge counters,
-        #      outside the current activated-ability grammar.
-        # Engine additions (engine-kavaron-elevator):
-        #   a. ``make_spacecraft`` now accepts ``station_threshold=None``
-        #      (no animation) and optional ``power``/``toughness`` (default
-        #      0), so a non-animating Spacecraft builds correctly.
-        #   b. ``ActivatedAbility(tier_threshold=N)`` gates the ability on
-        #      the source having N or more charge counters;
-        #      ``effective_activated_abilities`` filters gated abilities out
-        #      when the threshold isn't met.
-        #   c. ``AddChargeCounterManaOfChosenColor`` effect reads the source's
-        #      charge_counters at resolve time and delegates to
-        #      ``AddNManaOfChosenColor``.
-        # The bespoke entry uses ``make_spacecraft(station_threshold=None)``
-        # to produce the correct ``Legendary Artifact — Spacecraft`` type
-        # line and wires Station (charge-counter accumulation via
-        # ``ActivateStation``) and both activated abilities faithfully.
-        # The unified builder can't claim this card until a Station-line
-        # regex variant without the animation clause and a tier-gated
-        # activated-ability arm are added; deferred to a future slice.
-        make_spacecraft(
-            "The Eternity Elevator", "{5}",
-            legendary=True,
-            station_threshold=None,  # never animates
-            activated_abilities=(
-                # {T}: Add {C}{C}{C}.
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=(("C", 3),)),
-                    is_mana_ability=True,
-                ),
-                # 20+ | {T}: Add X mana of any one color, where X is the
-                # number of charge counters on The Eternity Elevator.
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddChargeCounterManaOfChosenColor(),
-                    is_mana_ability=True,
-                    tier_threshold=20,
-                ),
-            ),
-        ),
-    ]
-}
+_BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {}
 
 
 # The Station reminder line. Scryfall prints it as a single line:
@@ -229,16 +197,25 @@ _BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {
 #    equal to its power on this Spacecraft. Station only as a sorcery.
 #    It's an artifact creature at <N>+.)"
 # We capture the threshold integer inside the parenthetical so we can
-# cross-check it against the highest tier line. The trailing
-# "It's an artifact creature at <N>+." sub-clause is omitted on
-# Spacecraft that never animate (e.g. The Eternity Elevator), but
-# every Spacecraft we currently claim has a non-zero station_threshold,
-# so the regex requires it. Spacecraft without it fall through.
+# cross-check it against the highest tier line.
 _STATION_LINE_RE = re.compile(
     r"^Station \(Tap another creature you control: "
     r"Put charge counters equal to its power on this Spacecraft\. "
     r"Station only as a sorcery\. "
     r"It's an artifact creature at (\d+)\+\.\)$"
+)
+
+# Non-animating Station reminder line — same as above but without the
+# "It's an artifact creature at N+." sub-clause. Scryfall prints this
+# form on Spacecraft that never become creatures (e.g. The Eternity
+# Elevator whose station_threshold is None — it accumulates charge
+# counters via Station but never animates). The absence of the
+# animation clause is the distinguishing marker; we record
+# station_threshold=None for these Spacecraft.
+_STATION_LINE_NO_ANIMATION_RE = re.compile(
+    r"^Station \(Tap another creature you control: "
+    r"Put charge counters equal to its power on this Spacecraft\. "
+    r"Station only as a sorcery\.\)$"
 )
 
 
@@ -372,11 +349,20 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         return _BESPOKE_SPACECRAFT[name]
 
     legendary = "Legendary" in supertypes
+    pt_missing = False
     try:
         power = int(card["power"])
         toughness = int(card["toughness"])
     except (KeyError, ValueError):
-        return None
+        # Non-animating Spacecraft (e.g. The Eternity Elevator) have no
+        # printed P/T in their Scryfall record — they never become creatures,
+        # so the engine's default ``power=0, toughness=0`` is correct.
+        # Animating Spacecraft (all others in the EoE pool) always have P/T
+        # fields; a missing field on one of those is a data error and the card
+        # must be rejected after we confirm the Station line is non-animating.
+        power = 0
+        toughness = 0
+        pt_missing = True
 
     text = card.get("oracle_text", "")
     # Spacecraft oracle text is line-structured but we don't strip
@@ -386,6 +372,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     lines = [line for line in text.split("\n") if line.strip()]
 
     station_threshold: int | None = None
+    station_seen: bool = False  # sentinel: True once any Station line is consumed
     tier_threshold: int | None = None
     stationed_keywords: frozenset[str] | None = None
     triggers: list[TriggeredAbility] = []
@@ -395,11 +382,23 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     for line in lines:
         m = _STATION_LINE_RE.match(line)
         if m is not None:
-            if station_threshold is not None:
+            if station_seen:
                 # Two Station lines on one card would be malformed -
                 # bail rather than silently keep the second.
                 return None
+            station_seen = True
             station_threshold = int(m.group(1))
+            continue
+        if _STATION_LINE_NO_ANIMATION_RE.match(line) is not None:
+            # Non-animating Station line (no "It's an artifact creature
+            # at N+." sub-clause). station_threshold stays None to signal
+            # that this Spacecraft never animates; station_seen is flipped
+            # True so the final "was any Station line present?" check
+            # doesn't reject the card.
+            if station_seen:
+                return None
+            station_seen = True
+            # station_threshold remains None — no animation
             continue
         m = _TIER_LINE_RE.match(line)
         if m is not None:
@@ -467,11 +466,20 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                     dataclasses.replace(static_ab, tier_threshold=tier_n)
                 )
                 continue
+            if clause.activated is not None:
+                # Tier-gated activated ability. The Eternity Elevator's
+                # ``20+ | {T}: Add X mana of any one color, …`` is the EoE
+                # printing in this shape. Tag the ability with the tier
+                # threshold so ``effective_activated_abilities`` hides it
+                # when the Spacecraft has fewer than N charge counters.
+                activateds.append(
+                    dataclasses.replace(clause.activated, tier_threshold=tier_n)
+                )
+                continue
             if clause.trigger is None:
-                # The clause parsed but as a non-trigger and non-anthem
-                # (activated ability, granted-keyword line, self-scope
-                # static). Tier-gated activations and self-scope
-                # statics on Spacecraft aren't modeled by this builder
+                # The clause parsed but as a non-trigger, non-activated, and
+                # non-anthem (granted-keyword line, self-scope static). Self-
+                # scope statics on Spacecraft aren't modeled by this builder
                 # yet — skip rather than silently drop the ability.
                 return None
             trig = clause.trigger
@@ -589,19 +597,28 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             return None
         triggers.append(trig)
 
-    # Both Station and the keyword-tier line are required: a Spacecraft
-    # with no Station line is malformed, and one with no tier-keyword
-    # line wouldn't ever animate via ``stationed_keywords``.
-    if station_threshold is None:
+    # A Station line is required: a Spacecraft with no Station line is
+    # malformed. Non-animating Spacecraft (station_threshold=None, e.g.
+    # The Eternity Elevator) have seen a Station line but have no
+    # keyword-tier line — that's fine; they carry only activated abilities
+    # and never animate. Animating Spacecraft (station_threshold is not
+    # None) require a keyword-tier line to wire up stationed_keywords.
+    if not station_seen:
         return None
-    if tier_threshold is None or stationed_keywords is None:
-        return None
-    # The Station reminder text encodes the same threshold as the
-    # highest (and here only) keyword tier line on every printing in
-    # the current EoE pool. Treat any drift as a signal that we're
-    # looking at a shape outside this grammar and bail.
-    if station_threshold != tier_threshold:
-        return None
+    if station_threshold is not None:
+        # Animating Spacecraft: keyword-tier line is mandatory, and P/T
+        # must be present (missing P/T on an animating card is a data
+        # error — the stationed creature would have no meaningful stats).
+        if tier_threshold is None or stationed_keywords is None:
+            return None
+        if pt_missing:
+            return None
+        # The Station reminder text encodes the same threshold as the
+        # highest (and here only) keyword tier line on every printing in
+        # the current EoE pool. Treat any drift as a signal that we're
+        # looking at a shape outside this grammar and bail.
+        if station_threshold != tier_threshold:
+            return None
 
     # Order the triggers deterministically: non-tier-gated triggers
     # (``tier_threshold=0``) first in printed order, followed by tier-
@@ -622,7 +639,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
         power=power,
         toughness=toughness,
         station_threshold=station_threshold,
-        stationed_keywords=stationed_keywords,
+        stationed_keywords=stationed_keywords if stationed_keywords is not None else frozenset(),
         triggered_abilities=ordered_triggers,
         static_abilities=tuple(statics),
         activated_abilities=tuple(activateds),

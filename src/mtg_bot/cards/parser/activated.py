@@ -86,6 +86,7 @@ from mtg_bot.cards.base import (
     CostReduction,
     parse_mana_cost,
 )
+from mtg_bot.effects.generic import AddChargeCounterManaOfChosenColor
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
@@ -497,28 +498,34 @@ def _is_mana_ability_effect(effect) -> bool:
     """Return True iff ``effect`` is a mana ability for the purposes of
     CR 605: it produces mana and does not target.
 
-    Today the only effect class that satisfies both is ``AddManaToPool``
-    — it mints coins straight into the controller's mana pool with no
-    target selection. ``AddManaToPool`` covers both fixed-color coins
-    (``add {U}`` → ``("U", 1)``) and the at-resolution choose-color
-    coin (``add one mana of any color`` → ``("any", 1)``, used by
-    All-Fates Scroll's ``{T}`` ability). The other "permanent-color" /
-    "land-could-produce" mana effects also belong here in principle but
-    aren't yet emitted by the activated-ability grammar (each requires
-    its own surface-form regex first).
+    ``AddManaToPool`` covers fixed-color coins (``add {U}`` → ``("U", 1)``)
+    and the at-resolution choose-color coin (``add one mana of any color``
+    → ``("any", 1)``, used by All-Fates Scroll's ``{T}`` ability).
+
+    ``AddChargeCounterManaOfChosenColor`` covers The Eternity Elevator's
+    tier-gated ``{T}: Add X mana of any one color, where X is the number
+    of charge counters on this Spacecraft.`` — X is determined at
+    resolution time rather than parse time, but the ability still mints
+    mana into the pool with no targets, satisfying CR 605's mana-ability
+    criterion. Marking it ``is_mana_ability=True`` causes the engine to
+    bypass the stack on activation, matching the printed behavior.
+
+    The other "permanent-color" / "land-could-produce" mana effects also
+    belong here in principle but aren't yet emitted by the activated-ability
+    grammar (each requires its own surface-form regex first).
 
     Effects that would be excluded if they ever appeared (defense in
     depth): anything reporting ``requires_target() == True`` is not a
     mana ability per the rules — even if it adds mana, the targeting
-    forces the ability to use the stack. Today no ``AddManaToPool``
-    instance targets, but the explicit guard keeps future grammar
-    additions honest.
+    forces the ability to use the stack. Today neither ``AddManaToPool``
+    nor ``AddChargeCounterManaOfChosenColor`` targets, but the explicit
+    guard keeps future grammar additions honest.
     """
-    if not isinstance(effect, AddManaToPool):
-        return False
-    if effect.requires_target():
-        return False
-    return True
+    if isinstance(effect, (AddManaToPool, AddChargeCounterManaOfChosenColor)):
+        if effect.requires_target():
+            return False
+        return True
+    return False
 
 
 def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:

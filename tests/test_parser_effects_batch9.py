@@ -184,15 +184,14 @@ def test_parse_spell_effect_phrase_recognizes_target_creature_gets_pump_ueot():
 # ---------- negative cases ----------
 
 def test_parse_effect_returns_none_for_malformed_add_mana():
-    # Three-or-more-coin shape isn't wired yet — only single-coin
+    # Three-or-more colored-coin shape isn't wired — only single-coin
     # ``{<color>}`` and two-same-color ``{<color>}{<color>}`` are
-    # recognized today (Steelswarm Operator's largest add is two
-    # coins). Extend the regex if a future card uses ``Add {U}{U}{U}``.
+    # recognized for WUBRG coins (Steelswarm Operator's largest add is
+    # two colored coins). Colorless ``{C}`` repetitions ARE recognized
+    # via ``_ADD_N_COLORLESS_MANA`` (The Eternity Elevator's
+    # ``{T}: Add {C}{C}{C}``), but three-or-more colored coins remain
+    # unsupported.
     assert _parse_effect("add {U}{U}{U}") is None
-    # Colorless single-coin not supported by this regex (would need to
-    # extend to ``[WUBRGC]``; no EoE single-line ``{C}`` mana ability
-    # today, only land-builder territory).
-    assert _parse_effect("add {C}") is None
     # ``add one mana of any color`` IS recognized (All-Fates Scroll).
     # See ``test_parser_artifact_all_fates_scroll`` for the positive
     # case. Plural / amount-N shapes are not recognized:

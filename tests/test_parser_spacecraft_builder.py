@@ -177,10 +177,13 @@ def test_build_spacecraft_printing_claims_legendary_spacecraft():
 
 
 def test_build_spacecraft_printing_skips_missing_power_toughness():
-    """A Spacecraft with no printed P/T (like The Eternity Elevator,
-    which doesn't animate) is outside this slice - the engine still
-    needs ``power``/``toughness`` for ``make_spacecraft`` to populate
-    the stationed-creature P/T."""
+    """An animating Spacecraft (one with a Station line that includes
+    "It's an artifact creature at N+.") must have printed P/T — the
+    stationed creature needs real stats. A card with the animating
+    Station line but no P/T fields is rejected. Non-animating Spacecraft
+    (Station line without the animation clause, like The Eternity
+    Elevator) are handled separately via the no-animation Station regex
+    and default to power=0/toughness=0."""
     card = {
         "name": "Hand-Crafted PT-less Spacecraft",
         "mana_cost": "{5}",
