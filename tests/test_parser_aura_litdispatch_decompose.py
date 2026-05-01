@@ -6,13 +6,14 @@ The parent audit flagged the 8-entry literal-trigger-line table on
 dispatch": each entry mapped a verbatim oracle trigger line to a
 ``TriggeredAbility`` rather than letting the unified
 ``_parse_triggered_ability_line`` grammar claim the line. Seven of
-the eight entries were migrated to grammar-driven dispatch (the
-trigger condition resolves through the predicate-trigger phrasebook
-in ``triggers.py``; the effect body resolves through the unified
-effect grammar in ``effects.py``). One entry — Chorale of the
-Void's attacks-trigger reanimate — remains as a literal because the
-engine doesn't yet have a generic primitive for "defending player's
-graveyard" reanimation.
+the eight entries were migrated to grammar-driven dispatch in the
+initial pass (audit-litdispatch-auras). The eighth and final entry
+— Chorale of the Void's attacks-trigger reanimate — was migrated in
+audit-monoist-chorale: the body now claims through a literal multi-
+sentence recognizer in ``effects._parse_effect`` mapping to the
+generic ``ReanimateTargetCreatureCardFromDefendersGraveyard``
+primitive, and the trigger header parses through the unified
+grammar.
 
 This file asserts:
 
@@ -20,10 +21,7 @@ This file asserts:
   ``_parse_triggered_ability_line`` path to the same
   ``TriggeredAbility`` shape the literal table previously
   produced;
-* the single remaining entry (Chorale's attacks trigger) still
-  routes via the literal table — its unified-grammar counterpart
-  is intentionally not yet wired (architectural blocker
-  documented in ``_AURA_LITERAL_TRIGGER_LINES``);
+* the literal table is now empty;
 * Chorale of the Void's "Void —" end-step rider, which uses the
   "sacrifice unless" surface (not the standard intervening-if
   Void-gate surface), parses with ``requires_void=False`` because
@@ -42,11 +40,11 @@ from mtg_bot.cards.parser.enchantment_builder import (
 )
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects import (
-    ChoraleReanimateDefenderGraveCreatureEffect,
     DestroyEnchantedPermanent,
     EnchantedCreatureFightsTargetEffect,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
+    ReanimateTargetCreatureCardFromDefendersGraveyard,
     SacrificeSelfUnlessVoidActive,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
@@ -158,57 +156,56 @@ def test_migrated_aura_trigger_lines_parse_via_unified_path(
     assert parsed == expected
 
 
-# ---------- remaining literal entry: Chorale attacks trigger ----------
+# ---------- final literal entry migrated: Chorale attacks trigger ----------
 
 
-def test_chorale_attacks_trigger_remains_in_literal_table() -> None:
+def test_chorale_attacks_trigger_no_longer_in_literal_table() -> None:
     """Chorale of the Void's attacks-trigger reanimate body
     (``put target creature card from defending player's graveyard
     onto the battlefield under your control tapped and attacking``)
-    still routes via the literal table because the engine doesn't
-    have a generic ``ReanimateFromDefendingPlayersGraveyard``
-    primitive yet — it's the sole remaining entry, documented as
-    an architectural blocker.
+    was migrated in audit-monoist-chorale to a generic engine
+    primitive (``ReanimateTargetCreatureCardFromDefendersGraveyard``)
+    plus a literal multi-sentence recognizer in
+    ``effects._parse_effect``. The literal-trigger table no longer
+    carries the line; the unified ``_parse_triggered_ability_line``
+    path claims it.
     """
     line = (
         "Whenever enchanted creature attacks, put target creature card "
         "from defending player's graveyard onto the battlefield under "
         "your control tapped and attacking."
     )
-    assert line in _AURA_LITERAL_TRIGGER_LINES
+    assert line not in _AURA_LITERAL_TRIGGER_LINES
+
+
+def test_chorale_attacks_trigger_parses_via_unified_path() -> None:
+    """Chorale's attacks-trigger body now claims through the unified
+    grammar: trigger header (``Whenever enchanted creature attacks``)
+    parses via the predicate-trigger phrasebook; effect body parses
+    via ``_parse_effect``'s literal multi-sentence recognizer mapping
+    to the generic ``ReanimateTargetCreatureCardFromDefendersGraveyard``
+    primitive.
+    """
+    line = (
+        "Whenever enchanted creature attacks, put target creature card "
+        "from defending player's graveyard onto the battlefield under "
+        "your control tapped and attacking."
+    )
+    parsed = _parse_triggered_ability_line(line)
     expected = TriggeredAbility(
         event=Event.ATTACKS,
         predicate=IsHost(subject="attacker"),
-        effect=ChoraleReanimateDefenderGraveCreatureEffect(),
+        effect=ReanimateTargetCreatureCardFromDefendersGraveyard(),
     )
-    assert _AURA_LITERAL_TRIGGER_LINES[line] == expected
+    assert parsed == expected
 
 
-def test_chorale_attacks_trigger_is_not_yet_grammar_claimable() -> None:
-    """The unified ``_parse_triggered_ability_line`` path returns
-    ``None`` for Chorale's attacks-trigger body — by design. The
-    literal-table dispatch in ``_build_aura_via_oracle_text`` claims
-    the line BEFORE the grammar parser runs, so the card still lands.
-    When the engine grows a ``ReanimateFromDefendingPlayersGraveyard``
-    primitive (or the existing reanimate family is parameterized to
-    accept that filter), the literal entry can be removed and the
-    body will claim through the unified path automatically.
+def test_aura_literal_table_is_empty() -> None:
+    """After the audit-monoist-chorale decomposition, the literal-
+    trigger table is empty: every entry has been migrated to the
+    unified grammar. Future entries should NOT be added — they
+    indicate either a missing engine primitive (in which case add
+    the primitive and route through the grammar) or a missing
+    parameterized recognizer (in which case extend the grammar).
     """
-    line = (
-        "Whenever enchanted creature attacks, put target creature card "
-        "from defending player's graveyard onto the battlefield under "
-        "your control tapped and attacking."
-    )
-    assert _parse_triggered_ability_line(line) is None
-
-
-def test_aura_literal_table_has_only_one_remaining_entry() -> None:
-    """After the audit decomposition, the literal-trigger table
-    contains exactly ONE entry (Chorale's attacks-trigger reanimate
-    — see ``test_chorale_attacks_trigger_remains_in_literal_table``).
-    Adding a new entry should require either a documented
-    architectural blocker or a planned migration to the unified
-    grammar — not a silent literal-table addition that bypasses
-    the grammar.
-    """
-    assert len(_AURA_LITERAL_TRIGGER_LINES) == 1
+    assert _AURA_LITERAL_TRIGGER_LINES == {}

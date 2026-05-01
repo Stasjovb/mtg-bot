@@ -210,6 +210,7 @@ from mtg_bot.effects.generic import (
     LockOrUnlockDoorOfTargetRoomYouControl,
     PairedTargetPumpDebuffUEOT,
     PeekTopMayBattlefieldIfLandElseHand,
+    ReanimateTargetCreatureCardFromDefendersGraveyard,
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
@@ -3451,6 +3452,28 @@ def _parse_effect(phrase: str) -> Effect | None:
             positive_power=1, positive_toughness=0,
             negative_power=0, negative_toughness=-1,
         )
+    # Chorale of the Void's attacks-trigger body — reanimate from a
+    # defending player's graveyard tapped + attacking. The body is a
+    # single printed sentence but the legal-target pool is bound to
+    # "defending player" (not a generic graveyard reanimate filter)
+    # and the resolved card enters with two combat-state riders
+    # simultaneously (tapped + attacking + not summoning-sick), which
+    # the standard single-sentence reanimate grammar doesn't model.
+    # Literal-line recognizer mapped to the generic
+    # ``ReanimateTargetCreatureCardFromDefendersGraveyard`` primitive
+    # — only card in the pool with this defender-graveyard reanimate
+    # shape today; broader grammar (parameterized "put target
+    # creature card from <player-spec> graveyard onto the battlefield
+    # under <controller-spec> tapped and attacking") deferred until a
+    # second example exists. The 2-player simplification is documented
+    # on the engine primitive: the legal-target pool today is "any
+    # opponent's graveyard creature card", which matches the printed
+    # text exactly in 2-player mode.
+    if phrase == (
+        "put target creature card from defending player's graveyard "
+        "onto the battlefield under your control tapped and attacking"
+    ):
+        return ReanimateTargetCreatureCardFromDefendersGraveyard()
     # Perigee Beckoner's ETB body (only EoE card with the "pump another
     # target creature you control + grant dies-return-tapped trigger"
     # shape; broader grammar deferred until a second example exists).

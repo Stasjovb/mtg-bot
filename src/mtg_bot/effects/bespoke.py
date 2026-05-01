@@ -980,64 +980,11 @@ class AtomicMicrosizerAttackEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class ChoraleReanimateDefenderGraveCreatureEffect(Effect):
-    """Chorale of the Void's attacks trigger: "Put target creature
-    card from defending player's graveyard onto the battlefield under
-    your control tapped and attacking."
-
-    Simplification: legal targets = any creature card in any opponent's
-    graveyard (2-player case matches oracle exactly; multiplayer is an
-    approximation). The reanimated creature enters tapped and attacking.
-    """
-
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        return [
-            ("graveyard_creature", c.id)
-            for p in state.players
-            if p.id != controller_id
-            for c in p.graveyard
-            if c.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.actions import put_into_battlefield
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "graveyard_creature":
-            return
-        for p in state.players:
-            card = next((c for c in p.graveyard if c.id == target_id), None)
-            if card is None:
-                continue
-            p.graveyard.remove(card)
-            state.log.append(
-                f"{card.printing.name} returns from P{p.id}'s graveyard "
-                f"under P{controller_id} tapped and attacking"
-            )
-            put_into_battlefield(state, card, controller_id)
-            card.tapped = True
-            card.attacking = True
-            card.summoning_sick = False
-            return
-
-    def describe(self) -> str:
-        return (
-            "put target creature card from defending player's "
-            "graveyard onto the battlefield under your control tapped "
-            "and attacking"
-        )
-
+# ChoraleReanimateDefenderGraveCreatureEffect was decomposed in
+# audit-monoist-chorale: the body is now a literal multi-sentence
+# recognizer in ``effects._parse_effect`` mapping to the generic
+# ``ReanimateTargetCreatureCardFromDefendersGraveyard`` primitive in
+# ``effects.generic``.
 
 
 @dataclass(frozen=True)

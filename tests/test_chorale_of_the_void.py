@@ -7,7 +7,7 @@ from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.actions import drain_stack
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects import (
-    ChoraleReanimateDefenderGraveCreatureEffect,
+    ReanimateTargetCreatureCardFromDefendersGraveyard,
     SacrificeSelfUnlessVoidActive,
 )
 from mtg_bot.game import GameState, Player, Zone
@@ -47,7 +47,7 @@ def _put_in_graveyard(state, printing, owner_id=1):
 
 
 # -----------------------
-# ChoraleReanimateDefenderGraveCreatureEffect
+# ReanimateTargetCreatureCardFromDefendersGraveyard
 # -----------------------
 
 
@@ -55,7 +55,7 @@ def test_effect_legal_targets_opp_graveyard_creatures_only():
     state = _new_state()
     own_bear = _put_in_graveyard(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     opp_bear = _put_in_graveyard(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    legal = ChoraleReanimateDefenderGraveCreatureEffect().legal_targets(state, 0)
+    legal = ReanimateTargetCreatureCardFromDefendersGraveyard().legal_targets(state, 0)
     ids = {tid for kind, tid in legal if kind == "graveyard_creature"}
     assert opp_bear.id in ids
     assert own_bear.id not in ids
@@ -64,7 +64,7 @@ def test_effect_legal_targets_opp_graveyard_creatures_only():
 def test_effect_resolve_puts_card_on_battlefield_tapped_attacking():
     state = _new_state()
     enemy_bear = _put_in_graveyard(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    ChoraleReanimateDefenderGraveCreatureEffect().resolve(
+    ReanimateTargetCreatureCardFromDefendersGraveyard().resolve(
         state, 0, (("graveyard_creature", enemy_bear.id),),
     )
     assert enemy_bear in state.battlefield
@@ -75,7 +75,7 @@ def test_effect_resolve_puts_card_on_battlefield_tapped_attacking():
 
 
 def test_effect_describe():
-    d = ChoraleReanimateDefenderGraveCreatureEffect().describe()
+    d = ReanimateTargetCreatureCardFromDefendersGraveyard().describe()
     assert "defending player" in d and "graveyard" in d
 
 

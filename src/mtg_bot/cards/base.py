@@ -66,7 +66,6 @@ from mtg_bot.effects import (
     DestroyTargetNonlandPermanent,
     DestroyUpToOneTargetNonlandPermanent,
     ExileOpponentsNonlandPermanentUntilLeaves,
-    ChoraleReanimateDefenderGraveCreatureEffect,
     EnchantedCreatureFightsTargetEffect,
     EnduringDiesReturnAsEnchantmentEffect,
     KavaronHarrierAttackEffect,

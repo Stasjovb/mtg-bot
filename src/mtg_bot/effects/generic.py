@@ -10721,3 +10721,116 @@ def _signed(n: int) -> str:
     return f"+{n}" if n >= 0 else str(n)
 
 
+# ---------------------------------------------------------------------------
+# Reanimate from defending player's graveyard, tapped + attacking
+# (audit-monoist-chorale).
+#
+# Models the Chorale of the Void attacks-trigger reanimate body:
+# "put target creature card from defending player's graveyard onto the
+# battlefield under your control tapped and attacking".
+#
+# 2-player simplification: legal targets = any creature card in any
+# opponent's graveyard. The engine's combat model doesn't thread the
+# per-attacker defending-player identity into a slot the resolving
+# effect can read, so the multi-defender / multiplayer / planeswalker-
+# defender variants degrade to "any opponent's graveyard" — matching
+# the printed text exactly in 2-player and approximating it elsewhere.
+# When the engine grows a per-attacker defending-player slot, this
+# primitive will read it; the public API doesn't need to change.
+#
+# The reanimated card enters tapped AND attacking. Combat-state
+# bookkeeping marks the card ``attacking=True`` and clears
+# ``summoning_sick`` so it's a "real" attacker for the rest of the
+# combat phase. The engine's combat damage path reads
+# ``obj.attacking`` and applies damage to the defending player by id
+# (via the ``defending_player_id`` argument threaded from
+# ``resolve_combat_damage``); the engine doesn't carry a
+# per-attacker defender slot today, so the new attacker rides the
+# combat phase's single defender id implicitly.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReanimateTargetCreatureCardFromDefendersGraveyard(Effect):
+    """Put target creature card from a defending player's graveyard
+    onto the battlefield under the resolving controller's control,
+    tapped and attacking.
+
+    Used by Chorale of the Void's attacks trigger: the source aura's
+    enchanted creature attacks, and the trigger reanimates a creature
+    card from the defending player's graveyard, on the active player's
+    side, already attacking.
+
+    Target kind: ``("graveyard_creature", id)``. The legal-target pool
+    is the union of every opponent's graveyard creature cards. In
+    2-player mode this matches the printed "defending player" exactly
+    because the resolving controller has only one opponent; in
+    multiplayer / planeswalker-defender cases this is an approximation
+    until the engine threads per-attacker defender identity into a
+    state slot the effect can read.
+
+    Resolve semantics:
+
+    1. Locate the chosen card in any opponent's graveyard; remove it.
+    2. ``put_into_battlefield`` brings it on under the resolving
+       controller's id (CR 405.5: "under your control" — the ETB is
+       the new permanent's first ETB under that controller).
+    3. ``obj.tapped = True``, ``obj.attacking = True``,
+       ``obj.summoning_sick = False`` so the new permanent is a
+       legal attacker for the in-progress combat phase. The engine's
+       combat damage path reads ``obj.attacking`` and the defending
+       player id from the calling combat phase (single-defender
+       semantics; the new attacker rides the same defender as the
+       triggering attacker).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("graveyard_creature", c.id)
+            for p in state.players
+            if p.id != controller_id
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_creature":
+            return
+        for p in state.players:
+            card = next(
+                (c for c in p.graveyard if c.id == target_id), None,
+            )
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            state.log.append(
+                f"{card.printing.name} returns from P{p.id}'s graveyard "
+                f"under P{controller_id} tapped and attacking"
+            )
+            put_into_battlefield(state, card, controller_id)
+            card.tapped = True
+            card.attacking = True
+            card.summoning_sick = False
+            return
+
+    def describe(self) -> str:
+        return (
+            "put target creature card from defending player's "
+            "graveyard onto the battlefield under your control tapped "
+            "and attacking"
+        )
+
+

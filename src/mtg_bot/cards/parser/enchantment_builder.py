@@ -30,10 +30,10 @@ Non-Aura enchantments:
 - Leyline of Mutation ``{2}{G}{G}`` — honest no-op
 
 Aura enchantments:
-- Chorale of the Void ``{3}{B}`` — bespoke attacks-trigger effect
-  (ChoraleReanimateDefenderGraveCreatureEffect) and Void end-step rider
-  (SacrificeSelfUnlessVoidActive); deferred until those effects land as
-  grammar-level phrases.
+- (none — Chorale of the Void was migrated in audit-monoist-chorale; its
+  attacks-trigger body is claimed by a literal multi-sentence recognizer
+  in ``effects._parse_effect`` mapping to the generic
+  ``ReanimateTargetCreatureCardFromDefendersGraveyard`` primitive.)
 
 Cards migrated to the Aura oracle-text path (``_UNIFIED_AURA_NAMES``):
 
@@ -81,7 +81,6 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
-    ChoraleReanimateDefenderGraveCreatureEffect,
     CreateToken,
     DestroyEnchantedPermanent,
     EachOpponentExilesOwnCreature,
@@ -90,6 +89,7 @@ from mtg_bot.effects import (
     ExileTargetCreatureUntilSourceLeaves,
     PainForAllDamageEchoEffect,
     PainForAllETBEffect,
+    ReanimateTargetCreatureCardFromDefendersGraveyard,
     SacrificeSelfUnlessVoidActive,
     SotheraEndStepReanimateEffect,
     TapEnchantedPermanent,
@@ -326,7 +326,7 @@ def _build_chorale_of_the_void() -> CardPrinting:
         triggered_abilities=(
             TriggeredAbility(
                 event=Event.ATTACKS, predicate=IsHost(subject="attacker"),
-                effect=ChoraleReanimateDefenderGraveCreatureEffect(),
+                effect=ReanimateTargetCreatureCardFromDefendersGraveyard(),
             ),
             TriggeredAbility(
                 event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
@@ -693,8 +693,9 @@ _ENCHANTMENT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     # _NONAURA_LITERAL_TRIGGER_LINES.)
     # (Terrasymbiosis migrated to oracle-text path via _NONAURA_LITERAL_
     # TRIGGER_LINES — see _UNIFIED_ENCHANTMENT_NAMES.)
-    # (Chorale of the Void migrated to oracle-text path via _UNIFIED_AURA_NAMES
-    # + _AURA_LITERAL_TRIGGER_LINES.)
+    # (Chorale of the Void migrated to oracle-text path via _UNIFIED_AURA_NAMES;
+    # full grammar decomposition in audit-monoist-chorale — both trigger lines
+    # claim through the unified path.)
 }
 
 
@@ -990,67 +991,22 @@ _CRYOSHATTER_COMPOUND_LINE = (
 #   is informative-only, and the audit reworked the void-prefix
 #   handling in ``triggers.py`` to set ``requires_void=True`` only
 #   when the body carries the canonical middle-clause Void gate).
-_AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
-    # ---------------------------------------------------------------
-    # Chorale of the Void — attacks trigger.
-    # "Whenever enchanted creature attacks, put target creature card
-    # from defending player's graveyard onto the battlefield under
-    # your control tapped and attacking." → bespoke
-    # ChoraleReanimateDefenderGraveCreatureEffect.
-    #
-    # ARCHITECTURAL BLOCKER: this body needs a generic
-    # ``ReanimateTargetCreatureCardFromDefendingPlayersGraveyard``
-    # primitive that satisfies all three of:
-    #
-    #   1. legal-target pool restricted to "defending player"'s
-    #      graveyard — the player being attacked by the Aura's
-    #      enchanted creature, NOT any opponent of the resolving
-    #      controller. The current
-    #      ``ChoraleReanimateDefenderGraveCreatureEffect``
-    #      simplifies to "any opponent's graveyard" because the
-    #      engine doesn't thread the per-attacker defending-player
-    #      identity into ``state.resolving_combat_target_player``
-    #      (or any sibling slot the resolving effect could read).
-    #      Multi-defender combat (planeswalkers / multiplayer) is a
-    #      further complication — the printed phrase is unambiguous
-    #      in 2-player combat but the engine has no canonical hook
-    #      to resolve it.
-    #   2. the reanimated card enters tapped AND attacking the
-    #      defending player it just came from — the engine's
-    #      ``put_into_battlefield`` path doesn't mark a fresh
-    #      permanent as already-attacking-a-specific-defender,
-    #      so the existing bespoke flips ``card.attacking = True``
-    #      without wiring a defender_id. A grammar-side primitive
-    #      would need to thread the same defender hook through
-    #      ``put_into_battlefield`` and through the combat-state
-    #      bookkeeping.
-    #   3. the new permanent isn't summoning-sick — already handled
-    #      by the bespoke and trivially mirrored by a generic-form.
-    #
-    # Until the engine grows a per-attacker defending-player slot,
-    # the bespoke is the only honest claim — the standard
-    # reanimate primitives (e.g.
-    # ``ReturnCreatureFromYourGraveyardToBattlefield``) have the
-    # wrong source-of-creatures (controller's graveyard, not
-    # defending player's) and the wrong enters-state (untapped, not
-    # attacking-a-specific-defender). Generalization is gated on
-    # adding a ``ReanimateFromDefendingPlayersGraveyard`` engine
-    # primitive (or extending the existing reanimate family with
-    # ``defending_player_only=True`` plus
-    # ``tapped_and_attacking_defender=True`` flags); at that point
-    # the literal here can be removed and the body will claim
-    # through the unified path automatically.
-    # ---------------------------------------------------------------
-    (
-        "Whenever enchanted creature attacks, put target creature card "
-        "from defending player's graveyard onto the battlefield under "
-        "your control tapped and attacking."
-    ): TriggeredAbility(
-        event=Event.ATTACKS,
-        predicate=IsHost(subject="attacker"),
-        effect=ChoraleReanimateDefenderGraveCreatureEffect(),
-    ),
-}
+_AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {}
+# Chorale of the Void — fully decomposed in audit-monoist-chorale.
+# The attacks-trigger body is claimed by a literal multi-sentence
+# recognizer in ``effects._parse_effect`` mapping to the generic
+# ``ReanimateTargetCreatureCardFromDefendersGraveyard`` primitive;
+# the trigger header (``Whenever enchanted creature attacks, …``)
+# parses via the unified ``_parse_triggered_ability_line`` grammar.
+#
+# 2-player simplification is preserved on the engine primitive
+# (legal-target pool = any opponent's graveyard creature card),
+# matching the printed "defending player" exactly in 2-player and
+# approximating it in multi-defender / multiplayer / planeswalker-
+# defender contexts. When the engine grows a per-attacker
+# defending-player slot (state.resolving_combat_target_player or
+# similar), the primitive's ``legal_targets`` will narrow to that
+# specific player without an API change.
 
 # Allowlist of names that may claim through the Aura oracle-text path.
 # Mirrors ``_UNIFIED_ENCHANTMENT_NAMES`` — explicit opt-in per name.
@@ -1073,9 +1029,11 @@ _UNIFIED_AURA_NAMES: frozenset[str] = frozenset({
     # EoE Auras — medium priority
     "Moonlit Meditation",  # Enchant artifact or creature you control + token-replace
     "Tractor Beam",        # Enchant creature or Spacecraft + ETB tap + control + doesn't-untap
-    # Chorale of the Void — attacks trigger (bespoke reanimate effect,
-    # literal in _AURA_LITERAL_TRIGGER_LINES) + Void end-step rider
-    # (bespoke SacrificeSelfUnlessVoidActive, also literal).
+    # Chorale of the Void — attacks trigger
+    # (ReanimateTargetCreatureCardFromDefendersGraveyard via literal
+    # multi-sentence recognizer in effects._parse_effect, audit-monoist-
+    # chorale) + Void end-step rider (SacrificeSelfUnlessVoidActive
+    # via the unified intervening-if grammar).
     "Chorale of the Void",
 })
 

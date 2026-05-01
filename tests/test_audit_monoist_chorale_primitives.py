@@ -1,9 +1,10 @@
 """Unit tests for the generic primitives + formula added in
 audit-monoist-chorale.
 
-These replace the per-card bespoke effect
-``MonoistCircuitFeederETBEffect`` with reusable engine-level building
-blocks:
+These replace the per-card bespoke effects
+``MonoistCircuitFeederETBEffect`` and
+``ChoraleReanimateDefenderGraveCreatureEffect`` with reusable
+engine-level building blocks:
 
 - ``CountControlledMatching`` (formula) — number of permanents the
   controller controls satisfying an ``ObjectPredicate``. Used by
@@ -15,18 +16,28 @@ blocks:
   (kind ``"creature"``). Both slots required: ``legal_targets``
   returns ``[]`` when either side is empty so the firing path
   fizzles before the trigger goes on the stack.
+- ``ReanimateTargetCreatureCardFromDefendersGraveyard`` (effect) —
+  put target creature card from a defending player's graveyard onto
+  the battlefield under the controller's control, tapped + attacking.
+  2-player simplification: legal targets = any opponent's graveyard
+  creature card.
 
 The primitives are also exercised end-to-end through the parser-bound
-card path in ``tests/test_monoist_circuit_feeder.py``; the unit tests
-below pin the primitives' contract independent of any specific card so
-future parameterizations or new card adopters can rely on the
-documented shape.
+card paths in ``tests/test_monoist_circuit_feeder.py`` and
+``tests/test_chorale_of_the_void.py``; the unit tests below pin the
+primitives' contract independent of any specific card so future
+parameterizations or new card adopters can rely on the documented
+shape.
 """
 
 from __future__ import annotations
 
 from mtg_bot.cards import SYNTHETIC_CREATURES
-from mtg_bot.effects import PairedTargetPumpDebuffUEOT
+from mtg_bot.cards.base import make_creature
+from mtg_bot.effects import (
+    PairedTargetPumpDebuffUEOT,
+    ReanimateTargetCreatureCardFromDefendersGraveyard,
+)
 from mtg_bot.effects.formulas import Constant, CountControlledMatching
 from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
 from mtg_bot.game import GameState, Player, Zone
@@ -51,6 +62,12 @@ def _put(state, printing, owner_id=0):
     obj = state.new_object(printing, owner_id, Zone.BATTLEFIELD)
     state.battlefield.append(obj)
     return obj
+
+
+def _put_in_graveyard(state, printing, owner_id=1):
+    c = state.new_object(printing, owner_id, Zone.GRAVEYARD)
+    state.players[owner_id].graveyard.append(c)
+    return c
 
 
 # =============================================================
@@ -225,3 +242,71 @@ def test_paired_target_resolve_no_op_without_formula():
     )
     assert own.temp_power_bonus == 0
     assert opp.temp_toughness_bonus == 0
+
+
+# =============================================================
+# ReanimateTargetCreatureCardFromDefendersGraveyard
+# =============================================================
+
+
+def test_reanimate_defenders_graveyard_legal_targets_only_opp_graveyard():
+    state = _new_state()
+    own_card = _put_in_graveyard(
+        state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,
+    )
+    opp_card = _put_in_graveyard(
+        state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1,
+    )
+    e = ReanimateTargetCreatureCardFromDefendersGraveyard()
+    legal = e.legal_targets(state, controller_id=0)
+    ids = {tid for kind, tid in legal if kind == "graveyard_creature"}
+    assert opp_card.id in ids
+    assert own_card.id not in ids
+
+
+def test_reanimate_defenders_graveyard_resolve_tapped_attacking():
+    state = _new_state()
+    opp_card = _put_in_graveyard(
+        state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1,
+    )
+    e = ReanimateTargetCreatureCardFromDefendersGraveyard()
+    e.resolve(
+        state, controller_id=0,
+        targets=(("graveyard_creature", opp_card.id),),
+    )
+    assert opp_card in state.battlefield
+    assert opp_card.controller_id == 0
+    assert opp_card.tapped is True
+    assert opp_card.attacking is True
+    assert opp_card.summoning_sick is False
+    assert opp_card not in state.players[1].graveyard
+
+
+def test_reanimate_defenders_graveyard_resolve_no_op_when_no_target():
+    state = _new_state()
+    e = ReanimateTargetCreatureCardFromDefendersGraveyard()
+    # Empty targets — no card to reanimate; resolve is a clean no-op.
+    e.resolve(state, controller_id=0, targets=())
+    # Battlefield untouched.
+    assert state.battlefield == []
+
+
+def test_reanimate_defenders_graveyard_resolve_no_op_when_target_missing():
+    """If the target id no longer exists in any graveyard at resolve
+    time (a parallel effect dragged it elsewhere), the resolve is a
+    silent no-op — no exception, no zone-confusion bookkeeping."""
+    state = _new_state()
+    e = ReanimateTargetCreatureCardFromDefendersGraveyard()
+    e.resolve(
+        state, controller_id=0,
+        targets=(("graveyard_creature", 99999),),
+    )
+    assert state.battlefield == []
+
+
+def test_reanimate_defenders_graveyard_describe():
+    d = ReanimateTargetCreatureCardFromDefendersGraveyard().describe()
+    assert "defending player" in d
+    assert "graveyard" in d
+    assert "tapped" in d
+    assert "attacking" in d
