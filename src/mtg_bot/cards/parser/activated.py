@@ -430,6 +430,18 @@ def _normalize_activated_effect_phrase(phrase: str) -> str:
 _INLINE_SORCERY_RIDER_SUFFIX = " Activate only as a sorcery."
 
 
+# Inline once-per-game rider: ``Activate only once.`` glued to the end
+# of the same line as the activation, with a single space separator
+# after the effect's terminating period. DSK Haunted Screen's third
+# activation is the only EoE/DSK printing today. The rider is stripped
+# here and lifts to ``activate_only_once=True`` on the resulting
+# ``ActivatedAbility`` — the legality gate in ``legal_actions`` then
+# filters out re-activations once the source's
+# ``has_activated_once_only_ability`` flag is latched at activation
+# time.
+_INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX = " Activate only once."
+
+
 # Inline cost-reduction rider for activated abilities:
 # ``This ability costs {N} less to activate if <condition>.`` glued to
 # the end of the activation line, with a single space separator after
@@ -576,6 +588,15 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         # the standard ``{cost}: <effect>.`` shape still matches.
         stripped = stripped[: -len(_INLINE_SORCERY_RIDER_SUFFIX)]
         sorcery_speed = True
+    activate_only_once = False
+    if stripped.endswith(_INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX):
+        # Drop the rider but keep the effect's terminating period so
+        # the standard ``{cost}: <effect>.`` shape still matches.
+        # Disjoint with the sorcery rider above (no card prints both
+        # ``Activate only as a sorcery.`` AND ``Activate only once.``
+        # today), so the two checks operate independently.
+        stripped = stripped[: -len(_INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX)]
+        activate_only_once = True
     cost_reductions: tuple[CostReduction, ...] = ()
     # Variable-amount X-based differently-named-land rider — checked
     # BEFORE the numeric ``{N}`` rider because ``{X}`` can't be captured
@@ -627,6 +648,7 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
     ability = ActivatedAbility(
         cost=cost, effect=effect, sorcery_speed=sorcery_speed,
         cost_reductions=cost_reductions,
+        activate_only_once=activate_only_once,
     )
     if _is_mana_ability_effect(effect):
         ability = replace(ability, is_mana_ability=True)

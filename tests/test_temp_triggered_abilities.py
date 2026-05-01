@@ -15,7 +15,7 @@ from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.effects import (
     GrantTriggeredAbilityUEOT,
     PumpTargetCreatureUntilEOT,
-    RequiemMonolithDealtDamageEffect,
+    DrawCardsAndLoseLifeEqualToResolvingDamage,
     TriggeredAbility,
 )
 from mtg_bot.effects.base import _apply_damage
@@ -48,7 +48,7 @@ def test_grant_then_damage_fires_rider_once():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
         trigger="this_dealt_damage",
-        effect=RequiemMonolithDealtDamageEffect(),
+        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
         state, 0, (("creature", bear.id),),
@@ -73,7 +73,7 @@ def test_granted_trigger_fires_multiple_times_in_one_turn():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
         trigger="this_dealt_damage",
-        effect=RequiemMonolithDealtDamageEffect(),
+        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
         state, 0, (("creature", bear.id),),
@@ -92,7 +92,7 @@ def test_cleanup_clears_temp_triggered_abilities():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
         trigger="this_dealt_damage",
-        effect=RequiemMonolithDealtDamageEffect(),
+        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
         state, 0, (("creature", bear.id),),
@@ -124,7 +124,7 @@ def test_pump_with_granted_trigger_combo():
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
         trigger="this_dealt_damage",
-        effect=RequiemMonolithDealtDamageEffect(),
+        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     PumpTargetCreatureUntilEOT(
         power_bonus=2, toughness_bonus=0,
@@ -149,7 +149,7 @@ def test_grant_effect_legal_targets_filters_you_control_only():
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
             trigger="this_dealt_damage",
-            effect=RequiemMonolithDealtDamageEffect(),
+            effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
         you_control_only=True,
     )
@@ -166,7 +166,7 @@ def test_grant_effect_legal_targets_filters_opponents_only():
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
             trigger="this_dealt_damage",
-            effect=RequiemMonolithDealtDamageEffect(),
+            effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
         opponents_only=True,
     )
@@ -191,7 +191,7 @@ def test_grant_effect_no_targets_noop():
     GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
             trigger="this_dealt_damage",
-            effect=RequiemMonolithDealtDamageEffect(),
+            effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
     ).resolve(state, 0, ())
 
@@ -202,7 +202,7 @@ def test_grant_effect_describe_with_and_without_ability():
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
             trigger="this_dealt_damage",
-            effect=RequiemMonolithDealtDamageEffect(),
+            effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
     )
     assert "until end of turn" in eff.describe()
@@ -216,7 +216,7 @@ def test_grant_effect_requires_target_true():
 def test_pump_effect_describe_includes_granted_trigger():
     granted = TriggeredAbility(
         trigger="this_dealt_damage",
-        effect=RequiemMonolithDealtDamageEffect(),
+        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     eff = PumpTargetCreatureUntilEOT(
         power_bonus=2, toughness_bonus=1,

@@ -562,6 +562,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ):
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
                 continue
+            # ``Activate only once.`` rider — DSK Haunted Screen's
+            # third activation. Once the source's
+            # ``has_activated_once_only_ability`` flag is latched at
+            # activation time, every later activation of an ability
+            # with this rider is filtered out — including a second
+            # attempt within the same priority window before the
+            # first activation has resolved.
+            if ability.activate_only_once and obj.has_activated_once_only_ability:
+                continue
             # Cost payability checks. Apply ability-level mana
             # reductions (Dominion Bracelet: {X} less where X is
             # equipped creature's power) before checking.

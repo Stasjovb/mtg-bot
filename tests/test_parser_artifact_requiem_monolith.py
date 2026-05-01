@@ -1,4 +1,4 @@
-"""Parser claims Requiem Monolith via literal-line bespoke-effect dispatch.
+"""Parser claims Requiem Monolith via decomposed generic primitives.
 
 Requiem Monolith prints:
 
@@ -7,21 +7,21 @@ Requiem Monolith prints:
     much life." That creature's controller may have this artifact deal
     1 damage to it. Activate only as a sorcery.
 
-The printed body is two-step (grant a UEOT ``this_dealt_damage``
-trigger to the target, then offer the target's controller an optional
-``deal 1`` ping) and is wrapped in a bespoke
-``RequiemMonolithActivatedEffect`` engine class. The full oracle line
-is matched as a literal in the artifact builder's
-``_LITERAL_ACTIVATED_LINES`` table, which dispatches to a factory that
-returns the canonical static-shape ``ActivatedAbility(...,
-sorcery_speed=True)``. Same "literal match for bespoke effect text"
-pattern Round 18 used for Hylderblade and Robe of Stars.
+The body decomposes into a ``Sequence`` of two generic primitives:
 
-The trailing ``Activate only as a sorcery.`` rider is part of the
-literal key — the literal-line layer doesn't peel it off because the
-factory hard-codes ``sorcery_speed=True``. (The unified activation
-grammar's inline-rider strip path isn't reached for these literal-
-matched lines.)
+  1. ``GrantTriggeredAbilityUEOT(ability=TriggeredAbility(trigger=
+     "this_dealt_damage", effect=DrawCardsAndLoseLifeEqualToResolving
+     Damage()))`` — the quoted "Whenever this creature is dealt
+     damage, you draw that many cards and lose that much life."
+     trigger granted UEOT to the target creature.
+  2. ``MayHaveSourceDealDamageToTarget(amount=1)`` — the optional
+     1-damage ping the target's controller may take. Anaphoric to the
+     target chosen by the upstream UEOT grant; ``Sequence.resolve``
+     threads the chosen target tuple to every sub-effect.
+
+The trailing ``Activate only as a sorcery.`` rider lifts to
+``sorcery_speed=True`` on the ability via the existing inline-rider
+strip in ``activated.py``.
 """
 
 from __future__ import annotations
@@ -29,9 +29,15 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    RequiemMonolithActivatedEffect,
+    TriggeredAbility,
 )
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
+from mtg_bot.effects import (
+    DrawCardsAndLoseLifeEqualToResolvingDamage,
+    GrantTriggeredAbilityUEOT,
+    MayHaveSourceDealDamageToTarget,
+    Sequence,
+)
 
 
 _REQUIEM_MONOLITH_CARD = {
@@ -50,20 +56,26 @@ _REQUIEM_MONOLITH_CARD = {
 def test_build_artifact_printing_claims_requiem_monolith():
     """The Scryfall-shaped Requiem Monolith record builds an Artifact
     with the canonical ``{T}`` sorcery-speed activation whose effect is
-    ``RequiemMonolithActivatedEffect`` — same shape as the static
-    registry's ``make_artifact(...)``."""
+    the decomposed ``Sequence(GrantTriggeredAbilityUEOT(...),
+    MayHaveSourceDealDamageToTarget(amount=1))``."""
     printing = _build_artifact_printing(_REQUIEM_MONOLITH_CARD)
     assert printing is not None
     assert printing.name == "Requiem Monolith"
     assert printing.activated_abilities == (
         ActivatedAbility(
             cost=ActivationCost(tap_self=True),
-            effect=RequiemMonolithActivatedEffect(),
+            effect=Sequence(effects=(
+                GrantTriggeredAbilityUEOT(
+                    ability=TriggeredAbility(
+                        trigger="this_dealt_damage",
+                        effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
+                    ),
+                ),
+                MayHaveSourceDealDamageToTarget(amount=1),
+            )),
             sorcery_speed=True,
         ),
     )
     assert printing.triggered_abilities == ()
     assert printing.static_abilities == ()
     assert printing.keywords == frozenset()
-
-

@@ -1303,12 +1303,21 @@ class Sequence(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        # Sub-effects with ``hi > 0`` (a target slot of their own) get
+        # the chosen ``targets`` tuple — that's the standard targeting
+        # path. Sub-effects with ``hi == 0`` declare themselves
+        # untargeted but may still consume the same target tuple as an
+        # ANAPHORIC reference to a target chosen by an upstream sub-
+        # effect (e.g. Requiem Monolith's ``MayHaveSourceDealDamage
+        # ToTarget`` reads the same creature target the upstream
+        # ``GrantTriggeredAbilityUEOT`` resolved against — "that
+        # creature's controller may have this artifact deal 1 damage
+        # to it"). Passing ``targets`` to those sub-effects is safe
+        # because non-anaphoric untargeted effects (``DrawCards``,
+        # ``SacrificeSelf``, ``GainLife``, etc.) accept the parameter
+        # via ``targets: tuple[Target, ...] = ()`` and ignore it.
         for e in self.effects:
-            lo, hi = e.target_count_range()
-            if hi > 0:
-                e.resolve(state, controller_id, targets)
-            else:
-                e.resolve(state, controller_id, ())
+            e.resolve(state, controller_id, targets)
 
     def describe(self) -> str:
         return ". ".join(e.describe() for e in self.effects) + "."

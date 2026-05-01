@@ -1,22 +1,31 @@
 """Tests for the DSK Haunted Screen parser claim.
 
-Round 1 deferred Haunted Screen pending two engine-level lifts:
+Haunted Screen prints three activations:
 
-1. The ``{T}: Add {W} or {B}.`` and ``{T}, Pay 1 life: Add {G}, {U},
-   or {R}.`` mana abilities — handled by the existing
-   ``AddNManaOfChosenColor(options=…)`` engine class plus a new
-   literal-line dispatch entry in ``artifact_builder``.
-2. The ``{7}: …. Activate only once.`` activation — Round 1's
-   "Activate only once" tracking case. Claimed via a bespoke
-   ``HauntedScreenActivatedEffect`` whose resolve site latches a new
-   ``GameObject.has_activated_once_only_ability`` flag on first fire
-   and silently no-ops on subsequent fires. The "becomes a 0/0 Spirit
-   creature in addition to its other types" half writes permanent
-   layer-4 ``add_type "creature"`` / ``add_subtype "Spirit"`` and
-   layer-7 sublayer-1 ``set_base_pt (0, 0)`` registry entries with
-   ``expires_at=None`` plus the new ``GameObject.permanent_is_creature``
-   write-through cache so ``is_creature_now`` short-circuits without
-   consulting the registry on every read.
+  1. ``{T}: Add {W} or {B}.`` — mana ability claimed via the unified
+     ``add {<c1>} or {<c2>}`` recognizer →
+     ``AddNManaOfChosenColor(amount=1, options=("W","B"))`` flagged
+     ``is_mana_ability=True``.
+  2. ``{T}, Pay 1 life: Add {G}, {U}, or {R}.`` — mana ability claimed
+     via the unified ``add {<c1>}, {<c2>}, or {<c3>}`` recognizer →
+     ``AddNManaOfChosenColor(amount=1, options=("G","U","R"))`` flagged
+     ``is_mana_ability=True``, with ``pay_life=1``.
+  3. ``{7}: Put seven +1/+1 counters on this artifact. It becomes a
+     0/0 Spirit creature in addition to its other types. Activate
+     only once.`` — once-only activation. The body decomposes into
+     ``Sequence(PutPlusOneCounterOnSelf(amount=7),
+     BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
+     base_p=0, base_t=0))`` via the multi-sentence literal recognizer
+     in ``effects.py``. The trailing ``Activate only once.`` rider
+     lifts to ``activate_only_once=True`` on the ability via the new
+     inline-rider strip in ``activated.py``.
+
+The per-source ``GameObject.has_activated_once_only_ability`` flag is
+latched at activation time (in ``_activate_ability`` in ``actions.py``)
+and read by ``legal_actions``'s gate (``if ability.activate_only_once
+and obj.has_activated_once_only_ability: continue``) so a second
+activation — even before the first resolves off the stack — is
+filtered out at legality time.
 """
 
 from __future__ import annotations
@@ -31,26 +40,15 @@ def _claimed_names() -> frozenset[str]:
 # ---------- Haunted Screen ----------
 
 def test_haunted_screen_claimed_by_parser():
-    # Haunted Screen ``{3}`` Artifact — three activations claimed via
-    # three literal-line entries in ``artifact_builder``. The first
-    # two are mana abilities with ``options=("W","B")`` and
-    # ``options=("G","U","R")`` respectively; the third is the once-
-    # only "becomes 0/0 Spirit creature" body.
     assert "Haunted Screen" in _claimed_names()
 
 
 def test_haunted_screen_carries_three_activations():
-    # First ability: ``{T}: Add {W} or {B}.`` →
-    # ``AddNManaOfChosenColor(amount=1, options=("W","B"))`` flagged
-    # ``is_mana_ability=True``.
-    # Second ability: ``{T}, Pay 1 life: Add {G}, {U}, or {R}.`` →
-    # ``AddNManaOfChosenColor(amount=1, options=("G","U","R"))``
-    # flagged ``is_mana_ability=True``, with ``pay_life=1``.
-    # Third ability: ``{7}: Put seven +1/+1 counters …`` →
-    # ``HauntedScreenActivatedEffect``.
     from mtg_bot.effects import (
         AddNManaOfChosenColor,
-        HauntedScreenActivatedEffect,
+        BecomeCreatureWithSubtypeAndPTPermanently,
+        PutPlusOneCounterOnSelf,
+        Sequence,
     )
 
     parser = OracleParserCardSource()
@@ -80,13 +78,23 @@ def test_haunted_screen_carries_three_activations():
     assert second.effect.amount == 1
     third = next(
         a for a in p.activated_abilities
-        if isinstance(a.effect, HauntedScreenActivatedEffect)
+        if isinstance(a.effect, Sequence)
     )
     assert third.cost.mana_str == "{7}"
     assert third.cost.tap_self is False
     assert third.cost.sacrifice_self is False
     assert third.sorcery_speed is False
     assert third.is_mana_ability is False
+    assert third.activate_only_once is True
+    # Body decomposes into two generic primitives.
+    assert len(third.effect.effects) == 2
+    counters, become = third.effect.effects
+    assert isinstance(counters, PutPlusOneCounterOnSelf)
+    assert counters.amount == 7
+    assert isinstance(become, BecomeCreatureWithSubtypeAndPTPermanently)
+    assert become.subtype == "Spirit"
+    assert become.base_p == 0
+    assert become.base_t == 0
 
 
 def test_haunted_screen_has_no_triggers_or_statics():
@@ -96,23 +104,24 @@ def test_haunted_screen_has_no_triggers_or_statics():
     assert p.static_abilities == ()
 
 
-# ---------- HauntedScreenActivatedEffect engine class ----------
+# ---------- BecomeCreatureWithSubtypeAndPTPermanently engine class ----------
 
-def test_haunted_screen_activated_effect_describe():
-    from mtg_bot.effects import HauntedScreenActivatedEffect
+def test_become_creature_with_subtype_describe():
+    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
 
-    desc = HauntedScreenActivatedEffect().describe()
-    assert "+1/+1 counters" in desc
+    desc = BecomeCreatureWithSubtypeAndPTPermanently(
+        subtype="Spirit", base_p=0, base_t=0,
+    ).describe()
     assert "Spirit" in desc
-    assert "activate only once" in desc
+    assert "0/0" in desc
+    assert "in addition to its other types" in desc
 
 
-def test_haunted_screen_activated_effect_first_resolve_transforms():
-    # First resolve: 7 +1/+1 counters, becomes 0/0 Spirit creature
-    # (permanent grants written to the registry with expires_at=None,
-    # plus the ``permanent_is_creature`` write-through cache flag).
+def test_become_creature_with_subtype_first_resolve_transforms():
+    """First resolve writes the layer-4/7 registry entries with
+    ``expires_at=None`` plus the ``permanent_is_creature`` cache."""
     from mtg_bot.cards.base import make_artifact
-    from mtg_bot.effects import HauntedScreenActivatedEffect
+    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
     from mtg_bot.game import (
         GameObject, GameState, Player, Zone,
         effective_subtypes, is_creature_now,
@@ -128,26 +137,37 @@ def test_haunted_screen_activated_effect_first_resolve_transforms():
         battlefield=[source_obj],
         resolving_source=source_obj,
     )
-    HauntedScreenActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    assert source_obj.has_activated_once_only_ability is True
+    BecomeCreatureWithSubtypeAndPTPermanently(
+        subtype="Spirit", base_p=0, base_t=0,
+    ).resolve(state, controller_id=0, targets=())
     assert source_obj.permanent_is_creature is True
-    assert source_obj.plus_one_counters == 7
     assert is_creature_now(source_obj)
     assert "Spirit" in effective_subtypes(state, source_obj)
 
 
-def test_haunted_screen_activated_effect_second_resolve_is_noop():
-    # Second resolve (same source) is a silent no-op — the once-only
-    # flag latches on first fire and gates subsequent fires from
-    # stacking more counters or re-applying the type-change registry
-    # entries.
-    from mtg_bot.cards.base import make_artifact
-    from mtg_bot.effects import HauntedScreenActivatedEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
+def test_become_creature_with_subtype_no_source_is_noop():
+    """``resolving_source`` is None → silent no-op."""
+    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+    from mtg_bot.game import GameState, Player
 
-    art_pr = make_artifact("Haunted Screen", "{3}")
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    BecomeCreatureWithSubtypeAndPTPermanently(
+        subtype="Spirit", base_p=0, base_t=0,
+    ).resolve(state, controller_id=0, targets=())
+    # Nothing to assert beyond "didn't raise".
+
+
+def test_become_creature_no_subtype_skips_subtype_grant():
+    """Empty ``subtype`` skips the layer-4 add_subtype registry entry
+    but still writes the layer-4 add_type and layer-7 set_base_pt."""
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.effects import BecomeCreatureWithSubtypeAndPTPermanently
+    from mtg_bot.game import (
+        GameObject, GameState, Player, Zone,
+        is_creature_now,
+    )
+
+    art_pr = make_artifact("Some Artifact", "{1}")
     source_obj = GameObject(
         id=10, printing=art_pr, owner_id=0, controller_id=0,
         zone=Zone.BATTLEFIELD,
@@ -157,86 +177,68 @@ def test_haunted_screen_activated_effect_second_resolve_is_noop():
         battlefield=[source_obj],
         resolving_source=source_obj,
     )
-    HauntedScreenActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
+    BecomeCreatureWithSubtypeAndPTPermanently(
+        subtype="", base_p=2, base_t=2,
+    ).resolve(state, controller_id=0, targets=())
+    assert is_creature_now(source_obj)
+
+
+# ---------- Once-only activation gating ----------
+
+def test_haunted_screen_once_only_legal_only_once():
+    """After the first activation, ``legal_actions`` filters out the
+    once-only ability — even before the first resolves off the
+    stack."""
+    from mtg_bot.actions import _activate_ability, ActivateAbility
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.turn import Step
+
+    parser = OracleParserCardSource()
+    haunted = parser.get_printings()["Haunted Screen"]
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=RandomAgent()))
+    state.players.append(Player(id=1, agent=RandomAgent()))
+    # Give P0 enough mana sources to pay {7}: seven Mountains
+    # (any colorless-paying source works since {7} is generic).
+    for _ in range(7):
+        ml = state.new_object(BASIC_LANDS["Mountain"], 0, Zone.BATTLEFIELD)
+        state.battlefield.append(ml)
+    # Put Haunted Screen onto the battlefield under P0.
+    src = state.new_object(haunted, 0, Zone.BATTLEFIELD)
+    state.battlefield.append(src)
+    state.active_player_idx = 0
+    state.priority_player_idx = 0
+    state.step = Step.PRECOMBAT_MAIN
+    # Find the once-only ability index on the source (the Sequence body).
+    once_only_idx = next(
+        i for i, ab in enumerate(haunted.activated_abilities)
+        if ab.activate_only_once
     )
-    pre_counters = source_obj.plus_one_counters
-    pre_registry = list(state.continuous_effects)
-    HauntedScreenActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    # No additional counters; registry unchanged in length.
-    assert source_obj.plus_one_counters == pre_counters
-    assert len(state.continuous_effects) == len(pre_registry)
-
-
-def test_haunted_screen_activated_effect_no_source_is_noop():
-    # Defensive: ``resolving_source`` is None → silent no-op.
-    from mtg_bot.effects import HauntedScreenActivatedEffect
-    from mtg_bot.game import GameState, Player
-
-    state = GameState(players=[Player(id=0), Player(id=1)])
-    HauntedScreenActivatedEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    # Nothing to assert beyond "didn't raise".
-
-
-# ---------- GameObject.permanent_is_creature wiring ----------
-
-def test_permanent_is_creature_makes_artifact_a_creature():
-    # The new ``permanent_is_creature`` write-through cache lets
-    # ``is_creature_now`` short-circuit to True on a permanent that
-    # was non-creature at print time but had its type changed by an
-    # effect with ``expires_at=None`` (Haunted Screen's once-only
-    # activation).
-    from mtg_bot.cards.base import make_artifact
-    from mtg_bot.game import GameObject, Zone, is_creature_now
-
-    art_pr = make_artifact("Haunted Screen", "{3}")
-    obj = GameObject(
-        id=1, printing=art_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    assert is_creature_now(obj) is False
-    obj.permanent_is_creature = True
-    assert is_creature_now(obj) is True
-
-
-def test_permanent_is_creature_does_not_block_face_down_2_2_creature():
-    # CR 701.34: a face-down permanent is a 2/2 creature regardless
-    # of underlying printing types — face-down takes precedence over
-    # the new ``permanent_is_creature`` cache. Belt-and-suspenders
-    # that adding the new field doesn't reorder ``is_creature_now``'s
-    # short-circuit chain.
-    from mtg_bot.cards.base import make_artifact
-    from mtg_bot.game import GameObject, Zone, is_creature_now
-
-    art_pr = make_artifact("Some Artifact", "{1}")
-    obj = GameObject(
-        id=1, printing=art_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD, face_down=True,
-    )
-    # Even without ``permanent_is_creature``, face-down → creature.
-    assert is_creature_now(obj) is True
-
-
-def test_permanent_is_creature_yields_to_impending_suppression():
-    # An impending-cast permanent suppresses creature status while
-    # ``impending_active`` is True — the suppression precedes any
-    # of the "is creature" branches (printed, stationed,
-    # ``temp_is_creature``, ``permanent_is_creature``). Belt-and-
-    # suspenders that a hypothetical future card with both impending
-    # and a layer-4 add_type entry honors impending's wider
-    # short-circuit.
-    from mtg_bot.cards.base import make_artifact
-    from mtg_bot.game import GameObject, Zone, is_creature_now
-
-    art_pr = make_artifact("Some Artifact", "{1}")
-    obj = GameObject(
-        id=1, printing=art_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-        impending_active=True,
-        permanent_is_creature=True,
-    )
-    assert is_creature_now(obj) is False
+    # Before any activation, the once-only ability is legal.
+    legal = legal_actions(state, 0)
+    activate_actions = [
+        a for a in legal
+        if isinstance(a, ActivateAbility)
+        and a.source_id == src.id
+        and a.ability_index == once_only_idx
+    ]
+    assert len(activate_actions) == 1
+    # Activate it once. The flag latches at activation time (before the
+    # ability resolves off the stack).
+    _activate_ability(state, 0, src.id, once_only_idx)
+    assert src.has_activated_once_only_ability is True
+    # Now the legality gate filters it out — even though the ability is
+    # still on the stack.
+    legal = legal_actions(state, 0)
+    activate_actions = [
+        a for a in legal
+        if isinstance(a, ActivateAbility)
+        and a.source_id == src.id
+        and a.ability_index == once_only_idx
+    ]
+    assert activate_actions == []

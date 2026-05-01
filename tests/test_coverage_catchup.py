@@ -433,10 +433,27 @@ def test_mana_ability_not_offered_when_creature_summoning_sick():
 
 
 def test_requiem_missing_target_creature_noop():
-    from mtg_bot.effects import RequiemMonolithActivatedEffect
+    """Requiem Monolith's decomposed ``Sequence`` no-ops cleanly when
+    the targeted creature is no longer on the battlefield. Both sub-
+    effects guard against the missing target independently."""
+    from mtg_bot.effects import (
+        DrawCardsAndLoseLifeEqualToResolvingDamage,
+        GrantTriggeredAbilityUEOT,
+        MayHaveSourceDealDamageToTarget,
+        Sequence,
+        TriggeredAbility,
+    )
 
     state = _new_state()
-    RequiemMonolithActivatedEffect().resolve(
+    Sequence(effects=(
+        GrantTriggeredAbilityUEOT(
+            ability=TriggeredAbility(
+                trigger="this_dealt_damage",
+                effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
+            ),
+        ),
+        MayHaveSourceDealDamageToTarget(amount=1),
+    )).resolve(
         state, 0, (("creature", 99999),),
     )  # target id not on bf → silent noop
 

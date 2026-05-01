@@ -2305,6 +2305,15 @@ def _activate_ability(
         )
         _sacrifice(state, source)
 
+    # ``Activate only once.`` rider — DSK Haunted Screen's third
+    # activation. Latch the per-source ``has_activated_once_only_
+    # ability`` flag now (after the cost is paid and before the
+    # ability is resolved or pushed) so a second activation of the
+    # same ability — even before this one resolves off the stack — is
+    # rejected by ``legal_actions``'s gate against the flag.
+    if ability.activate_only_once:
+        source.has_activated_once_only_ability = True
+
     # Mana abilities bypass the stack — resolve the effect immediately
     # (MTG rule 605). Source is exposed via resolving_source for any
     # effect that needs it. Mana abilities can carry a discrete-object

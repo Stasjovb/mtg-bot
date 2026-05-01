@@ -203,11 +203,15 @@ from mtg_bot.effects.formulas import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
+    BecomeCreatureWithSubtypeAndPTPermanently,
     DestroyEnchantedPermanent,
+    DrawCardsAndLoseLifeEqualToResolvingDamage,
     DrawCardsByConditionMultiplier,
     EachOpponentExilesCardFromHandWithCastPermission,
     ExileTopXOfLibraryMayPlayThisTurn,
+    GrantTriggeredAbilityUEOT,
     LockOrUnlockDoorOfTargetRoomYouControl,
+    MayHaveSourceDealDamageToTarget,
     PairedTargetPumpDebuffUEOT,
     PeekTopMayBattlefieldIfLandElseHand,
     ReanimateTargetCreatureCardFromDefendersGraveyard,
@@ -4185,6 +4189,96 @@ def _parse_effect(phrase: str) -> Effect | None:
             grant_flying_counter=True,
             grant_subtype_and_pt=("Spirit", 1, 1),
         )
+    # Requiem Monolith's ``{T}`` activation body (after the inline
+    # ``Activate only as a sorcery.`` rider strip in
+    # ``_parse_activated_ability_line`` flips ``sorcery_speed=True``
+    # at the activated-ability layer). Two anaphoric sentences:
+    #   1. ``Until end of turn, target creature gains "Whenever this
+    #      creature is dealt damage, you draw that many cards and lose
+    #      that much life."`` — the printed quoted ability is itself a
+    #      ``TriggeredAbility(trigger="this_dealt_damage", effect=
+    #      DrawCardsAndLoseLifeEqualToResolvingDamage())`` granted
+    #      UEOT to the chosen creature via
+    #      ``GrantTriggeredAbilityUEOT``.
+    #   2. ``That creature's controller may have this artifact deal 1
+    #      damage to it.`` — the optional 1-damage ping (the target's
+    #      controller chooses, NOT the activator), modeled by
+    #      ``MayHaveSourceDealDamageToTarget(amount=1)`` whose
+    #      anaphoric "that creature" is the same target the UEOT
+    #      grant resolved against. ``Sequence.resolve`` threads the
+    #      activator-chosen target tuple through to every sub-effect
+    #      so the second sub-effect reads ``targets[0]`` to find "it".
+    #
+    # Matched as a multi-sentence literal here (rather than via the
+    # compound-effect splitter) because the body's anaphoric "that
+    # creature" pronoun crosses the sentence boundary AND the embedded
+    # quoted-ability text contains both `` and `` and a sentence-final
+    # period that would derail the splitter. Currently only Requiem
+    # Monolith in the EoE pool prints this exact UEOT-trigger-grant +
+    # target-controller-optional-ping shape; broader grammar deferred
+    # until a second card with a varying piece (different quoted
+    # ability, different ping amount) ships, at which point a
+    # parameterized recognizer for "until end of turn, target creature
+    # gains <quoted-trigger>. That creature's controller may have
+    # <source> deal N damage to it" would replace this literal.
+    if phrase == (
+        "until end of turn, target creature gains \"Whenever this "
+        "creature is dealt damage, you draw that many cards and lose "
+        "that much life.\" That creature's controller may have this "
+        "artifact deal 1 damage to it"
+    ):
+        return Sequence(effects=(
+            GrantTriggeredAbilityUEOT(
+                ability=TriggeredAbility(
+                    trigger="this_dealt_damage",
+                    effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
+                ),
+            ),
+            MayHaveSourceDealDamageToTarget(amount=1),
+        ))
+    # Haunted Screen's ``{7}`` once-only activation body (after the
+    # inline ``Activate only once.`` rider strip in
+    # ``_parse_activated_ability_line`` flips ``activate_only_once=True``
+    # at the activated-ability layer). Two anaphoric sentences:
+    #   1. ``Put seven +1/+1 counters on this artifact.`` — the
+    #      ``put N +1/+1 counters on this creature`` shape doesn't
+    #      cover ``this artifact``; mapped directly to
+    #      ``PutPlusOneCounterOnSelf(amount=7)`` here (which reads
+    #      ``state.resolving_source`` so the wording difference
+    #      doesn't matter at the engine layer).
+    #   2. ``It becomes a 0/0 Spirit creature in addition to its
+    #      other types.`` — anaphoric "It" refers to the source from
+    #      sentence 1; modeled by
+    #      ``BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
+    #      base_p=0, base_t=0)`` which writes layer-4/7 registry
+    #      entries with ``expires_at=None`` so the type-change persists
+    #      across turns (matches the printed "in addition to its other
+    #      types" — the artifact stays an artifact).
+    #
+    # Matched as a multi-sentence literal here (rather than via the
+    # compound-effect splitter) because the second sentence's "It" is
+    # anaphoric to the source artifact named in sentence 1, AND the
+    # ``put seven +1/+1 counters on this artifact`` surface isn't
+    # claimed by the existing single-sentence ``put N +1/+1 counters
+    # on this creature`` recognizer (the ``this creature`` anchor is
+    # specific). Currently only Haunted Screen in the DSK/EoE pool
+    # prints this exact counter-init + becomes-creature-with-subtype-
+    # and-PT shape; broader grammar deferred until a second card with
+    # a varying piece (different counter count, different subtype/PT)
+    # ships, at which point a parameterized recognizer for "put N
+    # +1/+1 counters on <self-anchor>. It becomes a P/T <subtype>
+    # creature in addition to its other types" would replace this
+    # literal.
+    if phrase == (
+        "put seven +1/+1 counters on this artifact. "
+        "It becomes a 0/0 Spirit creature in addition to its other types"
+    ):
+        return Sequence(effects=(
+            PutPlusOneCounterOnSelf(amount=7),
+            BecomeCreatureWithSubtypeAndPTPermanently(
+                subtype="Spirit", base_p=0, base_t=0,
+            ),
+        ))
     # ----------------------------------------------------------------
     # Aura-context effect-phrase recognizers (audit-litdispatch-auras).
     # Each entry routes a single Aura trigger body to its existing

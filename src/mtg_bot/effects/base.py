@@ -490,6 +490,16 @@ class ActivatedAbility:
     # the source doesn't meet the threshold. Used by The Eternity
     # Elevator's ``20+ | {T}: Add X mana of any one color`` ability.
     tier_threshold: int = 0
+    # ``Activate only once.`` rider — DSK Haunted Screen's third
+    # activation. When True, the ability is legal only while the
+    # source's ``has_activated_once_only_ability`` flag is False; the
+    # flag is latched at activation time (in ``_activate_ability``)
+    # so a second activation (instant- or sorcery-speed) is rejected
+    # by ``legal_actions`` even before the first activation has
+    # resolved off the stack. The flag is per-``GameObject``, so a
+    # blink-and-recast (a fresh ``GameObject`` instance) gets a fresh
+    # one-shot per CR 706.2.
+    activate_only_once: bool = False
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"

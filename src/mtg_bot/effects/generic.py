@@ -10834,3 +10834,203 @@ class ReanimateTargetCreatureCardFromDefendersGraveyard(Effect):
         )
 
 
+@dataclass(frozen=True)
+class DrawCardsAndLoseLifeEqualToResolvingDamage(Effect):
+    """"You draw that many cards and lose that much life." — the granted
+    UEOT trigger body Requiem Monolith installs on the target creature.
+
+    Reads ``state.resolving_combat_damage_amount`` (set by the dealt-
+    damage fire helper to the incoming damage amount, regardless of
+    whether the damage was combat or non-combat) and applies it to the
+    granted creature's controller — ``state.resolving_source`` is set
+    to the granted creature itself by ``_fire_enchanted_dealt_damage_
+    triggers``, so the creature's controller drives both the draw and
+    the life-loss step.
+
+    No-op if the resolving amount is 0 or the resolving source is None
+    (defensive — the helper sets both correctly).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_card
+
+        amount = state.resolving_combat_damage_amount
+        if amount <= 0:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        owner = state.player_by_id(source.controller_id)
+        for _ in range(amount):
+            draw_card(state, owner.id)
+        owner.life -= amount
+        state.log.append(
+            f"P{owner.id} draws {amount} and loses {amount} life "
+            f"(life: {owner.life})"
+        )
+
+    def describe(self) -> str:
+        return "you draw that many cards and lose that much life"
+
+
+@dataclass(frozen=True)
+class MayHaveSourceDealDamageToTarget(Effect):
+    """"That creature's controller may have <source> deal N damage to
+    it." — Requiem Monolith's optional-ping body.
+
+    The TARGET's controller (NOT the activator/resolving controller)
+    chooses whether to take the optional damage. Anaphoric to the
+    target chosen by an upstream sub-effect in the same ``Sequence``
+    (typically ``GrantTriggeredAbilityUEOT``); the target tuple is
+    threaded through by ``Sequence.resolve``'s pass-through (Sequence
+    forwards its ``targets`` to every sub-effect, untargeted ones
+    accept the parameter via ``targets: tuple = ()`` and ignore it,
+    anaphoric ones like this primitive read ``targets[0]`` directly).
+
+    Declares ``requires_target=False`` so ``Sequence.__post_init__``'s
+    "at most one targeting sub-effect" check still permits the
+    upstream targeter alongside this primitive.
+
+    On accept, the source deals ``amount`` damage to the chosen
+    creature via direct ``damage`` write + ``_fire_enchanted_dealt_
+    damage_triggers`` (which fires any UEOT-granted dealt-damage
+    triggers on the target — e.g. the trigger the preceding
+    ``GrantTriggeredAbilityUEOT`` just installed).
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "creature":
+            return
+        tgt = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if tgt is None:
+            return
+        source = state.resolving_source
+        if source is None:
+            return
+        target_controller = state.player_by_id(tgt.controller_id)
+        if target_controller.has_lost or target_controller.agent is None:
+            return
+        accept = target_controller.agent.choose_yes_no(
+            state, target_controller.id,
+            f"have {source.printing.name} deal {self.amount} damage "
+            f"to {tgt.printing.name}",
+        )
+        if not accept:
+            state.log.append(
+                f"P{target_controller.id} declines the optional "
+                f"{self.amount} damage from {source.printing.name}"
+            )
+            return
+        tgt.damage += self.amount
+        tgt.damaged_this_turn = True
+        state.log.append(
+            f"{source.printing.name} deals {self.amount} to "
+            f"{tgt.printing.name}"
+        )
+        _fire_enchanted_dealt_damage_triggers(state, tgt, self.amount)
+
+    def describe(self) -> str:
+        return (
+            f"that creature's controller may have this artifact "
+            f"deal {self.amount} damage to it"
+        )
+
+
+@dataclass(frozen=True)
+class BecomeCreatureWithSubtypeAndPTPermanently(Effect):
+    """Source becomes a creature of ``subtype`` with base ``base_p``/
+    ``base_t`` IN ADDITION TO ITS OTHER TYPES, indefinitely (until it
+    leaves the battlefield).
+
+    Permanent layer-4/7 continuous effect — writes three registry
+    entries with ``expires_at=None`` so cleanup leaves them in place:
+
+      - layer 4 ``add_type "creature"`` — read by ``is_creature_now``
+        via the ``GameObject.permanent_is_creature`` write-through
+        cache.
+      - layer 4 ``add_subtype <subtype>`` — read by
+        ``effective_subtypes`` walking the registry.
+      - layer 7 sublayer 1 ``set_base_pt (base_p, base_t)`` — read by
+        ``_compute_effective_pt`` via ``_registry_set_base_pt``.
+
+    Distinct from ``BecomeLandCreatureUEOT`` (UEOT, ``temp_*`` fields,
+    cleared at cleanup). Used by Haunted Screen's once-only activation
+    body — the type-change persists across turns and is intended to
+    survive cleanup.
+
+    No-op when ``state.resolving_source`` is None (defensive — the
+    activated-ability resolve site sets it before the effect runs).
+    """
+
+    subtype: str = ""
+    base_p: int = 0
+    base_t: int = 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None:
+            return
+        # Permanent layer-4/7 grants. ``permanent_is_creature`` is the
+        # write-through cache so ``is_creature_now`` short-circuits
+        # without consulting the registry on every read; the registry
+        # entries hold the layer metadata for future layer-aware
+        # ordering work.
+        source.permanent_is_creature = True
+        state.add_continuous_effect(
+            source_id=source.id, layer=4, kind="add_type",
+            target_id=source.id, params=("creature",),
+            expires_at=None,
+            description=f"{source.printing.name} becomes a creature",
+        )
+        if self.subtype:
+            state.add_continuous_effect(
+                source_id=source.id, layer=4, kind="add_subtype",
+                target_id=source.id, params=(self.subtype,),
+                expires_at=None,
+                description=(
+                    f"{source.printing.name} becomes a {self.subtype}"
+                ),
+            )
+        state.add_continuous_effect(
+            source_id=source.id, layer=7, sublayer=1,
+            kind="set_base_pt",
+            target_id=source.id, params=(self.base_p, self.base_t),
+            expires_at=None,
+            description=(
+                f"{source.printing.name} base "
+                f"{self.base_p}/{self.base_t}"
+            ),
+        )
+        subtype_str = f" {self.subtype}" if self.subtype else ""
+        state.log.append(
+            f"{source.printing.name} becomes a {self.base_p}/"
+            f"{self.base_t}{subtype_str} creature in addition to its "
+            f"other types"
+        )
+
+    def describe(self) -> str:
+        subtype_str = f" {self.subtype}" if self.subtype else ""
+        return (
+            f"this artifact becomes a {self.base_p}/{self.base_t}"
+            f"{subtype_str} creature in addition to its other types"
+        )
+
+

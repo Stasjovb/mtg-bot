@@ -48,18 +48,39 @@ Today the EoE pure-artifacts the unified clause grammar claims are:
   zone-change trigger drawing a card (modeled via LEAVES_BATTLEFIELD
   to match the static-registry simplification).
 
-In addition, three single-card oracle-line shapes are matched as
-literal strings and dispatched to bespoke effect classes (the same
-"literal match for bespoke effect text" pattern Round 18 used for
-Hylderblade and Robe of Stars). Each entry is keyed on the full,
-post-reminder-strip oracle line:
+In addition, several single-card oracle-line shapes that were once
+matched as literal strings against a bespoke-class registry now
+decompose into generic primitives via the unified ``_parse_clause``
+grammar (the multi-sentence literal-effect recognizer in
+``effects.py`` keeps the anaphoric body intact while still mapping
+to a ``Sequence`` of generic primitives):
 
 * **Requiem Monolith** — ``{T}: Until end of turn, target creature
-  gains '...' That creature's controller may have this artifact deal
-  1 damage to it. Activate only as a sorcery.`` →
-  ``RequiemMonolithActivatedEffect`` with ``sorcery_speed=True``. The
-  printed body grants a UEOT trigger then offers an optional ping —
-  one bespoke effect class encapsulates both.
+  gains "Whenever this creature is dealt damage, you draw that many
+  cards and lose that much life." That creature's controller may
+  have this artifact deal 1 damage to it. Activate only as a sorcery.``
+  decomposes into ``Sequence(GrantTriggeredAbilityUEOT(ability=
+  TriggeredAbility(trigger="this_dealt_damage", effect=DrawCardsAnd
+  LoseLifeEqualToResolvingDamage())), MayHaveSourceDealDamageToTarget
+  (amount=1))`` via the multi-sentence literal recognizer in
+  ``effects.py``. The trailing ``Activate only as a sorcery.`` rider
+  flips ``sorcery_speed=True`` via the existing inline-rider strip in
+  ``activated.py``.
+* **Haunted Screen** — three activations. The first two are mana
+  abilities claimed by the unified clause grammar via the
+  ``add {<c1>} or {<c2>}`` / ``add {<c1>}, {<c2>}, or {<c3>}``
+  recognizers mapping to ``AddNManaOfChosenColor``. The third
+  ``{7}: Put seven +1/+1 counters on this artifact. It becomes a 0/0
+  Spirit creature in addition to its other types. Activate only once.``
+  decomposes into ``Sequence(PutPlusOneCounterOnSelf(amount=7),
+  BecomeCreatureWithSubtypeAndPTPermanently(subtype="Spirit",
+  base_p=0, base_t=0))`` via a multi-sentence literal recognizer in
+  ``effects.py``. The trailing ``Activate only once.`` rider flips
+  ``activate_only_once=True`` via the new inline-rider strip in
+  ``activated.py``; the per-source ``has_activated_once_only_ability``
+  flag is now latched at the activation gate (``_activate_ability``
+  in ``actions.py``) and read by ``legal_actions`` to filter out
+  re-activation.
 * **All-Fates Scroll** — two-line activation, both claimed via the
   unified clause grammar: ``{T}: Add one mana of any color.`` parses
   through the existing ``add one mana of any color`` recognizer, and
@@ -151,8 +172,6 @@ from mtg_bot.cards.base import (
     CardPrinting,
     CostReduction,
     DrawCards,
-    HauntedScreenActivatedEffect,
-    RequiemMonolithActivatedEffect,
     StaticAbility,
     StaticScope,
     TriggeredAbility,
@@ -194,129 +213,36 @@ _LITERAL_FLAG_LINES: dict[str, str] = {
 
 # Literal oracle lines whose bespoke effect class lives in
 # ``mtg_bot.effects.bespoke`` and isn't (and shouldn't be) part of
-# the unified ``_parse_effect`` grammar. Each entry maps the full,
-# post-reminder-strip oracle line to a factory that returns the
-# corresponding ``ActivatedAbility``. Round 18 precedent: the
-# equipment_builder uses the same "literal match for bespoke effect
-# text" pattern for Hylderblade's Void rider and Robe of Stars'
-# Astral Projection.
+# the unified ``_parse_effect`` grammar. Empty today — every
+# previously-literal artifact activation has been decomposed into
+# generic primitives and now claims through the unified
+# ``_parse_clause`` grammar:
 #
-# Keys are exact post-strip lines; the dispatch fires before the
-# unified ``_parse_clause`` so the bespoke effect class survives
-# end-to-end. A line not in this table falls through to the unified
-# clause grammar as usual.
-def _requiem_monolith_activation() -> ActivatedAbility:
-    """Build Requiem Monolith's sorcery-speed activation.
-
-    The printed body grants a UEOT ``this_dealt_damage`` trigger to
-    the target creature and then offers the target's controller an
-    optional ``deal 1`` ping — one bespoke effect class wraps both
-    behaviors. The printed inline ``Activate only as a sorcery.``
-    rider lifts to ``sorcery_speed=True`` on the ability.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(tap_self=True),
-        effect=RequiemMonolithActivatedEffect(),
-        sorcery_speed=True,
-    )
-
-
-def _haunted_screen_once_only_activation() -> ActivatedAbility:
-    """Build Haunted Screen's ``{7}: Put seven +1/+1 counters on this
-    artifact. It becomes a 0/0 Spirit creature in addition to its
-    other types. Activate only once.`` activation.
-
-    The "Activate only once" rider is honored by the bespoke effect
-    rather than at the legal/actions activation gate — the resolve site
-    checks ``GameObject.has_activated_once_only_ability`` and silently
-    no-ops if the flag is already set, then latches it on the first
-    successful resolve. No new ``ActivationCost`` field is needed; the
-    cost shape is the bare seven-generic ``{7}`` parser-grammar
-    standard.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(
-            mana=parse_mana_cost("{7}"),
-            mana_str="{7}",
-        ),
-        effect=HauntedScreenActivatedEffect(),
-    )
-
-
-_LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
-    # Requiem Monolith — bespoke UEOT-grant-plus-optional-ping body.
-    # Sorcery-speed rider flips ``sorcery_speed=True`` at the activated-
-    # ability layer; the cost atom (``{T}``) parses via the unified
-    # activated grammar.
-    #
-    # Decomposition blocker: the body grants a quoted triggered ability
-    # to the target creature for the rest of the turn, then offers the
-    # target's controller (NOT the activator) an optional 1-damage
-    # ping via ``choose_mode``. Two missing engine primitives:
-    #
-    #   1. **Generic UEOT triggered-ability grant.** The engine has
-    #      ``state.grant_triggered_ability_ueot`` but no parser-level
-    #      primitive that encapsulates "until end of turn, target
-    #      creature gains <quoted-triggered-ability>". The quoted
-    #      ability body itself ("Whenever this creature is dealt
-    #      damage, you draw that many cards and lose that much life.")
-    #      is a separate parser problem — combat-damage observer
-    #      triggers granted UEOT need their own grammar arm.
-    #   2. **Optional ping where the choosing player is the target's
-    #      controller, not the activator.** Existing optional-effect
-    #      combinators (``MayDo``, ``IfYouDo``) ask the resolving
-    #      controller to choose; this body asks the *target's*
-    #      controller. No generic primitive routes a may-decision to
-    #      a non-resolving player today.
-    #
-    # No second EoE/DSK printing prints either piece, so the bespoke
-    # class earns its keep until a second example ships.
-    "{T}: Until end of turn, target creature gains \"Whenever this "
-    "creature is dealt damage, you draw that many cards and lose "
-    "that much life.\" That creature's controller may have this "
-    "artifact deal 1 damage to it. Activate only as a sorcery.":
-        _requiem_monolith_activation,
-    # Pinnacle Starcage and Ghost Vacuum migrated out of the literal
-    # table when the generic "exiled-with-this" recall infrastructure
-    # landed. Pinnacle Starcage's ``{6}{W}{W}`` activation now
-    # decomposes into a Sequence of
-    # ``MoveEachExiledWithSourceToOwnersGraveyard`` +
-    # ``CreateNTokensFromLastExileRecall(token_name="Robot")`` +
-    # ``SacrificeSelf`` via the multi-sentence literal recognizer in
-    # ``effects.py``. Ghost Vacuum's ``{6}, {T}, Sacrifice this
-    # artifact`` activation now decomposes into the parameterized
-    # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
-    # Control`` primitive (with ``grant_flying_counter=True`` and
-    # ``grant_subtype_and_pt=("Spirit", 1, 1)``) via the same
-    # multi-sentence literal recognizer path. Both bespoke effect
-    # classes are deleted.
-    #
-    # Haunted Screen — three activations. The first two are mana
-    # abilities (``{T}: Add {W} or {B}.`` and ``{T}, Pay 1 life: Add
-    # {G}, {U}, or {R}.``) that now claim through the unified clause
-    # grammar via the new ``add {<c1>} or {<c2>}`` /
-    # ``add {<c1>}, {<c2>}, or {<c3>}`` recognizers in ``effects.py``
-    # (mapping to ``AddNManaOfChosenColor(amount=1, options=…)``);
-    # ``_is_mana_ability_effect`` in ``activated.py`` recognizes the
-    # primitive and sets ``is_mana_ability=True`` so CR 605 stack-bypass
-    # still applies. The third activation below is the once-only
-    # "becomes a 0/0 Spirit" body — genuinely card-unique (the
-    # combination of "Activate only once", a bare-cost type-change, and
-    # a self-counter init has no second example in the pool today).
-    # Decomposition blocker: the engine has no general "activate only
-    # once" ability rider — the ``has_activated_once_only_ability``
-    # ``GameObject`` flag is honored only by ``HauntedScreenActivated
-    # Effect``'s resolve site. Lifting it to a per-ability gate (and
-    # unbinding the type-change + counter init from this single class)
-    # would let the body decompose to ``Sequence(PutNCountersOnSelf
-    # (7), GrantTypeAndPTPermanently("creature","Spirit",(0,0)))`` plus
-    # an ``activate_only_once=True`` field on ``ActivatedAbility``. No
-    # second EoE/DSK printing prints the same shape today, so the
-    # bespoke class earns its keep until a second example ships.
-    "{7}: Put seven +1/+1 counters on this artifact. It becomes a 0/0 "
-    "Spirit creature in addition to its other types. Activate only once.":
-        _haunted_screen_once_only_activation,
-}
+# * Requiem Monolith — ``{T}: Until end of turn, target creature gains
+#   "Whenever this creature is dealt damage, you draw that many cards
+#   and lose that much life." That creature's controller may have this
+#   artifact deal 1 damage to it. Activate only as a sorcery.`` claims
+#   through the inline-sorcery-rider strip in ``activated.py`` plus a
+#   multi-sentence literal recognizer in ``effects.py`` mapping to
+#   ``Sequence(GrantTriggeredAbilityUEOT(ability=TriggeredAbility(
+#   trigger="this_dealt_damage", effect=DrawCardsAndLoseLifeEqualTo
+#   ResolvingDamage())), MayHaveSourceDealDamageToTarget(amount=1))``.
+# * Haunted Screen — ``{7}: Put seven +1/+1 counters on this artifact.
+#   It becomes a 0/0 Spirit creature in addition to its other types.
+#   Activate only once.`` claims through the new inline-activate-only-
+#   once-rider strip in ``activated.py`` (sets ``activate_only_once=
+#   True`` on the ability) plus a multi-sentence literal recognizer in
+#   ``effects.py`` mapping to ``Sequence(PutPlusOneCounterOnSelf(
+#   amount=7), BecomeCreatureWithSubtypeAndPTPermanently(subtype=
+#   "Spirit", base_p=0, base_t=0))``.
+#
+# Pinnacle Starcage and Ghost Vacuum had previously been migrated out
+# via the generic "exiled-with-this" recall infrastructure (Sequence
+# of ``MoveEachExiledWithSourceToOwnersGraveyard`` /
+# ``CreateNTokensFromLastExileRecall`` / ``SacrificeSelf`` for the
+# former; ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnder
+# YourControl`` for the latter).
+_LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {}
 
 
 # Literal trigger-line dispatch. Same shape as
@@ -485,15 +411,17 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         if affinity_reduction is not None:
             cost_reductions.append(affinity_reduction)
             continue
-        # Literal-line dispatch for bespoke single-card effect bodies
-        # (Requiem Monolith, Pinnacle Starcage, Ghost Vacuum, Haunted
-        # Screen). Tried FIRST (relative to the unified clause grammar)
-        # so the bespoke effect class survives — the unified
-        # ``_parse_clause`` would either reject the body (no matching
-        # primitive) or, in pathological cases, claim a near-miss
-        # primitive that doesn't match the static side. Same pattern as
-        # ``equipment_builder``'s Hylderblade / Robe of Stars literal
-        # match.
+        # Literal-line dispatch for bespoke single-card effect bodies.
+        # Empty today — Requiem Monolith, Haunted Screen, Pinnacle
+        # Starcage, and Ghost Vacuum have all been decomposed into
+        # generic primitives that claim through the unified
+        # ``_parse_clause`` grammar (the multi-sentence literal-effect
+        # recognizers in ``effects.py`` keep the anaphoric bodies
+        # intact while still mapping to ``Sequence`` of generic
+        # primitives). The dispatch site is preserved so a future
+        # bespoke single-card body whose anaphora can't be expressed
+        # through the unified grammar can land here without restoring
+        # the surrounding boilerplate.
         literal_activated_factory = _LITERAL_ACTIVATED_LINES.get(line)
         if literal_activated_factory is not None:
             activated.append(literal_activated_factory())
