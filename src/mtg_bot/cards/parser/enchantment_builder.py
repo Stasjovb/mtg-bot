@@ -1066,20 +1066,16 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         effect=SacrificeSelfUnlessVoidActive(),
     ),
     # ---------------------------------------------------------------
-    # Cracked Skull / Sporogenic Infection — DEALT_DAMAGE trigger.
-    # "When enchanted creature is dealt damage, destroy it."
-    # → DestroyEnchantedPermanent on DEALT_DAMAGE + IsHost().
-    # Two cards in the pool share this exact surface; having it here as
-    # a literal is still preferable to adding "destroy it" to the general
-    # effects grammar since "it" is an anaphoric pronoun whose referent
-    # (the enchanted creature) is Aura-context-specific and would be
-    # ambiguous outside of Aura triggers.
+    # (audit-litdispatch-auras) Cracked Skull / Sporogenic Infection
+    # / Cryoshatter shared DEALT_DAMAGE-destroys-host trigger
+    # ("When enchanted creature is dealt damage, destroy it.")
+    # migrated to the unified ``_parse_triggered_ability_line`` path:
+    # the trigger condition ``enchanted creature is dealt damage``
+    # already lives in ``_PREDICATE_TRIGGER_PHRASES``, and the body
+    # ``destroy it`` is now claimed by an Aura-context effect-phrase
+    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
+    # mapping to ``DestroyEnchantedPermanent``.
     # ---------------------------------------------------------------
-    "When enchanted creature is dealt damage, destroy it.": TriggeredAbility(
-        event=Event.DEALT_DAMAGE,
-        predicate=IsHost(),
-        effect=DestroyEnchantedPermanent(),
-    ),
 }
 
 # Allowlist of names that may claim through the Aura oracle-text path.

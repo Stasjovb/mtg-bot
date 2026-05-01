@@ -185,6 +185,7 @@ from mtg_bot.effects.conditions import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
+    DestroyEnchantedPermanent,
     DrawCardsByConditionMultiplier,
     EachOpponentExilesCardFromHandWithCastPermission,
     LockOrUnlockDoorOfTargetRoomYouControl,
@@ -3970,6 +3971,40 @@ def _parse_effect(phrase: str) -> Effect | None:
                 attacking=True,
                 schedule_end_of_combat_sacrifice=True,
             )
+    # ----------------------------------------------------------------
+    # Aura-context effect-phrase recognizers (audit-litdispatch-auras).
+    # Each entry routes a single Aura trigger body to its existing
+    # engine class via the unified effect grammar, replacing a
+    # whole-line entry that previously lived in
+    # ``mtg_bot.cards.parser.enchantment_builder._AURA_LITERAL_TRIGGER_LINES``.
+    # The trigger condition phrase (``this Aura enters`` /
+    # ``enchanted creature is dealt damage`` /
+    # ``At the beginning of your end step``) is already resolved by
+    # the predicate-trigger phrasebook in ``triggers.py``; these
+    # recognizers complete the round trip so the whole oracle line
+    # parses through the standard ``_parse_triggered_ability_line``
+    # path with no dedicated literal-table lookup. Each recognizer
+    # is a literal effect-phrase — only one or two cards in the pool
+    # ship the matching surface today, and broader generalization is
+    # deferred until a third example exists.
+    # ----------------------------------------------------------------
+    # ``destroy it`` — anaphoric Aura-context body. Used by
+    # Cryoshatter's compound becomes-tapped-or-dealt-damage line
+    # (handled by the Cryoshatter compound-line recognizer in
+    # ``enchantment_builder``), Cracked Skull's DEALT_DAMAGE trigger,
+    # and Sporogenic Infection's DEALT_DAMAGE trigger. The "it"
+    # refers to the Aura's enchanted permanent;
+    # ``DestroyEnchantedPermanent`` reads
+    # ``state.resolving_source.attached_to`` and fizzles cleanly when
+    # the source isn't an Aura with a host (so this recognizer is
+    # safe to register at the global effect-grammar level even though
+    # "it" is anaphoric — a non-Aura source's resolution becomes a
+    # no-op rather than a wrong behavior). Generalization to a
+    # parameterized ``destroy <subject>`` recognizer deferred until a
+    # third Aura body with a different subject phrasing
+    # (e.g. ``destroy enchanted creature``) ships.
+    if phrase == "destroy it":
+        return DestroyEnchantedPermanent()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
