@@ -4878,9 +4878,11 @@ def _parse_effect(phrase: str) -> Effect | None:
     if m is not None:
         return GrantUnblockableUEOT(power_at_most=int(m.group(1)))
     # ``target creature can't be blocked this turn`` — bare unblockable
-    # grant. Pure UEOT primitive on a creature target; sets
-    # ``temp_unblockable=True`` at resolve time. Enter the Enigma is
-    # the EoE/Duskmourn surface form that introduced this primitive.
+    # grant. Pure UEOT primitive on a creature target; writes a layer-6
+    # ``grant_keyword "unblockable"`` registry entry at resolve time
+    # (via ``ApplyEffect(GrantUnblockable, EndOfTurn())``). Enter the
+    # Enigma is the EoE/Duskmourn surface form that introduced this
+    # primitive.
     if _TARGET_CREATURE_CANT_BE_BLOCKED_THIS_TURN.match(phrase) is not None:
         return GrantUnblockableUEOT()
     # ``counter target sorcery spell`` — Warping Wail mode 2. Tried

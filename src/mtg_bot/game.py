@@ -58,8 +58,6 @@ class GameObject:
     # in ``_compute_effective_pt`` use the post-cancellation
     # values via this field.
     minus_one_counters: int = 0
-    # "Can't be blocked this turn" marker (cleared at cleanup).
-    temp_unblockable: bool = False
     # "You may play this card this turn" — set on cards exiled by
     # impulse-style effects (Territorial Bruntar landfall, Memorial
     # Vault activated). Cleared at cleanup. legal_actions honors it
