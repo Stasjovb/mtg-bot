@@ -841,12 +841,6 @@ class CardPrinting:
     #     printed (0/4).
     # None = use printed P/T (default).
     dynamic_pt_formula: str | None = None
-    # Replacement-effect flag: when any permanent with this flag is on
-    # the battlefield under the counter-recipient's control, +1/+1
-    # counters going onto creatures (and Spacecraft) they control are
-    # doubled. Matches Loading Zone. Multiple doublers stack
-    # multiplicatively via add_plus_one_counters().
-    is_counter_doubler: bool = False
     # Spell-cast restriction: when any permanent with this flag is on
     # the battlefield (regardless of controller), each player may cast
     # at most one noncreature spell per turn. Matches Deafening Silence.
@@ -1631,7 +1625,6 @@ def make_enchantment(
     static_abilities: tuple[StaticAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = False,
-    is_counter_doubler: bool = False,
     restricts_noncreature_spells_to_one_per_turn: bool = False,
     grants_first_spell_each_turn_free: bool = False,
     warp: str | None = None,
@@ -1669,7 +1662,6 @@ def make_enchantment(
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
-        is_counter_doubler=is_counter_doubler,
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells_to_one_per_turn
         ),

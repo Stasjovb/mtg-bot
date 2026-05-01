@@ -476,29 +476,6 @@ def _collect_replacement_effects(
                     continue
                 out.append((obj.id, re))
         # ── Legacy synthesis paths ─────────────────────────────────
-        # Loading-Zone-shape counter-doubler →
-        # MultiplyCount(2) on WOULD_PLACE_COUNTER. Scope: counter
-        # recipient is a creature or Spacecraft the doubler's
-        # controller controls. The recipient passes through subjects
-        # ``"obj"``; the doubler reads its controller_id off that.
-        if event == Event.WOULD_PLACE_COUNTER and getattr(
-            obj.printing, "is_counter_doubler", False,
-        ):
-            recipient = subjects.get("obj")
-            if (
-                recipient is not None
-                and getattr(recipient, "controller_id", None)
-                == obj.controller_id
-            ):
-                out.append((
-                    obj.id,
-                    ReplacementEffect(
-                        event_pattern=EventPattern(
-                            event=Event.WOULD_PLACE_COUNTER,
-                        ),
-                        transform=MultiplyCount(factor=2),
-                    ),
-                ))
         # Quantum-Riddler-shape draw replacement →
         # AddToCount(1) on WOULD_DRAW_CARDS, gated on the drawing
         # player having ≤ 1 card in hand AND being the carrier's

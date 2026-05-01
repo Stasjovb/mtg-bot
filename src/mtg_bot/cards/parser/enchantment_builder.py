@@ -17,7 +17,8 @@ Two claim paths co-exist in this module:
 Cards still on the bespoke path (in ``_ENCHANTMENT_BUILDERS``):
 
 Non-Aura enchantments:
-- Loading Zone ``{3}{G}`` — is_counter_doubler + warp
+- Loading Zone ``{3}{G}`` — counter-doubling StaticAbility +
+  ReplacementEffect on WOULD_PLACE_COUNTER + warp
 - Weftwalking ``{4}{U}{U}`` — ETB body parses through the unified
   clause grammar via ``ConditionalIfCastFromHand`` wrapping a
   ``Sequence(ShuffleZonesIntoLibrary, DrawCards(7))``;
@@ -95,6 +96,12 @@ from mtg_bot.effects import (
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
     TractorBeamETBEffect,
 )
+from mtg_bot.effects.base import StaticAbility, StaticScope
+from mtg_bot.effects.modifiers import (
+    EventPattern,
+    MultiplyCount,
+    ReplacementEffect,
+)
 from mtg_bot.effects.object_predicates import (
     IsArtifact,
     IsCreature,
@@ -144,14 +151,6 @@ def _build_seam_rip() -> CardPrinting:
                 effect=ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2),
             ),
         ),
-    )
-
-
-def _build_loading_zone() -> CardPrinting:
-    return make_enchantment(
-        "Loading Zone", "{3}{G}",
-        warp="{G}",
-        is_counter_doubler=True,
     )
 
 
@@ -1265,9 +1264,10 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
 # addition here + one kwarg name in the call to ``make_enchantment`` below.
 
 # "If one or more counters would be put on a creature, Spacecraft, or
-# Planet you control, twice that many of each of those kinds of counters
-# are put on it instead." → is_counter_doubler=True. (Loading Zone.)
-# Only card in the pool with this exact counter-doubler surface; deferred
+# Planet you control, twice that many of each of those kinds of
+# counters are put on it instead." → SELF-scope StaticAbility carrying
+# a ReplacementEffect(WOULD_PLACE_COUNTER, MultiplyCount(2)). Only
+# card in the pool with this exact counter-doubler surface; deferred
 # generalization until a second counter-doubler enchantment lands.
 _COUNTER_DOUBLER_LINE = (
     "If one or more counters would be put on a creature, Spacecraft, or "
@@ -1410,7 +1410,9 @@ def _build_enchantment_via_oracle_text(
 
     Printing-flag statics recognized (in addition to warp, ward, and
     restricts_noncreature_spells):
-    - ``_COUNTER_DOUBLER_LINE`` → ``is_counter_doubler=True``
+    - ``_COUNTER_DOUBLER_LINE`` → SELF-scope StaticAbility(
+      replacement_effect=ReplacementEffect(WOULD_PLACE_COUNTER,
+      MultiplyCount(2)))
     - ``_GRANTS_ETB_COUNTER_PER_LAND_LINE`` →
       ``grants_etb_counter_per_land_entered_this_turn=True``
     - ``_GRANTS_FIRST_SPELL_FREE_LINE`` →
@@ -1424,12 +1426,12 @@ def _build_enchantment_via_oracle_text(
     text = card.get("oracle_text", "")
     legendary = "Legendary" in card.get("type_line", "")
     restricts_noncreature_spells = False
-    is_counter_doubler = False
     grants_etb_counter_per_land = False
     grants_first_spell_free = False
     ward: str | None = None
     warp: str | None = None
     triggers: list[TriggeredAbility] = []
+    statics: list[StaticAbility] = []
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -1449,9 +1451,22 @@ def _build_enchantment_via_oracle_text(
         if warp_cost is not None:
             warp = warp_cost
             continue
-        # Counter-doubler static (Loading Zone)
+        # Counter-doubler static (Loading Zone). Builds a SELF-scope
+        # StaticAbility carrying a ReplacementEffect that multiplies
+        # the WOULD_PLACE_COUNTER count by 2 when the recipient is
+        # under the source's controller; the dispatcher's implicit
+        # "source.controller_id == affected_player_id" gate handles
+        # the printed "you control" qualifier.
         if line == _COUNTER_DOUBLER_LINE:
-            is_counter_doubler = True
+            statics.append(StaticAbility(
+                scope=StaticScope.SELF,
+                replacement_effect=ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.WOULD_PLACE_COUNTER,
+                    ),
+                    transform=MultiplyCount(factor=2),
+                ),
+            ))
             continue
         # ETB-counter-per-land static (Bioengineered Future)
         if line == _GRANTS_ETB_COUNTER_PER_LAND_LINE:
@@ -1480,7 +1495,7 @@ def _build_enchantment_via_oracle_text(
     has_any_recognized = (
         restricts_noncreature_spells
         or triggers
-        or is_counter_doubler
+        or statics
         or grants_etb_counter_per_land
         or grants_first_spell_free
         or ward is not None
@@ -1500,7 +1515,7 @@ def _build_enchantment_via_oracle_text(
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells
         ),
-        is_counter_doubler=is_counter_doubler,
+        static_abilities=tuple(statics),
         grants_etb_counter_per_land_entered_this_turn=(
             grants_etb_counter_per_land
         ),

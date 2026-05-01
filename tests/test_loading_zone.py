@@ -180,9 +180,28 @@ def test_put_plus_one_counter_on_creature_you_control_doubles():
     assert bear.plus_one_counters == 2
 
 
-def test_loading_zone_printing_has_flag_and_warp():
+def test_loading_zone_printing_has_counter_doubler_static_and_warp():
+    """Loading Zone's counter-doubler is a SELF-scope StaticAbility
+    carrying a ReplacementEffect(MultiplyCount(2)) on
+    WOULD_PLACE_COUNTER — the registry-driven shape that replaced the
+    legacy ``is_counter_doubler`` printing flag."""
+    from mtg_bot.effects.modifiers import (
+        EventPattern, MultiplyCount, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
     p = _PRINTINGS["Loading Zone"]
-    assert p.is_counter_doubler is True
+    matches = [
+        s for s in p.static_abilities
+        if s.replacement_effect is not None
+        and s.replacement_effect.event_pattern.event
+        == Event.WOULD_PLACE_COUNTER
+    ]
+    assert len(matches) == 1
+    assert matches[0].replacement_effect == ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_PLACE_COUNTER),
+        transform=MultiplyCount(factor=2),
+    )
     assert p.warp_cost is not None
 
 

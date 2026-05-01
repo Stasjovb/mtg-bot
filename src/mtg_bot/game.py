@@ -1458,12 +1458,15 @@ def _counter_doubling_factor(state: GameState, obj: GameObject) -> int:
     Routes through :func:`mtg_bot.effects.modifiers
     .dispatch_replacement` on ``WOULD_PLACE_COUNTER`` with a base
     ``count=1`` payload; the post-replacement count IS the factor.
-    Loading-Zone-shape doublers (``is_counter_doubler``) synthesise
-    a ``MultiplyCount(2)`` replacement gated on the recipient's
-    controller matching the doubler's controller. Recipients that
-    aren't creatures or Spacecraft (Loading Zone's printed scope)
-    short-circuit to 1 — the dispatch is skipped entirely so future
-    replacements with broader scopes don't accidentally fire.
+    Loading-Zone-shape doublers ride a SELF-scope StaticAbility with
+    a ``ReplacementEffect(MultiplyCount(2))`` on
+    ``WOULD_PLACE_COUNTER``. The dispatcher's implicit
+    "source.controller_id == affected_player_id" gate fires the
+    doubler when the recipient's controller matches the doubler's
+    controller. Recipients that aren't creatures or Spacecraft
+    (Loading Zone's printed scope) short-circuit to 1 — the dispatch
+    is skipped entirely so future replacements with broader scopes
+    don't accidentally fire.
     """
     if not (obj.printing.is_creature or obj.printing.is_spacecraft):
         return 1
