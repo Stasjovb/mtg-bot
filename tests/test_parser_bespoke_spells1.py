@@ -138,8 +138,15 @@ def test_bespoke_table_count():
     #   + Zero Point Ballad (per-clause multi-sentence literal in effects.py)
     #   + Devastating Onslaught (per-clause multi-sentence literal in effects.py)
     #   + Consult the Star Charts (per-clause multi-sentence literal in effects.py)
-    # 50 - 48 = 2 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 2
+    # Additional removals in bespoke-final-spells branch (2 more, 0 remaining):
+    #   + Terminal Velocity (per-clause multi-sentence literal in effects.py;
+    #     two-sentence body with embedded quoted triggered abilities)
+    #   + Close Encounter (per-clause literal in effects.py for the
+    #     "deals damage equal to the power of the chosen creature or card"
+    #     surface; additional-cost preamble already stripped by the
+    #     _is_additional_cost_preamble dropper)
+    # 50 - 50 = 0 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 0
 
 
 # ------------------------------------------------------------------ #

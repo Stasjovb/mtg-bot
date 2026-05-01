@@ -169,7 +169,12 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-from mtg_bot.effects.bespoke import ArabellaAttackEffect, RovingActuatorETBEffect
+from mtg_bot.effects.bespoke import (
+    ArabellaAttackEffect,
+    CloseEncounterEffect,
+    RovingActuatorETBEffect,
+    TerminalVelocityEffect,
+)
 from mtg_bot.effects.generic import TapEnchantedPermanent
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -3649,6 +3654,49 @@ def _parse_effect(phrase: str) -> Effect | None:
         "Put the rest on the bottom of your library in a random order"
     ):
         return ConsultTheStarChartsEffect()
+    # Terminal Velocity's two-sentence body — "You may put an artifact or
+    # creature card from your hand onto the battlefield. That permanent
+    # gains haste, [LTB-damage-trigger], and [end-step-sac-trigger]."
+    # The second sentence embeds two full quoted triggered abilities inside
+    # a "gains ..., ..., and ..." clause; no per-clause recognizer can
+    # decompose that structure. Sentence 1 ("you may put...") also has no
+    # standalone per-clause primitive. Both blockers require non-trivial
+    # new grammar, so the full two-sentence body is matched as a single
+    # literal dispatching to the bespoke engine class. The oracle text
+    # ends with `."` (period inside the closing double-quote), so the
+    # trailing-period strip in ``_normalize_spell_effect_phrase`` does NOT
+    # fire — the normalized phrase retains the trailing `."`. Only
+    # Terminal Velocity (EoS) in the pool has this exact surface; broader
+    # grammar deferred until a second card with this put-from-hand +
+    # quoted-trigger-grants shape ships.
+    if phrase == (
+        'you may put an artifact or creature card from your hand onto '
+        'the battlefield. That permanent gains haste, "When this '
+        'permanent leaves the battlefield, it deals damage equal to '
+        'its mana value to each creature," and "At the beginning of '
+        'your end step, sacrifice this permanent."'
+    ):
+        return TerminalVelocityEffect()
+    # Close Encounter's body after the additional-cost preamble is stripped
+    # by ``_parse_spell_oracle_text``'s ``_is_additional_cost_preamble``
+    # dropper. The remaining clause ("Close Encounter deals damage equal
+    # to the power of the chosen creature or card to target creature.")
+    # normalizes — after the card-name prefix strip and trailing-period
+    # strip — to the phrase below. No existing recognizer covers
+    # "deals damage equal to the power of the chosen creature or card":
+    # ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET`` matches "deals
+    # damage equal to its power to any target" (source's own power), NOT
+    # the "chosen creature or card" additional-cost reference. The engine
+    # class reads ``state.resolving_additional_cost_choice_id`` at resolve
+    # time to look up the chosen object's power. Only Close Encounter (EoE)
+    # in the pool has this exact additional-cost-power damage surface;
+    # broader grammar deferred until a second card with a similar
+    # chosen-object-power damage shape ships.
+    if phrase == (
+        "deals damage equal to the power of the chosen creature or "
+        "card to target creature"
+    ):
+        return CloseEncounterEffect()
     # Kavaron Harrier's "create ... that's tapped and attacking. Sacrifice
     # that token at end of combat." two-sentence phrase. The second
     # sentence is anaphoric ("that token" refers to the token created in

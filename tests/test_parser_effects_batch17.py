@@ -311,21 +311,41 @@ def test_directed_discard_body_parses_via_per_clause_grammar():
 def test_close_encounter_claimed_by_parser():
     # Close Encounter ``{1}{G}`` Instant — power-as-damage burn whose
     # source is chosen as an additional cost (a creature you control
-    # or a warped creature card you own in exile). The static ships
-    # ``CloseEncounterEffect()`` plus the
-    # ``additional_cost_choose_your_creature`` printing flag; the
-    # whole-spell dispatcher returns the effect and
-    # ``_detect_additional_cost_flags`` threads the flag.
+    # or a warped creature card you own in exile). Migrated from the
+    # whole-spell exact-text tier to the per-clause grammar in
+    # bespoke-final-spells: the additional-cost preamble is stripped by
+    # ``_is_additional_cost_preamble``; the body normalizes to "deals
+    # damage equal to the power of the chosen creature or card to target
+    # creature" which the new literal in ``effects.py`` claims as
+    # ``CloseEncounterEffect()``.
     assert "Close Encounter" in _claimed_names()
 
 
-def test_dispatch_close_encounter_returns_engine_class():
+def test_dispatch_close_encounter_no_whole_spell_bespoke_entry():
+    # Close Encounter migrated from the whole-spell exact-text tier to
+    # the per-clause grammar; the whole-spell dispatcher now falls
+    # through (the key no longer exists in _WHOLE_SPELL_EXACT_TEXT).
     eff = _try_whole_spell_exact_text(
         "As an additional cost to cast this spell, choose a creature "
         "you control or a warped creature card you own in exile.\n"
         "Close Encounter deals damage equal to the power of the "
         "chosen creature or card to target creature."
     )
+    assert eff is None
+
+
+def test_dispatch_close_encounter_body_parses_via_per_clause_grammar():
+    # After the additional-cost preamble is stripped, the body clause
+    # normalizes to "deals damage equal to the power of the chosen
+    # creature or card to target creature" and is claimed by the new
+    # literal recognizer in ``_parse_effect``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+
+    body = (
+        "Close Encounter deals damage equal to the power of the "
+        "chosen creature or card to target creature."
+    )
+    eff = _parse_spell_effect_phrase(body, "Close Encounter")
     assert eff == CloseEncounterEffect()
 
 

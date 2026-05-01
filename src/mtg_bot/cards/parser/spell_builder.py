@@ -41,7 +41,6 @@ import re
 
 from mtg_bot.cards.base import (
     CardPrinting,
-    CloseEncounterEffect,
     CommuneWithEvilEffect,
     ConditionalIfVoid,
     CostReduction,
@@ -65,7 +64,6 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToBattlefield,
     ReturnCreatureFromYourGraveyardToHand,
     Sequence,
-    TerminalVelocityEffect,
     make_instant,
     make_sorcery,
 )
@@ -1004,24 +1002,18 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # ``ConsultTheStarChartsEffect()``.
     # Close Encounter — "As an additional cost to cast this spell,
     # choose a creature you control or a warped creature card you own
-    # in exile.\n Close Encounter deals damage equal to the power of
-    # the chosen creature or card to target creature." — Blocker: after
-    # the additional-cost preamble is stripped by the per-clause path's
-    # ``_is_additional_cost_preamble`` dropper, the body normalizes to
-    # "deals damage equal to the power of the chosen creature or card to
-    # target creature" — which has no per-clause recognizer. The existing
-    # ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET`` matches "deals
-    # damage equal to its power to any target" (source's own power), not
-    # the "chosen creature or card" phrasing (additional-cost object).
-    # Migration requires both a new recognizer for that surface AND a
-    # resolution mechanism that reads power from the chosen additional-
-    # cost creature/card. Stays in whole-spell tier.
-    (
-        "As an additional cost to cast this spell, choose a creature "
-        "you control or a warped creature card you own in exile.\n"
-        "Close Encounter deals damage equal to the power of the "
-        "chosen creature or card to target creature."
-    ): CloseEncounterEffect(),
+    # in exile.\nClose Encounter deals damage equal to the power of
+    # the chosen creature or card to target creature." — migrated to
+    # per-clause grammar: the additional-cost preamble is recognized by
+    # ``_is_additional_cost_preamble`` and stripped; the remaining body
+    # ("Close Encounter deals damage equal to the power of the chosen
+    # creature or card to target creature.") normalizes — after
+    # card-name-prefix and trailing-period stripping — to "deals damage
+    # equal to the power of the chosen creature or card to target
+    # creature", which the new literal recognizer in ``effects.py``
+    # matches directly, returning ``CloseEncounterEffect()``. The engine
+    # class reads ``state.resolving_additional_cost_choice_id`` at
+    # resolve time to look up the chosen object's power.
     # Lithobraking — "Create a Lander token. Then you may sacrifice an
     # artifact. When you do, Lithobraking deals 2 damage to each
     # creature." — migrated to per-clause grammar: the new
@@ -1072,28 +1064,17 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # your hand onto the battlefield. That permanent gains haste, \"When
     # this permanent leaves the battlefield, it deals damage equal to its
     # mana value to each creature,\" and \"At the beginning of your end
-    # step, sacrifice this permanent.\"" — Blocker: the oracle text embeds
-    # two full quoted activated/triggered abilities inside the second
-    # sentence's grant expression. These quoted abilities (the LTB damage
-    # trigger and the end-step-sac trigger) are NOT standalone effect
-    # phrases — they are printed as string-quoted content inside the "gains
-    # ..., ..., and ..." clause, and no per-clause recognizer can decompose
-    # that structure. Additionally, sentence 1 ("You may put...") has no
-    # "put from hand to battlefield" per-clause recognizer today. Both
-    # blockers require non-trivial new grammar:
-    # (1) A "you may put an artifact or creature card from your hand onto
-    #     the battlefield" recognizer in ``effects.py``.
-    # (2) A "grants haste + quoted-LTB-trigger + quoted-end-step-sac-trigger"
-    #     parser that walks the quoted ability bodies recursively.
-    # Until those land, ``TerminalVelocityEffect`` in the whole-spell tier
-    # is the correct placement.
-    (
-        "You may put an artifact or creature card from your hand onto "
-        "the battlefield. That permanent gains haste, \"When this "
-        "permanent leaves the battlefield, it deals damage equal to "
-        "its mana value to each creature,\" and \"At the beginning of "
-        "your end step, sacrifice this permanent.\""
-    ): TerminalVelocityEffect(),
+    # step, sacrifice this permanent.\"" — migrated to per-clause grammar:
+    # the new multi-sentence literal recognizer in ``effects.py`` matches
+    # the full two-sentence body as a single unit (the oracle text ends
+    # with ``."`` so the trailing-period strip in
+    # ``_normalize_spell_effect_phrase`` does NOT fire; the normalized
+    # phrase retains the trailing ``."`` and is matched verbatim) and
+    # returns ``TerminalVelocityEffect()``. Sentence 2 embeds two quoted
+    # triggered abilities inside a ``gains ..., ..., and ...`` clause; no
+    # per-sentence grammar can decompose them. Only Terminal Velocity (EoS)
+    # in the pool has this exact surface; broader grammar deferred until
+    # a second put-from-hand + quoted-trigger-grants card ships.
     # Pull Through the Weft — "Return up to two target nonland permanent
     # cards from your graveyard to your hand, then return up to two
     # target land cards from your graveyard to the battlefield tapped."

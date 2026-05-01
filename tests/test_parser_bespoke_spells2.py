@@ -102,7 +102,9 @@ def test_bespoke_table_count():
     # Diplomatic Relations, Desculpting Blast, Scout for Survivors,
     # Coordinated Clobbering, Trial of Agony, Zero Point Ballad,
     # Devastating Onslaught, Consult the Star Charts) → 2 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 2
+    # bespoke-final-spells removes 2 more (Terminal Velocity,
+    # Close Encounter) → 0 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 0
 
 
 # ------------------------------------------------------------------ #
