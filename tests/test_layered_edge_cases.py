@@ -213,7 +213,7 @@ def test_lignify_then_anthem_keyword_grant_anthem_wins_if_newer():
 
     # Synthetic anthem-style layer-6 keyword grant at a NEWER timestamp.
     # grant_keyword's contract is params=(keyword_string,) — one entry
-    # per keyword (matches GameState.grant_keywords_ueot).
+    # per keyword (matches the GrantKeywords primitive's writes).
     state.add_continuous_effect(
         source_id=bear.id, layer=6, kind="grant_keyword",
         target_id=bear.id, params=("flying",),
