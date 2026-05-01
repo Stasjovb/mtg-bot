@@ -11149,6 +11149,124 @@ class GrantKeywords(Effect):
         return f"gains {', '.join(sorted(self.keywords))}"
 
 
+@dataclass(frozen=True)
+class GrantActivatedAbility(Effect):
+    """Grant an activated ability to a permanent via a layer-6
+    ``"grant_activated_ability"`` registry entry.
+
+    Registry-only primitive: writes a single layer-6 entry with
+    ``expires_at=None`` (the entry persists until the source leaves
+    play). Wrap with ``ApplyEffect(GrantActivatedAbility(...),
+    ends_at=<Duration>)`` to give the grant a finite lifetime —
+    ``ApplyEffect`` rewrites the entry's lifetime fields.
+
+    Target selection mirrors ``BecomeType``: when ``targets`` carries
+    a ``(kind, id)`` pair, the registry entry targets that object;
+    with no targets, the effect falls back to self-target reading
+    ``state.resolving_source``. Registry ``source_id`` = the
+    spell/ability source (so its leave-play drops the entry); falls
+    back to the target's id when no resolving source is set
+    (manland-style self-target during ability resolution).
+
+    No-op when neither ``targets`` nor ``state.resolving_source``
+    yields a battlefield object. Reads via
+    :func:`mtg_bot.game.effective_activated_abilities`.
+    """
+
+    ability: "ActivatedAbility | None" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.ability is None:
+            return
+        source = state.resolving_source
+        if targets:
+            _, target_id = targets[0]
+            target = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+        else:
+            target = source
+        if target is None:
+            return
+        source_id = source.id if source is not None else target.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=6,
+            kind="grant_activated_ability",
+            target_id=target.id,
+            params=(self.ability,),
+            expires_at=None,
+            description=(
+                f"{target.printing.name} gains an activated ability"
+            ),
+        )
+
+    def describe(self) -> str:
+        return "gains an activated ability"
+
+
+@dataclass(frozen=True)
+class GrantTriggeredAbility(Effect):
+    """Grant a triggered ability to a permanent via a layer-6
+    ``"grant_triggered_ability"`` registry entry.
+
+    Registry-only primitive: writes a single layer-6 entry with
+    ``expires_at=None``. Wrap with ``ApplyEffect(
+    GrantTriggeredAbility(...), ends_at=<Duration>)`` to give the
+    grant a finite lifetime — ``ApplyEffect`` rewrites the entry's
+    lifetime fields.
+
+    Target selection mirrors ``BecomeType`` / ``GrantActivatedAbility``:
+    when ``targets`` carries a ``(kind, id)`` pair, the registry entry
+    targets that object; with no targets, the effect falls back to
+    self-target reading ``state.resolving_source``. Registry
+    ``source_id`` = the spell/ability source (so its leave-play
+    drops the entry); falls back to the target's id when no resolving
+    source is set.
+
+    No-op when neither ``targets`` nor ``state.resolving_source``
+    yields a battlefield object. Reads via
+    :func:`mtg_bot.game.effective_triggered_abilities`.
+    """
+
+    ability: "TriggeredAbility | None" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.ability is None:
+            return
+        source = state.resolving_source
+        if targets:
+            _, target_id = targets[0]
+            target = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+        else:
+            target = source
+        if target is None:
+            return
+        source_id = source.id if source is not None else target.id
+        state.add_continuous_effect(
+            source_id=source_id,
+            layer=6,
+            kind="grant_triggered_ability",
+            target_id=target.id,
+            params=(self.ability,),
+            expires_at=None,
+            description=(
+                f"{target.printing.name} gains a triggered ability"
+            ),
+        )
+
+    def describe(self) -> str:
+        return "gains a triggered ability"
+
+
 
 @dataclass(frozen=True)
 class ReanimateOneExiledWithSourceWithCounters(Effect):
