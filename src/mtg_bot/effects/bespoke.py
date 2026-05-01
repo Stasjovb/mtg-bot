@@ -2063,7 +2063,6 @@ class EnduringDiesReturnAsEnchantmentEffect(Effect):
         # — the returned permanent is a "new object" per CR 400.7, so
         # any UEOT grants on the FORMER object are dropped before the
         # battlefield transition.
-        source.temp_triggered_abilities = ()
         state.continuous_effects = [
             ce for ce in state.continuous_effects
             if not (
@@ -2127,13 +2126,11 @@ class PerigeeBeckonerDiesReturnTappedEffect(Effect):
         # so a second death this turn (re-killed after the return)
         # doesn't re-fire the rider — rules-wise the granted UEOT
         # trigger is on the FORMER object; the returned object is a
-        # "new object" with no memory of UEOT grants.
-        # Drop both the legacy ``temp_triggered_abilities`` field
-        # contents and any layer-6 registry grant entries targeting
-        # this source. Cleanup wipes the registry at end of turn
-        # anyway, but immediate clearing keeps the dies-trigger
-        # firing semantics correct mid-turn.
-        source.temp_triggered_abilities = ()
+        # "new object" with no memory of UEOT grants. Drop any
+        # layer-6 registry grant entries targeting this source.
+        # Cleanup wipes the registry at end of turn anyway, but
+        # immediate clearing keeps the dies-trigger firing semantics
+        # correct mid-turn.
         state.continuous_effects = [
             ce for ce in state.continuous_effects
             if not (

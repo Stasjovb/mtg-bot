@@ -207,24 +207,40 @@ def test_lignify_strips_printed_activated_abilities():
 
 
 def test_lignify_strips_temp_granted_abilities():
-    """A creature with UEOT-granted abilities (via legacy temp_*
-    fields) ALSO loses them under Lignify."""
+    """A creature with UEOT-granted abilities (via layer-6 registry
+    grants) ALSO loses them under Lignify."""
+    from mtg_bot.effects.combinators import ApplyEffect
+    from mtg_bot.effects.durations import EndOfTurn
+    from mtg_bot.effects.generic import (
+        GrantActivatedAbility, GrantTriggeredAbility,
+    )
+
     state = _new_state()
     aura = _put(state, LIGNIFY, owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     bear.temp_keywords = frozenset({"trample"})
-    bear.temp_triggered_abilities = (
-        TriggeredAbility(trigger="etb", effect=DrawCards(amount=1)),
+    granted_trig = TriggeredAbility(
+        trigger="etb", effect=DrawCards(amount=1),
     )
-    bear.temp_activated_abilities = (
-        ActivatedAbility(
-            cost=ActivationCost(
-                mana=parse_mana_cost("{1}"), mana_str="{1}",
-                tap_self=True,
-            ),
-            effect=DrawCards(amount=1),
+    granted_act = ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost("{1}"), mana_str="{1}",
+            tap_self=True,
         ),
+        effect=DrawCards(amount=1),
     )
+    state.resolving_source = bear
+    try:
+        ApplyEffect(
+            inner=GrantTriggeredAbility(ability=granted_trig),
+            ends_at=EndOfTurn(),
+        ).resolve(state, 0, ())
+        ApplyEffect(
+            inner=GrantActivatedAbility(ability=granted_act),
+            ends_at=EndOfTurn(),
+        ).resolve(state, 0, ())
+    finally:
+        state.resolving_source = None
     assert "trample" in effective_keywords(state, bear)
     assert len(effective_triggered_abilities(state, bear)) == 1
     assert len(effective_activated_abilities(state, bear)) == 1

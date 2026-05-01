@@ -5,8 +5,10 @@ creature you control gets +2/+0 and gains 'When this creature dies,
 return it to the battlefield tapped under its owner's control.'"
 
 Wired via ``PumpTargetCreatureUntilEOT.granted_triggered_ability`` —
-the rider lives in ``temp_triggered_abilities`` until cleanup, and
-``_fire_dies_triggers`` walks that tuple alongside printed dies-triggers.
+the rider lives on a layer-6 ``grant_triggered_ability`` registry
+entry until cleanup, and ``_fire_dies_triggers`` walks the
+``effective_triggered_abilities`` view (printed + registry-granted)
+alongside printed dies-triggers.
 """
 
 from mtg_bot.agents import RandomAgent
@@ -95,6 +97,10 @@ def test_owners_control_not_casters_control():
     it would still go to its owner — but the standard wiring restricts
     targets to creatures-you-control. Test the resolve's owner-routing
     directly by grant + move on a creature owned by P1."""
+    from mtg_bot.effects.combinators import ApplyEffect
+    from mtg_bot.effects.durations import EndOfTurn
+    from mtg_bot.effects.generic import GrantTriggeredAbility
+
     state = _new_state()
     # The pump's you_control_only restricts targeting to caster's
     # creatures, but the BESPOKE effect's resolve is what enforces
@@ -104,7 +110,10 @@ def test_owners_control_not_casters_control():
         event=Event.DIES, predicate=IsSelf(),
         effect=PerigeeBeckonerDiesReturnTappedEffect(),
     )
-    enemy_bear.temp_triggered_abilities = (granted,)
+    ApplyEffect(
+        inner=GrantTriggeredAbility(ability=granted),
+        ends_at=EndOfTurn(),
+    ).resolve(state, 0, (("creature", enemy_bear.id),))
     move_off_battlefield(state, enemy_bear, destination="graveyard")
     assert enemy_bear in state.battlefield
     assert enemy_bear.controller_id == 1  # owner = P1

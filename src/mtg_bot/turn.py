@@ -672,10 +672,11 @@ def _fire_dies_triggers(state: GameState, dead: "GameObject") -> None:
     ``move_off_battlefield`` via ``dispatch_event``, so all that
     remains here is the UEOT-granted-rider path.
 
-    The granted rider lives on the dying object's
-    ``temp_triggered_abilities`` (Perigee Beckoner's pump grants
-    exactly this). The rider isn't represented in the printed-ability
-    ledger so we resolve it directly rather than push it through
+    The granted rider lives on a layer-6 ``grant_triggered_ability``
+    registry entry against the dying object (Perigee Beckoner's pump
+    grants exactly this). The rider isn't represented in the
+    printed-ability ledger so we resolve it directly rather than
+    push it through
     ``push_triggered_ability`` (which would require broadening the
     ledger key type). ``resolving_source`` is set to the dying object
     so the granted effect can read it. Mirrors the dealt-damage path
@@ -1050,12 +1051,7 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_power_bonus = 0
         obj.temp_toughness_bonus = 0
         obj.temp_keywords = frozenset()
-        obj.temp_triggered_abilities = ()
         obj.temp_unblockable = False
-        # UEOT-granted abilities from manland animations (Lavaclaw,
-        # Wandering Fumarole, Raging Ravine) wear off at cleanup. Note
-        # ``temp_triggered_abilities`` is already cleared above.
-        obj.temp_activated_abilities = ()
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
         # Revert "gain control until end of turn" effects.

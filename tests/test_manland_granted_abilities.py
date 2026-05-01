@@ -4,8 +4,10 @@ Audit-found bug: Lavaclaw Reaches, Wandering Fumarole, and Raging Ravine
 each grant an activated/triggered ability that fires only while the land
 is animated. Pre-fix these were silently dropped. Now wired via
 ``BecomeLandCreatureUEOT.granted_activated_abilities`` and
-``granted_triggered_abilities`` (folded into ``temp_activated_abilities``
-and ``temp_triggered_abilities`` on resolve, cleared at cleanup).
+``granted_triggered_abilities`` — each composes
+``ApplyEffect(GrantActivatedAbility(...), EndOfTurn())`` /
+``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` so the grant
+lives on a layer-6 registry entry that expires at cleanup.
 """
 
 from mtg_bot.actions import (

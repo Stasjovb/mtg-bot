@@ -4,9 +4,9 @@ Covers:
 - granting a "Whenever this creature is dealt damage, ..." trigger and
   firing it once via _apply_damage,
 - firing the same trigger multiple times in one turn,
-- run_cleanup_step clearing temp_triggered_abilities so post-cleanup
-  damage doesn't fire it,
-- the new GrantTriggeredAbilityUEOT primitive,
+- run_cleanup_step expiring the layer-6 grant so post-cleanup damage
+  doesn't fire it,
+- the GrantTriggeredAbilityUEOT primitive,
 - PumpTargetCreatureUntilEOT optionally appending a granted trigger.
 """
 
@@ -86,7 +86,7 @@ def test_granted_trigger_fires_multiple_times_in_one_turn():
     assert state.players[1].life == life_before - 4
 
 
-def test_cleanup_clears_temp_triggered_abilities():
+def test_cleanup_expires_granted_triggered_abilities():
     state = _new_state()
     _stock_library(state, 1, 5)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
@@ -183,7 +183,13 @@ def test_grant_effect_no_ability_noop():
     GrantTriggeredAbilityUEOT(ability=None).resolve(
         state, 0, (("creature", bear.id),),
     )
-    assert bear.temp_triggered_abilities == ()
+    from mtg_bot.game import effective_triggered_abilities
+    granted_only = [
+        ab for ab in effective_triggered_abilities(state, bear)
+        if ab not in bear.printing.triggered_abilities
+    ]
+    assert granted_only == []
+    assert state.continuous_effects == []
 
 
 def test_grant_effect_no_targets_noop():

@@ -148,23 +148,6 @@ class GameObject:
     extended_temp_toughness_bonus: int = 0
     extended_temp_keywords: frozenset[str] = field(default_factory=frozenset)
     extended_temp_expires_at_player_id: Optional[int] = None
-    # UEOT triggered abilities granted by other effects (e.g. Requiem
-    # Monolith's "Whenever this creature is dealt damage, you draw that
-    # many cards and lose that much life", Raging Ravine's "Whenever
-    # this creature attacks, put a +1/+1 counter on it"). Cleared at
-    # cleanup. Fire helpers iterate this alongside
-    # ``printing.triggered_abilities``; the once-per-turn ledger uses
-    # synthetic indices (``("temp", i)`` or a 1000+ offset depending on
-    # call site) to avoid colliding with printed-ability indices.
-    temp_triggered_abilities: "tuple[TriggeredAbility, ...]" = ()
-    # Granted activated abilities that exist only "while animated" — a
-    # manland's UEOT activation can fold per-card abilities here (e.g.
-    # Lavaclaw Reaches' "{X}: This creature gets +X/+0 UEOT", Wandering
-    # Fumarole's "{0}: Switch P/T UEOT"). Cleared at cleanup. Read by
-    # ``effective_activated_abilities`` and surfaced to legal_actions /
-    # _activate_ability via the same index space (printed first, then
-    # static-grant, then equipment-grant, then temp_*).
-    temp_activated_abilities: "tuple[ActivatedAbility, ...]" = ()
     # Equipment attachment: if this object is Equipment, ``attached_to``
     # is the id of the creature it's attached to (or None if unattached).
     # Plays no role if the object isn't Equipment.
@@ -1327,11 +1310,10 @@ def effective_activated_abilities(
             continue
         if o.printing.grants_control_opponent_ability_when_equipped:
             base.append(DOMINION_BRACELET_GRANTED_ABILITY)
-    # UEOT-granted activated abilities (manland animations).
-    if obj.temp_activated_abilities:
-        base.extend(obj.temp_activated_abilities)
     # Walk layer-6 entries in timestamp order, applying
     # lose_all_abilities (clears) and grant_activated_ability (adds).
+    # UEOT-granted activated abilities (manland animations) live here
+    # via ApplyEffect(GrantActivatedAbility(...), EndOfTurn()).
     layer6 = sorted(
         (
             ce for ce in state.continuous_effects
@@ -1359,16 +1341,13 @@ def effective_triggered_abilities(
     state: "GameState", obj: "GameObject",
 ) -> tuple:
     """Return the printing's triggered abilities + any UEOT-granted
-    triggered abilities, including layer-6 registry entries.
+    triggered abilities from layer-6 registry entries.
 
-    Phase 2 of the layered-effects refactor: callers that previously
-    iterated ``obj.temp_triggered_abilities`` directly should now go
-    through this helper so registry-granted triggers (Requiem
-    Monolith's UEOT trigger, Raging Ravine's animated attack
-    trigger, Perigee Beckoner's granted dies-rider) are picked up.
-    Indices match the order the engine fires them: printed first,
-    then ``temp_*`` field grants (legacy path), then registry
-    grants.
+    Callers that previously iterated ``obj.temp_triggered_abilities``
+    directly should go through this helper so registry-granted
+    triggers (Requiem Monolith's UEOT trigger, Raging Ravine's
+    animated attack trigger, Perigee Beckoner's granted dies-rider)
+    are picked up.
 
     Lignify-style "lose all abilities" (layer 6) is processed in
     CR-613 timestamp order alongside grant_triggered_ability
@@ -1388,8 +1367,6 @@ def effective_triggered_abilities(
         ]
     else:
         base = list(obj.printing.triggered_abilities)
-    if obj.temp_triggered_abilities:
-        base.extend(obj.temp_triggered_abilities)
     layer6 = sorted(
         (
             ce for ce in state.continuous_effects
@@ -2270,49 +2247,6 @@ class GameState:
         )
         self.continuous_effects.append(effect)
         return effect
-
-    def grant_triggered_ability_ueot(
-        self,
-        *,
-        source_id: int,
-        target_id: int,
-        ability,
-        description: str = "",
-    ) -> ContinuousEffect:
-        """Helper for UEOT triggered-ability grants. Writes a layer-6
-        ``"grant_triggered_ability"`` entry with ``expires_at="cleanup"``.
-        Read via ``effective_triggered_abilities``."""
-        return self.add_continuous_effect(
-            source_id=source_id,
-            layer=6,
-            kind="grant_triggered_ability",
-            target_id=target_id,
-            params=(ability,),
-            expires_at="cleanup",
-            description=description,
-        )
-
-    def grant_activated_ability_ueot(
-        self,
-        *,
-        source_id: int,
-        target_id: int,
-        ability,
-        description: str = "",
-    ) -> ContinuousEffect:
-        """Helper for UEOT activated-ability grants (manland
-        animations). Writes a layer-6 ``"grant_activated_ability"``
-        entry with ``expires_at="cleanup"``. Read via
-        ``effective_activated_abilities``."""
-        return self.add_continuous_effect(
-            source_id=source_id,
-            layer=6,
-            kind="grant_activated_ability",
-            target_id=target_id,
-            params=(ability,),
-            expires_at="cleanup",
-            description=description,
-        )
 
     def grant_pt_pump_ueot(
         self,

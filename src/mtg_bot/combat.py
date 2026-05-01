@@ -194,10 +194,9 @@ def _fire_attacks_triggers(state: GameState, attacker) -> None:
 
     # UEOT-granted attacks-triggers (Raging Ravine's "+1/+1 counter
     # when this attacks", granted while animated). These live on
-    # ``temp_triggered_abilities`` / layer-6 registry entries via
-    # ``effective_triggered_abilities`` rather than on
-    # ``printing.triggered_abilities``, so the dispatcher's
-    # battlefield-walk doesn't see them. Use a 1000-offset
+    # layer-6 registry entries via ``effective_triggered_abilities``
+    # rather than on ``printing.triggered_abilities``, so the
+    # dispatcher's battlefield-walk doesn't see them. Use a 1000-offset
     # ability_index so the once_per_turn ledger key
     # ``(source_id, ability_index)`` can't collide with a printed-
     # ability index. None of the wired-in granted triggers are
@@ -556,8 +555,9 @@ def _fire_enchanted_dealt_damage_triggers(
 ) -> None:
     """Fire "whenever enchanted creature is dealt damage" triggers on
     auras attached to ``obj``, plus any UEOT-granted
-    ``this_dealt_damage`` triggers sitting in
-    ``obj.temp_triggered_abilities`` (Requiem Monolith).
+    ``this_dealt_damage`` triggers sitting on layer-6
+    ``grant_triggered_ability`` registry entries against ``obj``
+    (Requiem Monolith).
 
     Amount exposed via state.resolving_combat_damage_amount for effects
     that want to read it (e.g., Pain for All's
@@ -573,9 +573,8 @@ def _fire_enchanted_dealt_damage_triggers(
     below: ``IsHost()`` on an attached aura matches when
     ``aura.attached_to == obj.id``. The bespoke granted-ability walk
     for ``this_dealt_damage`` (Requiem Monolith) stays — it lives on
-    ``temp_triggered_abilities`` / layer-6 registry entries rather than
-    ``printing.triggered_abilities``, so the dispatcher's
-    battlefield-walk doesn't see it.
+    layer-6 registry entries rather than ``printing.triggered_abilities``,
+    so the dispatcher's battlefield-walk doesn't see it.
     """
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
