@@ -3047,8 +3047,8 @@ class TerminalVelocityEffect(Effect):
     4. Grant the card haste until end of turn via
        ``ApplyEffect(GrantKeywords({"haste"}), EndOfTurn())``.
     5. Grant the card a LEAVES_BATTLEFIELD predicate trigger (UEOT)
-       via ``state.grant_triggered_ability_ueot``; the trigger fires
-       ``DealSelfMVDamageToEachCreature``.
+       via ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())``;
+       the trigger fires ``DealSelfMVDamageToEachCreature``.
     6. Schedule a ``SacrificeSourceDelayed`` delayed trigger at the
        caster's current end step (``fire_at_turn = turn_number + 0``
        if it's the caster's turn, or ``+1`` if it's the opponent's
@@ -3067,7 +3067,11 @@ class TerminalVelocityEffect(Effect):
     ) -> None:
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.effects.base import TriggeredAbility
-        from mtg_bot.effects.generic import SacrificeSourceDelayed
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic import (
+            GrantTriggeredAbility, SacrificeSourceDelayed,
+        )
         from mtg_bot.effects.predicates import Event, IsSelf
 
         p = state.player_by_id(controller_id)
@@ -3104,10 +3108,11 @@ class TerminalVelocityEffect(Effect):
             f"battlefield via Terminal Velocity"
         )
         # Grant haste until end of turn.
-        spell_id = getattr(state.resolving_source, "id", card.id)
         from mtg_bot.effects.combinators import ApplyEffect
         from mtg_bot.effects.durations import EndOfTurn
-        from mtg_bot.effects.generic import GrantKeywords
+        from mtg_bot.effects.generic import (
+            GrantKeywords, GrantTriggeredAbility,
+        )
 
         ApplyEffect(
             inner=GrantKeywords(keywords=frozenset({"haste"})),
@@ -3120,15 +3125,10 @@ class TerminalVelocityEffect(Effect):
             predicate=IsSelf(),
             effect=DealSelfMVDamageToEachCreature(),
         )
-        state.grant_triggered_ability_ueot(
-            source_id=spell_id,
-            target_id=card.id,
-            ability=ltb_trigger,
-            description=(
-                f"Terminal Velocity grants LTB trigger to "
-                f"{card.printing.name} UEOT"
-            ),
-        )
+        ApplyEffect(
+            inner=GrantTriggeredAbility(ability=ltb_trigger),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", card.id),))
         # Schedule end-step sac.
         # "At the beginning of your end step" — the end step that
         # belongs to the CASTER (controller_id). Turn offset: 0 if

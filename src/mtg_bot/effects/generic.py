@@ -4293,9 +4293,11 @@ class PumpTargetCreatureUntilEOT(Effect):
     the trigger / activation resolves as a no-op when no target is
     chosen / available (e.g. Dubious Delicacy's ETB).
 
-    ``granted_triggered_ability`` (optional) appends a UEOT triggered
-    ability to the target's ``temp_triggered_abilities``. Use for cards
-    whose pump rider also grants "Whenever ~ does X, Y" until EOT.
+    ``granted_triggered_ability`` (optional) composes
+    ``ApplyEffect(GrantTriggeredAbility(ability=...), EndOfTurn())``
+    against the chosen target so the rider lives on the layer-6
+    registry with ``expires_at="cleanup"``. Use for cards whose pump
+    rider also grants "Whenever ~ does X, Y" until EOT.
     """
 
     power_bonus: int = 0
@@ -4319,12 +4321,13 @@ class PumpTargetCreatureUntilEOT(Effect):
     # the Blinkmoth subtype as a registry entry written by the
     # ``ApplyEffect(BecomeType, EndOfTurn())`` manland animation).
     target_subtype: str | None = None
-    # Granted triggered ability that's appended to the target's
-    # ``temp_triggered_abilities`` UEOT. Matches oracle text like
-    # Requiem Monolith's "Until end of turn, target creature gains
-    # 'Whenever this creature is dealt damage, you draw that many
-    # cards and lose that much life.'" Cleared at cleanup with the
-    # rest of the temp_* fields.
+    # Granted triggered ability composed via
+    # ``ApplyEffect(GrantTriggeredAbility(...), EndOfTurn())`` so the
+    # rider lives on the layer-6 registry with
+    # ``expires_at="cleanup"``. Matches oracle text like Requiem
+    # Monolith's "Until end of turn, target creature gains 'Whenever
+    # this creature is dealt damage, you draw that many cards and lose
+    # that much life.'"
     granted_triggered_ability: "TriggeredAbility | None" = None
     # "Up to one target" semantics — the trigger / activation resolves
     # as a no-op when no target is chosen or available (e.g. Dubious
@@ -4424,16 +4427,15 @@ class PumpTargetCreatureUntilEOT(Effect):
                 state, controller_id, (("creature", obj.id),),
             )
         if self.granted_triggered_ability is not None:
-            src = state.resolving_source
-            state.grant_triggered_ability_ueot(
-                source_id=src.id if src is not None else obj.id,
-                target_id=obj.id,
-                ability=self.granted_triggered_ability,
-                description=(
-                    f"{src.printing.name if src else obj.printing.name} "
-                    f"grants UEOT trigger to {obj.printing.name}"
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantTriggeredAbility(
+                    ability=self.granted_triggered_ability,
                 ),
-            )
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, (("creature", obj.id),))
         state.log.append(
             f"{obj.printing.name} gets "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
@@ -4752,14 +4754,12 @@ class GrantUnblockableUEOT(GrantUnblockable):
 class GrantTriggeredAbilityUEOT(Effect):
     """Grant a triggered ability to target creature until end of turn.
 
-    Appends ``ability`` to the target's ``temp_triggered_abilities``.
-    Fire helpers iterate that tuple alongside the printed abilities.
-    Cleared at cleanup. Use for "Until end of turn, target creature
-    gains 'Whenever ~ does X, Y.'" — Requiem Monolith is the canonical
-    EoE example.
-
-    ``you_control_only`` mirrors the same flag on PumpTargetCreatureUntilEOT
-    for "target creature you control" wording.
+    Thin targeting wrapper around ``ApplyEffect(GrantTriggeredAbility(
+    ability=...), EndOfTurn())``. The targeting/legal-targets shape
+    (``you_control_only`` / ``opponents_only``) lives here; the actual
+    registry write delegates to the ``GrantTriggeredAbility`` primitive.
+    Use for "Until end of turn, target creature gains 'Whenever ~ does
+    X, Y.'" — Requiem Monolith is the canonical EoE example.
     """
 
     ability: "TriggeredAbility | None" = None
@@ -4784,6 +4784,9 @@ class GrantTriggeredAbilityUEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+
         if self.ability is None or not targets:
             return
         kind, target_id = targets[0]
@@ -4794,16 +4797,10 @@ class GrantTriggeredAbilityUEOT(Effect):
         )
         if obj is None:
             return
-        src = state.resolving_source
-        state.grant_triggered_ability_ueot(
-            source_id=src.id if src is not None else obj.id,
-            target_id=obj.id,
-            ability=self.ability,
-            description=(
-                f"{src.printing.name if src else obj.printing.name} "
-                f"grants UEOT trigger to {obj.printing.name}"
-            ),
-        )
+        ApplyEffect(
+            inner=GrantTriggeredAbility(ability=self.ability),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, targets)
         state.log.append(
             f"{obj.printing.name} gains a granted triggered ability "
             f"until end of turn"
