@@ -462,6 +462,25 @@ def test_found_footage_carries_face_down_static_flag():
     assert p.looks_at_opponents_face_down_creatures is True
 
 
+def test_face_down_look_recognizer_matches_printed_line():
+    # The recognizer lives in ``printing_keywords.py`` alongside Warp /
+    # Ward / Devour / Impending; audit-sothera-foundfootage migrated
+    # the ``_LITERAL_FLAG_LINES`` table entry into the standard
+    # printing-keyword recognizer path.
+    from mtg_bot.cards.parser.printing_keywords import (
+        _parse_looks_at_opponents_face_down_line,
+    )
+    assert _parse_looks_at_opponents_face_down_line(
+        "You may look at face-down creatures your opponents control any time."
+    ) is True
+    # Other lines don't claim it.
+    assert _parse_looks_at_opponents_face_down_line(
+        "Surveil 2, then draw a card."
+    ) is False
+    # Empty / whitespace lines don't claim it.
+    assert _parse_looks_at_opponents_face_down_line("") is False
+
+
 def test_found_footage_carries_sac_surveil_draw_activation():
     # The activated ``{2}, Sacrifice this artifact: Surveil 2, then
     # draw a card.`` lands as a single ActivatedAbility with the

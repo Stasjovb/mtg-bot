@@ -147,9 +147,12 @@ Two additional cards are claimed via the expanded unified grammar
   creature tokens.`` trigger (new ``"your upkeep"`` entry in
   ``_AT_BEGINNING_OF_PHRASES`` in ``triggers.py``).
 * **Found Footage** — ``You may look at face-down creatures your
-  opponents control any time.`` (new ``_LITERAL_FLAG_LINES`` dispatch
-  setting ``looks_at_opponents_face_down_creatures=True`` on
-  ``make_artifact``). ``{2}, Sacrifice this artifact: Surveil 2, then
+  opponents control any time.`` claims via
+  ``_parse_looks_at_opponents_face_down_line`` (a printing-keyword
+  recognizer in ``printing_keywords.py`` alongside Warp / Ward /
+  Devour / Impending), which sets
+  ``looks_at_opponents_face_down_creatures=True`` on
+  ``make_artifact``. ``{2}, Sacrifice this artifact: Surveil 2, then
   draw a card.`` (unified ``_parse_clause`` activated-ability grammar).
   The Clue subtype is extracted from the Scryfall type-line via the
   new ``artifact_subtype`` step in ``_build_artifact_printing``.
@@ -180,6 +183,9 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.cost_reduction import _parse_affinity_line
+from mtg_bot.cards.parser.printing_keywords import (
+    _parse_looks_at_opponents_face_down_line,
+)
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -190,25 +196,16 @@ from mtg_bot.effects.object_predicates import HasSubtype
 from mtg_bot.effects.predicates import Controlled, Event, YOU
 
 
-# Literal oracle lines that set a printing-level boolean flag rather
-# than producing an ability. ``_LITERAL_FLAG_LINES`` maps the verbatim
-# post-strip oracle line to the flag name it sets on the ``make_artifact``
-# call. The artifact builder consults this table FIRST — before the
-# unified ``_parse_clause`` — so the line is consumed cleanly and doesn't
-# fall through to the "unrecognized → skip card" path.
-#
-# Today's entries:
-#
-# * Found Footage — ``You may look at face-down creatures your opponents
-#   control any time.`` → ``looks_at_opponents_face_down_creatures=True``.
-#   The engine doesn't model face-down hidden information (a controller
-#   can already inspect any face-down GameObject), so the flag is purely
-#   informational for fidelity; no engine consequence today.
-_LITERAL_FLAG_LINES: dict[str, str] = {
-    "You may look at face-down creatures your opponents control any time.": (
-        "looks_at_opponents_face_down_creatures"
-    ),
-}
+# Printing-level flag dispatch is handled via the standard
+# printing-keyword recognizer path in
+# ``mtg_bot.cards.parser.printing_keywords`` — see
+# ``_parse_looks_at_opponents_face_down_line`` (Found Footage's
+# ``You may look at face-down creatures your opponents control any
+# time.`` static). Earlier waves carried a dedicated
+# ``_LITERAL_FLAG_LINES`` table here; that table was removed in
+# audit-sothera-foundfootage in favor of the printing-keyword
+# recognizer pattern (Warp, Ward, Devour, Impending), keeping all
+# printing-keyword dispatch in one place.
 
 
 # Literal oracle lines whose bespoke effect class lives in
@@ -330,8 +327,10 @@ def _build_thrumming_hivepool() -> CardPrinting:
 # clause grammar (``_parse_affinity_line`` for the Affinity rider,
 # ``_ANTHEM_SUBJECT_SCOPES["slivers you control"]`` for the Sliver
 # anthem, ``"your upkeep"`` in ``_AT_BEGINNING_OF_PHRASES`` for the
-# upkeep token trigger, and ``_LITERAL_FLAG_LINES`` for the
-# looks-at-face-down-creatures static).
+# upkeep token trigger, and
+# ``_parse_looks_at_opponents_face_down_line`` in
+# ``printing_keywords.py`` for the looks-at-face-down-creatures
+# static).
 _BESPOKE_ARTIFACT_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {}
 
 
@@ -395,10 +394,12 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         # Printing-level flag dispatch — lines that set a boolean flag on
         # ``make_artifact`` rather than producing an ability. Tried first
         # so these lines are consumed before the unified clause grammar.
-        flag_name = _LITERAL_FLAG_LINES.get(line)
-        if flag_name is not None:
-            if flag_name == "looks_at_opponents_face_down_creatures":
-                looks_at_face_down = True
+        # Each printing-keyword recognizer lives in
+        # ``printing_keywords.py`` alongside Warp/Ward/Devour/Impending;
+        # the dispatch here mirrors the creature builder's
+        # printing-keyword fan-out.
+        if _parse_looks_at_opponents_face_down_line(line):
+            looks_at_face_down = True
             continue
         # Affinity keyword line dispatch — ``Affinity for <subtype>``
         # (reminder text already stripped). Produces a

@@ -273,6 +273,38 @@ def _parse_restricts_noncreature_spells_line(line: str) -> bool:
     return line.strip() == _RESTRICTS_NONCREATURE_SPELLS_LINE
 
 
+# ``You may look at face-down creatures your opponents control any
+# time.`` — Found Footage's printed informational static. Flips the
+# printing-level ``looks_at_opponents_face_down_creatures: bool`` flag
+# on ``make_artifact``. The engine doesn't model face-down hidden
+# information today (every game object is fully visible to every
+# player in the simulation), so the flag carries the printed surface
+# for fidelity but has no engine consequence on resolution. We
+# nevertheless wire the line as a printing-keyword recognizer rather
+# than dropping it, so the round-trip from oracle text to printing is
+# faithful — when a future change lands face-down hidden-information
+# modeling, this flag becomes the gate the new code keys off.
+#
+# Literal-string match — Found Footage is the only DSK/EoE card with
+# this exact surface today, "broader grammar deferred until a second
+# example exists" (a future Clue or Curse with the same look-grant
+# would either land its own recognizer or, if a parameter varies,
+# parameterize this one).
+_LOOKS_AT_OPPONENTS_FACE_DOWN_LINE = (
+    "You may look at face-down creatures your opponents control any time."
+)
+
+
+def _parse_looks_at_opponents_face_down_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the printing-level Found Footage
+    look-at-face-down static, else ``False``. Flips the
+    ``looks_at_opponents_face_down_creatures`` kwarg on
+    ``make_artifact``; the engine reads the flag for hidden-information
+    handling (currently a no-op since face-down state isn't modeled).
+    """
+    return line.strip() == _LOOKS_AT_OPPONENTS_FACE_DOWN_LINE
+
+
 # ``If one or more tokens would be created under your control, twice
 # that many of those tokens are created instead.`` — Exalted Sunborn's
 # printed token-doubler replacement effect. The engine wires the
