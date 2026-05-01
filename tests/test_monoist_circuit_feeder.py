@@ -7,6 +7,10 @@ you control gets +X/+0 and target creature an opponent controls gets
 The "target creature you control AND target creature an opponent
 controls" wording makes BOTH slots required (CR 601.2c). If either
 slot can't be filled, the trigger doesn't go on the stack at all.
+
+Decomposed in audit-monoist-chorale: routes through the generic
+``PairedTargetPumpDebuffUEOT`` primitive driven by the
+``CountControlledMatching(IsArtifact())`` formula.
 """
 
 from mtg_bot.actions import (
@@ -15,9 +19,23 @@ from mtg_bot.actions import (
 )
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import SYNTHETIC_CREATURES
-from mtg_bot.effects import MonoistCircuitFeederETBEffect
+from mtg_bot.effects import PairedTargetPumpDebuffUEOT
+from mtg_bot.effects.formulas import CountControlledMatching
+from mtg_bot.effects.object_predicates import IsArtifact
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
+
+
+def _monoist_effect() -> PairedTargetPumpDebuffUEOT:
+    """Construct the ``PairedTargetPumpDebuffUEOT`` instance Monoist
+    Circuit-Feeder uses — paired-target +X/-X with X = artifact count
+    you control. Centralized so tests don't drift from the production
+    parser path."""
+    return PairedTargetPumpDebuffUEOT(
+        formula=CountControlledMatching(IsArtifact()),
+        positive_power=1, positive_toughness=0,
+        negative_power=0, negative_toughness=-1,
+    )
 
 from mtg_bot.cards.source import get_active_source
 
@@ -48,18 +66,18 @@ def _put(state, printing, owner_id=0):
 
 
 def test_effect_requires_target_and_describe():
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     assert e.requires_target()
     assert e.target_count_range() == (2, 2)
     d = e.describe()
-    assert "+X/+0" in d and "-0/-X" in d
+    assert "+1X/+0X" in d and "+0X/-1X" in d
 
 
 def test_legal_targets_returns_empty_when_no_own_creature():
     state = _new_state()
     # Just an opponent's creature — own slot has no candidate.
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     assert e.legal_targets(state, 0) == []
 
 
@@ -67,7 +85,7 @@ def test_legal_targets_returns_empty_when_no_opponent_creature():
     state = _new_state()
     # Just a friendly creature — opponent slot has no candidate.
     _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     assert e.legal_targets(state, 0) == []
 
 
@@ -75,7 +93,7 @@ def test_legal_targets_mixes_both_kinds_when_both_present():
     state = _new_state()
     own = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
     opp = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     legal = e.legal_targets(state, 0)
     kinds = {kind for kind, _ in legal}
     assert "my_creature" in kinds
@@ -93,7 +111,7 @@ def test_resolve_applies_both_pump_and_debuff():
     opp = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     state.resolving_source = m
     try:
-        MonoistCircuitFeederETBEffect().resolve(
+        _monoist_effect().resolve(
             state, 0, (("my_creature", own.id), ("creature", opp.id)),
         )
     finally:

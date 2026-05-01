@@ -217,7 +217,6 @@ from mtg_bot.effects import (
     TerminalVelocityEffect,
     ZeroPointBalladEffect,
     ModalChooseOne,
-    MonoistCircuitFeederETBEffect,
     FocusFireEffect,
     OptionalManaCostThenEffect,
     OptionalSacAnotherForEffect,

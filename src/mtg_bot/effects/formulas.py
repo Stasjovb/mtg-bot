@@ -86,3 +86,31 @@ class MVOfCostPaidObjectPlus(Formula):
         if not paid:
             return self.constant
         return paid[0].printing.mana_cost.total + self.constant
+
+
+@dataclass(frozen=True)
+class CountControlledMatching(Formula):
+    """Number of permanents the controller controls that satisfy
+    ``predicate``.
+
+    Walks ``state.battlefield`` once at resolve time and counts every
+    permanent whose ``controller_id`` matches the resolving controller
+    AND whose object satisfies the wrapped
+    :class:`mtg_bot.effects.object_predicates.ObjectPredicate`.
+
+    Used for "where X is the number of artifacts you control" /
+    "the number of creatures you control" / "the number of <subtype>s
+    you control" formulas. Composes with the predicate algebra (``&`` /
+    ``|`` / ``~``) so cards layering filters (e.g. "the number of
+    artifacts and creatures you control") drop in without a new formula
+    class — wrap the combined predicate.
+    """
+
+    predicate: "object"  # ObjectPredicate; typed loosely to avoid an import cycle.
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        return sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id
+            and self.predicate.test(o, state)
+        )

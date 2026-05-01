@@ -196,7 +196,10 @@ from mtg_bot.effects.conditions import (
     ControlsAnotherCreatureWithPowerAtMost,
     PerDifferentlyNamedLand,
 )
-from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+from mtg_bot.effects.formulas import (
+    CountControlledMatching,
+    MVOfCostPaidObjectPlus,
+)
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
@@ -205,12 +208,14 @@ from mtg_bot.effects.generic import (
     EachOpponentExilesCardFromHandWithCastPermission,
     ExileTopXOfLibraryMayPlayThisTurn,
     LockOrUnlockDoorOfTargetRoomYouControl,
+    PairedTargetPumpDebuffUEOT,
     PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
 )
+from mtg_bot.effects.object_predicates import IsArtifact
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -3419,6 +3424,32 @@ def _parse_effect(phrase: str) -> Effect | None:
     ):
         return ExileTopXOfLibraryMayPlayThisTurn(
             amount=MVOfCostPaidObjectPlus(constant=1),
+        )
+    # Monoist Circuit-Feeder's ETB body — paired-target opposite-polarity
+    # pump/debuff with a shared X. The compound-effect splitter can't
+    # carve this body cleanly: ``Sequence`` supports only one targeting
+    # sub-effect (the cast-time picker is single-prompt) and the two
+    # ``and ``-joined halves each prompt for their own creature.
+    # Literal-line recognizer mapped to the generic
+    # ``PairedTargetPumpDebuffUEOT`` primitive driven by a
+    # ``CountControlledMatching(IsArtifact())`` formula. Only card in
+    # the pool with this paired-target +X/-X shape today; broader
+    # grammar (parameterized "until end of turn, target creature you
+    # control gets <delta> and target creature an opponent controls
+    # gets <delta>, where X is <formula>") deferred until a second
+    # example exists. When that ships, the recognizer becomes a regex
+    # whose capture groups feed ``PairedTargetPumpDebuffUEOT``'s
+    # constructor — the engine primitive is already parameterized for
+    # any pump/debuff polarity and any ``Formula``.
+    if phrase == (
+        "until end of turn, target creature you control gets +X/+0 "
+        "and target creature an opponent controls gets -0/-X, where "
+        "X is the number of artifacts you control"
+    ):
+        return PairedTargetPumpDebuffUEOT(
+            formula=CountControlledMatching(IsArtifact()),
+            positive_power=1, positive_toughness=0,
+            negative_power=0, negative_toughness=-1,
         )
     # Perigee Beckoner's ETB body (only EoE card with the "pump another
     # target creature you control + grant dies-return-tapped trigger"

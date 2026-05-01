@@ -13,8 +13,20 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent
 from mtg_bot.cards import SYNTHETIC_CREATURES
 from mtg_bot.effects import (
-    DiplomaticRelationsEffect, MonoistCircuitFeederETBEffect,
+    DiplomaticRelationsEffect, PairedTargetPumpDebuffUEOT,
 )
+from mtg_bot.effects.formulas import CountControlledMatching
+from mtg_bot.effects.object_predicates import IsArtifact
+
+
+def _monoist_effect() -> PairedTargetPumpDebuffUEOT:
+    """Mirror the production parser path: paired-target +X/-X with X =
+    artifact count you control."""
+    return PairedTargetPumpDebuffUEOT(
+        formula=CountControlledMatching(IsArtifact()),
+        positive_power=1, positive_toughness=0,
+        negative_power=0, negative_toughness=-1,
+    )
 from mtg_bot.game import GameState, Player, Zone
 
 from mtg_bot.cards.source import get_active_source
@@ -50,7 +62,7 @@ def _put(state, printing, owner_id=0):
 
 
 def test_monoist_declares_per_slot_kinds():
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     assert e.target_slot_kinds() == ("my_creature", "creature")
     assert e.target_count_range() == (2, 2)
 
@@ -122,7 +134,7 @@ def test_per_slot_kind_skips_when_kind_unavailable():
     # legal_targets: for Monoist's effect with no opp creature, returns
     # [] (per-slot rule), so push_triggered_ability fizzles before the
     # picker ever runs. Verify by direct invocation.
-    e = MonoistCircuitFeederETBEffect()
+    e = _monoist_effect()
     state.resolving_source = monoist
     try:
         legal = e.legal_targets(state, 0)

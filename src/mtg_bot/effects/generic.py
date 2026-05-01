@@ -10523,3 +10523,201 @@ class EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage(Effect):
         )
 
 
+# ---------------------------------------------------------------------------
+# Paired-target opposite-polarity pump/debuff (audit-monoist-chorale).
+#
+# Models a single resolving effect that picks TWO distinct creature
+# targets — one matching ``positive_kind`` (e.g. ``"my_creature"``) and
+# one matching ``negative_kind`` (e.g. ``"creature"`` for an opponent's
+# creature) — and grants opposite UEOT P/T deltas keyed off a shared X
+# computed at resolve time from a ``Formula``.
+#
+# Why not a ``Sequence``: the engine's ``Sequence`` combinator restricts
+# itself to a SINGLE targeting sub-effect by design (the cast-time
+# target-selection pipeline picks one target prompt per cast).
+# Two-target paired-polarity bodies (Monoist Circuit-Feeder) need both
+# slots filled atomically, with a shared X, in one trigger firing —
+# decomposing into ``Sequence(PumpYourCreature, DebuffOppCreature)``
+# would either double-prompt the targeting pipeline (illegal) or drop
+# one of the targets (silent no-op, forbidden).
+#
+# Future direction (Option B in the audit notes): extend the
+# ``Effect.targets`` grammar to declare ``targets: tuple[TargetSpec,
+# ...]`` with multiple slots and wire the cast/activation pipeline to
+# ask the agent for one target per slot. That refactor unblocks
+# multi-target spells generally; until then this primitive is the
+# contained "ship-now" answer for the paired-polarity shape.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PairedTargetPumpDebuffUEOT(Effect):
+    """Two required creature targets, opposite-polarity UEOT deltas
+    keyed off a shared ``Formula``.
+
+    Slot 0 ("positive"): a creature matching ``positive_kind`` —
+    typically ``"my_creature"`` for "target creature you control".
+    Slot 1 ("negative"): a creature matching ``negative_kind`` —
+    typically ``"creature"`` for "target creature an opponent controls".
+    Per-slot kind enforcement (via ``target_slot_kinds``) prevents an
+    agent from filling both slots from the same pool.
+
+    At resolve time, X is computed via ``formula.value(state,
+    controller_id)``. The positive slot gets ``+X*positive_power /
+    +X*positive_toughness``; the negative slot gets ``-X*-negative_power
+    / -X*-negative_toughness`` (signed multiplication preserves the
+    "+X/+0 vs -0/-X" Monoist shape — pass ``positive_power=1,
+    positive_toughness=0, negative_power=0, negative_toughness=-1``).
+
+    Both slots are REQUIRED (per CR 601.2c the trigger doesn't go on
+    the stack unless both can be filled). ``legal_targets`` returns
+    ``[]`` if either side has no candidate; the firing path's
+    no-legal-targets gate then fizzles before the trigger lands on the
+    stack — no half-effect leak.
+
+    Re-validates each chosen target at resolve time per CR 608.2b: a
+    target that's left the battlefield or changed control is illegal
+    and skipped, and the OTHER half still resolves.
+    """
+
+    formula: "Formula | None" = None
+    # Sign multipliers for each slot — apply X * sign to the per-slot
+    # delta. Default to +X/+0 (positive) and -0/-X (negative), the
+    # Monoist Circuit-Feeder shape; cards with different polarities
+    # parameterize via the constructor.
+    positive_power: int = 1
+    positive_toughness: int = 0
+    negative_power: int = 0
+    negative_toughness: int = -1
+    # Per-slot target kinds. Defaults match Monoist
+    # ("target creature you control" + "target creature an opponent
+    # controls").  A future card with different kind constraints (e.g.
+    # "target attacking creature" + "target creature defending player
+    # controls") swaps these without touching the resolve path.
+    positive_kind: str = "my_creature"
+    negative_kind: str = "creature"
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        return (self.positive_kind, self.negative_kind)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        positive = [
+            (self.positive_kind, o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id == controller_id
+        ]
+        negative = [
+            (self.negative_kind, o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and o.controller_id != controller_id
+        ]
+        # Both slots required: empty pool on either side fizzles the
+        # trigger before it can be put on the stack.
+        if not positive or not negative:
+            return []
+        return positive + negative
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.formula is None:
+            return
+        x = self.formula.value(state, controller_id)
+        src = state.resolving_source
+        source_id = src.id if src is not None else -1
+        # Locate one entry per slot. Order is agent-dependent, so
+        # search by kind rather than index.
+        pos_target = next(
+            ((k, t) for (k, t) in targets if k == self.positive_kind),
+            None,
+        )
+        neg_target = next(
+            ((k, t) for (k, t) in targets if k == self.negative_kind),
+            None,
+        )
+        if pos_target is not None:
+            obj = next(
+                (o for o in state.battlefield if o.id == pos_target[1]),
+                None,
+            )
+            # Re-validate per CR 608.2b: still a creature, still under
+            # the resolving controller's control.
+            if (
+                obj is not None
+                and obj.controller_id == controller_id
+                and obj.printing.is_creature
+            ):
+                p_delta = self.positive_power * x
+                t_delta = self.positive_toughness * x
+                if p_delta or t_delta:
+                    state.grant_pt_pump_ueot(
+                        source_id=source_id,
+                        target_id=obj.id,
+                        power=p_delta,
+                        toughness=t_delta,
+                        description=(
+                            f"{obj.printing.name} gets "
+                            f"{_signed(p_delta)}/{_signed(t_delta)} UEOT"
+                        ),
+                    )
+                    state.log.append(
+                        f"{obj.printing.name} gets "
+                        f"{_signed(p_delta)}/{_signed(t_delta)} UEOT"
+                    )
+        if neg_target is not None:
+            obj = next(
+                (o for o in state.battlefield if o.id == neg_target[1]),
+                None,
+            )
+            if (
+                obj is not None
+                and obj.controller_id != controller_id
+                and obj.printing.is_creature
+            ):
+                p_delta = self.negative_power * x
+                t_delta = self.negative_toughness * x
+                if p_delta or t_delta:
+                    state.grant_pt_pump_ueot(
+                        source_id=source_id,
+                        target_id=obj.id,
+                        power=p_delta,
+                        toughness=t_delta,
+                        description=(
+                            f"{obj.printing.name} gets "
+                            f"{_signed(p_delta)}/{_signed(t_delta)} UEOT"
+                        ),
+                    )
+                    state.log.append(
+                        f"{obj.printing.name} gets "
+                        f"{_signed(p_delta)}/{_signed(t_delta)} UEOT"
+                    )
+
+    def describe(self) -> str:
+        return (
+            f"until end of turn, target creature you control gets "
+            f"{_signed(self.positive_power)}X/"
+            f"{_signed(self.positive_toughness)}X and target creature "
+            f"an opponent controls gets "
+            f"{_signed(self.negative_power)}X/"
+            f"{_signed(self.negative_toughness)}X"
+        )
+
+
+def _signed(n: int) -> str:
+    """Format a signed integer with an explicit ``+`` for non-negative
+    values. ``+0`` reads more naturally than ``0`` in pump/debuff
+    descriptions ("gets +X/+0" vs "gets X/0")."""
+    return f"+{n}" if n >= 0 else str(n)
+
+

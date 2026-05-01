@@ -69,9 +69,13 @@ Migrated to ``_BESPOKE_TRIGGER_LINES`` in bespoke-splitskin-monoist:
     generic ``Sequence((DrawCards(amount=1), IfNot(
     ControlsAnotherCreatureWithPowerAtMost(2),
     DiscardSelf(amount=1))))``. No bespoke engine class remains.
-  - Monoist Circuit-Feeder — ETB trigger line matched verbatim routes to
-    ``MonoistCircuitFeederETBEffect``; ``Flying`` keyword and all other
-    oracle lines parse via the unified grammar.
+  - Monoist Circuit-Feeder — initial migration was to
+    ``_BESPOKE_TRIGGER_LINES``; fully decomposed in audit-monoist-chorale
+    via the parser's multi-sentence literal recognizer in
+    ``effects._parse_effect`` returning the generic
+    ``PairedTargetPumpDebuffUEOT`` primitive driven by the
+    ``CountControlledMatching(IsArtifact())`` formula. No bespoke engine
+    class remains.
 
 Migrated to grammar in bespoke-survey-mechan:
   - Survey Mechan — ``SurveyMechanActivationEffect`` bespoke class
@@ -184,17 +188,22 @@ def test_monoist_circuit_feeder_claimed_by_parser():
 
 def test_monoist_circuit_feeder_grammar_structure():
     """Grammar-claimed Monoist Circuit-Feeder has flying + a single
-    ENTERS trigger wired to ``MonoistCircuitFeederETBEffect`` via the
-    literal trigger-line dispatch in ``_BESPOKE_TRIGGER_LINES``.
+    ENTERS trigger wired to the generic
+    ``PairedTargetPumpDebuffUEOT`` primitive driven by the
+    ``CountControlledMatching(IsArtifact())`` formula.
 
-    Migration from ``_BESPOKE_ARTIFACT_CREATURES`` to the trigger-line
-    dispatch: the ETB oracle line "When this creature enters, until end
+    Migration through audit-monoist-chorale: the ETB body (``Until end
     of turn, target creature you control gets +X/+0 and target creature
     an opponent controls gets -0/-X, where X is the number of artifacts
-    you control." is matched verbatim; Flying parses via the standard
-    keyword-line recognizer.
+    you control.``) is claimed by a literal multi-sentence recognizer in
+    ``effects._parse_effect`` mapping to the generic primitive; the
+    trigger header parses via the unified
+    ``_parse_triggered_ability_line`` grammar; Flying parses via the
+    standard keyword-line recognizer. No bespoke engine class remains.
     """
-    from mtg_bot.effects.bespoke import MonoistCircuitFeederETBEffect
+    from mtg_bot.effects import PairedTargetPumpDebuffUEOT
+    from mtg_bot.effects.formulas import CountControlledMatching
+    from mtg_bot.effects.object_predicates import IsArtifact
     from mtg_bot.effects.predicates import Event
 
     mcf = _parser("Monoist Circuit-Feeder")
@@ -203,7 +212,17 @@ def test_monoist_circuit_feeder_grammar_structure():
     assert "flying" in mcf.keywords
     etb = [t for t in mcf.triggered_abilities if t.event == Event.ENTERS]
     assert len(etb) == 1
-    assert isinstance(etb[0].effect, MonoistCircuitFeederETBEffect)
+    eff = etb[0].effect
+    assert isinstance(eff, PairedTargetPumpDebuffUEOT)
+    # Polarity matches the printed text: +X/+0 friendly, -0/-X opp.
+    assert eff.positive_power == 1
+    assert eff.positive_toughness == 0
+    assert eff.negative_power == 0
+    assert eff.negative_toughness == -1
+    assert eff.target_slot_kinds() == ("my_creature", "creature")
+    # X formula reads "number of artifacts you control" at resolve time.
+    assert isinstance(eff.formula, CountControlledMatching)
+    assert isinstance(eff.formula.predicate, IsArtifact)
 
 
 

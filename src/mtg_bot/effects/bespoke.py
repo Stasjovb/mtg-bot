@@ -1088,127 +1088,11 @@ class KavaronHarrierAttackEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class MonoistCircuitFeederETBEffect(Effect):
-    """Monoist Circuit-Feeder's ETB: "Until end of turn, target creature
-    you control gets +X/+0 and target creature an opponent controls
-    gets -0/-X, where X is the number of artifacts you control."
-
-    Two REQUIRED targets (per CR 601.2c, both slots must be filled to
-    queue the trigger). Modeled with distinct target kinds so the
-    standard targeting pipeline can validate each slot independently:
-
-    - ``("my_creature", id)`` — slot 0, the +X/+0 friendly creature
-    - ``("creature",   id)`` — slot 1, the -0/-X opponent creature
-
-    X is computed at resolve time from the caster's artifact count.
-    If either slot has no legal candidate, ``legal_targets`` returns
-    ``[]`` so the firing path's no-legal-targets gate fizzles the
-    trigger before it goes on the stack — no half-effect leaks.
-    """
-
-    def requires_target(self) -> bool:
-        return True
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (2, 2)
-
-    def target_slot_kinds(self) -> tuple[str, ...]:
-        # Slot 0: friendly creature (+X/+0). Slot 1: opp creature
-        # (-0/-X). Per-slot kind enforcement guards against an agent
-        # picking two friendlies or two opps.
-        return ("my_creature", "creature")
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        mine = [
-            ("my_creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-            and o.controller_id == controller_id
-        ]
-        theirs = [
-            ("creature", o.id)
-            for o in state.battlefield
-            if o.printing.is_creature
-            and o.controller_id != controller_id
-        ]
-        # Both slots must be satisfiable; if either side is empty
-        # the trigger cannot be put on the stack.
-        if not mine or not theirs:
-            return []
-        return mine + theirs
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        x = sum(
-            1 for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
-        )
-        # Locate one entry per slot. Order is agent-dependent, so
-        # search by kind rather than index.
-        my_target = next(
-            ((k, t) for (k, t) in targets if k == "my_creature"), None
-        )
-        opp_target = next(
-            ((k, t) for (k, t) in targets if k == "creature"), None
-        )
-        # Re-validate at resolution: a target that's left the
-        # battlefield or changed control is illegal and skipped per
-        # CR 608.2b. The OTHER half still resolves.
-        src = state.resolving_source
-        source_id = src.id if src is not None else -1
-        if my_target is not None:
-            obj = next(
-                (o for o in state.battlefield if o.id == my_target[1]),
-                None,
-            )
-            if (
-                obj is not None
-                and obj.controller_id == controller_id
-                and obj.printing.is_creature
-            ):
-                state.grant_pt_pump_ueot(
-                    source_id=source_id,
-                    target_id=obj.id,
-                    power=x,
-                    toughness=0,
-                    description=f"{obj.printing.name} gets +{x}/+0 UEOT",
-                )
-                state.log.append(
-                    f"{obj.printing.name} gets +{x}/+0 UEOT"
-                )
-        if opp_target is not None:
-            obj = next(
-                (o for o in state.battlefield if o.id == opp_target[1]),
-                None,
-            )
-            if (
-                obj is not None
-                and obj.controller_id != controller_id
-                and obj.printing.is_creature
-            ):
-                state.grant_pt_pump_ueot(
-                    source_id=source_id,
-                    target_id=obj.id,
-                    power=0,
-                    toughness=-x,
-                    description=f"{obj.printing.name} gets -0/-{x} UEOT",
-                )
-                state.log.append(
-                    f"{obj.printing.name} gets -0/-{x} UEOT"
-                )
-
-    def describe(self) -> str:
-        return (
-            "until end of turn, target creature you control gets +X/+0 "
-            "and target creature an opponent controls gets -0/-X, where "
-            "X is the number of artifacts you control"
-        )
-
+# MonoistCircuitFeederETBEffect was decomposed in audit-monoist-chorale:
+# the body is now a literal multi-sentence recognizer in
+# ``effects._parse_effect`` mapping to the generic
+# ``PairedTargetPumpDebuffUEOT`` primitive in ``effects.generic`` driven
+# by the ``CountControlledMatching(IsArtifact())`` formula.
 
 
 @dataclass(frozen=True)
@@ -3019,9 +2903,8 @@ class HauntedScreenActivatedEffect(Effect):
     payment side is the legal-actions / activation pipeline's
     responsibility); the body's no-op ensures a wasted activation
     never re-applies the layer-4 type-change or stacks more counters.
-    Same shape ``MonoistCircuitFeederETBEffect`` uses for ETB-only
-    bookkeeping that survives a re-fire — the flag is checked-then-
-    latched at the top of resolve.
+    Same once-only-resolve shape pattern several bespoke ETBs used —
+    the flag is checked-then-latched at the top of resolve.
 
     First-time resolve writes three permanent registry entries:
 
