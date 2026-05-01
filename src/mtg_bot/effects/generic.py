@@ -1272,12 +1272,14 @@ class AttachToTargetCreatureYouControl(Effect):
             f"{source.printing.name} is attached to {target.printing.name}"
         )
         if self.granted_keywords_ueot:
-            state.grant_keywords_ueot(
-                source_id=source.id,
-                target_id=target.id,
-                keywords=self.granted_keywords_ueot,
-                log_source_name=source.printing.name,
-                log_target_name=target.printing.name,
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords_ueot),
+                ends_at=EndOfTurn(),
+            ).resolve(
+                state, controller_id, (("creature", target.id),),
             )
             state.log.append(
                 f"{target.printing.name} gains "
@@ -4412,16 +4414,14 @@ class PumpTargetCreatureUntilEOT(Effect):
         if self.granted_keywords_if_warp_cast and obj.cast_via_warp:
             granted = granted | self.granted_keywords_if_warp_cast
         if granted:
-            source = state.resolving_source
-            state.grant_keywords_ueot(
-                source_id=source.id if source is not None else obj.id,
-                target_id=obj.id,
-                keywords=granted,
-                log_source_name=(
-                    source.printing.name if source is not None
-                    else obj.printing.name
-                ),
-                log_target_name=obj.printing.name,
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=granted),
+                ends_at=EndOfTurn(),
+            ).resolve(
+                state, controller_id, (("creature", obj.id),),
             )
         if self.granted_triggered_ability is not None:
             src = state.resolving_source
@@ -4827,9 +4827,9 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
     until end of turn.``
 
     Composes ``ApplyEffect(BecomeType(...), EndOfTurn())`` for the
-    type/PT side, with the chosen target threaded through ``targets``.
-    Keyword grants go through the legacy ``state.grant_keywords_ueot``
-    helper. Targets exclude the source (``"other"``); both creature and
+    type/PT side and ``ApplyEffect(GrantKeywords(...), EndOfTurn())``
+    for the keyword grants — both threaded through the chosen target.
+    Targets exclude the source (``"other"``); both creature and
     non-creature artifacts are valid targets (a non-creature artifact
     gains creature status until end of turn; an already-creature
     artifact has its base P/T overridden — which can shrink a
@@ -4884,18 +4884,11 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
             ),
             ends_at=EndOfTurn(),
         ).resolve(state, controller_id, targets)
-        src = state.resolving_source
         if self.granted_keywords:
-            state.grant_keywords_ueot(
-                source_id=src.id if src is not None else obj.id,
-                target_id=obj.id,
-                keywords=self.granted_keywords,
-                log_source_name=(
-                    src.printing.name if src is not None
-                    else obj.printing.name
-                ),
-                log_target_name=obj.printing.name,
-            )
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, targets)
         kw_note = (
             f" and gains {', '.join(sorted(self.granted_keywords))}"
             if self.granted_keywords else ""
@@ -4970,13 +4963,13 @@ class PumpSelfUntilEOT(Effect):
                 ),
             )
         if self.granted_keywords:
-            state.grant_keywords_ueot(
-                source_id=source.id,
-                target_id=source.id,
-                keywords=self.granted_keywords,
-                log_source_name=source.printing.name,
-                log_target_name=source.printing.name,
-            )
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, ())
         state.log.append(
             f"{source.printing.name} gets "
             f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
@@ -5054,16 +5047,14 @@ class PumpCreaturesYouControlUntilEOT(Effect):
                     ),
                 )
             if self.granted_keywords:
-                src = state.resolving_source
-                state.grant_keywords_ueot(
-                    source_id=src.id if src is not None else obj.id,
-                    target_id=obj.id,
-                    keywords=self.granted_keywords,
-                    log_source_name=(
-                        src.printing.name if src is not None
-                        else obj.printing.name
-                    ),
-                    log_target_name=obj.printing.name,
+                from mtg_bot.effects.combinators import ApplyEffect
+                from mtg_bot.effects.durations import EndOfTurn
+
+                ApplyEffect(
+                    inner=GrantKeywords(keywords=self.granted_keywords),
+                    ends_at=EndOfTurn(),
+                ).resolve(
+                    state, controller_id, (("creature", obj.id),),
                 )
             if untap_rider_active and obj.tapped:
                 obj.tapped = False
@@ -5172,16 +5163,16 @@ class PumpCreaturesOpponentsControlUntilEOT(Effect):
                         ),
                     )
                 if self.granted_keywords:
-                    src = state.resolving_source
-                    state.grant_keywords_ueot(
-                        source_id=src.id if src is not None else obj.id,
-                        target_id=obj.id,
-                        keywords=self.granted_keywords,
-                        log_source_name=(
-                            src.printing.name if src is not None
-                            else obj.printing.name
+                    from mtg_bot.effects.combinators import ApplyEffect
+                    from mtg_bot.effects.durations import EndOfTurn
+
+                    ApplyEffect(
+                        inner=GrantKeywords(
+                            keywords=self.granted_keywords,
                         ),
-                        log_target_name=obj.printing.name,
+                        ends_at=EndOfTurn(),
+                    ).resolve(
+                        state, controller_id, (("creature", obj.id),),
                     )
             count += 1
         # Format signed bonuses ("+3"/"-3" rather than "+-3").
@@ -6004,14 +5995,13 @@ class BecomeLandCreatureUEOT(Effect):
     False once the registry entries expire, so the land returns to
     its non-creature state at end of turn.
 
-    Keyword grants, unblockable, and per-manland granted abilities
-    remain on the legacy ``temp_*`` field path (the keyword-grant
-    helper still mirrors onto ``temp_keywords``; ``unblockable`` sets
+    Keyword grants ride the new ``ApplyEffect(GrantKeywords(...),
+    EndOfTurn())`` primitive (layer-6 ``grant_keyword`` registry
+    entries with ``expires_at="cleanup"``). ``unblockable`` still sets
     ``temp_unblockable`` directly; ``granted_activated_abilities`` /
     ``granted_triggered_abilities`` flow through
-    ``state.grant_*_ability_ueot``). Migrating those to dedicated
-    primitives is a separate sweep — they aren't blocking the
-    type/subtype/PT side from using the new pattern.
+    ``state.grant_*_ability_ueot``. Migrating those last two to
+    dedicated primitives is a separate sweep.
     """
 
     power: int = 0
@@ -6054,13 +6044,10 @@ class BecomeLandCreatureUEOT(Effect):
             ends_at=EndOfTurn(),
         ).resolve(state, controller_id, ())
         if self.granted_keywords:
-            state.grant_keywords_ueot(
-                source_id=source.id,
-                target_id=source.id,
-                keywords=self.granted_keywords,
-                log_source_name=source.printing.name,
-                log_target_name=source.printing.name,
-            )
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, ())
         if self.unblockable:
             source.temp_unblockable = True
         for ab in self.granted_activated_abilities:
@@ -9808,11 +9795,12 @@ class ThreatenTargetCreatureUEOT(Effect):
 
     Control reverts on cleanup via the layer-2 control_change registry
     (``state.grant_control_change_ueot``); haste rides
-    ``grant_keywords_ueot`` UEOT. Source-name in the log lines is
-    pulled from ``state.resolving_source.printing.name`` so the same
-    class fires correctly for any spell whose printed text matches the
-    Threaten core (currently Vengeful Possession; future cards with
-    the same surface get this for free).
+    ``ApplyEffect(GrantKeywords({"haste"}), EndOfTurn())`` for the
+    layer-6 grant. Source-name in the log lines is pulled from
+    ``state.resolving_source.printing.name`` so the same class fires
+    correctly for any spell whose printed text matches the Threaten
+    core (currently Vengeful Possession; future cards with the same
+    surface get this for free).
 
     Target slot: ``("creature", id)`` — for the wider
     artifact-or-creature variant (Systems Override), use a separate
@@ -9860,13 +9848,13 @@ class ThreatenTargetCreatureUEOT(Effect):
             ),
         )
         obj.tapped = False
-        state.grant_keywords_ueot(
-            source_id=spell_id,
-            target_id=obj.id,
-            keywords=frozenset({"haste"}),
-            log_source_name=source_name,
-            log_target_name=obj.printing.name,
-        )
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({"haste"})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", obj.id),))
         state.log.append(
             f"P{controller_id} takes control of {obj.printing.name} "
             f"UEOT; untaps + gains haste"

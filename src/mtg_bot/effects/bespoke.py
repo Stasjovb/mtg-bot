@@ -1334,13 +1334,14 @@ class MutinousMassacreEffect(Effect):
                     ),
                 )
             o.tapped = False
-            state.grant_keywords_ueot(
-                source_id=spell_id,
-                target_id=o.id,
-                keywords=frozenset({"haste"}),
-                log_source_name="Mutinous Massacre",
-                log_target_name=o.printing.name,
-            )
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+            from mtg_bot.effects.generic import GrantKeywords
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=frozenset({"haste"})),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, (("creature", o.id),))
             state.log.append(
                 f"P{controller_id} takes control of {o.printing.name} "
                 f"UEOT; untaps + gains haste"
@@ -1395,9 +1396,9 @@ class SystemsOverrideEffect(Effect):
         if obj is None:
             return
         # Gain control UEOT via the layer-2 control_change registry
-        # entry; haste via grant_keywords_ueot. Both expire at
-        # cleanup, with controller refresh handled in
-        # ``run_cleanup_step``.
+        # entry; haste via the layer-6 GrantKeywords primitive wrapped
+        # in EndOfTurn. Both expire at cleanup, with controller refresh
+        # handled in ``run_cleanup_step``.
         src = state.resolving_source
         spell_id = src.id if src is not None else obj.id
         state.grant_control_change_ueot(
@@ -1410,13 +1411,14 @@ class SystemsOverrideEffect(Effect):
             ),
         )
         obj.tapped = False
-        state.grant_keywords_ueot(
-            source_id=spell_id,
-            target_id=obj.id,
-            keywords=frozenset({"haste"}),
-            log_source_name="Systems Override",
-            log_target_name=obj.printing.name,
-        )
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic import GrantKeywords
+
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({"haste"})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", obj.id),))
         state.log.append(
             f"P{controller_id} takes control of {obj.printing.name} "
             f"UEOT; untaps + gains haste"
@@ -1486,15 +1488,18 @@ class BiosynthicBurstEffect(Effect):
             return
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, 1)
-        src = state.resolving_source
-        source_id = src.id if src is not None else obj.id
-        state.grant_keywords_ueot(
-            source_id=source_id,
-            target_id=obj.id,
-            keywords=frozenset({"reach", "trample", "indestructible"}),
-            log_source_name="Biosynthetic Burst",
-            log_target_name=obj.printing.name,
-        )
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic import GrantKeywords
+
+        ApplyEffect(
+            inner=GrantKeywords(
+                keywords=frozenset(
+                    {"reach", "trample", "indestructible"},
+                ),
+            ),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", obj.id),))
         obj.tapped = False
         state.log.append(
             f"{obj.printing.name} gets a +1/+1 counter, gains reach, "
@@ -1954,12 +1959,17 @@ class DiplomaticRelationsEffect(Effect):
                     toughness=0,
                     description=f"{my_obj.printing.name} gets +1/+0 UEOT",
                 )
-                state.grant_keywords_ueot(
-                    source_id=source_id,
-                    target_id=my_obj.id,
-                    keywords=frozenset({"vigilance"}),
-                    log_source_name="Diplomatic Relations",
-                    log_target_name=my_obj.printing.name,
+                from mtg_bot.effects.combinators import ApplyEffect
+                from mtg_bot.effects.durations import EndOfTurn
+                from mtg_bot.effects.generic import GrantKeywords
+
+                ApplyEffect(
+                    inner=GrantKeywords(
+                        keywords=frozenset({"vigilance"}),
+                    ),
+                    ends_at=EndOfTurn(),
+                ).resolve(
+                    state, controller_id, (("creature", my_obj.id),),
                 )
                 state.log.append(
                     f"{my_obj.printing.name} gets +1/+0 and gains "
@@ -3035,7 +3045,7 @@ class TerminalVelocityEffect(Effect):
     3. Move the chosen card from hand to the battlefield via
        ``put_into_battlefield``.
     4. Grant the card haste until end of turn via
-       ``state.grant_keywords_ueot``.
+       ``ApplyEffect(GrantKeywords({"haste"}), EndOfTurn())``.
     5. Grant the card a LEAVES_BATTLEFIELD predicate trigger (UEOT)
        via ``state.grant_triggered_ability_ueot``; the trigger fires
        ``DealSelfMVDamageToEachCreature``.
@@ -3095,13 +3105,14 @@ class TerminalVelocityEffect(Effect):
         )
         # Grant haste until end of turn.
         spell_id = getattr(state.resolving_source, "id", card.id)
-        state.grant_keywords_ueot(
-            source_id=spell_id,
-            target_id=card.id,
-            keywords=frozenset({"haste"}),
-            log_source_name="Terminal Velocity",
-            log_target_name=card.printing.name,
-        )
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic import GrantKeywords
+
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({"haste"})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", card.id),))
         # Grant LTB trigger (UEOT): when this permanent leaves, deal
         # MV damage to each creature.
         ltb_trigger = TriggeredAbility(
