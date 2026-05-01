@@ -981,21 +981,20 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # ``PainForAllDamageEchoEffect``.
     # ---------------------------------------------------------------
     # ---------------------------------------------------------------
-    # Cracked Skull — ETB look-at-hand may-discard trigger.
-    # Multi-sentence oracle trigger line; the standard trigger parser
-    # anchors on a single trailing period so it can't match this
-    # three-sentence form. Literal keeps the entire printed surface.
-    # Only Cracked Skull in the pool has this ETB form.
+    # (audit-litdispatch-auras) Cracked Skull look-at-hand-may-discard
+    # ETB ("When this Aura enters, look at target player's hand. You
+    # may choose a nonland card from it. That player discards that
+    # card.") migrated to the unified
+    # ``_parse_triggered_ability_line`` path. The trigger condition
+    # ``this Aura enters`` already lives in
+    # ``_PREDICATE_TRIGGER_PHRASES``; the body — a three-sentence
+    # phrase — is now claimed by an Aura-context effect-phrase
+    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
+    # mapping to ``TargetOpponentLookHandMayDiscard``. The trigger-
+    # line regex preserves internal periods because it anchors only
+    # on the single trailing period of the whole oracle line, so the
+    # multi-sentence body reaches the effect-grammar lookup verbatim.
     # ---------------------------------------------------------------
-    (
-        "When this Aura enters, look at target player's hand. "
-        "You may choose a nonland card from it. "
-        "That player discards that card."
-    ): TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=TargetOpponentLookHandMayDiscard(),
-    ),
     # ---------------------------------------------------------------
     # Sporogenic Infection — ETB target-opp-sacs trigger.
     # "When this Aura enters, target player sacrifices a creature of

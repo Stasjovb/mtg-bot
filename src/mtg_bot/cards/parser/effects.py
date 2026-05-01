@@ -195,6 +195,7 @@ from mtg_bot.effects.generic import (
     PeekTopMayBattlefieldIfLandElseHand,
     ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
+    TargetOpponentLookHandMayDiscard,
 )
 from mtg_bot.effects.predicates import Event, IsSelf
 
@@ -4050,6 +4051,27 @@ def _parse_effect(phrase: str) -> Effect | None:
     # card ships this damage-relay surface.
     if phrase == "deals that much damage to each opponent":
         return PainForAllDamageEchoEffect()
+    # ``look at target player's hand. You may choose a nonland card
+    # from it. That player discards that card`` — Cracked Skull's
+    # multi-sentence ETB body. The standard trigger parser anchors
+    # on a single trailing period, so the body (which itself spans
+    # three sentences) reaches this recognizer with two internal
+    # periods preserved verbatim. Maps to
+    # ``TargetOpponentLookHandMayDiscard`` whose printed ``You may``
+    # gate is honored via ``Agent.choose_yes_no`` and whose
+    # ``target player`` legality is narrowed to ``target opponent``
+    # per the standard EoE/DSK simplification (self-targeting is
+    # never strategically correct for the controller, so the
+    # narrowing doesn't affect rational play). Only Cracked Skull
+    # in the pool today; broader grammar deferred until a second
+    # card prints the same look-at-hand-may-directed-discard
+    # multi-sentence shape.
+    if phrase == (
+        "look at target player's hand. "
+        "You may choose a nonland card from it. "
+        "That player discards that card"
+    ):
+        return TargetOpponentLookHandMayDiscard()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
