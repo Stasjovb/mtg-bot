@@ -477,9 +477,13 @@ class OptionalSacAnotherForPumpSelfUEOT(Effect):
         source.temp_power_bonus += self.power_bonus
         source.temp_toughness_bonus += self.toughness_bonus
         if self.granted_keywords:
-            source.temp_keywords = (
-                source.temp_keywords | self.granted_keywords
-            )
+            from mtg_bot.effects.durations import EndOfTurn
+            from mtg_bot.effects.generic import GrantKeywords
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.granted_keywords),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, ())
 
     def describe(self) -> str:
         parts = []
