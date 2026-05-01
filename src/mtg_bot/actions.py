@@ -1940,6 +1940,16 @@ def _activate_ability(
         return
     ability = abilities[ability_index]
 
+    # Accumulate every discrete GameObject paid as part of this
+    # activation's cost (sacrificed permanents, exiled-from-graveyard
+    # cards, equipment exiled to grant the ability, etc.). Threaded
+    # onto the StackItem so resolution can reference "the sacrificed
+    # artifact" / "the discarded card" via
+    # ``state.resolving_cost_paid_objects`` rather than re-deriving it
+    # from a graveyard heuristic. Mana / tap costs do not contribute
+    # — they pay no discrete object the resolving body could reference.
+    cost_paid_objects: list[GameObject] = []
+
     # Pay mana first (auto-tap lands). Dominion Bracelet's granted
     # ability reduces its generic cost by the equipped creature's
     # effective power. For abilities with an X in the cost (Blast
@@ -2076,6 +2086,7 @@ def _activate_ability(
             f"(cost for {source.printing.name}'s ability)"
         )
         _sacrifice(state, chosen)
+        cost_paid_objects.append(chosen)
 
     # "Remove a +1/+1 counter from a creature you control" cost. The
     # agent picks which creature via choose_sacrifice (reusing the
@@ -2139,6 +2150,7 @@ def _activate_ability(
                 f"(cost for {source.printing.name}'s ability)"
             )
             _sacrifice(state, chosen)
+            cost_paid_objects.append(chosen)
 
     # "Sacrifice a Desert" cost (Scavenger Grounds). Subtype-filtered.
     if ability.cost.sacrifice_a_desert:
@@ -2165,6 +2177,7 @@ def _activate_ability(
                 f"(cost for {source.printing.name}'s ability)"
             )
             _sacrifice(state, chosen)
+            cost_paid_objects.append(chosen)
 
     # "Exile this equipment" cost (Dominion Bracelet). Walk the
     # source's attached equipment with a matching grant flag and exile
@@ -2185,6 +2198,7 @@ def _activate_ability(
                 f"(cost for {source.printing.name}'s ability)"
             )
             move_off_battlefield(state, granter, destination="exile")
+            cost_paid_objects.append(granter)
 
     # "Sacrifice a Food" cost (Ragost). Agent picks via choose_sacrifice.
     # Food status read through effective_subtypes so Ragost-granted
@@ -2213,6 +2227,7 @@ def _activate_ability(
             f"(Food cost for {source.printing.name}'s ability)"
         )
         _sacrifice(state, chosen)
+        cost_paid_objects.append(chosen)
 
     # "Tap an untapped permanent you control" cost (Gene Pollinator).
     # Agent picks an untapped permanent they control (excluding source).
@@ -2241,6 +2256,7 @@ def _activate_ability(
             f"(cost for {source.printing.name}'s ability)"
         )
         tap_permanent(state, chosen)
+        cost_paid_objects.append(chosen)
 
     # "Exile an artifact card from your graveyard" cost (Rust Harvester).
     # Agent picks which artifact card from graveyard to exile.
@@ -2265,6 +2281,7 @@ def _activate_ability(
         )
         p.graveyard.remove(chosen_card)
         p.exile.append(chosen_card)
+        cost_paid_objects.append(chosen_card)
 
     # Exile-self and sacrifice-self are paid LAST so the source is still
     # on the battlefield for target selection. exile_self moves the source
@@ -2290,13 +2307,18 @@ def _activate_ability(
 
     # Mana abilities bypass the stack — resolve the effect immediately
     # (MTG rule 605). Source is exposed via resolving_source for any
-    # effect that needs it.
+    # effect that needs it. Mana abilities can carry a discrete-object
+    # cost (Gene Pollinator's "Tap an untapped permanent you control"),
+    # so the cost-paid objects need to be visible to the resolving
+    # body via state.resolving_cost_paid_objects.
     if ability.is_mana_ability:
         state.resolving_source = source
+        state.resolving_cost_paid_objects = tuple(cost_paid_objects)
         try:
             ability.effect.resolve(state, player_id, targets)
         finally:
             state.resolving_source = None
+            state.resolving_cost_paid_objects = ()
         state.log.append(
             f"P{player_id} activates {source.printing.name}'s mana ability"
         )
@@ -2310,6 +2332,7 @@ def _activate_ability(
             ability=ability,
             targets=targets,
             x_value=ability_x_value,
+            cost_paid_objects=tuple(cost_paid_objects),
         )
     )
     state.log.append(
@@ -2653,6 +2676,7 @@ def resolve_top_of_stack(state: GameState) -> None:
         )
         state.resolving_counter_amount = item.counter_amount
         state.resolving_modes = item.chosen_modes
+        state.resolving_cost_paid_objects = item.cost_paid_objects
         try:
             item.ability.effect.resolve(state, item.controller_id, item.targets)
         finally:
@@ -2664,6 +2688,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             state.resolving_combat_damage_source_controller_id = None
             state.resolving_counter_amount = 0
             state.resolving_modes = ()
+            state.resolving_cost_paid_objects = ()
         return
 
     # Spell resolution

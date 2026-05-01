@@ -1824,6 +1824,19 @@ class StackItem:
     # ``GameObject.unlocked_halves`` when the Room enters the
     # battlefield. ``None`` for non-Room spells.
     cast_room_half: "str | None" = None
+    # GameObjects paid as part of this ability/spell's activation cost
+    # (sacrificed permanents, exiled-from-graveyard cards, etc.). For
+    # an activated ability whose cost includes ``Sacrifice another
+    # artifact``, this tuple holds one element: the artifact that was
+    # sacrificed (as it now sits in its owner's graveyard, since
+    # cost-payment moves it off the battlefield before the stack item
+    # is built). Mirrored to ``state.resolving_cost_paid_objects``
+    # during resolution so effects and formulas (e.g.
+    # ``MVOfCostPaidObjectPlus``) can read per-object properties of
+    # the paid objects without zone-walking heuristics. Empty for
+    # activations with no discrete-object cost atom (pure mana / tap)
+    # and for spells.
+    cost_paid_objects: tuple["GameObject", ...] = ()
 
 
 @dataclass
@@ -2132,6 +2145,20 @@ class GameState:
     # counters-added observer trigger (Terrasymbiosis: "draw that many
     # cards"). 0 outside such resolution.
     resolving_counter_amount: int = 0
+    # GameObjects that were paid as part of the cost when the
+    # currently-resolving activated ability was activated. Mirrors
+    # ``StackItem.cost_paid_objects`` during resolution so effects /
+    # formulas that reference "the sacrificed artifact" / "the
+    # sacrificed creature" / "the discarded card" can read the paid
+    # object(s) without scanning zones for a heuristic match. Empty
+    # outside resolution and for activations whose cost paid no
+    # discrete objects (pure mana / tap costs). Each entry is a
+    # GameObject reference; for sacrificed permanents it points at the
+    # object as it now sits in its owner's graveyard (move-off-
+    # battlefield runs during cost payment, before the StackItem is
+    # built). Used by ``MVOfCostPaidObjectPlus`` and any future formula
+    # that reads a per-object property of a cost-paid object.
+    resolving_cost_paid_objects: tuple[GameObject, ...] = ()
     # IDs of permanents scheduled to be sacrificed at end of combat.
     # Cleared during clear_combat_state after processing.
     # Used by Kavaron Harrier's attack token.
@@ -2705,11 +2732,19 @@ class GameState:
 
         # Stack items must point at the cloned GameObject for their
         # source. All other fields are immutable; share by reference.
+        # ``cost_paid_objects`` likewise carries GameObject refs and
+        # must be remapped through ``clone_obj`` so search rollouts see
+        # cloned objects (sacrificed permanents now sitting in a player
+        # graveyard) rather than stale originals.
         new_stack: list[StackItem] = []
         for item in self.stack:
             ni = StackItem.__new__(StackItem)
             ni.__dict__ = item.__dict__.copy()
             ni.source = clone_obj(item.source)
+            if item.cost_paid_objects:
+                ni.cost_paid_objects = tuple(
+                    clone_obj(o) for o in item.cost_paid_objects
+                )
             new_stack.append(ni)
 
         new_log = LogBuffer()
@@ -2721,6 +2756,10 @@ class GameState:
         new_resolving_source = (
             clone_obj(self.resolving_source)
             if self.resolving_source is not None else None
+        )
+        new_resolving_cost_paid_objects: tuple[GameObject, ...] = (
+            tuple(clone_obj(o) for o in self.resolving_cost_paid_objects)
+            if self.resolving_cost_paid_objects else ()
         )
 
         new_state = GameState(
@@ -2759,6 +2798,7 @@ class GameState:
                 self.resolving_combat_damage_source_controller_id
             ),
             resolving_counter_amount=self.resolving_counter_amount,
+            resolving_cost_paid_objects=new_resolving_cost_paid_objects,
             pending_end_of_combat_sacrifices=list(
                 self.pending_end_of_combat_sacrifices
             ),
