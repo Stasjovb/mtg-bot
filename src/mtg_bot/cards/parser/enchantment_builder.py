@@ -1025,24 +1025,26 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         effect=ChoraleReanimateDefenderGraveCreatureEffect(),
     ),
     # ---------------------------------------------------------------
-    # Chorale of the Void — Void end-step trigger (bespoke sac-unless-
-    # void effect). "Void — At the beginning of your end step, sacrifice
-    # this Aura unless a nonland permanent left the battlefield this turn
-    # or a spell was warped this turn." → SacrificeSelfUnlessVoidActive.
-    # The "Void — " prefix is the oracle ability-word; the rest maps to
-    # the existing Void-rider mechanic. Only Chorale in the pool ships
-    # this exact "sacrifice this Aura unless" Void end-step form;
-    # generalization deferred until a second Aura with a Void rider lands.
+    # (audit-litdispatch-auras) Chorale of the Void's "Void —
+    # sacrifice unless" end-step rider ("Void — At the beginning of
+    # your end step, sacrifice this Aura unless a nonland permanent
+    # left the battlefield this turn or a spell was warped this
+    # turn.") migrated to the unified
+    # ``_parse_triggered_ability_line`` path. The ``Void — ``
+    # ability-word prefix is consumed by the ``At …`` dispatch in
+    # ``triggers.py``; per CR 207.2c the prefix has no rules
+    # consequence on its own, and the conditional-flag-setting
+    # logic in ``_parse_triggered_ability_line`` correctly leaves
+    # ``requires_void=False`` on this shape because the canonical
+    # void gate appears inside an UNLESS clause (in the body) rather
+    # than as a middle-clause intervening-if. The body
+    # ``sacrifice this Aura unless <void-gate>`` is now claimed by
+    # an Aura-context effect-phrase recognizer in
+    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
+    # ``SacrificeSelfUnlessVoidActive``, which encodes the "fire
+    # always; sacrifice only when Void inactive" semantics at
+    # resolve time.
     # ---------------------------------------------------------------
-    (
-        "Void — At the beginning of your end step, sacrifice this Aura "
-        "unless a nonland permanent left the battlefield this turn or a "
-        "spell was warped this turn."
-    ): TriggeredAbility(
-        event=Event.BEGINNING_OF_END_STEP,
-        predicate=Controlled(YOU),
-        effect=SacrificeSelfUnlessVoidActive(),
-    ),
     # ---------------------------------------------------------------
     # (audit-litdispatch-auras) Cracked Skull / Sporogenic Infection
     # / Cryoshatter shared DEALT_DAMAGE-destroys-host trigger

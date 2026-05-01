@@ -298,16 +298,31 @@ def test_at_beginning_of_void_prefix_with_compound_effect():
     )
 
 
-def test_at_beginning_of_void_prefix_missing_gate_rejected():
-    # The Void prefix is paired with the verbatim void-gate middle
-    # clause in every printing — a Void-prefixed line whose body
-    # starts with something else is unrecognized. Reject outright
-    # rather than producing a Void-flagged trigger with no gate (which
-    # would over-fire at non-Void moments).
+def test_at_beginning_of_void_prefix_missing_gate_no_requires_void_flag():
+    # The ``Void — `` prefix is an ability word and per CR 207.2c
+    # carries no rules consequence on its own. The
+    # ``requires_void=True`` flag rides the BODY-side void gate
+    # phrase (``if <void-gate>, ``) — not the prefix. A Void-prefixed
+    # line whose body has no gate phrase therefore parses as a plain
+    # turn-structure trigger with ``requires_void=False``: the prefix
+    # is still consumed as an ability word, but no Void semantics
+    # ride the produced ``TriggeredAbility``.
+    #
+    # This shape co-exists with the second printed Void surface
+    # (Chorale of the Void's ``Void — At …, sacrifice this Aura
+    # unless <gate>``) where the void check rides the resolving
+    # effect class itself (``SacrificeSelfUnlessVoidActive``)
+    # rather than the trigger flag — tested separately on
+    # Chorale's printing.
     parsed = _parse_triggered_ability_line(
         "Void — At the beginning of your end step, draw a card."
     )
-    assert parsed is None
+    assert parsed == TriggeredAbility(
+        event=Event.BEGINNING_OF_END_STEP,
+        predicate=Controlled(YOU),
+        effect=DrawCards(amount=1),
+        requires_void=False,
+    )
 
 
 def test_at_beginning_of_void_prefix_unparseable_inner_rejected():

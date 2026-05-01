@@ -1798,12 +1798,46 @@ def _parse_triggered_ability_line(
     # already gone by the time we get here, but if a future helper
     # rearranges that order this guard keeps the two paths from
     # stealing each other's lines).
+    #
+    # Two ``Void — At the beginning of …`` shapes co-exist:
+    #
+    # 1. The standard intervening-if Void rider (``Void — At …, if
+    #    <void-gate>, <effect>``): the gate phrase appears as a
+    #    middle clause, the trigger fires only while Void is active,
+    #    and the produced ``TriggeredAbility`` carries
+    #    ``requires_void=True``. Used by Insatiable Skittermaw,
+    #    Voidforged Titan, Kavaron Skywarden, Hylderblade.
+    #
+    # 2. The "sacrifice unless" Void rider (``Void — At …, sacrifice
+    #    this <subject> unless <void-gate>``): the gate phrase
+    #    appears in an UNLESS clause as part of the effect, the
+    #    trigger fires every turn, and the sacrifice itself is
+    #    gated on Void via the resolving effect class
+    #    (``SacrificeSelfUnlessVoidActive``). Used by Chorale of
+    #    the Void.
+    #
+    # Per CR 207.2c the ``Void — `` ability word has no rules
+    # consequence on its own; the ``requires_void=True`` flag rides
+    # the BODY-side void gate phrase, not the prefix. We strip the
+    # prefix in both shapes (so the ``At …`` regex matches) but only
+    # set ``requires_void=True`` for shape 1, detected by the
+    # canonical gate phrase appearing as a middle clause in the
+    # body. Shape 2 has no leading gate so the gate-bearing branch
+    # in the body parser is skipped and dispatch falls through to
+    # plain effect parsing (where the
+    # ``SacrificeSelfUnlessVoidActive``-bound recognizer claims the
+    # body).
     if (
         at_line.startswith(_VOID_PREFIX)
         and at_line[len(_VOID_PREFIX):].startswith("At the beginning of ")
     ):
         at_line = at_line[len(_VOID_PREFIX):]
-        requires_void = True
+        # Set ``requires_void`` only when the body carries the
+        # canonical middle-clause Void gate. Without this guard, the
+        # "sacrifice unless" surface (Chorale) would route through
+        # the gate-required path and reject for missing the gate
+        # prefix at the start of the body.
+        requires_void = _VOID_GATE_PREFIX in at_line
     # ``Survival — `` ability-word prefix on an ``At the beginning of``
     # body. Strip the prefix and thread the flag through to the body
     # parser, which will then expect the canonical ``if this creature

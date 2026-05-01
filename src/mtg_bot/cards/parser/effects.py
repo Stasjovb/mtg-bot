@@ -180,7 +180,12 @@ from mtg_bot.effects.bespoke import (
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
 )
-from mtg_bot.effects.combinators import IfNot, IfYouDo, MayDo
+from mtg_bot.effects.combinators import (
+    IfNot,
+    IfYouDo,
+    MayDo,
+    SacrificeSelfUnlessVoidActive,
+)
 from mtg_bot.effects.conditions import (
     ControlsAnotherCreatureWithPowerAtMost,
     PerDifferentlyNamedLand,
@@ -4090,6 +4095,29 @@ def _parse_effect(phrase: str) -> Effect | None:
         "than enchanted creature"
     ):
         return TargetOpponentSacrificesCreatureOtherThanEnchanted()
+    # ``sacrifice this Aura unless a nonland permanent left the
+    # battlefield this turn or a spell was warped this turn`` —
+    # Chorale of the Void's Void end-step rider. The full printed
+    # line is ``Void — At the beginning of your end step, sacrifice
+    # this Aura unless <void-gate>``; the ``Void — `` ability-word
+    # prefix is informative only (CR 207.2c — ability words have no
+    # rules consequence) and is consumed by ``triggers.py`` before
+    # the body reaches this recognizer. The ``unless`` wording
+    # inverts the standard Void-rider semantics: the trigger fires
+    # every turn, but the SACRIFICE only happens when Void is
+    # inactive — the void check rides the resolving effect class
+    # itself rather than the ``requires_void=True`` trigger flag.
+    # Maps to ``SacrificeSelfUnlessVoidActive`` which encodes the
+    # unless-check at resolve time. Subject phrasing accepts ``Aura``
+    # here because that's the only printed surface today; if a
+    # future printing uses ``permanent`` / ``enchantment`` /
+    # ``creature``, the right move is to parameterize the subject
+    # rather than adding a second literal.
+    if phrase == (
+        "sacrifice this Aura unless a nonland permanent left the "
+        "battlefield this turn or a spell was warped this turn"
+    ):
+        return SacrificeSelfUnlessVoidActive()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
