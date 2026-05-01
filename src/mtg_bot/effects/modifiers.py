@@ -250,10 +250,8 @@ class SetBasePowerToughness(LayerPayload):
 
     The UEOT resolve path records this via
     ``GameState.grant_set_base_pt_ueot`` which writes a registry entry
-    with ``expires_at="cleanup"`` and mirrors the values onto the
-    target's ``temp_base_pt_override`` legacy cache so all existing
-    ``effective_power`` / ``effective_toughness`` read sites continue
-    to work unchanged.
+    with ``expires_at="cleanup"``. ``_compute_effective_pt``'s layer-7b
+    path reads the registry directly via ``_registry_set_base_pt``.
     """
 
     power: int

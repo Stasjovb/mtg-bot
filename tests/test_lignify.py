@@ -134,15 +134,17 @@ def test_lignify_pt_combines_with_plus_one_counters():
     assert effective_toughness(state, bear) == 6
 
 
-def test_lignify_overrides_temp_base_pt_override():
-    """If a UEOT 'becomes 1/1' effect already set
-    ``temp_base_pt_override``, Lignify's registry entry takes
-    precedence (registry is the layered-effects source of truth).
+def test_lignify_overrides_earlier_set_base_pt():
+    """If a UEOT 'becomes 1/1' effect wrote a layer-7b set_base_pt
+    registry entry first, Lignify's later entry takes precedence — the
+    most-recent-timestamp 7b sublayer-1 entry wins.
     """
     state = _new_state()
     aura = _put(state, LIGNIFY, owner_id=0)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
-    bear.temp_base_pt_override = (1, 1)
+    state.grant_set_base_pt_ueot(
+        source_id=bear.id, target_id=bear.id, power=1, toughness=1,
+    )
     assert effective_power(state, bear) == 1
     assert effective_toughness(state, bear) == 1
 

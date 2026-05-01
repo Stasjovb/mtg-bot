@@ -66,22 +66,25 @@ def test_grant_set_base_pt_ueot_writes_registry_entry():
     assert ce.expires_at == "cleanup"
 
 
-def test_grant_set_base_pt_ueot_mirrors_temp_field():
+def test_grant_set_base_pt_ueot_drives_effective_pt():
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.grant_set_base_pt_ueot(
         source_id=bear.id, target_id=bear.id, power=3, toughness=3,
     )
-    assert bear.temp_base_pt_override == (3, 3)
+    # Registry entry is the sole source of truth for the layer-7b read.
+    assert effective_power(state, bear) == 3
+    assert effective_toughness(state, bear) == 3
 
 
-def test_grant_set_base_pt_ueot_missing_target_is_noop():
+def test_grant_set_base_pt_ueot_missing_target_still_writes_registry():
     state = _new_state()
-    # No exception — just a no-op for temp_base_pt_override.
+    # No exception — registry entry is written regardless; the read path
+    # is target-id-keyed so an entry for a nonexistent id is just inert.
     state.grant_set_base_pt_ueot(
         source_id=99, target_id=99, power=3, toughness=3,
     )
-    assert len(state.continuous_effects) == 1  # registry entry still written
+    assert len(state.continuous_effects) == 1
 
 
 # ─────────────────────────────────────────────
@@ -145,7 +148,7 @@ def test_pump_bonus_stacks_on_top_of_set_base_pt():
 
 
 def test_set_base_pt_expires_at_cleanup():
-    """Cleanup step clears temp_base_pt_override → bear returns to 2/2."""
+    """Cleanup step expires the registry entry → bear returns to 2/2."""
     state = _new_state()
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"])
     state.grant_set_base_pt_ueot(
@@ -154,7 +157,6 @@ def test_set_base_pt_expires_at_cleanup():
     assert effective_power(state, bear) == 3
 
     run_cleanup_step(state)
-    assert bear.temp_base_pt_override is None
     assert effective_power(state, bear) == 2
     assert effective_toughness(state, bear) == 2
 
@@ -325,10 +327,13 @@ def test_genemorph_landfall_trigger_fires_on_land_entry():
     drain_stack(state)
 
     # PickFirstAgent targets the first legal creature — either the bear
-    # or imago should have 3/3 base P/T set.
+    # or imago should have 3/3 base P/T set via the layer-7b registry.
     affected = [
         o for o in state.battlefield
-        if o.temp_base_pt_override is not None
-        and o.temp_base_pt_override == (3, 3)
+        if any(
+            ce.layer == 7 and ce.sublayer == 1 and ce.kind == "set_base_pt"
+            and ce.target_id == o.id and ce.params == (3, 3)
+            for ce in state.continuous_effects
+        )
     ]
     assert len(affected) == 1

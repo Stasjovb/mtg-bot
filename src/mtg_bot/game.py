@@ -2386,23 +2386,11 @@ class GameState:
 
         Writes a registry entry with ``layer=7``, ``sublayer=1``,
         ``kind="set_base_pt"``, ``params=(power, toughness)``, and
-        ``expires_at="cleanup"``; AND mirrors the values onto the
-        target's ``temp_base_pt_override`` legacy cache so existing
-        ``effective_power`` / ``effective_toughness`` read sites
-        (including ``_compute_effective_pt``'s layer-7b path) continue
-        to work unchanged.
-
-        ``run_cleanup_step`` clears ``temp_base_pt_override`` along with
-        every other ``temp_*`` field; the registry entry expires at the
-        same point via ``expire_continuous_effects("cleanup")``.
-
-        No-op when no battlefield object has ``id == target_id``.
+        ``expires_at="cleanup"``. ``_compute_effective_pt``'s layer-7b
+        path reads the registry directly via ``_registry_set_base_pt``,
+        so no field mirror is needed — the registry entry expires at
+        cleanup via ``expire_continuous_effects("cleanup")``.
         """
-        target = next(
-            (o for o in self.battlefield if o.id == target_id), None,
-        )
-        if target is not None:
-            target.temp_base_pt_override = (power, toughness)
         return self.add_continuous_effect(
             source_id=source_id,
             layer=7,
