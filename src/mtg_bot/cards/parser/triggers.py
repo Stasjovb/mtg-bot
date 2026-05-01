@@ -72,6 +72,8 @@ from mtg_bot.cards.base import (
     ConditionalIfYouGainedLifeAtLeast,
     ConditionalOnTappedCreatures,
     DrawCards,
+    DrawCardsEqualToResolvingCombatDamage,
+    DrawCardsEqualToResolvingCounterAmount,
     Effect,
     IfGainedLifeThisTurnUntapSelf,
     PutPlusOneCounterOnSelf,
@@ -542,6 +544,14 @@ def _parse_at_beginning_of_phrase(
 # engine field already exists; this is purely a parser-grammar
 # addition.
 _ONCE_PER_TURN_RIDER_SUFFIX = " This ability triggers only once each turn."
+# Alternative once-per-turn rider phrasing — Scryfall prints
+# Terrasymbiosis with "Do this only once each turn." (where "this"
+# refers to the trigger's effect) instead of the standard "This
+# ability triggers only once each turn." surface. Mechanically
+# equivalent: both lift to ``once_per_turn=True`` on the produced
+# ``TriggeredAbility``. The strip below in ``_parse_triggered_
+# ability_line`` tries both suffixes — whichever appears wins.
+_DO_THIS_ONCE_PER_TURN_RIDER_SUFFIX = " Do this only once each turn."
 
 
 # Trigger-condition phrases → engine-level trigger key (legacy
@@ -760,6 +770,23 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this creature blocks a creature with flying": (
         Event.BLOCKS,
         IsSelf(subject="blocker") & Subject("attacker", HasKeyword("flying")),
+    ),
+    # ``Whenever you put one or more +1/+1 counters on a creature you
+    # control`` (Terrasymbiosis). ``Event.COUNTERS_ADDED`` carries the
+    # subject ``"obj"`` (the permanent that received the counters);
+    # the single-subject default resolves ``Subject(None, IsCreature())
+    # & Controlled(YOU)`` against ``obj``, gating the trigger to a
+    # creature under the source's controller. The "one or more"
+    # wording is implicit in the event semantics — the dispatcher
+    # latches the aggregate counter amount so the resolving effect can
+    # read it via ``state.resolving_counter_amount`` (see
+    # ``DrawCardsEqualToResolvingCounterAmount``). The "Do this only
+    # once each turn." rider is parsed separately by
+    # ``_DO_THIS_ONCE_PER_TURN_RIDER_SUFFIX`` below and lifts to
+    # ``once_per_turn=True`` on the produced ``TriggeredAbility``.
+    "you put one or more +1/+1 counters on a creature you control": (
+        Event.COUNTERS_ADDED,
+        Subject(None, IsCreature()) & Controlled(YOU),
     ),
     # ``Whenever a creature you control dies`` (Sothera, the
     # Supervoid). Batch 9. Broader than the existing
@@ -1737,6 +1764,9 @@ def _parse_triggered_ability_line(
     if line.endswith(_ONCE_PER_TURN_RIDER_SUFFIX):
         line = line[: -len(_ONCE_PER_TURN_RIDER_SUFFIX)]
         once_per_turn = True
+    elif line.endswith(_DO_THIS_ONCE_PER_TURN_RIDER_SUFFIX):
+        line = line[: -len(_DO_THIS_ONCE_PER_TURN_RIDER_SUFFIX)]
+        once_per_turn = True
     # Turn-structure ``At the beginning of <when>, <effect>.`` shape.
     # Tried before the standard ``When``/``Whenever`` paths because the
     # leading word is ``At`` and the line regex below wouldn't match it
@@ -1989,6 +2019,27 @@ def _parse_triggered_ability_line(
     effect = _parse_effect_phrase(m.group(2))
     if effect is None:
         return None
+    # Context-dependent effect rewrite for "draw that many cards":
+    # the unified ``_DRAW_THAT_MANY_CARDS`` regex always returns
+    # ``DrawCardsEqualToResolvingCombatDamage`` because that's the
+    # most common surface in the EoE pool. When the surrounding
+    # trigger condition is a COUNTERS_ADDED phrase (Terrasymbiosis's
+    # "you put one or more +1/+1 counters on a creature you control,
+    # you may draw that many cards"), rewrite the effect to the
+    # counter-amount sibling so it reads
+    # ``state.resolving_counter_amount`` instead of
+    # ``state.resolving_combat_damage_amount`` at fire time. The
+    # rewrite is local to the predicate-trigger dispatch — no other
+    # ``draw that many cards`` surface in the pool needs the swap.
+    # Future printings whose condition phrase parses to COUNTERS_ADDED
+    # get the same routing for free.
+    pred_match_for_rewrite = _parse_predicate_trigger_phrase(condition)
+    if (
+        pred_match_for_rewrite is not None
+        and pred_match_for_rewrite[0] == Event.COUNTERS_ADDED
+        and isinstance(effect, DrawCardsEqualToResolvingCombatDamage)
+    ):
+        effect = DrawCardsEqualToResolvingCounterAmount()
     # Compound predicate-trigger lookup wins when the condition phrase
     # is claimed by the multi-arm table (e.g. ``"this creature enters
     # or dies"`` → two ``(Event, Predicate)`` arms). The single-arm

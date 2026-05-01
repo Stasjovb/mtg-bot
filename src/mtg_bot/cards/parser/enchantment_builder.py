@@ -84,7 +84,6 @@ from mtg_bot.effects import (
     ChoraleReanimateDefenderGraveCreatureEffect,
     CreateToken,
     DestroyEnchantedPermanent,
-    DrawCardsEqualToResolvingCounterAmount,
     EnchantedCreatureFightsTargetEffect,
     ExileOpponentsNonlandPermanentUntilLeaves,
     ExileTargetCreatureUntilSourceLeaves,
@@ -171,20 +170,6 @@ def _build_sothera_the_supervoid() -> CardPrinting:
             TriggeredAbility(
                 event=Event.BEGINNING_OF_END_STEP, predicate=Controlled(YOU),
                 effect=SotheraEndStepReanimateEffect(),
-            ),
-        ),
-    )
-
-
-def _build_terrasymbiosis() -> CardPrinting:
-    return make_enchantment(
-        "Terrasymbiosis", "{2}{G}",
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.COUNTERS_ADDED,
-                predicate=Subject(None, IsCreature()) & Controlled(YOU),
-                effect=DrawCardsEqualToResolvingCounterAmount(),
-                once_per_turn=True,
             ),
         ),
     )
@@ -1477,30 +1462,6 @@ _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         predicate=Controlled(YOU),
         effect=SotheraEndStepReanimateEffect(),
     ),
-    # Terrasymbiosis COUNTERS_ADDED trigger — "Whenever you put one or
-    # more +1/+1 counters on a creature you control, you may draw that
-    # many cards. Do this only once each turn."
-    # The effect "draw that many cards" is ``DrawCardsEqualToResolving
-    # CounterAmount`` which reads the COUNTERS_ADDED event's counter
-    # amount at resolve time. The general effects grammar maps
-    # "draw that many cards" to ``DrawCardsEqualToResolvingCombatDamage``
-    # (a different engine class for combat damage), so we use a literal
-    # here to route to the correct counter-amount class. The
-    # ``once_per_turn=True`` flag mirrors the printed
-    # "Do this only once each turn." rider (distinct from the standard
-    # "This ability triggers only once each turn." wording, so the
-    # standard rider-strip doesn't fire; the literal carries the flag
-    # directly). Only Terrasymbiosis in the pool has this surface.
-    (
-        "Whenever you put one or more +1/+1 counters on a creature you "
-        "control, you may draw that many cards. Do this only once each "
-        "turn."
-    ): TriggeredAbility(
-        event=Event.COUNTERS_ADDED,
-        predicate=Subject(None, IsCreature()) & Controlled(YOU),
-        effect=DrawCardsEqualToResolvingCounterAmount(),
-        once_per_turn=True,
-    ),
 }
 
 
@@ -1535,8 +1496,14 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # Weftwalking — grants_first_spell_each_turn_free static (literal)
     # + ETB trigger via _NONAURA_LITERAL_TRIGGER_LINES.
     "Weftwalking",
-    # Terrasymbiosis — COUNTERS_ADDED trigger via literal recognizer
-    # (DrawCardsEqualToResolvingCounterAmount with once_per_turn=True).
+    # Terrasymbiosis — COUNTERS_ADDED trigger now claims through the
+    # unified clause grammar via the ``"you put one or more +1/+1
+    # counters on a creature you control"`` predicate trigger phrase
+    # plus the ``Do this only once each turn.`` rider strip. The
+    # context-dependent effect rewrite in ``_parse_triggered_ability_
+    # line`` swaps the default ``DrawCardsEqualToResolvingCombatDamage``
+    # to ``DrawCardsEqualToResolvingCounterAmount`` when the trigger
+    # event is COUNTERS_ADDED.
     "Terrasymbiosis",
     # Sothera, the Supervoid — two literal trigger lines:
     # DIES (SotheraExileOpponentCreatureEffect) + end-step
