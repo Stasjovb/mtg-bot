@@ -43,7 +43,6 @@ from mtg_bot.cards.base import (
     AddManaToPool,
     AnticausalVestigeLeavesEffect,
     AstelliReclaimerETBEffect,
-    AttackInTheBoxAttackEffect,
     BoilerbilgesRipperETBEffect,
     CardPrinting,
     CostReduction,
@@ -324,11 +323,12 @@ def _make_bespoke_artifact_creatures() -> dict[str, CardPrinting]:
       ``PutPlusOneCounterOnSelf + DealDamageEqualToSourcePowerAnyTarget``
       now parses after adding ``(?:it )?`` prefix to the power-damage
       regex.  Migrated in bespoke-creature-wave7.
-    - Attack-in-the-Box — literal trigger-line dispatch in
-      ``_BESPOKE_TRIGGER_LINES`` routes the attack trigger to
-      ``AttackInTheBoxAttackEffect``; all other oracle lines (mana cost,
-      P/T, artifact type) parse via the unified grammar. Migrated in
-      bespoke-delirium.
+    - Attack-in-the-Box — multi-sentence literal recognizer in
+      ``_parse_effect`` decomposes the printed body into
+      ``IfYouDo(MayDo(PumpSelfUntilEOT(power=4, toughness=0)),
+      ScheduleSelfSacAtNextEndStep())``; the trigger header parses
+      via the unified ``Whenever this creature attacks`` grammar.
+      Migrated in audit-litdispatch-creatures.
     - Osseous Sticktwister — literal trigger-line dispatch in
       ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
       ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses
@@ -694,17 +694,6 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 #
 # Current entries:
 #
-# * **Attack-in-the-Box** — "Whenever this creature attacks, you may
-#   have it get +4/+0 until end of turn. If you do, sacrifice it at
-#   the beginning of the next end step." The multi-sentence shape fuses
-#   an optional pump (``choose_yes_no`` gate), a UEOT P/T buff, AND a
-#   ``delayed_triggers`` sac schedule into one resolve step. No grammar
-#   primitive models the "you may have it get +N/+0 UEOT. If you do,
-#   schedule sacrifice." compound; ``AttackInTheBoxAttackEffect``
-#   encodes all three pieces. The literal is the only card in the
-#   current pool with this exact two-sentence "optional pump + sac
-#   next-end-step" shape; generalize when a second example exists.
-#
 # * **Osseous Sticktwister** — "Delirium — At the beginning of your
 #   end step, if there are four or more card types among cards in your
 #   graveyard, each opponent may sacrifice a nonland permanent of their
@@ -732,17 +721,16 @@ _BESPOKE_LEGENDARY_CREATURES: dict[str, CardPrinting] = (
 #   land-battlefield-ramp shape. The literal is the only card in the
 #   current pool with this exact shape; generalize when a second
 #   example exists.
+#
+# Migrated to the unified grammar (no longer in this table):
+#
+# * **Attack-in-the-Box** — multi-sentence literal recognizer in
+#   ``effects._parse_effect`` decomposes the printed body into the
+#   ``IfYouDo(MayDo(PumpSelfUntilEOT(...)),
+#   ScheduleSelfSacAtNextEndStep())`` composition. The trigger header
+#   parses via the unified ``Whenever this creature attacks`` grammar.
+#   Migrated in audit-litdispatch-creatures.
 _BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {
-    # Attack-in-the-Box: optional pump + delayed end-step sac.
-    # Only card in pool with "you may have it get +N/+0 UEOT. If you
-    # do, sacrifice it at the beginning of the next end step." shape.
-    "Whenever this creature attacks, you may have it get +4/+0 until "
-    "end of turn. If you do, sacrifice it at the beginning of the next "
-    "end step.": TriggeredAbility(
-        event=Event.ATTACKS,
-        predicate=IsSelf(),
-        effect=AttackInTheBoxAttackEffect(),
-    ),
     # Osseous Sticktwister: Delirium-gated end-step per-opponent
     # sac-or-discard-or-take-damage. Only card in pool with this
     # per-opponent choice + conditional damage shape.

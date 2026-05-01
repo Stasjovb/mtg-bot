@@ -3785,73 +3785,14 @@ class ArabellaAttackEffect(Effect):
 
 
 
-@dataclass(frozen=True)
-class AttackInTheBoxAttackEffect(Effect):
-    """Attack-in-the-Box's attack trigger:
-
-    "Whenever this creature attacks, you may have it get +4/+0 until
-    end of turn. If you do, sacrifice it at the beginning of the next
-    end step."
-
-    The "may" is exposed via ``agent.choose_yes_no``. If the controller
-    declines, the rider is a silent no-op. If the controller accepts,
-    the source gets +4/+0 UEOT (via ``grant_pt_pump_ueot``) and a delayed
-    "sacrifice this source" trigger is appended to ``state.delayed_
-    triggers`` keyed at the current turn — same "next end step on the
-    current turn" interpretation Devastating Onslaught uses for its
-    haste-token sac scheduling.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.effects.generic import SacrificeSourceDelayed
-
-        source = state.resolving_source
-        if source is None:
-            return
-        p = state.player_by_id(controller_id)
-        if p.agent is None:
-            return
-        if not p.agent.choose_yes_no(
-            state, controller_id,
-            "Have Attack-in-the-Box get +4/+0 until end of turn?",
-        ):
-            state.log.append(
-                f"P{controller_id} declines Attack-in-the-Box pump"
-            )
-            return
-        # +4/+0 UEOT, source-on-source pump (same shape as
-        # ``PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0)``).
-        state.grant_pt_pump_ueot(
-            source_id=source.id, target_id=source.id,
-            power=4, toughness=0,
-            description=(
-                f"{source.printing.name} pumps itself +4/+0 UEOT "
-                f"(Attack-in-the-Box)"
-            ),
-        )
-        state.log.append(
-            f"{source.printing.name} gets +4/+0 until end of turn "
-            f"(Attack-in-the-Box)"
-        )
-        # Schedule sacrifice at the next end step of the current turn —
-        # matches the "Sacrifice them at the beginning of the next end
-        # step" wording on Devastating Onslaught (delayed trigger keyed
-        # to ``state.turn_number`` so it fires this turn's end step).
-        state.delayed_triggers.append({
-            "fire_at_turn": state.turn_number,
-            "controller_id": controller_id,
-            "source_id": source.id,
-            "effect": SacrificeSourceDelayed(),
-        })
-
-    def describe(self) -> str:
-        return (
-            "you may have this creature get +4/+0 until end of turn; if "
-            "you do, sacrifice it at the beginning of the next end step"
-        )
+# NOTE: ``AttackInTheBoxAttackEffect`` was deleted in
+# audit-litdispatch-creatures. Attack-in-the-Box's attack-trigger body
+# now decomposes into the generic combinator+primitive composition
+# ``IfYouDo(MayDo(PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0)),
+# ScheduleSelfSacAtNextEndStep())`` via a multi-sentence literal
+# recognizer in ``cards/parser/effects.py``. ``ScheduleSelfSacAtNextEndStep``
+# (new in ``effects/generic.py``) schedules the delayed sac at the
+# current turn's end step exactly as the deleted bespoke class did.
 
 
 

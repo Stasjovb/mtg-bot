@@ -369,18 +369,27 @@ def test_arabella_effect_no_op_when_x_is_zero():
 # ---------- Attack-in-the-Box ----------
 
 def test_attack_in_the_box_claimed_by_parser():
-    # Attack-in-the-Box now claims via the oracle-text parser: all lines
-    # except the attack trigger route through the unified grammar; the
-    # attack trigger is caught by ``_BESPOKE_TRIGGER_LINES`` in
-    # ``creature_builder`` and wires ``AttackInTheBoxAttackEffect``.
+    # Attack-in-the-Box now claims via the oracle-text parser end-to-
+    # end: every line (mana cost, P/T, artifact type, Toy subtype,
+    # attack trigger) routes through the unified grammar. The attack-
+    # trigger body matches a multi-sentence literal recognizer in
+    # ``effects._parse_effect`` and decomposes into
+    # ``IfYouDo(MayDo(PumpSelfUntilEOT(...)),
+    # ScheduleSelfSacAtNextEndStep())``. Migrated in
+    # audit-litdispatch-creatures.
     assert "Attack-in-the-Box" in _claimed_names()
 
 
-def test_attack_in_the_box_carries_attacks_trigger_with_bespoke_effect():
+def test_attack_in_the_box_carries_attacks_trigger_with_combinator_tree():
     # Belt-and-suspenders that the produced ``CardPrinting`` carries
-    # the attack trigger via the bespoke ``AttackInTheBoxAttackEffect``
-    # engine class.
-    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
+    # the attack trigger as the canonical
+    # ``IfYouDo(MayDo(PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0)),
+    # ScheduleSelfSacAtNextEndStep())`` composition rather than any
+    # per-card class.
+    from mtg_bot.effects.combinators import IfYouDo, MayDo
+    from mtg_bot.effects.generic import (
+        PumpSelfUntilEOT, ScheduleSelfSacAtNextEndStep,
+    )
 
     p = OracleParserCardSource().get_printings()["Attack-in-the-Box"]
     assert p.power == 2 and p.toughness == 4
@@ -390,100 +399,13 @@ def test_attack_in_the_box_carries_attacks_trigger_with_bespoke_effect():
         t for t in p.triggered_abilities if t.event == Event.ATTACKS
     ]
     assert len(attacks) == 1
-    assert isinstance(attacks[0].effect, AttackInTheBoxAttackEffect)
-
-
-def test_attack_in_the_box_effect_describe():
-    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
-
-    desc = AttackInTheBoxAttackEffect().describe()
-    assert "+4/+0" in desc
-    assert "sacrifice" in desc
-
-
-def test_attack_in_the_box_effect_decline_is_no_op():
-    # When the agent declines, no pump and no scheduled sac.
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
-    from mtg_bot.game import GameObject, GameState, Player, Zone
-
-    class _AgentDeclines:
-        def choose_yes_no(self, state, pid, prompt):
-            return False
-
-    box_pr = make_creature(
-        "Attack-in-the-Box", "{3}", 2, 4, artifact=True,
-        subtypes=("Toy",),
+    expected = IfYouDo(
+        do_action=MayDo(
+            PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0),
+        ),
+        then_action=ScheduleSelfSacAtNextEndStep(),
     )
-    box = GameObject(
-        id=1, printing=box_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    p0 = Player(id=0, agent=_AgentDeclines())
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1], battlefield=[box], resolving_source=box,
-    )
-    AttackInTheBoxAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    # No delayed trigger scheduled.
-    assert state.delayed_triggers == []
-
-
-def test_attack_in_the_box_effect_accept_pumps_and_schedules_sac():
-    # When the agent accepts, the source gets +4/+0 UEOT and a delayed
-    # ``SacrificeSourceDelayed`` trigger is scheduled at the current
-    # turn (matches Devastating Onslaught's "next end step" wording).
-    from mtg_bot.cards.base import make_creature
-    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
-    from mtg_bot.effects.generic import SacrificeSourceDelayed
-    from mtg_bot.game import (
-        GameObject, GameState, Player, Zone, effective_power,
-    )
-
-    class _AgentAccepts:
-        def choose_yes_no(self, state, pid, prompt):
-            return True
-
-    box_pr = make_creature(
-        "Attack-in-the-Box", "{3}", 2, 4, artifact=True,
-        subtypes=("Toy",),
-    )
-    box = GameObject(
-        id=1, printing=box_pr, owner_id=0, controller_id=0,
-        zone=Zone.BATTLEFIELD,
-    )
-    p0 = Player(id=0, agent=_AgentAccepts())
-    p1 = Player(id=1)
-    state = GameState(
-        players=[p0, p1], battlefield=[box], resolving_source=box,
-        turn_number=4,
-    )
-    AttackInTheBoxAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    # Power went from 2 → 6 (printed 2 + UEOT pump 4).
-    assert effective_power(state, box) == 6
-    # Exactly one delayed trigger scheduled at the current turn,
-    # targeting the source for sacrifice.
-    assert len(state.delayed_triggers) == 1
-    entry = state.delayed_triggers[0]
-    assert entry["fire_at_turn"] == 4
-    assert entry["source_id"] == box.id
-    assert isinstance(entry["effect"], SacrificeSourceDelayed)
-
-
-def test_attack_in_the_box_effect_no_op_without_resolving_source():
-    # Defensive: no resolving_source → silent no-op rather than raising.
-    from mtg_bot.effects.bespoke import AttackInTheBoxAttackEffect
-    from mtg_bot.game import GameState, Player
-
-    state = GameState(players=[Player(id=0), Player(id=1)])
-    AttackInTheBoxAttackEffect().resolve(
-        state, controller_id=0, targets=(),
-    )
-    assert state.delayed_triggers == []
+    assert attacks[0].effect == expected
 
 
 # ---------- Wickerfolk Thresher ----------

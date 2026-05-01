@@ -21,10 +21,12 @@ Migrated OUT of ``_BESPOKE_ARTIFACT_CREATURES`` (claimed by grammar):
     ``OptionalSacArtifactForEffect`` updated to forward ``requires_target``
     / ``legal_targets`` / ``targets`` from the inner effect.
     Migrated in bespoke-artifact-misc.
-  - Attack-in-the-Box — literal trigger-line dispatch in
-    ``_BESPOKE_TRIGGER_LINES`` routes the attack trigger to
-    ``AttackInTheBoxAttackEffect``; all other oracle lines parse via the
-    unified grammar. Migrated in bespoke-delirium.
+  - Attack-in-the-Box — multi-sentence literal recognizer in
+    ``effects._parse_effect`` decomposes the printed body into
+    ``IfYouDo(MayDo(PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0)),
+    ScheduleSelfSacAtNextEndStep())``. The trigger header (ATTACKS +
+    IsSelf) parses via the unified grammar. Migrated in
+    audit-litdispatch-creatures.
   - Osseous Sticktwister — literal trigger-line dispatch in
     ``_BESPOKE_TRIGGER_LINES`` routes the Delirium end-step trigger to
     ``OsseousSticktwisterEndStepEffect``; ``Lifelink`` keyword parses

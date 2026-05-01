@@ -1777,6 +1777,57 @@ class SacrificeSourceDelayed(Effect):
 
 
 @dataclass(frozen=True)
+class ScheduleSelfSacAtNextEndStep(Effect):
+    """"Sacrifice this permanent at the beginning of the next end step."
+
+    Reads ``state.resolving_source`` for the permanent to sacrifice and
+    schedules a delayed ``SacrificeSourceDelayed`` trigger keyed at the
+    current turn — the same "next end step on the current turn"
+    interpretation Devastating Onslaught uses for its haste-token sac
+    scheduling and Attack-in-the-Box's "if you do, sacrifice it at the
+    beginning of the next end step" rider.
+
+    On resolve, ``state.delayed_triggers`` gains an entry with
+    ``fire_at_turn = state.turn_number`` (the current turn's upcoming
+    end step), ``controller_id`` set to the controller, and
+    ``source_id`` set to ``state.resolving_source.id``. The standard
+    ``run_delayed_end_step_triggers`` machinery then pushes a synthetic
+    ``BEGINNING_OF_END_STEP`` trigger that fires
+    ``SacrificeSourceDelayed`` against the same source.
+
+    Returns ``True`` when the schedule lands; ``False`` when there's
+    no resolving source (defensive — this should never happen at a
+    real callsite, but keeps composition with ``IfYouDo`` honest).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> bool:
+        source = state.resolving_source
+        if source is None:
+            return False
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number,
+            "controller_id": controller_id,
+            "source_id": source.id,
+            "effect": SacrificeSourceDelayed(),
+        })
+        state.log.append(
+            f"P{controller_id} schedules {source.printing.name} to be "
+            f"sacrificed at the beginning of the next end step"
+        )
+        return True
+
+    def describe(self) -> str:
+        return (
+            "sacrifice this permanent at the beginning of the next "
+            "end step"
+        )
+
+
+
+@dataclass(frozen=True)
 class RemoveChargeCountersFromSourceDelayed(Effect):
     """Delayed-triggered "remove N charge counters from this permanent"
     effect.

@@ -181,6 +181,7 @@ from mtg_bot.effects.conditions import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     EachOpponentExilesCardFromHandWithCastPermission,
+    ScheduleSelfSacAtNextEndStep,
     TapEnchantedPermanent,
 )
 from mtg_bot.effects.predicates import Event, IsSelf
@@ -3548,6 +3549,38 @@ def _parse_effect(phrase: str) -> Effect | None:
                 then_action=DrawCards(amount=1),
             ),
         ))
+    # Attack-in-the-Box's attack-trigger body — the optional-pump-then-
+    # schedule-sac compound: "you may have it get +4/+0 until end of
+    # turn. If you do, sacrifice it at the beginning of the next end
+    # step." The "If you do" reflexive in sentence 2 is anaphoric to the
+    # optional pump in sentence 1, so the two sentences must stay
+    # coupled; the sentence-splitting grammar would carve at the ``. ``
+    # boundary and try to parse "if you do, sacrifice it at the
+    # beginning of the next end step" as a standalone clause, which
+    # has no standalone meaning. Matched as a single literal so the
+    # parser can compose the body from generic primitives — no per-card
+    # class needed. The capturing structure is
+    # ``IfYouDo(MayDo(PumpSelfUntilEOT(...)),
+    # ScheduleSelfSacAtNextEndStep())``: ``MayDo`` gates the pump on
+    # the controller's ``choose_yes_no``, ``IfYouDo`` fires the sac
+    # schedule only when the pump landed, and
+    # ``ScheduleSelfSacAtNextEndStep`` schedules a delayed
+    # ``SacrificeSourceDelayed`` keyed at the current turn (matching
+    # Devastating Onslaught's "next end step" wording). Only Attack-in-
+    # the-Box in the EoE/DSK pool has this exact "optional-pump-then-
+    # sac-next-end-step" shape; broader grammar deferred until a second
+    # example exists (e.g. a card with a different P/T or a different
+    # delayed consequence).
+    if phrase == (
+        "you may have it get +4/+0 until end of turn. "
+        "If you do, sacrifice it at the beginning of the next end step"
+    ):
+        return IfYouDo(
+            do_action=MayDo(
+                PumpSelfUntilEOT(power_bonus=4, toughness_bonus=0),
+            ),
+            then_action=ScheduleSelfSacAtNextEndStep(),
+        )
     # Systems Override's five-sentence body — gain control of target artifact
     # or creature UEOT, untap it, grant haste UEOT (the Threaten core), plus
     # a Spacecraft-conditional charge-counter rider: put ten charge counters
