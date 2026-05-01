@@ -970,21 +970,16 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # ``PainForAllETBEffect``.
     # ---------------------------------------------------------------
     # ---------------------------------------------------------------
-    # Pain for All — DEALT_DAMAGE trigger
-    # "Whenever enchanted creature is dealt damage, it deals that much
-    # damage to each opponent." → PainForAllDamageEchoEffect.
-    # Only card in the pool with this "echo dealt-damage to each
-    # opponent" Aura trigger; generalization deferred until a second
-    # example exists.
+    # (audit-litdispatch-auras) Pain for All damage-echo
+    # ("Whenever enchanted creature is dealt damage, it deals that
+    # much damage to each opponent.") migrated to the unified
+    # ``_parse_triggered_ability_line`` path: ``enchanted creature
+    # is dealt damage`` already lives in
+    # ``_PREDICATE_TRIGGER_PHRASES`` and the body is now claimed by
+    # an Aura-context effect-phrase recognizer in
+    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
+    # ``PainForAllDamageEchoEffect``.
     # ---------------------------------------------------------------
-    (
-        "Whenever enchanted creature is dealt damage, it deals that "
-        "much damage to each opponent."
-    ): TriggeredAbility(
-        event=Event.DEALT_DAMAGE,
-        predicate=IsHost(),
-        effect=PainForAllDamageEchoEffect(),
-    ),
     # ---------------------------------------------------------------
     # Cracked Skull — ETB look-at-hand may-discard trigger.
     # Multi-sentence oracle trigger line; the standard trigger parser

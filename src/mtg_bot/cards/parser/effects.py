@@ -175,6 +175,7 @@ from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
     CloseEncounterEffect,
     EnchantedCreatureFightsTargetEffect,
+    PainForAllDamageEchoEffect,
     PainForAllETBEffect,
     RovingActuatorETBEffect,
     TerminalVelocityEffect,
@@ -4037,6 +4038,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         "other target"
     ):
         return PainForAllETBEffect()
+    # ``deals that much damage to each opponent`` — Pain for All's
+    # damage-echo body. The printed surface is ``Whenever enchanted
+    # creature is dealt damage, it deals that much damage to each
+    # opponent.``; ``_normalize_creature_effect_phrase`` strips the
+    # leading ``it `` from the body before this lookup runs. Maps to
+    # ``PainForAllDamageEchoEffect`` which reads
+    # ``state.resolving_combat_damage_amount`` and routes the same
+    # amount as life loss to each opponent. Generalization to a
+    # ``RelayDamageToEachOpponent`` primitive deferred until a second
+    # card ships this damage-relay surface.
+    if phrase == "deals that much damage to each opponent":
+        return PainForAllDamageEchoEffect()
     # "you may sacrifice an artifact. When you do, <inner>" —
     # ``OptionalSacArtifactForEffect`` with inner effect parsed recursively.
     # Checked BEFORE ``_parse_compound_effect`` so the ` and ` joiner
