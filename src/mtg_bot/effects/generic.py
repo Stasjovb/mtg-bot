@@ -9804,6 +9804,60 @@ class ThreatenTargetCreatureUEOT(Effect):
 
 
 @dataclass(frozen=True)
+class ShuffleZonesIntoLibrary(Effect):
+    """Shuffle one or more of the controller's owned zones into their
+    library, then re-shuffle the library.
+
+    ``zones`` is a tuple of zone-name strings — recognized values are
+    ``"hand"`` and ``"graveyard"``. Each card in those zones is moved
+    to the library, ``Zone.LIBRARY`` is stamped on the card's zone
+    field, and ``shuffle_library`` is called once at the end.
+
+    Used by Weftwalking's ETB ("shuffle your hand and graveyard into
+    your library, then draw seven cards") composed with ``DrawCards``
+    in a ``Sequence``. Future printings (e.g. shuffle-just-graveyard
+    or shuffle-just-hand variants) reuse the same primitive with a
+    different ``zones`` tuple.
+    """
+
+    zones: tuple[str, ...] = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, shuffle_library
+
+        p = state.player_by_id(controller_id)
+        moved = 0
+        if "hand" in self.zones:
+            for c in list(p.hand):
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+                moved += 1
+            p.hand.clear()
+        if "graveyard" in self.zones:
+            for c in list(p.graveyard):
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+                moved += 1
+            p.graveyard.clear()
+        shuffle_library(state, controller_id)
+        zone_phrase = " and ".join(self.zones) if self.zones else "(none)"
+        state.log.append(
+            f"P{controller_id} shuffles {moved} cards from "
+            f"{zone_phrase} into their library"
+        )
+
+    def describe(self) -> str:
+        if not self.zones:
+            return "shuffle (no zones) into your library"
+        zone_phrase = " and ".join(f"your {z}" for z in self.zones)
+        return f"shuffle {zone_phrase} into your library"
+
+
+
+@dataclass(frozen=True)
 class ExileAllMatchingUntilSourceLeaves(Effect):
     """Mass-exile every battlefield permanent matching the type+MV filter
     until the source leaves the battlefield.

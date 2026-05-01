@@ -175,6 +175,7 @@ from mtg_bot.effects.generic import (
     ScuttlemuttColorChangeUEOT,
     SelfMill,
     SetLifeToHalfStartingRoundedUp,
+    ShuffleZonesIntoLibrary,
     Surveil,
     Pump,
     PutPlusOneCounters,
@@ -203,6 +204,7 @@ from mtg_bot.effects.generic import (
     WarpExileSelf,
 )
 from mtg_bot.effects.combinators import (
+    ConditionalIfCastFromHand,
     ConditionalIfOpponentHasMoreLands,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
@@ -279,6 +281,5 @@ from mtg_bot.effects.bespoke import (
     TractorBeamETBEffect,
     TerminalVelocityEffect,
     DealSelfMVDamageToEachCreature,
-    WeftwalkingETBEffect,
     ZeroPointBalladEffect,
 )

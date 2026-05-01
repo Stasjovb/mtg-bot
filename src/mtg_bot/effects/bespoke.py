@@ -768,57 +768,6 @@ class EnchantedCreatureFightsTargetEffect(Effect):
 
 
 @dataclass(frozen=True)
-class WeftwalkingETBEffect(Effect):
-    """Weftwalking's ETB: "Shuffle your hand and graveyard into your
-    library, then draw seven cards."
-
-    The real oracle gates the shuffle-and-draw on "if you cast it"
-    (vs. put into play by some other means). Our engine only puts
-    enchantments onto the battlefield via casting, so the gate is a
-    no-op. The card's static "first spell each turn may be cast
-    without paying mana cost" is modeled via the
-    ``grants_first_spell_each_turn_free`` printing flag, plumbed
-    through legal_actions and _cast_spell — see those modules.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-        from mtg_bot.turn import draw_n_cards
-
-        p = state.player_by_id(controller_id)
-        # Move hand and graveyard back into the library.
-        moved = 0
-        for c in list(p.hand):
-            c.zone = Zone.LIBRARY
-            p.library.append(c)
-            moved += 1
-        p.hand.clear()
-        for c in list(p.graveyard):
-            c.zone = Zone.LIBRARY
-            p.library.append(c)
-            moved += 1
-        p.graveyard.clear()
-        # Shuffle.
-        from mtg_bot.game import shuffle_library
-        shuffle_library(state, controller_id)
-        state.log.append(
-            f"Weftwalking: P{controller_id} shuffles {moved} cards into "
-            f"library and draws 7"
-        )
-        draw_n_cards(state, controller_id, 7)
-
-    def describe(self) -> str:
-        return (
-            "shuffle your hand and graveyard into your library, then "
-            "draw seven cards"
-        )
-
-
-
-@dataclass(frozen=True)
 class PossibilityTechnicianETBEffect(Effect):
     """Possibility Technician's ETB-and-Kavu-observer effect: "Exile
     the top card of your library. For as long as that card remains

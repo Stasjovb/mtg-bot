@@ -67,6 +67,7 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    ConditionalIfCastFromHand,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfYouGainedLifeAtLeast,
     ConditionalOnTappedCreatures,
@@ -1343,6 +1344,42 @@ def _parse_intervening_while_effect_wrapper(phrase: str):
     return _INTERVENING_WHILE_EFFECT_WRAPPERS.get(phrase.strip())
 
 
+# Intervening-``if`` gates whose semantics are best expressed as an
+# effect wrapper rather than a predicate AND-ed onto the trigger event
+# predicate. Same shape as ``_INTERVENING_WHILE_EFFECT_WRAPPERS`` but
+# for the ``, if <gate>,`` middle-clause surface (vs ``while <gate>``).
+# Each entry maps a gate phrase to a factory ``(inner) -> Effect`` that
+# wraps the parsed inner effect; the trigger's event and predicate
+# stay unchanged.
+#
+# This table is consulted AFTER ``_INTERVENING_IF_PHRASES`` in the
+# dispatch: predicate gates win when both tables claim a phrase (today
+# they're mutually exclusive by construction).
+#
+# ``"you cast it"`` — Weftwalking's ETB middle clause: "When this
+# enchantment enters, if you cast it, shuffle your hand and graveyard
+# into your library, then draw seven cards." Wraps the inner effect in
+# ``ConditionalIfCastFromHand(inner)``; today the wrapper is a
+# structural no-op because the engine puts enchantments onto the
+# battlefield only via casting, but we register the wrapper so the
+# printed gate isn't silently dropped — same fidelity discipline the
+# Void/Survival/Delirium ability-word gates follow.
+_INTERVENING_IF_EFFECT_WRAPPERS: dict[str, "callable"] = {
+    "you cast it": lambda inner: ConditionalIfCastFromHand(inner_effect=inner),
+}
+
+
+def _parse_intervening_if_effect_wrapper(phrase: str):
+    """Look up ``phrase`` in ``_INTERVENING_IF_EFFECT_WRAPPERS``.
+
+    Returns the factory ``(inner_effect) -> Effect`` for a recognized
+    gate phrase, or ``None`` when the phrase isn't claimed. Used by
+    the intervening-if dispatch as a fallback after the predicate
+    phrasebook misses, mirroring the parallel ``while`` path.
+    """
+    return _INTERVENING_IF_EFFECT_WRAPPERS.get(phrase.strip())
+
+
 def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
     """Look up ``phrase`` (a trailing-``if`` gate clause from the
     ``... if <gate>.`` tail) in ``_TRAILING_IF_PHRASES``. Returns the
@@ -1795,18 +1832,46 @@ def _parse_triggered_ability_line(
         condition = iif_match.group(1)
         gate_phrase = iif_match.group(2)
         gate_pred = _parse_intervening_if_phrase(gate_phrase)
-        if gate_pred is None:
+        if gate_pred is not None:
+            effect = _parse_effect_phrase(iif_match.group(3))
+            if effect is None:
+                return None
+            # Only the predicate-style trigger path supports an AND-able
+            # gate predicate; the legacy string-key path can't carry a
+            # predicate at all, so a gated trigger must resolve to an
+            # event that's already on the predicate side. The two table
+            # lookups below preserve the same precedence as the no-gate
+            # path; if only the legacy string-key table claims the
+            # condition phrase we decline rather than silently drop the
+            # gate.
+            pred_match = _parse_predicate_trigger_phrase(condition)
+            if pred_match is None:
+                return None
+            event, base_predicate = pred_match
+            phrase_once = _predicate_trigger_phrase_is_once_per_turn(
+                condition,
+            )
+            return TriggeredAbility(
+                event=event,
+                predicate=base_predicate & gate_pred,
+                effect=effect,
+                once_per_turn=once_per_turn or phrase_once,
+            )
+        # Effect-wrapper gate fallback: the ``if`` clause isn't a
+        # predicate AND but instead wraps the resolved inner effect at
+        # resolve time (e.g. Weftwalking's ``if you cast it`` gate maps
+        # to ``ConditionalIfCastFromHand``). Mirrors the parallel
+        # ``while`` path's effect-wrapper fallback. Tried AFTER the
+        # predicate-gate path so explicit predicate gates win; when the
+        # gate phrase isn't in either phrasebook the line is rejected
+        # outright (same don't-silently-drop-the-gate discipline as the
+        # predicate path).
+        wrapper_factory = _parse_intervening_if_effect_wrapper(gate_phrase)
+        if wrapper_factory is None:
             return None
-        effect = _parse_effect_phrase(iif_match.group(3))
-        if effect is None:
+        inner_effect = _parse_effect_phrase(iif_match.group(3))
+        if inner_effect is None:
             return None
-        # Only the predicate-style trigger path supports an AND-able
-        # gate predicate; the legacy string-key path can't carry a
-        # predicate at all, so a gated trigger must resolve to an event
-        # that's already on the predicate side. The two table lookups
-        # below preserve the same precedence as the no-gate path; if
-        # only the legacy string-key table claims the condition phrase
-        # we decline rather than silently drop the gate.
         pred_match = _parse_predicate_trigger_phrase(condition)
         if pred_match is None:
             return None
@@ -1814,8 +1879,8 @@ def _parse_triggered_ability_line(
         phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
         return TriggeredAbility(
             event=event,
-            predicate=base_predicate & gate_pred,
-            effect=effect,
+            predicate=base_predicate,
+            effect=wrapper_factory(inner_effect),
             once_per_turn=once_per_turn or phrase_once,
         )
     # Intervening-``while`` shape: ``When/Whenever <condition> while

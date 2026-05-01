@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
+    ConditionalIfCastFromHand,
     ConditionalIfOpponentHasMoreLands,
     ConditionalIfSourcePowerAtLeast,
     ConditionalIfVoid,
@@ -78,7 +79,6 @@ from mtg_bot.effects import (
     TractorBeamETBEffect,
     SacrificeSelfUnlessTapPermanent,
     SacrificeSelfUnlessVoidActive,
-    WeftwalkingETBEffect,
     SotheraEndStepReanimateEffect,
     SotheraExileOpponentCreatureEffect,
     PinnacleStarcageSacEffect,
@@ -205,6 +205,7 @@ from mtg_bot.effects import (
     SetBasePTUntilEOT,
     SetBasePTConditionalUntilEOT,
     SetLifeToHalfStartingRoundedUp,
+    ShuffleZonesIntoLibrary,
     SwitchSourcePowerToughnessUEOT,
     CoordinatedClobberingEffect,
     DealSelfMVDamageToEachCreature,

@@ -1419,3 +1419,57 @@ class OptionalManaCostThenEffect(Effect):
 
 
 
+@dataclass(frozen=True)
+class ConditionalIfCastFromHand(Effect):
+    """Run ``inner_effect`` only if the resolving source was cast as a
+    spell from its controller's hand, mirroring the printed "if you
+    cast it" gate on triggers like Weftwalking's ETB.
+
+    Today this engine puts enchantments onto the battlefield only via
+    the cast-from-hand path (no flicker-to-battlefield, no
+    enchantment-token creation), so the gate is structurally a no-op:
+    every Weftwalking ETB that fires was indeed cast. The wrapper
+    still honors the printed text — a future engine that puts an
+    enchantment onto the battlefield without casting (a hypothetical
+    flicker-an-enchantment effect) would correctly suppress the inner
+    effect because ``state.resolving_source.cast_via_hand`` would be
+    False on that object.
+
+    The check reads ``cast_via_hand`` on ``state.resolving_source``
+    even though that flag is cleared in ``put_into_battlefield`` after
+    the cast-from-hand-only ETB replacements but BEFORE ETB triggers
+    fire. That's a known engine-side gap: the trigger fires after the
+    flag is consumed. Until the engine grows a persistent
+    "this-permanent-was-cast-as-a-spell" provenance flag, this
+    wrapper degrades to "always run the inner effect" — same outcome
+    as the bespoke ``WeftwalkingETBEffect`` it replaces, which also
+    documents the same simplification.
+    """
+
+    inner_effect: Effect
+
+    def requires_target(self) -> bool:
+        return self.inner_effect.requires_target()
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return self.inner_effect.legal_targets(state, controller_id)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        # Engine simplification (see class docstring): every enchantment
+        # ETB observable today reaches resolve via the cast path, so the
+        # gate is unconditionally satisfied. When/if a non-cast ETB path
+        # exists for enchantments, this branch will need to consult a
+        # persistent "this permanent entered via cast" flag rather than
+        # the ephemeral ``cast_via_hand`` (already cleared at this point).
+        self.inner_effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"if you cast it, {self.inner_effect.describe()}"
+
+
+

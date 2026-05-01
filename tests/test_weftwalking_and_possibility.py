@@ -5,7 +5,27 @@ cast-from-exile clause."""
 from mtg_bot.actions import CastSpell, PlayLand
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
-from mtg_bot.effects import PossibilityTechnicianETBEffect, WeftwalkingETBEffect
+from mtg_bot.effects import (
+    ConditionalIfCastFromHand,
+    DrawCards,
+    PossibilityTechnicianETBEffect,
+    Sequence,
+    ShuffleZonesIntoLibrary,
+)
+
+
+def _weftwalking_etb_effect():
+    """Reproduce Weftwalking's ETB body as the composition the parser
+    now produces. The bespoke ``WeftwalkingETBEffect`` was deleted when
+    the body migrated to the unified clause grammar; the engine now
+    routes it through ``ConditionalIfCastFromHand`` wrapping a
+    ``Sequence`` of ``ShuffleZonesIntoLibrary`` and ``DrawCards``."""
+    return ConditionalIfCastFromHand(
+        inner_effect=Sequence(effects=(
+            ShuffleZonesIntoLibrary(zones=("hand", "graveyard")),
+            DrawCards(amount=7),
+        )),
+    )
 from mtg_bot.game import GameState, Player, Zone
 from tests._etb_helpers import _legacy_or_inferred_key, _matches_legacy_key
 
@@ -45,7 +65,7 @@ def test_weftwalking_shuffles_hand_and_graveyard_into_library_and_draws_7():
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.GRAVEYARD)
         p.graveyard.append(c)
     _stock_library(state, 0, 5)
-    WeftwalkingETBEffect().resolve(state, 0, ())
+    _weftwalking_etb_effect().resolve(state, 0, ())
     # Hand contains exactly 7 cards (the draw). Graveyard is empty.
     # Library started with 5 + 2 (hand) + 3 (gy) = 10; drew 7 → 3 left.
     assert len(p.hand) == 7
@@ -54,8 +74,15 @@ def test_weftwalking_shuffles_hand_and_graveyard_into_library_and_draws_7():
 
 
 def test_weftwalking_describe():
-    d = WeftwalkingETBEffect().describe()
-    assert "shuffle" in d and "seven" in d
+    d = _weftwalking_etb_effect().describe()
+    # Composed describe text: shuffle + draw 7 + the if-you-cast-it
+    # gate prefix from ``ConditionalIfCastFromHand``. The composed
+    # describes use digits (``you draw 7 cards``) where the bespoke's
+    # describe used the spelled-out form ("draw seven cards") — that
+    # delta is purely surface, no behavioral effect.
+    assert "shuffle" in d
+    assert "7" in d or "seven" in d
+    assert "cast it" in d
 
 
 def test_weftwalking_printing_has_etb():

@@ -18,8 +18,11 @@ Cards still on the bespoke path (in ``_ENCHANTMENT_BUILDERS``):
 
 Non-Aura enchantments:
 - Loading Zone ``{3}{G}`` — is_counter_doubler + warp
-- Weftwalking ``{4}{U}{U}`` — ETB (WeftwalkingETBEffect) + grants_first_
-  spell_each_turn_free
+- Weftwalking ``{4}{U}{U}`` — ETB body parses through the unified
+  clause grammar via ``ConditionalIfCastFromHand`` wrapping a
+  ``Sequence(ShuffleZonesIntoLibrary, DrawCards(7))``;
+  ``grants_first_spell_each_turn_free`` rides the literal-static
+  recognizer
 - Sothera, the Supervoid ``{2}{B}{B}`` — bespoke DIES + end-step effects
 - Terrasymbiosis ``{2}{G}`` — COUNTERS_ADDED trigger
 - Bioengineered Future ``{1}{G}{G}`` — ETB token + grants_etb_counter_
@@ -94,7 +97,6 @@ from mtg_bot.effects import (
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
     TractorBeamETBEffect,
-    WeftwalkingETBEffect,
 )
 from mtg_bot.effects.object_predicates import (
     IsArtifact,
@@ -153,19 +155,6 @@ def _build_loading_zone() -> CardPrinting:
         "Loading Zone", "{3}{G}",
         warp="{G}",
         is_counter_doubler=True,
-    )
-
-
-def _build_weftwalking() -> CardPrinting:
-    return make_enchantment(
-        "Weftwalking", "{4}{U}{U}",
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.ENTERS, predicate=IsSelf(),
-                effect=WeftwalkingETBEffect(),
-            ),
-        ),
-        grants_first_spell_each_turn_free=True,
     )
 
 
@@ -1457,22 +1446,6 @@ _UNIFIED_ENCHANTMENT_HONEST_NOOP_NAMES: frozenset[str] = frozenset({
 # uses a bespoke engine class not yet in the general grammar. Parallel to
 # ``_AURA_LITERAL_TRIGGER_LINES`` for non-Aura paths.
 _NONAURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
-    # Weftwalking ETB — "When this enchantment enters, if you cast it,
-    # shuffle your hand and graveyard into your library, then draw seven
-    # cards." → WeftwalkingETBEffect.
-    # The "if you cast it" intervening-if gate is honored by the engine
-    # class (reads ``state.resolving_source`` to check if it was cast).
-    # Only Weftwalking in the pool has this ETB; generalization deferred
-    # until a second card with a shuffle-hand-and-graveyard-then-draw-N
-    # surface exists.
-    (
-        "When this enchantment enters, if you cast it, shuffle your hand "
-        "and graveyard into your library, then draw seven cards."
-    ): TriggeredAbility(
-        event=Event.ENTERS,
-        predicate=IsSelf(),
-        effect=WeftwalkingETBEffect(),
-    ),
     # Sothera, the Supervoid — DIES trigger
     # "Whenever a creature you control dies, each opponent chooses a
     # creature they control and exiles it." → SotheraExileOpponentCreature

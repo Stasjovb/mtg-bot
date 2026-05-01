@@ -137,6 +137,7 @@ from mtg_bot.cards.base import (
     SetBasePTUntilEOT,
     SetBasePTConditionalUntilEOT,
     SetLifeToHalfStartingRoundedUp,
+    ShuffleZonesIntoLibrary,
     TakeExtraTurnAfterThisOne,
     TerritorialBruntarLandfallEffect,
     TriggeredAbility,
@@ -3215,6 +3216,30 @@ def _parse_effect(phrase: str) -> Effect | None:
     # same shape (reveal-until-condition + put-result-elsewhere) would
     # call for a parameterized recognizer at that point.
     #
+    # Weftwalking's ETB body composed (after the intervening-if gate
+    # ``if you cast it`` is split off by the trigger-line regex):
+    # ``shuffle your hand and graveyard into your library, then draw
+    # seven cards``. The compound parser's joiner-precedence (`` and ``
+    # before ``, then ``) would carve this incorrectly because the
+    # inner `` and `` belongs to the zone-list of the shuffle primitive
+    # ("your hand and graveyard"), not to a compound effect joiner.
+    # Matched here as a single literal so the whole body dispatches in
+    # one step to a ``Sequence`` of two generic primitives —
+    # ``ShuffleZonesIntoLibrary(zones=("hand", "graveyard"))`` and
+    # ``DrawCards(amount=7)``. A future card with a varying piece
+    # (different zone list, different draw count) would land its own
+    # literal here; broader grammar (e.g. teaching the compound parser
+    # to recognize ``shuffle your <zone-list> into your library`` as
+    # an atomic primitive whose internal `` and `` is bracketed)
+    # deferred until a second example exists.
+    if phrase == (
+        "shuffle your hand and graveyard into your library, "
+        "then draw seven cards"
+    ):
+        return Sequence(effects=(
+            ShuffleZonesIntoLibrary(zones=("hand", "graveyard")),
+            DrawCards(amount=7),
+        ))
     # House Cartographer's Survival body (only card in the pool with
     # the "reveal until land" shape; broader grammar deferred until a
     # second example exists).
@@ -4095,6 +4120,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         "your life total becomes half your starting life total, rounded up"
     ):
         return SetLifeToHalfStartingRoundedUp()
+    # ``shuffle your hand and graveyard into your library`` —
+    # Weftwalking's ETB body's first half (composed in a Sequence with
+    # ``draw seven cards`` via the ``, then `` joiner). Single-card
+    # literal in the EoE pool today; the parameterized
+    # ``ShuffleZonesIntoLibrary`` engine class accepts any tuple of
+    # zones, so a future card with ``shuffle just your graveyard into
+    # your library`` lands by adding a sister literal here. Tried as a
+    # primitive (not a compound) because the inner `` and `` belongs to
+    # the zone-list, not to a compound effect joiner — the compound
+    # parser's `` and `` split would otherwise carve this phrase
+    # incorrectly.
+    if phrase == "shuffle your hand and graveyard into your library":
+        return ShuffleZonesIntoLibrary(zones=("hand", "graveyard"))
     # ``put a +1/+1 counter on each of up to N target creatures`` —
     # multi-target counter spread (Weftblade Enhancer). Tried BEFORE
     # the bare-target regex below because the bare regex's ``target
