@@ -476,21 +476,6 @@ def _collect_replacement_effects(
                     continue
                 out.append((obj.id, re))
         # ── Legacy synthesis paths ─────────────────────────────────
-        # Token-doubler flag → MultiplyCount(2) on WOULD_CREATE_TOKEN.
-        if event == Event.WOULD_CREATE_TOKEN and getattr(
-            obj.printing, "is_token_doubler", False,
-        ):
-            controller_id = subjects.get("controller_id")
-            if controller_id is None or obj.controller_id == controller_id:
-                out.append((
-                    obj.id,
-                    ReplacementEffect(
-                        event_pattern=EventPattern(
-                            event=Event.WOULD_CREATE_TOKEN,
-                        ),
-                        transform=MultiplyCount(factor=2),
-                    ),
-                ))
         # Loading-Zone-shape counter-doubler →
         # MultiplyCount(2) on WOULD_PLACE_COUNTER. Scope: counter
         # recipient is a creature or Spacecraft the doubler's

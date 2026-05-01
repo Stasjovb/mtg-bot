@@ -5596,11 +5596,11 @@ class CreateToken(Effect):
             # Sunborn ×2, future Anointed Procession ×3, …) flow
             # through the unified ``dispatch_replacement``. The
             # dispatcher walks the battlefield collecting matching
-            # ``ReplacementEffect`` instances (currently synthesised
-            # from the legacy ``CardPrinting.is_token_doubler`` flag;
-            # native declarations on each printing's static abilities
-            # come in PR D), applies them in CR 616.1 order, and
-            # returns the post-replacement count.
+            # ``StaticAbility.replacement_effect`` declarations,
+            # applies them in CR 616.1 order, and returns the post-
+            # replacement count. The "under your control" qualifier
+            # is enforced by the dispatcher's implicit
+            # ``source.controller_id == affected_player_id`` gate.
             from mtg_bot.effects.modifiers import dispatch_replacement
             from mtg_bot.effects.predicates import Event as _Event
             replaced = dispatch_replacement(
@@ -5609,10 +5609,6 @@ class CreateToken(Effect):
                 subjects={
                     "controller": state.player_by_id(recipient),
                     "kind": printing.name,
-                    # ``controller_id`` is read by the legacy
-                    # ``is_token_doubler`` synthesizer to gate the
-                    # doubler to the recipient's own permanents.
-                    "controller_id": recipient,
                 },
                 payload={"count": self.count},
             )

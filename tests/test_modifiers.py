@@ -14,10 +14,12 @@ Covers:
   (1 candidate) without consulting any agent.
 - :func:`dispatch_replacement` consults the affected player's
   ``choose_replacement_order`` agent hook for ≥2 candidates.
-- The legacy ``is_token_doubler`` flag synthesises a
-  ``ReplacementEffect(WOULD_CREATE_TOKEN, MultiplyCount(2))`` and
-  composes correctly with the dispatcher (Exalted Sunborn doubles to
-  4; two doublers compound to 8).
+- Exalted Sunborn's native ``StaticAbility.replacement_effect =
+  ReplacementEffect(WOULD_CREATE_TOKEN, MultiplyCount(2))`` composes
+  correctly with the dispatcher (one doubles to 4; two compound to 8;
+  doublers under an opponent's control don't double the controller's
+  tokens — the implicit "source.controller_id == affected_player_id"
+  gate handles the printed "under your control" qualifier).
 """
 
 from __future__ import annotations
@@ -226,7 +228,7 @@ def test_dispatch_no_replacements_returns_payload_unchanged():
 
 def test_dispatch_with_token_doubler_doubles_count():
     """Exalted Sunborn on the battlefield doubles the count via the
-    legacy ``is_token_doubler`` synthesis path."""
+    native ``StaticAbility.replacement_effect`` path."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.game import GameState, Player, Zone
 

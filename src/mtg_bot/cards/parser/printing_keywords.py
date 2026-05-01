@@ -307,15 +307,17 @@ def _parse_looks_at_opponents_face_down_line(line: str) -> bool:
 
 # ``If one or more tokens would be created under your control, twice
 # that many of those tokens are created instead.`` — Exalted Sunborn's
-# printed token-doubler replacement effect. The engine wires the
-# replacement off the printing-level ``is_token_doubler`` flag (rather
-# than a generic ``StaticAbility`` shape, since token replacement
-# happens at create-token resolution rather than as a creature-relative
-# continuous effect). Matched as a literal string — Exalted Sunborn is
-# the only card in the pool with this exact surface today; "broader
+# printed token-doubler replacement effect. The parser builds a
+# SELF-scope ``StaticAbility`` carrying a ``ReplacementEffect(
+# event_pattern=EventPattern(WOULD_CREATE_TOKEN), transform=
+# MultiplyCount(2))``; the dispatcher's implicit "source's controller
+# is the affected player" gate handles the "under your control"
+# qualifier. Matched as a literal string — Exalted Sunborn is the
+# only card in the pool with this exact surface today; "broader
 # grammar deferred until a second example exists" (e.g. a hypothetical
 # Anointed-Procession-style enchantment with the same shape would land
-# its own recognizer or, if a parameter varies, parameterize this one).
+# its own recognizer or, if the multiplier varies, parameterize this
+# one).
 _TOKEN_DOUBLER_LINE = (
     "If one or more tokens would be created under your control, "
     "twice that many of those tokens are created instead."
@@ -324,9 +326,11 @@ _TOKEN_DOUBLER_LINE = (
 
 def _parse_token_doubler_line(line: str) -> bool:
     """Return ``True`` if ``line`` is the printing-level token-doubler
-    replacement clause, else ``False``. Flips the ``is_token_doubler``
-    kwarg on ``make_creature``; the engine reads the flag at
-    create-token resolution time and doubles the count.
+    replacement clause, else ``False``. Drives a SELF-scope
+    ``StaticAbility(replacement_effect=ReplacementEffect(...,
+    MultiplyCount(2)))`` declaration in the calling parser; the engine
+    walks ``static_abilities`` at create-token resolution time and
+    doubles the count.
     """
     return line.strip() == _TOKEN_DOUBLER_LINE
 

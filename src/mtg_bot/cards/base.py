@@ -842,10 +842,6 @@ class CardPrinting:
     # None = use printed P/T (default).
     dynamic_pt_formula: str | None = None
     # Replacement-effect flag: when any permanent with this flag is on
-    # the battlefield under the token-creator's control, the number of
-    # tokens created is doubled. Matches Exalted Sunborn.
-    is_token_doubler: bool = False
-    # Replacement-effect flag: when any permanent with this flag is on
     # the battlefield under the counter-recipient's control, +1/+1
     # counters going onto creatures (and Spacecraft) they control are
     # doubled. Matches Loading Zone. Multiple doublers stack
@@ -1163,7 +1159,6 @@ def make_creature(
     enters_with_counters_from_x: str | None = None,
     subtypes: tuple[str, ...] = (),
     dynamic_pt_formula: str | None = None,
-    is_token_doubler: bool = False,
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
     grants_all_basic_land_types_to_lands_you_control: bool = False,
@@ -1231,7 +1226,6 @@ def make_creature(
         external_cost_reductions=tuple(external_cost_reductions),
         enters_with_counters_from_x=enters_with_counters_from_x,
         dynamic_pt_formula=dynamic_pt_formula,
-        is_token_doubler=is_token_doubler,
         devour_land_multiplier=devour_land_multiplier,
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         grants_all_basic_land_types_to_lands_you_control=(
@@ -1638,7 +1632,6 @@ def make_enchantment(
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = False,
     is_counter_doubler: bool = False,
-    is_token_doubler: bool = False,
     restricts_noncreature_spells_to_one_per_turn: bool = False,
     grants_first_spell_each_turn_free: bool = False,
     warp: str | None = None,
@@ -1677,7 +1670,6 @@ def make_enchantment(
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
         is_counter_doubler=is_counter_doubler,
-        is_token_doubler=is_token_doubler,
         restricts_noncreature_spells_to_one_per_turn=(
             restricts_noncreature_spells_to_one_per_turn
         ),

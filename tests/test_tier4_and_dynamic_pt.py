@@ -41,7 +41,9 @@ def test_create_token_without_doubler_creates_one():
 
 def test_exalted_sunborn_doubles_token_creation():
     state = _new_state()
-    # Put Exalted Sunborn on battlefield (is_token_doubler=True).
+    # Put Exalted Sunborn on battlefield. The token-doubling
+    # replacement effect rides a SELF-scope StaticAbility carrying a
+    # ReplacementEffect(MultiplyCount(2)) on WOULD_CREATE_TOKEN.
     sunborn = state.new_object(
         _PRINTINGS["Exalted Sunborn"], 0, Zone.BATTLEFIELD,
     )
@@ -113,8 +115,29 @@ def test_exalted_sunborn_count_3_doubled_to_6():
     assert len(robots) == 6
 
 
-def test_exalted_sunborn_printing_has_flag():
-    assert _PRINTINGS["Exalted Sunborn"].is_token_doubler is True
+def test_exalted_sunborn_printing_has_token_doubler_static():
+    """Exalted Sunborn's token-doubler is a SELF-scope StaticAbility
+    carrying a ReplacementEffect(MultiplyCount(2)) on
+    WOULD_CREATE_TOKEN — the registry-driven shape that replaced the
+    legacy ``is_token_doubler`` printing flag."""
+    from mtg_bot.effects.modifiers import (
+        EventPattern, MultiplyCount, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    statics = _PRINTINGS["Exalted Sunborn"].static_abilities
+    matches = [
+        s for s in statics
+        if s.replacement_effect is not None
+        and s.replacement_effect.event_pattern.event
+        == Event.WOULD_CREATE_TOKEN
+    ]
+    assert len(matches) == 1
+    re = matches[0].replacement_effect
+    assert re == ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_CREATE_TOKEN),
+        transform=MultiplyCount(factor=2),
+    )
 
 
 # -----------------------

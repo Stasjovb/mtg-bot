@@ -8,7 +8,8 @@ claimed via the ``_BESPOKE_CREATURES`` name-keyed dispatch table in
 Covered creatures:
   1. Starfield Shepherd — flying, warp {1}{W}, ETB modal tutor
   2. Astelli Reclaimer — flying, warp {2}{W}, ETB AstelliReclaimerETBEffect
-  3. Exalted Sunborn — flying, lifelink, warp {1}{W}, is_token_doubler
+  3. Exalted Sunborn — flying, lifelink, warp {1}{W}, token-doubling
+     static (StaticAbility.replacement_effect = MultiplyCount(2))
   4. Territorial Bruntar — reach, landfall TerritorialBruntarLandfallEffect
   5. All-Fates Stalker — warp {1}{W}, ETB ExileTargetCreatureUntilSourceLeaves
   6. Anticausal Vestige — warp {4}, leaves-battlefield AnticausalVestigeLeavesEffect

@@ -141,9 +141,13 @@ from mtg_bot.effects.conditions import (
 )
 from mtg_bot.effects.modifiers import (
     ContinuousModifier,
+    EventPattern,
     GrantKeyword,
+    MultiplyCount,
     RemoveKeyword,
+    ReplacementEffect,
 )
+from mtg_bot.effects.predicates import Event
 from mtg_bot.effects.state_predicates import (
     Delirium,
     SpellsCastThisTurn,
@@ -858,7 +862,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
-    is_token_doubler = False
     extra_etb_trigger = 0
     replaces_draw_with_extra_when_hand_at_most_one = False
     dynamic_pt_formula: str | None = None
@@ -1049,12 +1052,21 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # ``If one or more tokens would be created under your
             # control, twice that many of those tokens are created
             # instead.`` — Exalted Sunborn's printed token-doubler
-            # replacement effect. Flips the ``is_token_doubler`` kwarg
-            # below; the engine consumes the flag at create-token
-            # resolution time and doubles the count. Idempotent: a
-            # malformed printing with the line twice ends up with the
-            # field set once.
-            is_token_doubler = True
+            # replacement effect. Expressed as a SELF-scope StaticAbility
+            # carrying a ReplacementEffect that multiplies the
+            # WOULD_CREATE_TOKEN count by 2. The dispatcher's implicit
+            # gate (source's controller IS the affected player) handles
+            # the printed "under your control" qualifier, so no
+            # additional subject_filter is needed.
+            statics.append(StaticAbility(
+                scope=StaticScope.SELF,
+                replacement_effect=ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.WOULD_CREATE_TOKEN,
+                    ),
+                    transform=MultiplyCount(factor=2),
+                ),
+            ))
             continue
         if _parse_extra_etb_trigger_line(line):
             # ``If a permanent entering the battlefield causes a
@@ -1350,7 +1362,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_minus_one_counters_from_hand_cast
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
-        is_token_doubler=is_token_doubler,
         extra_etb_trigger=extra_etb_trigger,
         replaces_draw_with_extra_when_hand_at_most_one=(
             replaces_draw_with_extra_when_hand_at_most_one
