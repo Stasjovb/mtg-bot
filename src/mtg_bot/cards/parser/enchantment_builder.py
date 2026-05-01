@@ -937,83 +937,102 @@ _CRYOSHATTER_COMPOUND_LINE = (
     "destroy it."
 )
 
-# Literal trigger-line recognizers for Aura ETBs whose effect phrase
-# uses a bespoke engine class not yet in the general grammar. Each entry
-# maps the verbatim stripped oracle trigger line to the ``TriggeredAbility``
-# object the bespoke factory would have built. Only one card in the pool
-# prints each surface today; each entry's docstring documents why
-# generalization is deferred.
+# Literal trigger-line recognizers for Aura trigger surfaces that
+# can't yet flow through the unified ``_parse_triggered_ability_line``
+# grammar because a needed engine primitive doesn't exist yet — an
+# *architectural blocker*, not a "complex" body. Each entry's
+# docstring NAMES the missing primitive (specific generic-form,
+# what blocks adding it today). When a new card eventually exercises
+# the same primitive, or when the engine grows the missing piece,
+# the literal-line entry should be removed and the body migrated to
+# a parser-grammar surface alongside the new engine class.
 #
-# The table is consulted BEFORE the standard ``_parse_triggered_ability_line``
-# path so the known literal wins over a potential partial parse failure.
-# ``_strip_reminder_text`` has already been applied to the line before
-# the lookup — keys must be reminder-text-stripped.
+# The table is consulted BEFORE the standard
+# ``_parse_triggered_ability_line`` path so the literal wins over a
+# potential partial parse failure. ``_strip_reminder_text`` has
+# already been applied to the line before the lookup — keys must be
+# reminder-text-stripped.
+#
+# Audit history (audit-litdispatch-auras): seven routing-only entries
+# previously lived here. Each was migrated to an Aura-context
+# effect-phrase recognizer in
+# ``mtg_bot.cards.parser.effects._parse_effect`` paired with the
+# matching condition phrase already in ``_PREDICATE_TRIGGER_PHRASES``.
+# The seven migrated bodies → engine class:
+#
+# - ``destroy it`` → ``DestroyEnchantedPermanent`` (Cryoshatter +
+#   Cracked Skull + Sporogenic Infection)
+# - ``enchanted creature fights up to one target creature an opponent
+#   controls`` → ``EnchantedCreatureFightsTargetEffect`` (Meltstrider's
+#   Resolve)
+# - ``enchanted creature deals damage equal to its power to any other
+#   target`` → ``PainForAllETBEffect``
+# - ``deals that much damage to each opponent`` →
+#   ``PainForAllDamageEchoEffect``
+# - ``look at target player's hand. You may choose a nonland card
+#   from it. That player discards that card`` →
+#   ``TargetOpponentLookHandMayDiscard`` (Cracked Skull)
+# - ``target player sacrifices a creature of their choice other than
+#   enchanted creature`` →
+#   ``TargetOpponentSacrificesCreatureOtherThanEnchanted``
+#   (Sporogenic Infection)
+# - ``sacrifice this Aura unless a nonland permanent left the
+#   battlefield this turn or a spell was warped this turn`` →
+#   ``SacrificeSelfUnlessVoidActive`` (Chorale of the Void's "Void —"
+#   end-step rider; per CR 207.2c the ``Void — `` ability-word prefix
+#   is informative-only, and the audit reworked the void-prefix
+#   handling in ``triggers.py`` to set ``requires_void=True`` only
+#   when the body carries the canonical middle-clause Void gate).
 _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
     # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Meltstrider's Resolve fight ETB
-    # ("When this Aura enters, enchanted creature fights up to one
-    # target creature an opponent controls.") migrated to the
-    # unified ``_parse_triggered_ability_line`` path: ``this Aura
-    # enters`` lives in ``_PREDICATE_TRIGGER_PHRASES`` and the body
-    # is now claimed by an Aura-context effect-phrase recognizer in
-    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
-    # ``EnchantedCreatureFightsTargetEffect``.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Pain for All ETB
-    # ("When this Aura enters, enchanted creature deals damage equal
-    # to its power to any other target.") migrated to the unified
-    # ``_parse_triggered_ability_line`` path: ``this Aura enters``
-    # already lives in ``_PREDICATE_TRIGGER_PHRASES`` and the body
-    # is claimed by an Aura-context effect-phrase recognizer in
-    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
-    # ``PainForAllETBEffect``.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Pain for All damage-echo
-    # ("Whenever enchanted creature is dealt damage, it deals that
-    # much damage to each opponent.") migrated to the unified
-    # ``_parse_triggered_ability_line`` path: ``enchanted creature
-    # is dealt damage`` already lives in
-    # ``_PREDICATE_TRIGGER_PHRASES`` and the body is now claimed by
-    # an Aura-context effect-phrase recognizer in
-    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
-    # ``PainForAllDamageEchoEffect``.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Cracked Skull look-at-hand-may-discard
-    # ETB ("When this Aura enters, look at target player's hand. You
-    # may choose a nonland card from it. That player discards that
-    # card.") migrated to the unified
-    # ``_parse_triggered_ability_line`` path. The trigger condition
-    # ``this Aura enters`` already lives in
-    # ``_PREDICATE_TRIGGER_PHRASES``; the body — a three-sentence
-    # phrase — is now claimed by an Aura-context effect-phrase
-    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
-    # mapping to ``TargetOpponentLookHandMayDiscard``. The trigger-
-    # line regex preserves internal periods because it anchors only
-    # on the single trailing period of the whole oracle line, so the
-    # multi-sentence body reaches the effect-grammar lookup verbatim.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Sporogenic Infection target-opp-sacs
-    # ETB ("When this Aura enters, target player sacrifices a
-    # creature of their choice other than enchanted creature.")
-    # migrated to the unified ``_parse_triggered_ability_line`` path:
-    # ``this Aura enters`` lives in ``_PREDICATE_TRIGGER_PHRASES``
-    # and the body is now claimed by an Aura-context effect-phrase
-    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
-    # mapping to
-    # ``TargetOpponentSacrificesCreatureOtherThanEnchanted``.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # Chorale of the Void — attacks trigger (bespoke reanimate effect).
+    # Chorale of the Void — attacks trigger.
     # "Whenever enchanted creature attacks, put target creature card
-    # from defending player's graveyard onto the battlefield under your
-    # control tapped and attacking." → ChoraleReanimateDefenderGrave
-    # CreatureEffect. Only Chorale in the pool has this "reanimate-from-
-    # defending-player's-graveyard-tapped-and-attacking" Aura-attacks
-    # trigger; generalization deferred until a second example exists.
+    # from defending player's graveyard onto the battlefield under
+    # your control tapped and attacking." → bespoke
+    # ChoraleReanimateDefenderGraveCreatureEffect.
+    #
+    # ARCHITECTURAL BLOCKER: this body needs a generic
+    # ``ReanimateTargetCreatureCardFromDefendingPlayersGraveyard``
+    # primitive that satisfies all three of:
+    #
+    #   1. legal-target pool restricted to "defending player"'s
+    #      graveyard — the player being attacked by the Aura's
+    #      enchanted creature, NOT any opponent of the resolving
+    #      controller. The current
+    #      ``ChoraleReanimateDefenderGraveCreatureEffect``
+    #      simplifies to "any opponent's graveyard" because the
+    #      engine doesn't thread the per-attacker defending-player
+    #      identity into ``state.resolving_combat_target_player``
+    #      (or any sibling slot the resolving effect could read).
+    #      Multi-defender combat (planeswalkers / multiplayer) is a
+    #      further complication — the printed phrase is unambiguous
+    #      in 2-player combat but the engine has no canonical hook
+    #      to resolve it.
+    #   2. the reanimated card enters tapped AND attacking the
+    #      defending player it just came from — the engine's
+    #      ``put_into_battlefield`` path doesn't mark a fresh
+    #      permanent as already-attacking-a-specific-defender,
+    #      so the existing bespoke flips ``card.attacking = True``
+    #      without wiring a defender_id. A grammar-side primitive
+    #      would need to thread the same defender hook through
+    #      ``put_into_battlefield`` and through the combat-state
+    #      bookkeeping.
+    #   3. the new permanent isn't summoning-sick — already handled
+    #      by the bespoke and trivially mirrored by a generic-form.
+    #
+    # Until the engine grows a per-attacker defending-player slot,
+    # the bespoke is the only honest claim — the standard
+    # reanimate primitives (e.g.
+    # ``ReturnCreatureFromYourGraveyardToBattlefield``) have the
+    # wrong source-of-creatures (controller's graveyard, not
+    # defending player's) and the wrong enters-state (untapped, not
+    # attacking-a-specific-defender). Generalization is gated on
+    # adding a ``ReanimateFromDefendingPlayersGraveyard`` engine
+    # primitive (or extending the existing reanimate family with
+    # ``defending_player_only=True`` plus
+    # ``tapped_and_attacking_defender=True`` flags); at that point
+    # the literal here can be removed and the body will claim
+    # through the unified path automatically.
     # ---------------------------------------------------------------
     (
         "Whenever enchanted creature attacks, put target creature card "
@@ -1024,38 +1043,6 @@ _AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {
         predicate=IsHost(subject="attacker"),
         effect=ChoraleReanimateDefenderGraveCreatureEffect(),
     ),
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Chorale of the Void's "Void —
-    # sacrifice unless" end-step rider ("Void — At the beginning of
-    # your end step, sacrifice this Aura unless a nonland permanent
-    # left the battlefield this turn or a spell was warped this
-    # turn.") migrated to the unified
-    # ``_parse_triggered_ability_line`` path. The ``Void — ``
-    # ability-word prefix is consumed by the ``At …`` dispatch in
-    # ``triggers.py``; per CR 207.2c the prefix has no rules
-    # consequence on its own, and the conditional-flag-setting
-    # logic in ``_parse_triggered_ability_line`` correctly leaves
-    # ``requires_void=False`` on this shape because the canonical
-    # void gate appears inside an UNLESS clause (in the body) rather
-    # than as a middle-clause intervening-if. The body
-    # ``sacrifice this Aura unless <void-gate>`` is now claimed by
-    # an Aura-context effect-phrase recognizer in
-    # ``mtg_bot.cards.parser.effects._parse_effect`` mapping to
-    # ``SacrificeSelfUnlessVoidActive``, which encodes the "fire
-    # always; sacrifice only when Void inactive" semantics at
-    # resolve time.
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # (audit-litdispatch-auras) Cracked Skull / Sporogenic Infection
-    # / Cryoshatter shared DEALT_DAMAGE-destroys-host trigger
-    # ("When enchanted creature is dealt damage, destroy it.")
-    # migrated to the unified ``_parse_triggered_ability_line`` path:
-    # the trigger condition ``enchanted creature is dealt damage``
-    # already lives in ``_PREDICATE_TRIGGER_PHRASES``, and the body
-    # ``destroy it`` is now claimed by an Aura-context effect-phrase
-    # recognizer in ``mtg_bot.cards.parser.effects._parse_effect``
-    # mapping to ``DestroyEnchantedPermanent``.
-    # ---------------------------------------------------------------
 }
 
 # Allowlist of names that may claim through the Aura oracle-text path.
