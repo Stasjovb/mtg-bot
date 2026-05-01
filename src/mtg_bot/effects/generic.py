@@ -7811,7 +7811,15 @@ class CreateXTokensOfTargetPermanentWithHasteEndStepSac(Effect):
                 put_into_battlefield(state, token, controller_id)
             finally:
                 state.resolving_x_value = saved_x
-            token.temp_keywords = token.temp_keywords | frozenset({"haste"})
+            from mtg_bot.effects.combinators import ApplyEffect
+            from mtg_bot.effects.durations import EndOfTurn
+
+            ApplyEffect(
+                inner=GrantKeywords(keywords=frozenset({"haste"})),
+                ends_at=EndOfTurn(),
+            ).resolve(
+                state, controller_id, (("creature", token.id),),
+            )
             state.delayed_triggers.append({
                 "fire_at_turn": state.turn_number,
                 "controller_id": controller_id,

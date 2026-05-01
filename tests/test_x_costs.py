@@ -12,7 +12,7 @@ from mtg_bot.actions import (
 )
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES, ManaCost, parse_mana_cost
-from mtg_bot.game import GameState, Player, StackItem, Zone
+from mtg_bot.game import GameState, Player, StackItem, Zone, effective_keywords
 
 from mtg_bot.cards.source import get_active_source
 
@@ -208,7 +208,7 @@ def test_devastating_onslaught_creates_x_copies_with_haste_sac_at_end_step():
     assert len(copies) == 2
     # Copies have haste (so they can attack immediately despite summoning sick).
     for c in copies:
-        assert "haste" in c.temp_keywords
+        assert "haste" in effective_keywords(state, c)
     # Delayed triggers scheduled to sac them at this turn's end step.
     assert len(state.delayed_triggers) == 2
     # Fire the end step — triggers go on the stack, then resolve.
