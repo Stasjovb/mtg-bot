@@ -2,23 +2,26 @@
 and :class:`ReplacementEffect` (CR 614).
 
 This module is the architectural pillar that replaces the per-card
-boolean-flag anti-pattern (``is_token_doubler``,
-``is_counter_doubler``, ``effective_draw_count``,
-``etb_trigger_multiplier``,
-``shuffles_into_library_instead_of_graveyard``,
-``attack_bypass_if_artifact_entered_this_turn``,
-``unblockable_if_two_spells_cast_this_turn``, …) and the literal-line
-recognizers in ``printing_keywords.py`` / ``equipment_builder.py`` /
-``statics.py`` anthem family. Decomposition: a modifier is either a
+boolean-flag anti-pattern and literal-line recognizers in
+``printing_keywords.py`` / ``equipment_builder.py`` / ``statics.py``
+anthem family. Decomposition: a modifier is either a
 :class:`ContinuousModifier` (CR 613 layer system — P/T mod, keyword
 grant/remove, type add) or a :class:`ReplacementEffect` (CR 614 —
 intercept events; transforms ``MultiplyCount(×N)``, ``AddToCount(+N)``,
 ``AddInstances(+N)``, ``Replace(other_event)``, ``Prevent``).
 
-PR A (this module's birth) lands the type definitions for both
-families plus the :func:`dispatch_replacement` infrastructure for
-``ReplacementEffect``. The CR-613 dispatcher for ``ContinuousModifier``
-lands in PR D when the continuous-effect family migrates.
+Today every battlefield-permanent replacement flag is a native
+``StaticAbility.replacement_effect`` declaration on the printing —
+the legacy boolean-flag synthesis paths
+(``is_token_doubler`` / ``is_counter_doubler`` /
+``extra_etb_trigger`` / ``replaces_draw_with_extra_when_hand_at_most_one``)
+have all been retired. The continuous-effect side (anthem family,
+Mechan Shieldmate, Illvoi Infiltrator) is partially migrated;
+:func:`walk_continuous_modifiers` is the consumer-facing dispatcher.
+The ``shuffles_into_library_instead_of_graveyard`` flag still
+synthesises a ``ReplacementEffect`` because the moving card isn't on
+the battlefield at dispatch time — its native-declaration migration
+needs the walker extended to also visit moving cards.
 """
 
 from __future__ import annotations
