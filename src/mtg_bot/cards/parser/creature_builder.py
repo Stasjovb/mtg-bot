@@ -138,9 +138,11 @@ from mtg_bot.effects.object_predicates import (
 from mtg_bot.effects.conditions import (
     AtLeastNSpellsCastThisTurn,
     ControlledArtifactEnteredThisTurn,
+    HandSizeAtMost,
 )
 from mtg_bot.effects.modifiers import (
     AddInstances,
+    AddToCount,
     ContinuousModifier,
     EventPattern,
     GrantKeyword,
@@ -863,7 +865,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
-    replaces_draw_with_extra_when_hand_at_most_one = False
     dynamic_pt_formula: str | None = None
     enters_with_counters_from_x: str | None = None
     grants_additional_land_per_turn = 0
@@ -1097,13 +1098,25 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # ``As long as you have one or fewer cards in hand, if you
             # would draw one or more cards, you draw that many cards
             # plus one instead.`` — Quantum Riddler's printed
-            # draw-replacement static. Flips the
-            # ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg
-            # below; the engine consumes the flag at draw resolution
-            # time and adds one extra card when the controller's hand
-            # is at most one card. Idempotent: a malformed printing
-            # with the line twice ends up with the field set once.
-            replaces_draw_with_extra_when_hand_at_most_one = True
+            # draw-replacement static. SELF-scope StaticAbility gated
+            # by HandSizeAtMost(1) (state-aware Condition checked at
+            # replacement-collection time), carrying a
+            # ReplacementEffect(EventPattern(WOULD_DRAW_CARDS),
+            # AddToCount(1)). The dispatcher's implicit "source's
+            # controller is the affected player" gate handles the
+            # "you would draw" qualifier; HandSizeAtMost handles the
+            # printed "as long as you have one or fewer cards in
+            # hand" rider.
+            statics.append(StaticAbility(
+                scope=StaticScope.SELF,
+                condition=HandSizeAtMost(1),
+                replacement_effect=ReplacementEffect(
+                    event_pattern=EventPattern(
+                        event=Event.WOULD_DRAW_CARDS,
+                    ),
+                    transform=AddToCount(delta=1),
+                ),
+            ))
             continue
         if _parse_attack_bypass_if_artifact_entered_line(line):
             # ``As long as an artifact entered the battlefield under
@@ -1372,9 +1385,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_minus_one_counters_from_hand_cast
         ),
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
-        replaces_draw_with_extra_when_hand_at_most_one=(
-            replaces_draw_with_extra_when_hand_at_most_one
-        ),
         dynamic_pt_formula=dynamic_pt_formula,
         enters_with_counters_from_x=enters_with_counters_from_x,
         grants_additional_land_per_turn=grants_additional_land_per_turn,

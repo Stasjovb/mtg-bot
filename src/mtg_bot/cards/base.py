@@ -985,13 +985,6 @@ class CardPrinting:
     # so Convoke and a sac-for-mana ability on the same source are
     # mutually exclusive — matches CR.
     has_convoke: bool = False
-    # Draw replacement: while any permanent with this flag is on the
-    # battlefield under the drawing player's control AND that player
-    # has one or fewer cards in hand, every "draw one or more cards"
-    # event for that player draws one extra card. Matches Quantum
-    # Riddler. Consumed by game.effective_draw_count and the
-    # draw_n_cards helper in turn.py.
-    replaces_draw_with_extra_when_hand_at_most_one: bool = False
     # Block restriction: "This creature can block only creatures with
     # flying." Sibling concept to reach (which loosens what *flying*
     # attackers can be blocked by). Matches the EoE Drone token printed
@@ -1149,7 +1142,6 @@ def make_creature(
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
     grants_all_basic_land_types_to_lands_you_control: bool = False,
-    replaces_draw_with_extra_when_hand_at_most_one: bool = False,
     warp_additional_life_cost: int = 0,
     warp_castable_from_graveyard: bool = False,
     enters_as_copy_of_creature: bool = False,
@@ -1216,9 +1208,6 @@ def make_creature(
         nonbasic_lands_are_mountains=nonbasic_lands_are_mountains,
         grants_all_basic_land_types_to_lands_you_control=(
             grants_all_basic_land_types_to_lands_you_control
-        ),
-        replaces_draw_with_extra_when_hand_at_most_one=(
-            replaces_draw_with_extra_when_hand_at_most_one
         ),
         warp_additional_life_cost=warp_additional_life_cost,
         warp_castable_from_graveyard=warp_castable_from_graveyard,

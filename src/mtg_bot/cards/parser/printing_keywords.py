@@ -368,15 +368,17 @@ def _parse_extra_etb_trigger_line(line: str) -> bool:
 
 # ``As long as you have one or fewer cards in hand, if you would draw
 # one or more cards, you draw that many cards plus one instead.`` —
-# Quantum Riddler's printed draw-replacement static. The engine wires
-# the replacement off the printing-level
-# ``replaces_draw_with_extra_when_hand_at_most_one`` flag (rather than
-# a generic ``StaticAbility`` shape, since draw replacement happens at
-# draw resolution time and reads the controller's hand size). Matched
-# as a literal string — Quantum Riddler is the only card in the pool
-# with this exact surface today; "broader grammar deferred until a
-# second example exists" (a future printing whose hand-size threshold
-# differs would parameterize this recognizer's threshold capture).
+# Quantum Riddler's printed draw-replacement static. The parser builds
+# a SELF-scope ``StaticAbility(condition=HandSizeAtMost(1),
+# replacement_effect=ReplacementEffect(WOULD_DRAW_CARDS,
+# AddToCount(1)))`` declaration; the dispatcher's implicit "source's
+# controller is the affected player" gate handles "you would draw"
+# and the StaticAbility.condition handles "as long as you have one
+# or fewer cards in hand". Matched as a literal string — Quantum
+# Riddler is the only card in the pool with this exact surface
+# today; "broader grammar deferred until a second example exists" (a
+# future printing whose hand-size threshold differs would
+# parameterize this recognizer's threshold capture).
 _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE = (
     "As long as you have one or fewer cards in hand, if you would "
     "draw one or more cards, you draw that many cards plus one "
@@ -386,11 +388,12 @@ _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE = (
 
 def _parse_replaces_draw_when_hand_at_most_one_line(line: str) -> bool:
     """Return ``True`` if ``line`` is the printing-level draw-replacement
-    clause for hand-size at-most-one, else ``False``. Flips the
-    ``replaces_draw_with_extra_when_hand_at_most_one`` kwarg on
-    ``make_creature``; the engine reads the flag at draw resolution
-    time and adds one extra card when the controller's hand is at
-    most one card.
+    clause for hand-size at-most-one, else ``False``. Drives a
+    SELF-scope ``StaticAbility(condition=HandSizeAtMost(1),
+    replacement_effect=ReplacementEffect(..., AddToCount(1)))``
+    declaration in the calling parser; the engine walks
+    ``static_abilities`` at draw resolution time and adds the
+    replacement's contribution when the condition holds.
     """
     return line.strip() == _REPLACES_DRAW_WHEN_HAND_AT_MOST_ONE_LINE
 

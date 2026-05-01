@@ -475,31 +475,6 @@ def _collect_replacement_effects(
                 ):
                     continue
                 out.append((obj.id, re))
-        # ── Legacy synthesis paths ─────────────────────────────────
-        # Quantum-Riddler-shape draw replacement →
-        # AddToCount(1) on WOULD_DRAW_CARDS, gated on the drawing
-        # player having ≤ 1 card in hand AND being the carrier's
-        # controller.
-        if event == Event.WOULD_DRAW_CARDS and getattr(
-            obj.printing,
-            "replaces_draw_with_extra_when_hand_at_most_one",
-            False,
-        ):
-            drawer = subjects.get("player")
-            if (
-                drawer is not None
-                and getattr(drawer, "id", None) == obj.controller_id
-                and len(getattr(drawer, "hand", [])) <= 1
-            ):
-                out.append((
-                    obj.id,
-                    ReplacementEffect(
-                        event_pattern=EventPattern(
-                            event=Event.WOULD_DRAW_CARDS,
-                        ),
-                        transform=AddToCount(delta=1),
-                    ),
-                ))
     # Out-of-band synthesis: WOULD_GO_TO_GRAVEYARD reads a flag on
     # the moving CARD's printing, not on a battlefield permanent
     # (the card is mid-flight at dispatch). The dispatch site

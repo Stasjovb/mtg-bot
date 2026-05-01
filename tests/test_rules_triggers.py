@@ -408,7 +408,29 @@ def test_quantum_riddler_has_warp_cost_and_flying():
     r = _PRINTINGS["Quantum Riddler"]
     assert r.warp_cost_str == "{1}{U}"
     assert "flying" in r.keywords
-    assert r.replaces_draw_with_extra_when_hand_at_most_one is True
+    # The "you draw an extra when your hand is one or fewer" rider is a
+    # SELF-scope StaticAbility carrying a HandSizeAtMost(1) condition
+    # plus a ReplacementEffect(WOULD_DRAW_CARDS, AddToCount(1)) — the
+    # registry-driven shape that replaced the legacy
+    # ``replaces_draw_with_extra_when_hand_at_most_one`` printing flag.
+    from mtg_bot.effects.conditions import HandSizeAtMost
+    from mtg_bot.effects.modifiers import (
+        AddToCount, EventPattern, ReplacementEffect,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    matches = [
+        s for s in r.static_abilities
+        if s.replacement_effect is not None
+        and s.replacement_effect.event_pattern.event
+        == Event.WOULD_DRAW_CARDS
+    ]
+    assert len(matches) == 1
+    assert matches[0].condition == HandSizeAtMost(1)
+    assert matches[0].replacement_effect == ReplacementEffect(
+        event_pattern=EventPattern(event=Event.WOULD_DRAW_CARDS),
+        transform=AddToCount(delta=1),
+    )
 
 
 def test_real_virus_beetle_makes_every_opponent_discard():

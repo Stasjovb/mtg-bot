@@ -480,3 +480,18 @@ class AtLeastNSpellsCastThisTurn(Condition):
 
     def matches(self, state, viewer_id, chosen_targets=None):
         return state.player_by_id(viewer_id).spells_cast_this_turn >= self.n
+
+
+@dataclass(frozen=True)
+class HandSizeAtMost(Condition):
+    """The viewer's hand has at most ``n`` cards.
+
+    Reads ``len(Player.hand) <= n``. Models Quantum Riddler's "as
+    long as you have one or fewer cards in hand" gate on its
+    draw-replacement ``ReplacementEffect`` via ``HandSizeAtMost(1)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return len(state.player_by_id(viewer_id).hand) <= self.n
