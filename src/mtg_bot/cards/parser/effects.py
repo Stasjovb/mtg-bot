@@ -163,6 +163,9 @@ from mtg_bot.cards.base import (
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     MutinousMassacreEffect,
     CoordinatedClobberingEffect,
+    ZeroPointBalladEffect,
+    CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+    ConsultTheStarChartsEffect,
 )
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -3590,6 +3593,62 @@ def _parse_effect(phrase: str) -> Effect | None:
         "and the other can't block this turn"
     ):
         return DealDamageToTargetCreature(amount=5)
+    # Zero Point Ballad's three-sentence body — destroy all creatures with
+    # toughness X or less (X = cast-time X value), lose X life, then
+    # conditionally return a creature to the battlefield if X ≥ 6. The
+    # three sentences share the same X variable which the engine class
+    # reads from ``state.resolving_x_value`` at resolve time; they cannot
+    # be modeled as separate Sequence steps because each step depends on
+    # the same X. The literal "X" in the normalized phrase is matched
+    # verbatim (it is not a grammar variable here — the engine class owns
+    # the X-reading logic). Only Zero Point Ballad (EoE) has this exact
+    # X-wrath + X-life-loss + conditional-reanimate surface; broader
+    # grammar deferred until a second card with a similar X-wrath body ships.
+    if phrase == (
+        "destroy all creatures with toughness X or less. "
+        "You lose X life. "
+        "If X is 6 or more, return a creature card put into "
+        "a graveyard this way to the battlefield under your control"
+    ):
+        return ZeroPointBalladEffect()
+    # Devastating Onslaught's three-sentence body — create X token copies
+    # of a target artifact or creature you control, those tokens gain haste
+    # UEOT, then sacrifice them at the beginning of the next end step.
+    # X is the cast-time X from the {X}{X}{R} mana cost; the engine class
+    # reads ``state.resolving_x_value`` at resolve time. The three sentences
+    # are tightly coupled: "those tokens" and "them" are anaphoric to the
+    # tokens created in sentence 1. The literal "X" in the normalized phrase
+    # is matched verbatim. Only Devastating Onslaught (EoE) has this exact
+    # X-token-copy + haste + end-step-sac three-sentence surface; deferred
+    # until a second card with a varying element ships.
+    if phrase == (
+        "create X tokens that are copies of target artifact or "
+        "creature you control. "
+        "Those tokens gain haste until end of turn. "
+        "Sacrifice them at the beginning of the next end step"
+    ):
+        return CreateXTokensOfTargetPermanentWithHasteEndStepSac()
+    # Consult the Star Charts' four-sentence body (after the Kicker preamble
+    # is stripped by the per-clause grammar's preamble-drop pass) — look at
+    # the top X cards where X = lands you control, put one into hand; if
+    # kicked, put two into hand instead; put the rest on the bottom in
+    # random order. The "where X is the number of lands you control"
+    # qualifier links sentence 1 to sentence 2's "one of those cards", and
+    # the kicked-branch conditional in sentence 3 references both. None of
+    # the four sentences parse as standalone effects; the "put the rest on
+    # the bottom in a random order" rider has no per-clause primitive. The
+    # engine class reads the land count and kicked state at resolve time.
+    # Only Consult the Star Charts (EoE) has this exact kicked-library-look
+    # surface; deferred until a second kicked-library-look card ships.
+    if phrase == (
+        "look at the top X cards of your library, where X is the "
+        "number of lands you control. "
+        "Put one of those cards into your hand. "
+        "If this spell was kicked, put two of those cards "
+        "into your hand instead. "
+        "Put the rest on the bottom of your library in a random order"
+    ):
+        return ConsultTheStarChartsEffect()
     # Kavaron Harrier's "create ... that's tapped and attacking. Sacrifice
     # that token at end of combat." two-sentence phrase. The second
     # sentence is anaphoric ("that token" refers to the token created in

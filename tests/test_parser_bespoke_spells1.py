@@ -127,7 +127,7 @@ def test_bespoke_table_count():
     #   + Biosynthic Burst (per-clause multi-sentence literal in effects.py)
     #   + Systems Override (per-clause multi-sentence literal in effects.py)
     #   + Vengeful Possession (per-clause multi-sentence literal in effects.py)
-    # Additional removals in bespoke-spells6 branch (7 more, 5 remaining):
+    # Additional removals in bespoke-spells6 branch (10 more, 2 remaining):
     #   + Cut Propulsion (per-clause multi-sentence literal in effects.py)
     #   + Mutinous Massacre (per-clause multi-sentence literal in effects.py)
     #   + Diplomatic Relations (per-clause multi-sentence literal in effects.py)
@@ -135,8 +135,11 @@ def test_bespoke_table_count():
     #   + Scout for Survivors (per-clause multi-sentence literal in effects.py)
     #   + Coordinated Clobbering (per-clause multi-sentence literal in effects.py)
     #   + Trial of Agony (per-clause multi-sentence literal in effects.py)
-    # 50 - 45 = 5 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 5
+    #   + Zero Point Ballad (per-clause multi-sentence literal in effects.py)
+    #   + Devastating Onslaught (per-clause multi-sentence literal in effects.py)
+    #   + Consult the Star Charts (per-clause multi-sentence literal in effects.py)
+    # 50 - 48 = 2 entries remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 2
 
 
 # ------------------------------------------------------------------ #

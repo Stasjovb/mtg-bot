@@ -332,26 +332,24 @@ def test_dispatch_close_encounter_returns_engine_class():
 def test_consult_the_star_charts_claimed_by_parser():
     # Consult the Star Charts ``{1}{U}`` Instant with Kicker ``{1}{U}``.
     # The Kicker preamble is detected and threaded onto the printing
-    # via the ``kicker`` kwarg; the 4-sentence body lands as a
-    # whole-spell exact-text dispatch entry mapping to
-    # ``ConsultTheStarChartsEffect()``.
+    # via the ``kicker`` kwarg; the 4-sentence body is claimed by the
+    # new multi-sentence literal in ``effects.py`` (migrated from the
+    # whole-spell exact-text tier in bespoke-spells6).
     assert "Consult the Star Charts" in _claimed_names()
 
 
-def test_dispatch_consult_the_star_charts_returns_engine_class():
-    # The dispatch key uses the post-reminder-stripping form: the
-    # parenthesized Kicker reminder ``(You may pay an additional ...)``
-    # is stripped before lookup, leaving just ``Kicker {1}{U}`` on
-    # the first line.
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_consult_no_whole_spell_bespoke_entry():
+    # Consult the Star Charts migrated from the whole-spell exact-text
+    # tier to the per-clause grammar; whole-spell dispatch now falls
+    # through (the key with the Kicker preamble no longer exists).
+    assert _try_whole_spell_exact_text(
         "Kicker {1}{U}\n"
         "Look at the top X cards of your library, where X is the "
         "number of lands you control. Put one of those cards into "
         "your hand. If this spell was kicked, put two of those cards "
         "into your hand instead. Put the rest on the bottom of your "
         "library in a random order."
-    )
-    assert eff == ConsultTheStarChartsEffect()
+    ) is None
 
 
 # ---------- Kicker preamble detector ----------

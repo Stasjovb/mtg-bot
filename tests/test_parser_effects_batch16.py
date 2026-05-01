@@ -683,12 +683,28 @@ def test_scout_for_survivors_parses_via_per_clause_grammar():
     )
 
 
-def test_dispatch_zero_point_ballad_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_zero_point_ballad_no_bespoke_entry():
+    # Zero Point Ballad migrated from the whole-spell exact-text tier to
+    # the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Destroy all creatures with toughness X or less. You lose "
+        "X life. If X is 6 or more, return a creature card put into "
+        "a graveyard this way to the battlefield under your control."
+    ) is None
+
+
+def test_zero_point_ballad_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the three-sentence body
+    # (X-wrath + X-life-loss + conditional reanimate) as
+    # ``ZeroPointBalladEffect()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Destroy all creatures with toughness X or less. You lose "
         "X life. If X is 6 or more, return a creature card put into "
         "a graveyard this way to the battlefield under your control."
     )
+    eff = _parse_spell_effect_phrase(body, "Zero Point Ballad")
     assert eff == ZeroPointBalladEffect()
 
 
@@ -721,13 +737,30 @@ def test_systems_override_parses_via_per_clause_grammar():
     assert eff == SystemsOverrideEffect()
 
 
-def test_dispatch_devastating_onslaught_returns_engine_class():
-    eff = _try_whole_spell_exact_text(
+def test_dispatch_devastating_onslaught_no_bespoke_entry():
+    # Devastating Onslaught migrated from the whole-spell exact-text tier
+    # to the per-clause grammar; whole-spell dispatch now falls through.
+    assert _try_whole_spell_exact_text(
+        "Create X tokens that are copies of target artifact or "
+        "creature you control. Those tokens gain haste until end "
+        "of turn. Sacrifice them at the beginning of the next end "
+        "step."
+    ) is None
+
+
+def test_devastating_onslaught_parses_via_per_clause_grammar():
+    # Belt-and-suspenders: the per-clause grammar's multi-sentence
+    # literal in ``effects.py`` claims the three-sentence body
+    # (create X token-copies + grant haste + end-step sac) as
+    # ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()``.
+    from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    body = (
         "Create X tokens that are copies of target artifact or "
         "creature you control. Those tokens gain haste until end "
         "of turn. Sacrifice them at the beginning of the next end "
         "step."
     )
+    eff = _parse_spell_effect_phrase(body, "Devastating Onslaught")
     assert eff == CreateXTokensOfTargetPermanentWithHasteEndStepSac()
 
 

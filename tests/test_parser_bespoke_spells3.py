@@ -137,10 +137,11 @@ def test_bespoke_table_count():
     # Untimely Malfunction) → 15 remaining.
     # bespoke-spells4 removes 3 more (Biosynthic Burst, Systems Override,
     # Vengeful Possession) → 12 remaining.
-    # bespoke-spells6 removes 7 more (Cut Propulsion, Mutinous Massacre,
+    # bespoke-spells6 removes 10 more (Cut Propulsion, Mutinous Massacre,
     # Diplomatic Relations, Desculpting Blast, Scout for Survivors,
-    # Coordinated Clobbering, Trial of Agony) → 5 remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 5
+    # Coordinated Clobbering, Trial of Agony, Zero Point Ballad,
+    # Devastating Onslaught, Consult the Star Charts) → 2 remaining.
+    assert len(_WHOLE_SPELL_EXACT_TEXT) == 2
 
 
 # ------------------------------------------------------------------ #

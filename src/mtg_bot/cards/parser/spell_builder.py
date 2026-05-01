@@ -44,12 +44,10 @@ from mtg_bot.cards.base import (
     CloseEncounterEffect,
     CommuneWithEvilEffect,
     ConditionalIfVoid,
-    ConsultTheStarChartsEffect,
     CostReduction,
     CounterTargetSpell,
     CreateToken,
     ExileTargetCreature,
-    CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     DealDamageAnyTarget,
     DealNDamageToEachCreature,
     DestroyTargetArtifact,
@@ -68,7 +66,6 @@ from mtg_bot.cards.base import (
     ReturnCreatureFromYourGraveyardToHand,
     Sequence,
     TerminalVelocityEffect,
-    ZeroPointBalladEffect,
     make_instant,
     make_sorcery,
 )
@@ -954,17 +951,12 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # Zero Point Ballad — "Destroy all creatures with toughness X or
     # less. You lose X life. If X is 6 or more, return a creature card
     # put into a graveyard this way to the battlefield under your
-    # control." — Blocker: the body text contains the literal letter
-    # "X" (not a numeral) as a runtime value bound at cast time. The
-    # per-clause grammar has no shape for X-parametric wrath or X-gated
-    # conditional reanimate; adding them would require new recognizers
-    # that produce parameterless X-reading classes, which isn't
-    # worthwhile for one card. Stays in whole-spell tier.
-    (
-        "Destroy all creatures with toughness X or less. You lose "
-        "X life. If X is 6 or more, return a creature card put into "
-        "a graveyard this way to the battlefield under your control."
-    ): ZeroPointBalladEffect(),
+    # control." — migrated to per-clause grammar: the new multi-sentence
+    # literal in ``effects.py`` matches the three-sentence body (the
+    # literal "X" in the normalized phrase is matched verbatim; the
+    # engine class reads the cast-time X value from
+    # ``state.resolving_x_value`` at resolve time) and returns
+    # ``ZeroPointBalladEffect()``.
     # Systems Override — "Gain control of target artifact or creature until
     # end of turn. Untap that permanent. It gains haste until end of turn.
     # If it's a Spacecraft, put ten charge counters on it. If you do,
@@ -976,21 +968,11 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # Devastating Onslaught — "Create X tokens that are copies of target
     # artifact or creature you control. Those tokens gain haste until end
     # of turn. Sacrifice them at the beginning of the next end step." —
-    # Blocker: the body text contains the literal letter "X" for the
-    # token count (cast-time X from {X}{X}{R} cost). The per-clause
-    # grammar has no "create X token-copies" shape, and the target-copy
-    # + haste + end-step-sac three-step combination is already handled
-    # by the dedicated engine class. A multi-sentence literal in
-    # ``effects.py`` would work syntactically but the normalized phrase
-    # has literal "X" in "create x tokens that are copies…" — matching
-    # that as a literal is fragile (any variation breaks it). Stays in
-    # whole-spell tier mapping to the parameterless bespoke class.
-    (
-        "Create X tokens that are copies of target artifact or "
-        "creature you control. Those tokens gain haste until end "
-        "of turn. Sacrifice them at the beginning of the next end "
-        "step."
-    ): CreateXTokensOfTargetPermanentWithHasteEndStepSac(),
+    # migrated to per-clause grammar: the new multi-sentence literal in
+    # ``effects.py`` matches the three-sentence body (the "X" in the
+    # normalized phrase is matched verbatim; anaphoric "Those tokens" and
+    # "them" are coupled to the created tokens) and returns
+    # ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()``.
     # Nexus of Fate — "Take an extra turn after this one.\nIf Nexus of
     # Fate would be put into a graveyard from anywhere, reveal Nexus of
     # Fate and shuffle it into its owner's library instead." — migrated
@@ -1015,41 +997,25 @@ _WHOLE_SPELL_EXACT_TEXT: dict[str, Effect] = {
     # of your library, where X is the number of lands you control. Put
     # one of those cards into your hand. If this spell was kicked, put
     # two of those cards into your hand instead. Put the rest on the
-    # bottom of your library in a random order." — Blocker: the dispatch
-    # key INCLUDES the Kicker preamble because ``_try_whole_spell_exact_text``
-    # is called with the full reminder-stripped oracle text BEFORE per-
-    # clause preamble stripping runs. The per-clause grammar would see
-    # only the body after stripping the Kicker line; a multi-sentence
-    # literal in ``effects.py`` would therefore match only the body text
-    # (no Kicker preamble) — but the body itself contains "X" as the
-    # land-count variable AND a kicked-branch conditional that the per-
-    # clause grammar has no recognizer for. Both blockers must be lifted
-    # before migration is possible.
-    (
-        "Kicker {1}{U}\n"
-        "Look at the top X cards of your library, where X is the "
-        "number of lands you control. Put one of those cards into "
-        "your hand. If this spell was kicked, put two of those cards "
-        "into your hand instead. Put the rest on the bottom of your "
-        "library in a random order."
-    ): ConsultTheStarChartsEffect(),
+    # bottom of your library in a random order." — migrated to per-clause
+    # grammar: the Kicker preamble is stripped by the per-clause path's
+    # ``_is_kicker_preamble`` dropper; the body alone is normalized and
+    # matched by the new multi-sentence literal in ``effects.py``, returning
+    # ``ConsultTheStarChartsEffect()``.
     # Close Encounter — "As an additional cost to cast this spell,
     # choose a creature you control or a warped creature card you own
     # in exile.\n Close Encounter deals damage equal to the power of
-    # the chosen creature or card to target creature." — Blocker: same
-    # preamble-key issue as Consult the Star Charts: the dispatch key
-    # includes the additional-cost preamble because ``_try_whole_spell_
-    # exact_text`` is called before per-clause preamble stripping. After
-    # preamble stripping, the body "Close Encounter deals damage equal
-    # to the power of the chosen creature or card to target creature."
-    # normalizes to "deals damage equal to the power of the chosen
-    # creature or card to target creature" — which has no per-clause
-    # recognizer (the existing ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_
-    # ANY_TARGET`` matches "deals damage equal to its power to any
-    # target", not the "chosen creature or card" phrasing). Migration
-    # requires a new recognizer for that surface AND a resolution
-    # mechanism that reads power from the chosen additional-cost
-    # creature/card rather than the resolving spell's source object.
+    # the chosen creature or card to target creature." — Blocker: after
+    # the additional-cost preamble is stripped by the per-clause path's
+    # ``_is_additional_cost_preamble`` dropper, the body normalizes to
+    # "deals damage equal to the power of the chosen creature or card to
+    # target creature" — which has no per-clause recognizer. The existing
+    # ``_DEAL_DAMAGE_EQUAL_TO_SOURCE_POWER_ANY_TARGET`` matches "deals
+    # damage equal to its power to any target" (source's own power), not
+    # the "chosen creature or card" phrasing (additional-cost object).
+    # Migration requires both a new recognizer for that surface AND a
+    # resolution mechanism that reads power from the chosen additional-
+    # cost creature/card. Stays in whole-spell tier.
     (
         "As an additional cost to cast this spell, choose a creature "
         "you control or a warped creature card you own in exile.\n"
