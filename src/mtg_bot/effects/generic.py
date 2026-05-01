@@ -9930,3 +9930,58 @@ class ExileAllMatchingUntilSourceLeaves(Effect):
         )
 
 
+@dataclass(frozen=True)
+class DrawCardsByConditionMultiplier(Effect):
+    """Draw X cards, where X is the ``multiplier`` of a structural
+    ``Condition``.
+
+    Generic primitive for the "draw X cards, where X is <count>" oracle
+    shape. Reuses the existing ``Condition`` algebra (the same one
+    ``CostReduction.condition`` uses): the resolve site reads
+    ``condition.multiplier(state, controller_id)`` at fire time, which
+    is the exact count semantics each ``Condition`` already encodes
+    (``PerDifferentlyNamedLand`` counts distinctly-named lands the
+    viewer controls, ``PerControlled`` counts permanents matching the
+    inner ``ObjectPredicate``, etc.).
+
+    The ``description`` argument is a short oracle-text fragment used
+    by ``describe()`` so log output reads naturally — e.g. for
+    ``PerDifferentlyNamedLand`` we want "draw X cards, where X is the
+    number of differently named lands you control" rather than the
+    generic ``Condition.__class__.__name__``. The fragment is parser-
+    supplied (one per claimed phrase shape), keeping the runtime engine
+    class oblivious to oracle-text wording while still producing
+    readable logs.
+
+    Replaces the bespoke ``AllFatesScrollDrawEffect`` for the
+    differently-named-lands surface; reusable for any future "draw X
+    where X is <Condition.multiplier>" printing without further engine
+    work.
+    """
+
+    condition: "Condition"  # noqa: F821 - forward ref via TYPE_CHECKING
+    description_fragment: str = "where X is determined at resolution"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_n_cards
+
+        x = self.condition.multiplier(state, controller_id)
+        if x <= 0:
+            state.log.append(
+                f"P{controller_id} draws 0 cards "
+                f"({self.description_fragment})"
+            )
+            return
+        drawn = draw_n_cards(state, controller_id, x)
+        state.log.append(
+            f"P{controller_id} draws {drawn} cards "
+            f"({self.description_fragment})"
+        )
+
+    def describe(self) -> str:
+        return f"draw X cards, {self.description_fragment}"
+
+

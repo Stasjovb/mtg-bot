@@ -158,7 +158,6 @@ from mtg_bot.effects import (
     AddManaToPool,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
-    AllFatesScrollDrawEffect,
     AlpharaelDreamingAcolyteDiscardEffect,
     ArabellaAttackEffect,
     GhostVacuumActivatedEffect,

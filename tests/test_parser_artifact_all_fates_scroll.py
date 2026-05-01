@@ -1,4 +1,4 @@
-"""Parser claims All-Fates Scroll via two-line dispatch.
+"""Parser claims All-Fates Scroll entirely through the unified grammar.
 
 All-Fates Scroll prints:
 
@@ -6,28 +6,24 @@ All-Fates Scroll prints:
     {7}, {T}, Sacrifice this artifact: Draw X cards, where X is the
     number of differently named lands you control.
 
-Two pieces compose the claim:
+Both activations claim through the unified ``_parse_clause`` /
+``_parse_effect`` grammar — no literal-line dispatch:
 
-  * **New effect-grammar primitive** ``add one mana of any color`` →
-    ``AddManaToPool(produces=(("any", 1),))``. Lifts the first
-    activation through the unified activation grammar — the activation
+  * ``add one mana of any color`` →
+    ``AddManaToPool(produces=(("any", 1),))``. The activation
     layer auto-flags ``is_mana_ability=True`` because the produced
     effect is a non-targeting ``AddManaToPool`` (CR 605). Distinct
     from the bracketed ``add {<color>}`` shape: the latter mints a
     fixed-color coin known at parse time, this one defers the
     color choice to resolution.
-  * **Literal-line bespoke-effect dispatch** for the second activation:
-    the body ``Draw X cards, where X is the number of differently named
-    lands you control.`` is wrapped in
-    ``AllFatesScrollDrawEffect`` (a single-card engine class) and the
-    full post-reminder-strip oracle line is matched as a literal in the
-    artifact builder's ``_LITERAL_ACTIVATED_LINES`` table. Same
-    "literal match for bespoke effect text" pattern Round 18 used for
-    Hylderblade and Robe of Stars.
-
-The mana ability's three-piece cost ``{7}, {T}, Sacrifice this artifact``
-is otherwise a recognized unified-grammar shape; only the effect body
-is bespoke.
+  * ``draw X cards, where X is the number of differently named lands
+    you control`` → ``DrawCardsByConditionMultiplier(condition=
+    PerDifferentlyNamedLand(), description_fragment=…)``. A generic
+    primitive whose resolve site reads ``condition.multiplier(state,
+    controller_id)`` at fire time — re-uses the same condition the
+    spell-side cost-reduction grammar wires for Fungal Colossus's
+    ``This spell costs {X} less to cast, where X is the number of
+    differently named lands you control.``
 """
 
 from __future__ import annotations
@@ -36,12 +32,13 @@ from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
     AddManaToPool,
-    AllFatesScrollDrawEffect,
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.effects import _parse_effect
+from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+from mtg_bot.effects.generic import DrawCardsByConditionMultiplier
 
 
 # --- Effect-grammar level ------------------------------------------------
@@ -85,11 +82,31 @@ _ALL_FATES_SCROLL_CARD = {
 }
 
 
+def test_draw_x_per_differently_named_land_effect_parses():
+    """``draw X cards, where X is the number of differently named lands
+    you control`` parses to the generic
+    ``DrawCardsByConditionMultiplier(PerDifferentlyNamedLand(), …)`` —
+    the same ``Condition`` the spell-side cost-reduction grammar uses
+    for Fungal Colossus's parallel ``costs {X} less to cast`` rider."""
+    eff = _parse_effect(
+        "draw X cards, where X is the number of differently named lands "
+        "you control"
+    )
+    assert eff == DrawCardsByConditionMultiplier(
+        condition=PerDifferentlyNamedLand(),
+        description_fragment=(
+            "where X is the number of differently named lands you control"
+        ),
+    )
+
+
 def test_build_artifact_printing_claims_all_fates_scroll():
     """The Scryfall-shaped All-Fates Scroll record builds an Artifact
-    with two activated abilities — the unified-grammar mana ability and
-    the literal-matched bespoke-effect draw activation — same shape as
-    the static registry's ``make_artifact(...)``."""
+    with two activated abilities — both claimed via the unified
+    activated grammar (mana ability through the existing ``add one
+    mana of any color`` recognizer; sac-draw through the new
+    differently-named-land draw recognizer mapping to the generic
+    ``DrawCardsByConditionMultiplier`` engine class)."""
     printing = _build_artifact_printing(_ALL_FATES_SCROLL_CARD)
     assert printing is not None
     assert printing.name == "All-Fates Scroll"
@@ -106,7 +123,13 @@ def test_build_artifact_printing_claims_all_fates_scroll():
                 tap_self=True,
                 sacrifice_self=True,
             ),
-            effect=AllFatesScrollDrawEffect(),
+            effect=DrawCardsByConditionMultiplier(
+                condition=PerDifferentlyNamedLand(),
+                description_fragment=(
+                    "where X is the number of differently named lands "
+                    "you control"
+                ),
+            ),
         ),
     )
     assert printing.triggered_abilities == ()

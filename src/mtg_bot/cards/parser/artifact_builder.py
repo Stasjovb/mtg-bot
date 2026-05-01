@@ -67,13 +67,15 @@ post-reminder-strip oracle line:
   ``RequiemMonolithActivatedEffect`` with ``sorcery_speed=True``. The
   printed body grants a UEOT trigger then offers an optional ping —
   one bespoke effect class encapsulates both.
-* **All-Fates Scroll** — two-line activation: the standard
-  ``{T}: Add one mana of any color.`` mana ability (parsed via the
-  unified grammar through the new ``add one mana of any color``
-  primitive in ``effects.py``), plus a literal-matched
+* **All-Fates Scroll** — two-line activation, both claimed via the
+  unified clause grammar: ``{T}: Add one mana of any color.`` parses
+  through the existing ``add one mana of any color`` recognizer, and
   ``{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the
-  number of differently named lands you control.`` activation →
-  ``AllFatesScrollDrawEffect``.
+  number of differently named lands you control.`` parses through
+  the new ``draw X cards, where X is the number of differently named
+  lands you control`` recognizer mapping to the generic
+  ``DrawCardsByConditionMultiplier(condition=PerDifferentlyNamedLand
+  (), description_fragment=…)``.
 * **The Endstone** (Legendary) — both trigger lines now claim through
   the unified ``_parse_clause`` grammar. The composite ``Whenever you
   play a land or cast a spell, draw a card.`` parses via the new
@@ -137,7 +139,6 @@ from __future__ import annotations
 from mtg_bot.cards.base import (
     ActivatedAbility,
     ActivationCost,
-    AllFatesScrollDrawEffect,
     CardPrinting,
     CostReduction,
     DrawCards,
@@ -304,29 +305,6 @@ def _haunted_screen_once_only_activation() -> ActivatedAbility:
     )
 
 
-def _all_fates_scroll_draw_activation() -> ActivatedAbility:
-    """Build All-Fates Scroll's ``{7}, {T}, Sacrifice this artifact``
-    activation drawing X cards (X = number of differently named lands
-    the controller controls).
-
-    The first ability ``{T}: Add one mana of any color.`` parses via
-    the unified activation grammar — the new ``add one mana of any
-    color`` primitive in ``effects.py`` produces the same
-    ``AddManaToPool(produces=(("any", 1),))`` the static registry uses,
-    and the activation layer auto-flags ``is_mana_ability=True``. Only
-    the bespoke draw activation needs the literal-line dispatch.
-    """
-    return ActivatedAbility(
-        cost=ActivationCost(
-            mana=parse_mana_cost("{7}"),
-            mana_str="{7}",
-            tap_self=True,
-            sacrifice_self=True,
-        ),
-        effect=AllFatesScrollDrawEffect(),
-    )
-
-
 _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     # Memorial Vault — bespoke "exile X-from-top, may play this turn"
     # body. Cost atom is standard.
@@ -341,11 +319,6 @@ _LITERAL_ACTIVATED_LINES: dict[str, "callable"] = {
     "that much life.\" That creature's controller may have this "
     "artifact deal 1 damage to it. Activate only as a sorcery.":
         _requiem_monolith_activation,
-    # All-Fates Scroll — bespoke "draw X = differently-named lands"
-    # body. The companion mana ability parses via the unified grammar.
-    "{7}, {T}, Sacrifice this artifact: Draw X cards, where X is the "
-    "number of differently named lands you control.":
-        _all_fates_scroll_draw_activation,
     # Pinnacle Starcage — bespoke "put exiled-with-this-artifact into
     # graveyard, mint a Robot per, sacrifice this" body. Sacrifice
     # phrase is part of the effect body, not the cost.

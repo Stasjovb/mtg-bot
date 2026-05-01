@@ -79,6 +79,7 @@ from mtg_bot.effects.generic import (
     DoubleTargetCreaturesPowerUEOT,
     DrawCardPerMulticoloredPermanent,
     DrawCards,
+    DrawCardsByConditionMultiplier,
     DrawCardsEqualToResolvingCombatDamage,
     DrawCardsEqualToResolvingCounterAmount,
     EquipToTargetCreatureYouControl,
@@ -228,7 +229,6 @@ from mtg_bot.effects.combinators import (
     Sequence,
 )
 from mtg_bot.effects.bespoke import (
-    AllFatesScrollDrawEffect,
     AlpharaelDreamingAcolyteDiscardEffect,
     AnticausalVestigeLeavesEffect,
     ArabellaAttackEffect,

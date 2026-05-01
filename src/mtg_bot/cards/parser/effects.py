@@ -180,10 +180,12 @@ from mtg_bot.effects.bespoke import (
 from mtg_bot.effects.combinators import IfNot, IfYouDo, MayDo
 from mtg_bot.effects.conditions import (
     ControlsAnotherCreatureWithPowerAtMost,
+    PerDifferentlyNamedLand,
 )
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
+    DrawCardsByConditionMultiplier,
     EachOpponentExilesCardFromHandWithCastPermission,
     LockOrUnlockDoorOfTargetRoomYouControl,
     PeekTopMayBattlefieldIfLandElseHand,
@@ -543,6 +545,21 @@ _DRAW_N_CARDS = re.compile(
 # its bare-amount sibling.
 _DRAW_THAT_MANY_CARDS = re.compile(
     r"^(?:you (?:may )?)?draw that many cards$"
+)
+# "Draw X cards, where X is the number of differently named lands you
+# control." — variable-amount draw whose count comes from a structural
+# ``Condition``'s ``multiplier``. All-Fates Scroll's sac-draw activated
+# body (``{7}, {T}, Sacrifice this artifact: Draw X cards, where X is
+# the number of differently named lands you control.``) is the only
+# EoE/DSK printing today; broader X-draw grammar (a parameterized
+# ``where X is <count phrase>`` family) lands when a second printing
+# ships with a different count-phrase mate (``Per controlled <subtype>``
+# etc.). For now this is a literal-phrase recognizer dispatching to the
+# generic ``DrawCardsByConditionMultiplier(condition=
+# PerDifferentlyNamedLand(), description_fragment=…)`` engine class.
+_DRAW_X_CARDS_PER_DIFFERENTLY_NAMED_LAND = re.compile(
+    r"^draw X cards, where X is the number of differently named lands "
+    r"you control$"
 )
 _YOU_GAIN_N_LIFE = re.compile(r"^you gain (\d+) life$")
 # "Put a +1/+1 counter on target creature" — bare-target counter
@@ -4145,6 +4162,22 @@ def _parse_effect(phrase: str) -> Effect | None:
         # read at resolve time, so the engine class needs no
         # parameters.
         return DrawCardsEqualToResolvingCombatDamage()
+    if _DRAW_X_CARDS_PER_DIFFERENTLY_NAMED_LAND.match(phrase) is not None:
+        # ``draw X cards, where X is the number of differently named
+        # lands you control`` — All-Fates Scroll's sac-draw body. Maps
+        # to the generic ``DrawCardsByConditionMultiplier`` parameter-
+        # ized by the existing ``PerDifferentlyNamedLand`` condition,
+        # whose ``multiplier`` returns the count at resolve time. Same
+        # condition the spell-side cost-reduction grammar already uses
+        # (Fungal Colossus's ``This spell costs {X} less to cast, where
+        # X is the number of differently named lands you control.``).
+        return DrawCardsByConditionMultiplier(
+            condition=PerDifferentlyNamedLand(),
+            description_fragment=(
+                "where X is the number of differently named lands "
+                "you control"
+            ),
+        )
     m = _YOU_GAIN_N_LIFE.match(phrase)
     if m is not None:
         return GainLife(amount=int(m.group(1)))

@@ -1,13 +1,38 @@
-"""Tests for All-Fates Scroll's simplified sac-draw activated."""
+"""Tests for All-Fates Scroll's sac-draw activation, now wired through
+the generic ``DrawCardsByConditionMultiplier`` engine class instead of
+the previous bespoke ``AllFatesScrollDrawEffect``.
+
+The body ``Draw X cards, where X is the number of differently named
+lands you control.`` decomposes to:
+
+  * ``PerDifferentlyNamedLand`` (the structural ``Condition`` whose
+    ``multiplier`` returns the count of distinctly-named lands the
+    viewer controls — same condition the spell-side cost-reduction
+    grammar uses for Fungal Colossus's ``costs {X} less to cast``);
+  * ``DrawCardsByConditionMultiplier(condition, description_fragment)``
+    — generic engine class that reads ``condition.multiplier`` at
+    resolve time and draws that many cards.
+
+No card-specific engine wiring remains.
+"""
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.cards import BASIC_LANDS
-from mtg_bot.effects import AllFatesScrollDrawEffect
+from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+from mtg_bot.effects.generic import DrawCardsByConditionMultiplier
 from mtg_bot.game import GameState, Player, Zone
 
 from mtg_bot.cards.source import get_active_source
 
 _PRINTINGS = get_active_source().get_printings()
+
+
+_ALL_FATES_SCROLL_DRAW_EFFECT = DrawCardsByConditionMultiplier(
+    condition=PerDifferentlyNamedLand(),
+    description_fragment=(
+        "where X is the number of differently named lands you control"
+    ),
+)
 
 
 def _new_state():
@@ -34,7 +59,7 @@ def test_effect_draws_equal_to_distinct_land_names():
     for _ in range(5):
         c = state.new_object(BASIC_LANDS["Swamp"], 0, Zone.LIBRARY)
         state.players[0].library.append(c)
-    AllFatesScrollDrawEffect().resolve(state, 0, ())
+    _ALL_FATES_SCROLL_DRAW_EFFECT.resolve(state, 0, ())
     assert len(state.players[0].hand) == 3
 
 
@@ -43,12 +68,12 @@ def test_effect_draws_zero_when_no_lands():
     for _ in range(3):
         c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
         state.players[0].library.append(c)
-    AllFatesScrollDrawEffect().resolve(state, 0, ())
+    _ALL_FATES_SCROLL_DRAW_EFFECT.resolve(state, 0, ())
     assert len(state.players[0].hand) == 0
 
 
 def test_effect_describe():
-    d = AllFatesScrollDrawEffect().describe()
+    d = _ALL_FATES_SCROLL_DRAW_EFFECT.describe()
     assert "X cards" in d and "differently named" in d
 
 
@@ -66,3 +91,4 @@ def test_scroll_printing_has_two_activated_abilities():
     assert draw_abil.cost.tap_self
     assert draw_abil.cost.sacrifice_self
     assert draw_abil.cost.mana_str == "{7}"
+    assert isinstance(draw_abil.effect, DrawCardsByConditionMultiplier)

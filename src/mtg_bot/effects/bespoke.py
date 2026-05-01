@@ -611,45 +611,6 @@ class PainForAllDamageEchoEffect(Effect):
 
 
 @dataclass(frozen=True)
-class AllFatesScrollDrawEffect(Effect):
-    """All-Fates Scroll's sac-draw: "Draw X cards, where X is the
-    number of differently named lands you control."
-
-    Counts distinct land names on the controller's battlefield at
-    resolve time and draws that many cards.
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.turn import draw_n_cards
-
-        names: set[str] = set()
-        for o in state.battlefield:
-            if o.controller_id == controller_id and o.printing.is_land:
-                names.add(o.printing.name)
-        x = len(names)
-        if x <= 0:
-            state.log.append(
-                f"All-Fates Scroll: P{controller_id} controls no "
-                f"lands; draws 0"
-            )
-            return
-        drawn = draw_n_cards(state, controller_id, x)
-        state.log.append(
-            f"All-Fates Scroll: P{controller_id} draws {drawn} cards"
-        )
-
-    def describe(self) -> str:
-        return (
-            "draw X cards, where X is the number of differently named "
-            "lands you control"
-        )
-
-
-
-@dataclass(frozen=True)
 class TractorBeamETBEffect(Effect):
     """Tractor Beam's ETB triggered ability: ``When this Aura enters,
     tap enchanted permanent.``
