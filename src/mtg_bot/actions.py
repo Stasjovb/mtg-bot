@@ -358,10 +358,17 @@ def can_pay_cost(
             return False
         for l in matching[:need]:
             used_lands.add(l.id)
-    # Pay generic with remaining pool coins (any color) + remaining lands.
+    # Pay generic + hybrid with remaining pool coins (any color) +
+    # remaining lands. Hybrid mana symbols ({W/U}, {U/R}, ...) are
+    # treated as generic-1 in the affordability check (engine
+    # simplification documented in ``ManaCost.hybrid``: any mana pays
+    # them, the strict color restriction isn't enforced). The pip
+    # count must still be included in the bound — without this, a
+    # {U/R} cost would be silently free.
     remaining_pool = len(usable_pool) - len(used_coins)
     remaining_lands = sum(1 for l in lands if l.id not in used_lands)
-    return remaining_pool + remaining_lands >= cost.generic
+    needed = cost.generic + len(cost.hybrid)
+    return remaining_pool + remaining_lands >= needed
 
 
 def apply_cost_reductions(
@@ -918,8 +925,11 @@ def auto_tap_for_cost(
         for l in matching[:need]:
             used_lands.add(l.id)
             tapped.append(l)
-    # Generic cost: pool first, then lands.
-    generic_need = cost.generic
+    # Generic cost (including hybrid pips, treated as generic-1 per
+    # the engine simplification): pool first, then lands. The hybrid
+    # contribution to the bound was missing here, mirroring the same
+    # bug previously in ``can_pay_cost``.
+    generic_need = cost.generic + len(cost.hybrid)
     for idx, coin in enumerate(p.mana_pool):
         if generic_need == 0:
             break

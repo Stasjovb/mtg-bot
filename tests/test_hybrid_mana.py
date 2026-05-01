@@ -196,3 +196,107 @@ def test_pinnacle_emissary_trigger_creates_drone():
     assert isinstance(ta.effect, CreateToken)
     assert ta.effect.token_printing.name == "Drone"
     assert ta.effect.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Behavioral: hybrid mana payment
+#
+# Engine simplification (per `parse_mana_cost` comment): hybrid is
+# treated as generic-1 in payment — paying with ANY mana is allowed,
+# rather than enforcing the RAW restriction that {U/R} must be paid by
+# {U} or {R}. This is documented and acceptable for now; what's NOT
+# acceptable is the field being silently ignored. These tests pin the
+# simplification: the hybrid component contributes to the affordability
+# check so a {U/R}-cost spell can't be cast for free.
+# ---------------------------------------------------------------------------
+
+def test_can_pay_cost_hybrid_alone_requires_one_mana():
+    """A bare ``{U/R}`` cost requires at least one mana to pay — the
+    payment loop must include the hybrid pip in its affordability
+    check (current simplification: hybrid counts as +1 generic)."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.game import GameState, Player
+
+    cost = parse_mana_cost("{U/R}")
+    assert cost.total == 1
+
+    # Player with zero mana sources can't afford {U/R}.
+    state = GameState(players=[Player(id=0), Player(id=1)])
+    assert can_pay_cost(state, 0, cost) is False
+
+
+def test_can_pay_cost_hybrid_with_mana_pip_succeeds():
+    """A ``{U/R}`` cost is payable with one floating mana of any color
+    (engine simplification)."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.game import GameState, ManaCoin, Player
+
+    cost = parse_mana_cost("{U/R}")
+    p0 = Player(id=0)
+    p0.mana_pool = [ManaCoin(color="C")]
+    state = GameState(players=[p0, Player(id=1)])
+    assert can_pay_cost(state, 0, cost) is True
+
+
+def test_auto_tap_for_cost_hybrid_taps_lands():
+    """``auto_tap_for_cost`` must tap lands for the hybrid pips, not
+    just the colored and generic portions. With ``{2}{U/R}`` (3 pips
+    total) and 3 islands available, all 3 should be tapped."""
+    from mtg_bot.actions import auto_tap_for_cost
+    from mtg_bot.cards.base import make_basic_land, parse_mana_cost
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    cost = parse_mana_cost("{2}{U/R}")
+    island_pr = make_basic_land("Island", "U")
+    p0 = Player(id=0)
+    state = GameState(players=[p0, Player(id=1)])
+    state.battlefield = [
+        GameObject(
+            id=i + 1, printing=island_pr, owner_id=0, controller_id=0,
+            zone=Zone.BATTLEFIELD,
+        )
+        for i in range(3)
+    ]
+    auto_tap_for_cost(state, 0, cost)
+    tapped_count = sum(1 for o in state.battlefield if o.tapped)
+    assert tapped_count == 3, (
+        "Hybrid pips must contribute to the lands-tapped count "
+        "(simplification: hybrid counts as generic-1 in payment)"
+    )
+
+
+def test_can_pay_cost_mixed_generic_and_hybrid():
+    """``{2}{U/R}`` should require at least 3 sources of mana
+    (2 generic + 1 hybrid). With only 2 lands available, the cost
+    isn't payable; with 3, it is. Pins the contract that hybrid
+    counts toward the affordability bound."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import make_basic_land, parse_mana_cost
+    from mtg_bot.game import GameObject, GameState, Player, Zone
+
+    cost = parse_mana_cost("{2}{U/R}")
+    assert cost.total == 3
+
+    island_pr = make_basic_land("Island", "U")
+    p0 = Player(id=0)
+    state = GameState(players=[p0, Player(id=1)])
+    state.battlefield = [
+        GameObject(
+            id=i + 1, printing=island_pr, owner_id=0, controller_id=0,
+            zone=Zone.BATTLEFIELD,
+        )
+        for i in range(2)
+    ]
+    # Only 2 islands — below the {2}{U/R} threshold of 3.
+    assert can_pay_cost(state, 0, cost) is False
+
+    # Add a third island — now affordable.
+    state.battlefield.append(
+        GameObject(
+            id=3, printing=island_pr, owner_id=0, controller_id=0,
+            zone=Zone.BATTLEFIELD,
+        )
+    )
+    assert can_pay_cost(state, 0, cost) is True
