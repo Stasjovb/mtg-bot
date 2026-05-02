@@ -186,14 +186,21 @@ def test_thrumming_hivepool_has_cost_reduction():
 
 def test_thrumming_hivepool_has_anthem_static():
     from mtg_bot.effects.base import StaticScope
+    from mtg_bot.effects.modifiers import GrantKeyword
     card = _artifact_card("Thrumming Hivepool", "{6}", _THRUMMING_ORACLE)
     result = _build_artifact_printing(card)
     assert result is not None
-    assert len(result.static_abilities) == 1
-    sa = result.static_abilities[0]
-    assert sa.scope == StaticScope.SLIVERS_YOU_CONTROL
-    assert "double strike" in sa.granted_keywords
-    assert "haste" in sa.granted_keywords
+    # PR-D anthem migration: the multi-keyword anthem fans out into
+    # one StaticAbility per granted keyword, each carrying a layer-6
+    # ContinuousModifier(GrantKeyword).
+    assert len(result.static_abilities) == 2
+    granted = set()
+    for sa in result.static_abilities:
+        assert sa.scope == StaticScope.SLIVERS_YOU_CONTROL
+        assert sa.continuous_effect is not None
+        assert isinstance(sa.continuous_effect.payload, GrantKeyword)
+        granted.add(sa.continuous_effect.payload.keyword)
+    assert granted == {"double strike", "haste"}
 
 
 def test_thrumming_hivepool_oracle_shape_is_grammar_claimed():
@@ -207,7 +214,8 @@ def test_thrumming_hivepool_oracle_shape_is_grammar_claimed():
     result = _build_artifact_printing(card)
     assert result is not None
     assert len(result.cost_reductions) == 1
-    assert len(result.static_abilities) == 1
+    # Multi-keyword anthem fans out into one StaticAbility per keyword.
+    assert len(result.static_abilities) == 2
     assert len(result.triggered_abilities) == 1
 
 

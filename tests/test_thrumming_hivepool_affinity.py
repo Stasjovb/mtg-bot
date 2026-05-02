@@ -58,8 +58,10 @@ def test_thrumming_hivepool_has_affinity_cost_reduction():
             condition=PerControlled(HasSubtype("Sliver")),
         ),
     )
-    # Other oracle clauses still wired.
-    assert len(p.static_abilities) == 1
+    # Other oracle clauses still wired. PR-D anthem migration: the
+    # multi-keyword anthem fans out into one StaticAbility per keyword
+    # (double strike + haste = 2).
+    assert len(p.static_abilities) == 2
     assert len(p.triggered_abilities) == 1
 
 

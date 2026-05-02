@@ -66,6 +66,8 @@ def test_non_sliver_does_not_get_anthem():
 def test_hivepool_printing_metadata():
     h = _PRINTINGS["Thrumming Hivepool"]
     assert h.is_artifact
-    assert len(h.static_abilities) == 1
+    # PR-D anthem migration: the multi-keyword anthem fans out into
+    # one StaticAbility per keyword (double strike + haste = 2).
+    assert len(h.static_abilities) == 2
     triggers = {_legacy_or_inferred_key(ab) for ab in h.triggered_abilities}
     assert "beginning_of_upkeep" in triggers

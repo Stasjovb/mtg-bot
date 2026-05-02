@@ -323,11 +323,18 @@ def test_build_spacecraft_printing_claims_the_seriema():
     assert trig.effect == SearchLibraryForCard(
         filter_name="legendary_creature", may_fail=False,
     )
+    # PR-D anthem migration: the keyword grant rides on a layer-6
+    # ContinuousModifier(GrantKeyword("indestructible")) declaration;
+    # the legacy ``granted_keywords`` field is empty.
+    from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
     assert printing.static_abilities == (
         StaticAbility(
             scope=_Scope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL,
-            granted_keywords=frozenset({"indestructible"}),
             tier_threshold=0,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword("indestructible"),
+            ),
         ),
     )
 
