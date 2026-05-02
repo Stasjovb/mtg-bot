@@ -49,12 +49,12 @@ def test_spells_cast_two_or_more_parses_to_static():
         "As long as you've cast two or more spells this turn, this "
         "creature gets +2/+0."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         requires_spells_cast_this_turn=2,
-    )
+    ),)
 
 
 def test_spells_cast_two_or_more_with_keyword_rider():
@@ -64,13 +64,13 @@ def test_spells_cast_two_or_more_with_keyword_rider():
         "As long as you've cast two or more spells this turn, this "
         "creature gets +2/+0 and has flying."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         granted_keywords=frozenset({"flying"}),
         requires_spells_cast_this_turn=2,
-    )
+    ),)
 
 
 def test_spells_cast_two_or_more_does_not_set_other_gates():
@@ -81,10 +81,11 @@ def test_spells_cast_two_or_more_does_not_set_other_gates():
         "As long as you've cast two or more spells this turn, this "
         "creature gets +1/+1."
     )
-    assert parsed is not None
-    assert parsed.active_turn_only is False
-    assert parsed.requires_artifact_you_control is False
-    assert parsed.tier_threshold == 0
+    assert len(parsed) == 1
+    static = parsed[0]
+    assert static.active_turn_only is False
+    assert static.requires_artifact_you_control is False
+    assert static.tier_threshold == 0
 
 
 def test_spells_cast_two_or_more_rejects_unknown_keyword_rider():
@@ -96,7 +97,7 @@ def test_spells_cast_two_or_more_rejects_unknown_keyword_rider():
             "As long as you've cast two or more spells this turn, this "
             "creature gets +2/+0 and has scry."
         )
-        is None
+        == ()
     )
 
 
@@ -112,7 +113,7 @@ def test_one_spell_form_returns_none():
             "As long as you've cast one or more spells this turn, this "
             "creature gets +2/+0."
         )
-        is None
+        == ()
     )
 
 
@@ -124,7 +125,7 @@ def test_unrecognized_void_condition_returns_none():
         _parse_static_ability_line(
             "As long as you have void, this creature gets +1/+0."
         )
-        is None
+        == ()
     )
 
 
@@ -137,7 +138,7 @@ def test_unrecognized_creature_type_condition_returns_none():
         _parse_static_ability_line(
             "As long as you control a creature, this creature gets +1/+1."
         )
-        is None
+        == ()
     )
 
 

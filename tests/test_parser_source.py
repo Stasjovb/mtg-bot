@@ -2308,12 +2308,12 @@ def test_parse_static_ability_line_artifact_pt_only():
     result = _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +1/+0."
     )
-    assert result == StaticAbility(
+    assert result == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_parse_static_ability_line_artifact_pt_and_keyword():
@@ -2323,13 +2323,13 @@ def test_parse_static_ability_line_artifact_pt_and_keyword():
         "As long as you control an artifact, this creature gets +1/+0 "
         "and has deathtouch."
     )
-    assert result == StaticAbility(
+    assert result == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         granted_keywords=frozenset({"deathtouch"}),
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_parse_static_ability_line_extracts_pt_amounts():
@@ -2338,12 +2338,12 @@ def test_parse_static_ability_line_extracts_pt_amounts():
     result = _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +2/+3."
     )
-    assert result == StaticAbility(
+    assert result == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=3,
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_parse_static_ability_line_strips_whitespace():
@@ -2351,12 +2351,12 @@ def test_parse_static_ability_line_strips_whitespace():
         "  As long as you control an artifact, "
         "this creature gets +1/+0.  "
     )
-    assert _parse_static_ability_line(line) == StaticAbility(
+    assert _parse_static_ability_line(line) == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_parse_static_ability_line_rejects_unknown_condition():
@@ -2366,7 +2366,7 @@ def test_parse_static_ability_line_rejects_unknown_condition():
     scope here."""
     assert _parse_static_ability_line(
         "As long as you control a creature, this creature gets +1/+0."
-    ) is None
+    ) == ()
 
 
 def test_parse_static_ability_line_recognizes_active_turn_condition():
@@ -2377,12 +2377,12 @@ def test_parse_static_ability_line_recognizes_active_turn_condition():
     falling through."""
     assert _parse_static_ability_line(
         "As long as it's your turn, this creature gets +2/+0."
-    ) == StaticAbility(
+    ) == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_parse_static_ability_line_rejects_unknown_keyword():
@@ -2391,15 +2391,15 @@ def test_parse_static_ability_line_rejects_unknown_keyword():
     assert _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +1/+0 "
         "and has scry."
-    ) is None
+    ) == ()
 
 
 def test_parse_static_ability_line_rejects_non_static_lines():
-    assert _parse_static_ability_line("Flying") is None
+    assert _parse_static_ability_line("Flying") == ()
     assert _parse_static_ability_line(
         "When this creature enters, draw a card."
-    ) is None
-    assert _parse_static_ability_line("") is None
+    ) == ()
+    assert _parse_static_ability_line("") == ()
 
 
 def test_parse_static_ability_line_rejects_missing_period():
@@ -2407,7 +2407,7 @@ def test_parse_static_ability_line_rejects_missing_period():
     line doesn't match the pattern."""
     assert _parse_static_ability_line(
         "As long as you control an artifact, this creature gets +1/+0"
-    ) is None
+    ) == ()
 
 
 def test_parse_clause_recognizes_static_ability():
@@ -2415,12 +2415,12 @@ def test_parse_clause_recognizes_static_ability():
         "As long as you control an artifact, this creature gets +1/+0."
     )
     assert parsed is not None
-    assert parsed.static == StaticAbility(
+    assert parsed.statics == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         requires_artifact_you_control=True,
-    )
+    ),)
     assert parsed.keywords == ()
     assert parsed.trigger is None
     assert parsed.activated is None

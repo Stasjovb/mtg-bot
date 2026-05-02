@@ -36,12 +36,12 @@ def test_trailing_shape_spells_cast_parses_to_static():
         "This creature gets +2/+0 as long as you've cast two or more "
         "spells this turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         requires_spells_cast_this_turn=2,
-    )
+    ),)
 
 
 def test_trailing_shape_artifact_parses_to_static():
@@ -49,12 +49,12 @@ def test_trailing_shape_artifact_parses_to_static():
     parsed = _parse_static_ability_line(
         "This creature gets +1/+0 as long as you control an artifact."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_trailing_shape_with_keyword_rider():
@@ -64,13 +64,13 @@ def test_trailing_shape_with_keyword_rider():
         "This creature gets +1/+0 and has deathtouch as long as you "
         "control an artifact."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         granted_keywords=frozenset({"deathtouch"}),
         requires_artifact_you_control=True,
-    )
+    ),)
 
 
 def test_trailing_shape_with_multiword_keyword_rider():
@@ -81,13 +81,13 @@ def test_trailing_shape_with_multiword_keyword_rider():
         "This creature gets +1/+1 and has first strike as long as "
         "you've cast two or more spells this turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
         granted_keywords=frozenset({"first strike"}),
         requires_spells_cast_this_turn=2,
-    )
+    ),)
 
 
 # ---------- Leading vs. trailing equivalence ----------
@@ -128,8 +128,8 @@ def test_leading_and_trailing_shapes_are_equivalent(leading, trailing):
     # which shape the oracle text uses.
     a = _parse_static_ability_line(leading)
     b = _parse_static_ability_line(trailing)
-    assert a is not None
-    assert b is not None
+    assert a != ()
+    assert b != ()
     assert a == b
 
 
@@ -143,12 +143,12 @@ def test_trailing_shape_active_turn_parses_to_static():
     parsed = _parse_static_ability_line(
         "This creature gets +1/+1 as long as it's your turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_trailing_shape_unknown_condition_returns_none():
@@ -159,7 +159,7 @@ def test_trailing_shape_unknown_condition_returns_none():
         _parse_static_ability_line(
             "This creature gets +1/+1 as long as you control a creature."
         )
-        is None
+        == ()
     )
 
 
@@ -172,7 +172,7 @@ def test_trailing_shape_unknown_keyword_returns_none():
             "This creature gets +1/+0 and has scry as long as you "
             "control an artifact."
         )
-        is None
+        == ()
     )
 
 
@@ -184,7 +184,7 @@ def test_trailing_shape_missing_period_returns_none():
             "This creature gets +2/+0 as long as you've cast two or "
             "more spells this turn"
         )
-        is None
+        == ()
     )
 
 
@@ -197,7 +197,7 @@ def test_trailing_shape_missing_pt_returns_none():
             "This creature gets flying as long as you control an "
             "artifact."
         )
-        is None
+        == ()
     )
 
 
@@ -209,7 +209,7 @@ def test_trailing_shape_with_negative_pt_returns_none():
             "This creature gets -1/-1 as long as you control an "
             "artifact."
         )
-        is None
+        == ()
     )
 
 
@@ -222,7 +222,7 @@ def test_trailing_shape_wrong_subject_returns_none():
             "Target creature gets +1/+0 as long as you control an "
             "artifact."
         )
-        is None
+        == ()
     )
 
 

@@ -224,13 +224,13 @@ def test_parse_delirium_trailing_static_line():
         "as there are four or more card types among cards in your "
         "graveyard."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
         granted_keywords=frozenset({"trample"}),
         requires_delirium=True,
-    )
+    ),)
 
 
 def test_parse_static_line_unrecognized_gate_after_delirium_prefix():
@@ -243,7 +243,7 @@ def test_parse_static_line_unrecognized_gate_after_delirium_prefix():
     parsed = _parse_static_ability_line(
         "Delirium — This creature gets +1/+1 as long as the moon is full."
     )
-    assert parsed is None
+    assert parsed == ()
 
 
 # ---------- end-to-end claim ----------

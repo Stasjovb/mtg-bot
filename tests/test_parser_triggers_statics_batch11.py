@@ -299,12 +299,12 @@ def test_three_or_more_spells_leading_shape_parses_to_static():
         "As long as you've cast three or more spells this turn, this "
         "creature gets +3/+0."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=3,
         toughness_bonus=0,
         requires_spells_cast_this_turn=3,
-    )
+    ),)
 
 
 def test_three_or_more_spells_trailing_shape_parses_to_static():
@@ -312,12 +312,12 @@ def test_three_or_more_spells_trailing_shape_parses_to_static():
         "This creature gets +3/+0 as long as you've cast three or more "
         "spells this turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=3,
         toughness_bonus=0,
         requires_spells_cast_this_turn=3,
-    )
+    ),)
 
 
 def test_three_or_more_spells_leading_and_trailing_are_equivalent():
@@ -339,13 +339,13 @@ def test_three_or_more_spells_with_keyword_rider_leading():
         "As long as you've cast three or more spells this turn, this "
         "creature gets +2/+0 and has trample."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         granted_keywords=frozenset({"trample"}),
         requires_spells_cast_this_turn=3,
-    )
+    ),)
 
 
 def test_three_or_more_spells_distinct_from_two_or_more():
@@ -362,10 +362,10 @@ def test_three_or_more_spells_distinct_from_two_or_more():
         "As long as you've cast three or more spells this turn, this "
         "creature gets +1/+0."
     )
-    assert two is not None
-    assert three is not None
-    assert two.requires_spells_cast_this_turn == 2
-    assert three.requires_spells_cast_this_turn == 3
+    assert len(two) == 1
+    assert len(three) == 1
+    assert two[0].requires_spells_cast_this_turn == 2
+    assert three[0].requires_spells_cast_this_turn == 3
     assert two != three
 
 
@@ -377,11 +377,12 @@ def test_three_or_more_spells_does_not_set_other_gates():
         "As long as you've cast three or more spells this turn, this "
         "creature gets +1/+1."
     )
-    assert parsed is not None
-    assert parsed.requires_spells_cast_this_turn == 3
-    assert parsed.requires_artifact_you_control is False
-    assert parsed.active_turn_only is False
-    assert parsed.tier_threshold == 0
+    assert len(parsed) == 1
+    static = parsed[0]
+    assert static.requires_spells_cast_this_turn == 3
+    assert static.requires_artifact_you_control is False
+    assert static.active_turn_only is False
+    assert static.tier_threshold == 0
 
 
 # ---------- Phrasebook integrity (static side) ----------

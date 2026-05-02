@@ -32,24 +32,24 @@ def test_active_turn_leading_shape_parses_to_static():
     parsed = _parse_static_ability_line(
         "As long as it's your turn, this creature gets +2/+0."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_active_turn_trailing_shape_parses_to_static():
     parsed = _parse_static_ability_line(
         "This creature gets +2/+0 as long as it's your turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=2,
         toughness_bonus=0,
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_active_turn_leading_and_trailing_are_equivalent():
@@ -69,13 +69,13 @@ def test_active_turn_with_keyword_rider_leading():
         "As long as it's your turn, this creature gets +1/+0 and has "
         "flying."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         granted_keywords=frozenset({"flying"}),
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_active_turn_with_keyword_rider_trailing():
@@ -83,13 +83,13 @@ def test_active_turn_with_keyword_rider_trailing():
         "This creature gets +1/+0 and has deathtouch as long as it's "
         "your turn."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=0,
         granted_keywords=frozenset({"deathtouch"}),
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_active_turn_with_multiword_keyword_rider():
@@ -100,13 +100,13 @@ def test_active_turn_with_multiword_keyword_rider():
         "As long as it's your turn, this creature gets +1/+1 and has "
         "first strike."
     )
-    assert parsed == StaticAbility(
+    assert parsed == (StaticAbility(
         scope=StaticScope.SELF,
         power_bonus=1,
         toughness_bonus=1,
         granted_keywords=frozenset({"first strike"}),
         active_turn_only=True,
-    )
+    ),)
 
 
 def test_active_turn_does_not_set_other_gates():
@@ -116,11 +116,12 @@ def test_active_turn_does_not_set_other_gates():
     parsed = _parse_static_ability_line(
         "As long as it's your turn, this creature gets +1/+1."
     )
-    assert parsed is not None
-    assert parsed.active_turn_only is True
-    assert parsed.requires_artifact_you_control is False
-    assert parsed.requires_spells_cast_this_turn == 0
-    assert parsed.tier_threshold == 0
+    assert len(parsed) == 1
+    static = parsed[0]
+    assert static.active_turn_only is True
+    assert static.requires_artifact_you_control is False
+    assert static.requires_spells_cast_this_turn == 0
+    assert static.tier_threshold == 0
 
 
 def test_active_turn_rejects_unknown_keyword_rider():
@@ -132,7 +133,7 @@ def test_active_turn_rejects_unknown_keyword_rider():
             "As long as it's your turn, this creature gets +1/+0 and "
             "has scry."
         )
-        is None
+        == ()
     )
 
 
@@ -148,7 +149,7 @@ def test_during_your_turn_surface_form_returns_none():
         _parse_static_ability_line(
             "During your turn, this creature gets +1/+0."
         )
-        is None
+        == ()
     )
 
 
@@ -161,7 +162,7 @@ def test_active_turn_opponent_form_returns_none():
             "As long as it's an opponent's turn, this creature gets "
             "+1/+0."
         )
-        is None
+        == ()
     )
 
 
@@ -174,7 +175,7 @@ def test_active_turn_capitalization_drift_returns_none():
         _parse_static_ability_line(
             "As long as It's your turn, this creature gets +1/+0."
         )
-        is None
+        == ()
     )
 
 
