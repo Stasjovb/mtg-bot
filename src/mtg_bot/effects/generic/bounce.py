@@ -442,62 +442,21 @@ class ReturnCreatureFromYourGraveyardToHand(ReturnFromGraveyard):
 
 
 @dataclass(frozen=True)
-class ReturnUpToNCreaturesFromYourGraveyardToHand(Effect):
-    """Return up to ``max_n`` creature cards from your graveyard to your hand.
-
-    Models the "return one or two target creature [or planeswalker] cards
-    from your graveyard to your hand" mode of Archenemy's Charm. Since
-    planeswalkers aren't yet modeled in our card pool, the legal-target
-    pool is creature-only; if/when planeswalker cards land in graveyards,
-    they'd surface here through the same code path automatically.
+class ReturnUpToNCreaturesFromYourGraveyardToHand(ReturnFromGraveyard):
+    """``ReturnFromGraveyard`` constructor sugar for "return up to N
+    target creature cards from your graveyard to your hand". Models
+    Archenemy's Charm mode 1 ("return one or two target creature [or
+    planeswalker] cards"). Planeswalker cards aren't modeled in the
+    current card pool; they would surface through the same code path
+    automatically once the legality check sees them as creature cards.
     """
 
     max_n: int = 2
     min_n: int = 1
 
-    def requires_target(self) -> bool:
-        return True
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (self.min_n, self.max_n)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        p = state.player_by_id(controller_id)
-        return [
-            ("graveyard_creature", c.id)
-            for c in p.graveyard
-            if c.printing.is_creature
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone, reveal_to_all
-
-        if not targets:
-            return
-        p = state.player_by_id(controller_id)
-        seen_ids: set[int] = set()
-        for kind, target_id in targets:
-            if kind != "graveyard_creature":
-                continue
-            if target_id in seen_ids:
-                continue
-            seen_ids.add(target_id)
-            card = next((c for c in p.graveyard if c.id == target_id), None)
-            if card is None:
-                continue
-            p.graveyard.remove(card)
-            card.zone = Zone.HAND
-            p.hand.append(card)
-            reveal_to_all(state, card)
-            state.log.append(
-                f"{card.printing.name} returns from P{controller_id}'s "
-                f"graveyard to hand"
-            )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "creature", True)
+        object.__setattr__(self, "destination", "hand")
 
     def describe(self) -> str:
         return (
