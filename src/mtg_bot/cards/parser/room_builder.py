@@ -52,7 +52,6 @@ from mtg_bot.effects import (
     CreateToken,
     DrawCards,
     EachOpponentLosesLife,
-    ExileTopOfLibraryMayPlayThisTurn,
     GainLife,
     LoseLife,
     PumpTargetCreatureUntilEOT,
@@ -226,55 +225,6 @@ def _build_unholy_annex_ritual_chamber() -> CardPrinting:
     )
 
 
-def _build_charred_foyer_warped_space() -> CardPrinting:
-    """Charred Foyer // Warped Space ``{3}{R}`` // ``{4}{R}{R}``.
-
-    Charred Foyer oracle:
-        At the beginning of your upkeep, exile the top card of your
-        library. You may play it this turn.
-
-    Warped Space oracle:
-        Once each turn, you may pay {0} rather than pay the mana cost
-        for a spell you cast from exile.
-
-    Charred Foyer is a ``BEGINNING_OF_UPKEEP`` trigger gated on
-    ``Controlled(YOU)`` (your upkeep) wired to the new
-    ``ExileTopOfLibraryMayPlayThisTurn(amount=1)`` primitive — same
-    impulse-cast-flag mechanism Territorial Bruntar / Memorial Vault
-    use, packaged for the simple "exile the top card and you may play
-    it this turn" shape. The ``playable_from_exile_this_turn`` flag
-    expires at cleanup of the casting turn via the existing
-    ``turn.run_cleanup`` loop.
-
-    Warped Space is the optional alternative-cost permission "you may
-    pay {0} for a spell you cast from exile." It's an honest no-op
-    permission in this engine — the spell-casting pipeline doesn't
-    expose alt-costs as a choice yet, so a player who could "elect"
-    the {0} cost simply pays the printed mana cost instead. Same
-    permission-not-offered shape as a hypothetical convoke without
-    convoke-payment plumbing, or Steaming Sauna's "no maximum hand
-    size" arm: not modelling the optional benefit doesn't break
-    rules, it just makes the player miss a free spell. The half is
-    wired with cost-and-name only; once alt-cost machinery lands,
-    the static gains a real effect via the ``room_half`` lock gate.
-    """
-    return make_room(
-        _half(
-            "Charred Foyer", "{3}{R}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_UPKEEP,
-                    predicate=Controlled(YOU),
-                    effect=ExileTopOfLibraryMayPlayThisTurn(amount=1),
-                ),
-            ),
-        ),
-        _half(
-            "Warped Space", "{4}{R}{R}",
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Dispatch table: combined card name → factory
 # ---------------------------------------------------------------------------
@@ -282,7 +232,6 @@ def _build_charred_foyer_warped_space() -> CardPrinting:
 _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
-    "Charred Foyer // Warped Space": _build_charred_foyer_warped_space,
 }
 
 
@@ -297,6 +246,7 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
 # and the gate goes away with them.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Bottomless Pool // Locker Room",
+    "Charred Foyer // Warped Space",
     "Funeral Room // Awakening Hall",
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
@@ -338,6 +288,18 @@ _ROOM_HONEST_NOOP_LINES: frozenset[str] = frozenset({
     # alt-cost permission.
     "If a triggered ability of a permanent you control triggers, "
     "that ability triggers an additional time.",
+    # Warped Space: optional alternative-cost permission ``you may
+    # pay {0} for a spell you cast from exile``. The spell-casting
+    # pipeline doesn't expose alt-costs as a choice yet, so a player
+    # who could "elect" the {0} cost simply pays the printed mana
+    # cost instead. Same permission-not-offered shape as Steaming
+    # Sauna's "no maximum hand size" and Lecture Hall's hexproof-on-
+    # permanents — not modelling the optional benefit doesn't break
+    # rules, it just makes the player miss a free spell. Once the
+    # alt-cost machinery lands the static gains a real effect via
+    # the ``room_half`` lock gate and this entry drops.
+    "Once each turn, you may pay {0} rather than pay the mana cost "
+    "for a spell you cast from exile.",
 })
 
 

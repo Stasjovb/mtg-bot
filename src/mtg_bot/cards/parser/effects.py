@@ -211,6 +211,7 @@ from mtg_bot.effects.generic import (
     DrawCardsAndLoseLifeEqualToResolvingDamage,
     DrawCardsByConditionMultiplier,
     EachOpponentExilesCardFromHandWithCastPermission,
+    ExileTopOfLibraryMayPlayThisTurn,
     ExileTopXOfLibraryMayPlayThisTurn,
     GrantTriggeredAbilityUEOT,
     LockOrUnlockDoorOfTargetRoomYouControl,
@@ -3474,6 +3475,27 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ExileTopXOfLibraryMayPlayThisTurn(
             amount=MVOfCostPaidObjectPlus(constant=1),
         )
+    # Charred Foyer's upkeep trigger body — single-card impulse-cast
+    # shape ``exile the top card of your library. You may play it
+    # this turn``. Maps to ``ExileTopOfLibraryMayPlayThisTurn(
+    # amount=1)`` whose resolve sets ``playable_from_exile_this_turn``
+    # on the exiled card (cleared at cleanup of the casting turn via
+    # ``turn.run_cleanup``). Multi-sentence literal recognizer because
+    # the body crosses an internal period (the dot between sentence 1
+    # and ``You may play it this turn``) — no single-sentence regex
+    # tolerates that, and the compound splitter would carve the second
+    # sentence ``you may play it this turn`` which has no standalone
+    # primitive. Only Charred Foyer in the pool today fits this exact
+    # surface; broader grammar (a parameterized ``exile the top
+    # <count> cards of your library. You may play <pronoun> this
+    # turn`` regex driving ``ExileTopOfLibraryMayPlayThisTurn(amount=
+    # <count>)``) deferred until a second printing with a varying
+    # count or pronoun ships.
+    if phrase == (
+        "exile the top card of your library. "
+        "You may play it this turn"
+    ):
+        return ExileTopOfLibraryMayPlayThisTurn(amount=1)
     # Monoist Circuit-Feeder's ETB body — paired-target opposite-polarity
     # pump/debuff with a shared X. The compound-effect splitter can't
     # carve this body cleanly: ``Sequence`` supports only one targeting
