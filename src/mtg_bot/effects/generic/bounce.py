@@ -293,73 +293,37 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
 
 
 @dataclass(frozen=True)
-class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
-    """Return up to ``max_n`` creature cards with **total mana value**
-    ≤ ``max_total_mv`` from your graveyard to the battlefield. Put a
-    +1/+1 counter on each.
+class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(ReturnFromGraveyard):
+    """``ReturnFromGraveyard`` constructor sugar for "return up to N
+    target creature cards with total mana value M or less from your
+    graveyard to the battlefield, with a +1/+1 counter on each".
+    Matches Scout for Survivors.
 
-    Matches Scout for Survivors. The constraint is on the sum of
-    chosen targets' mana values, not on each individually — the
-    cleanest place to enforce that is at resolution time, since the
-    cast pipeline picks targets sequentially without a running budget.
-    Single-target legality still filters to MV ≤ max_total_mv (a card
-    bigger than the budget can never appear in any legal multi-pick).
+    The unified base's ``max_total_mv`` axis enforces the SUM-of-MV
+    budget at resolve time (skipping any pick that would exceed the
+    remaining budget). The ``plus_one_counter`` rider applies the
+    +1/+1 counter after each return-to-battlefield. The legacy
+    legal-target filter (creature cards with MV ≤ ``max_total_mv``
+    individually, since a card bigger than the budget can never
+    appear in any legal multi-pick) is replicated here by setting
+    ``max_mv = max_total_mv`` so the per-card cap and the sum cap
+    coincide for the single-card-too-big edge case.
     """
 
     max_n: int = 3
     max_total_mv: int = 3
 
-    def requires_target(self) -> bool:
-        return True
-
-    def target_count_range(self) -> tuple[int, int]:
-        return (0, self.max_n)
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        p = state.player_by_id(controller_id)
-        return [
-            ("graveyard_creature", c.id)
-            for c in p.graveyard
-            if c.printing.is_creature
-            and c.printing.mana_cost.total <= self.max_total_mv
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.actions import put_into_battlefield
-
-        p = state.player_by_id(controller_id)
-        # Enforce the SUM-of-MV budget at resolve time. Walk picks in
-        # pick order; admit each only if it fits the remaining budget,
-        # else drop it. Targets that already left the graveyard are
-        # silently skipped (standard targeting rule).
-        remaining = self.max_total_mv
-        for kind, target_id in targets:
-            if kind != "graveyard_creature":
-                continue
-            card = next((c for c in p.graveyard if c.id == target_id), None)
-            if card is None:
-                continue
-            mv = card.printing.mana_cost.total
-            if mv > remaining:
-                state.log.append(
-                    f"{card.printing.name} skipped — exceeds total-MV "
-                    f"budget (remaining {remaining}, needs {mv})"
-                )
-                continue
-            remaining -= mv
-            p.graveyard.remove(card)
-            state.log.append(
-                f"{card.printing.name} returns to the battlefield under "
-                f"P{controller_id} with a +1/+1 counter"
-            )
-            put_into_battlefield(state, card, controller_id)
-            from mtg_bot.game import add_plus_one_counters
-            add_plus_one_counters(state, card, 1)
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "creature", True)
+        object.__setattr__(self, "destination", "battlefield")
+        object.__setattr__(self, "min_n", 0)
+        # Per-card MV cap mirrors the legacy single-target legality
+        # filter ("a card bigger than the budget can never appear in
+        # any legal multi-pick"). Without this the legal-target pool
+        # would include too-big cards that the resolve-time budget
+        # check would silently drop.
+        object.__setattr__(self, "max_mv", self.max_total_mv)
+        object.__setattr__(self, "plus_one_counter", True)
 
     def describe(self) -> str:
         return (
