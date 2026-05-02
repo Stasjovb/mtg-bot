@@ -245,57 +245,17 @@ def _parse_modal_trigger_block(
 
 
 
-# Literal trigger-line dispatch for creature oracle lines whose effect
-# body uses a bespoke engine class that can't yet be expressed by the
-# unified ``_parse_effect_phrase`` grammar. Keyed by the exact
-# post-``_strip_reminder_text`` oracle line (same shape as
-# ``artifact_builder._LITERAL_TRIGGER_LINES``). Tried BEFORE
-# ``_parse_clause`` in the main line loop of ``_build_creature_printing``
-# so the bespoke effect class survives end-to-end while all other
-# oracle lines (keywords, statics, other triggers) continue to route
-# through the unified grammar.
-#
-# A literal entry is acceptable ONLY when:
-# - Exactly one card in the current pool fits that printed surface, AND
-# - The surrounding comment explains why generalization is deferred.
-#
-# Current entries: none — the table is empty after audit-monoist-chorale.
-#
-# Migrated to the unified grammar (no longer in this table):
-#
-# * **Attack-in-the-Box** — multi-sentence literal recognizer in
-#   ``effects._parse_effect`` decomposes the printed body into the
-#   ``IfYouDo(MayDo(PumpSelfUntilEOT(...)),
-#   ScheduleSelfSacAtNextEndStep())`` composition. The trigger header
-#   parses via the unified ``Whenever this creature attacks`` grammar.
-#   Migrated in audit-litdispatch-creatures.
-#
-# * **Wickerfolk Thresher** — multi-sentence literal recognizer in
-#   ``effects._parse_effect`` dispatches the printed body to the
-#   canonical ``PeekTopMayBattlefieldIfLandElseHand`` primitive. The
-#   trigger header (Delirium gate + attack event + IsSelf predicate)
-#   parses via the unified intervening-if grammar. Migrated in
-#   audit-litdispatch-creatures.
-#
-# * **Osseous Sticktwister** — multi-sentence literal recognizer in
-#   ``effects._parse_effect`` dispatches the post-Delirium-gate body
-#   to the new generic
-#   ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`` primitive.
-#   The trigger header (Delirium gate + ``BEGINNING_OF_END_STEP``
-#   event + ``Controlled(YOU)`` predicate) parses via the unified
-#   ``_parse_at_the_beginning_of_line`` grammar with the
-#   ``StateBound(Delirium())`` predicate composed on. Migrated in
-#   audit-per-opponent-choice.
-#
-# * **Monoist Circuit-Feeder** — paired-target opposite-polarity
-#   pump/debuff body is claimed by a literal multi-sentence recognizer
-#   in ``effects._parse_effect`` mapping to the new generic
-#   ``PairedTargetPumpDebuffUEOT`` primitive driven by a
-#   ``CountControlledMatching(IsArtifact())`` formula. The trigger
-#   header (``When this creature enters, …``) parses via the unified
-#   ``_parse_triggered_ability_line`` grammar. Migrated in
-#   audit-monoist-chorale.
-_BESPOKE_TRIGGER_LINES: dict[str, "TriggeredAbility"] = {}
+# Historical note: a literal trigger-line dispatch table
+# (``_BESPOKE_TRIGGER_LINES``) used to live here for creature oracle
+# lines whose effect body used a bespoke engine class outside the
+# ``_parse_effect_phrase`` grammar. Every entry was migrated to the
+# unified grammar — Attack-in-the-Box, Wickerfolk Thresher, and
+# Osseous Sticktwister via multi-sentence literal recognizers in
+# ``effects._parse_effect`` (audit-litdispatch-creatures and
+# audit-per-opponent-choice); Monoist Circuit-Feeder via the
+# ``PairedTargetPumpDebuffUEOT`` primitive (audit-monoist-chorale).
+# After the table sat empty for some time it was retired in
+# retire-empty-bespoke-shells.
 
 
 def _build_creature_printing(card: dict) -> CardPrinting | None:
@@ -828,18 +788,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             if not activated:
                 return None
             activated[-1] = replace(activated[-1], sorcery_speed=True)
-            continue
-        # Literal trigger-line dispatch: check the post-strip oracle
-        # line against ``_BESPOKE_TRIGGER_LINES`` BEFORE the unified
-        # ``_parse_clause`` so bespoke effect classes survive end-to-
-        # end. A matched literal is appended to ``triggers`` directly
-        # and the line is consumed — no fallthrough to ``_parse_clause``
-        # needed. Same pattern as ``artifact_builder._LITERAL_TRIGGER_
-        # LINES`` (Endstone, Pinnacle Starcage). See the table comment
-        # for why each entry isn't generalized today.
-        bespoke_ta = _BESPOKE_TRIGGER_LINES.get(line)
-        if bespoke_ta is not None:
-            triggers.append(bespoke_ta)
             continue
         # Pass the printing's own name to the clause dispatcher so the
         # triggered-ability layer can substitute name references
