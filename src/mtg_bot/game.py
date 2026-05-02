@@ -24,7 +24,38 @@ class Zone(Enum):
     STACK = "stack"
 
 
-@dataclass
+def _make_shallow_cloner(cls, list_fields: tuple[str, ...] = ()):
+    """Generate a fast shallow-copy fn for a ``slots=True`` dataclass.
+
+    The class loses ``__dict__`` under slots, so the previous
+    ``__dict__.copy()`` fast path no longer applies. We generate a
+    function that does direct per-slot assignment via ``exec`` —
+    each ``new.foo = o.foo`` compiles to a single ``LOAD_ATTR`` /
+    ``STORE_ATTR`` pair that hits the slot descriptors at C level,
+    skipping any Python-level loop overhead.
+
+    ``list_fields`` are slots whose values are mutable lists that
+    must be duplicated rather than shared with the source instance.
+    They emit ``new.<name> = list(o.<name>)`` — the rest emit a plain
+    reference assignment.
+    """
+    src_lines = ["def _clone(o, _new=cls.__new__, _list=list, _cls=cls):",
+                 "    new = _new(_cls)"]
+    for slot in cls.__slots__:
+        if slot in list_fields:
+            src_lines.append(f"    new.{slot} = _list(o.{slot})")
+        else:
+            src_lines.append(f"    new.{slot} = o.{slot}")
+    src_lines.append("    return new")
+    src = "\n".join(src_lines)
+    ns: dict = {"cls": cls}
+    exec(src, ns)
+    fn = ns["_clone"]
+    fn.__qualname__ = f"_clone_{cls.__name__}"
+    return fn
+
+
+@dataclass(slots=True)
 class GameObject:
     """An instance of a card in the game. Uniquely identified by ``id``."""
 
@@ -308,6 +339,14 @@ class GameObject:
     # its registry entry expires. Indefinite-lifetime entries persist
     # across cleanup so a permanent type-change survives.
     permanent_is_creature: bool = False
+
+
+# Fast shallow cloner generated once at module load. ``blocked_by`` is the
+# only mutable per-instance field that must be duplicated; every other slot
+# is either an immutable scalar / frozenset / Enum or a reference to the
+# frozen ``CardPrinting`` (safe to share across clones). Hot-path: called
+# ~120× per ``GameState.clone``.
+_clone_game_object = _make_shallow_cloner(GameObject, list_fields=("blocked_by",))
 
 
 def is_void_active(state: GameState) -> bool:
@@ -1824,7 +1863,7 @@ def effective_toughness(state: GameState, obj: GameObject) -> int:
     return _compute_effective_pt(state, obj)[1]
 
 
-@dataclass
+@dataclass(slots=True)
 class StackItem:
     """A spell or triggered ability on the stack.
 
@@ -1907,7 +1946,13 @@ class StackItem:
     cost_paid_objects: tuple["GameObject", ...] = ()
 
 
-@dataclass
+# Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
+# refs that the caller remaps via ``clone_obj``; everything else is an
+# immutable scalar / tuple. No mutable lists.
+_clone_stack_item = _make_shallow_cloner(StackItem)
+
+
+@dataclass(slots=True)
 class Player:
     id: int
     life: int = 20
@@ -1979,7 +2024,15 @@ class Player:
     agent_override_saved: Optional["Agent"] = None
 
 
-@dataclass
+# Fast shallow cloner. The 6 mutable list/zone fields (library, hand,
+# graveyard, exile, mana_pool, attacked_this_turn) are overwritten by
+# ``GameState.clone`` immediately after this returns, so they're shared
+# briefly by reference here — same semantics as the previous
+# ``__dict__.copy()`` fast path.
+_clone_player = _make_shallow_cloner(Player)
+
+
+@dataclass(slots=True)
 class ManaCoin:
     """A unit of mana in a player's pool.
 
@@ -2018,14 +2071,7 @@ class ManaCoin:
     spend_restriction: Optional[str] = None
 
 
-def _clone_mana_coin(coin: ManaCoin) -> ManaCoin:
-    """Fast clone for ManaCoin — same ``__new__`` + ``__dict__`` copy
-    pattern as ``GameState.clone``'s per-object cloners. ManaCoin's
-    two fields are immutable strings, so the shared __dict__ values
-    are safe; only the dict itself is duplicated."""
-    new = ManaCoin.__new__(ManaCoin)
-    new.__dict__ = coin.__dict__.copy()
-    return new
+_clone_mana_coin = _make_shallow_cloner(ManaCoin)
 
 
 class LogBuffer(list[str]):
@@ -2119,7 +2165,7 @@ class ContinuousEffect:
     expires_at_player_id: Optional[int] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class GameState:
     players: list[Player] = field(default_factory=list)
     battlefield: list[GameObject] = field(default_factory=list)
@@ -2653,24 +2699,22 @@ class GameState:
             existing = id_map.get(o.id)
             if existing is not None:
                 return existing
-            # Fast clone: skip __init__ entirely, copy the __dict__ in
-            # one C-level call, then duplicate the only mutable field.
-            new = GameObject.__new__(GameObject)
-            new.__dict__ = o.__dict__.copy()
-            new.blocked_by = list(o.blocked_by)
+            # Fast slot-cloner: explicit per-slot assignment via the
+            # exec'd ``_clone_game_object``; ``blocked_by`` is the only
+            # list field that needs duplication.
+            new = _clone_game_object(o)
             id_map[o.id] = new
             return new
 
-        # Clone players (and every zone list on each player). Same
-        # __new__ + __dict__ copy trick as clone_obj — avoids the
-        # dataclass __init__'s 18+ kwarg dispatch. Agent is shared
-        # (not game state). ManaCoin is a dataclass with two
-        # immutable string fields and is never mutated post-creation
-        # in the engine, so we copy via the same fast path.
+        # Clone players (and every zone list on each player). The
+        # exec'd slot-cloners are per-slot assignment fns generated at
+        # module load; agent is shared (not game state). ManaCoin is a
+        # slots dataclass whose two immutable string fields are never
+        # mutated post-creation in the engine, so the same fast path
+        # applies.
         new_players: list[Player] = []
         for p in self.players:
-            np = Player.__new__(Player)
-            np.__dict__ = p.__dict__.copy()
+            np = _clone_player(p)
             np.library = [clone_obj(o) for o in p.library]
             np.hand = [clone_obj(o) for o in p.hand]
             np.graveyard = [clone_obj(o) for o in p.graveyard]
@@ -2688,8 +2732,7 @@ class GameState:
         # graveyard) rather than stale originals.
         new_stack: list[StackItem] = []
         for item in self.stack:
-            ni = StackItem.__new__(StackItem)
-            ni.__dict__ = item.__dict__.copy()
+            ni = _clone_stack_item(item)
             ni.source = clone_obj(item.source)
             if item.cost_paid_objects:
                 ni.cost_paid_objects = tuple(
