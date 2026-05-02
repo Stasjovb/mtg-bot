@@ -14,24 +14,28 @@ builder splits the two faces, parses each into a ``RoomHalf``
 (name + mana cost + per-half abilities), and glues them together
 via ``make_room`` into the parent ``CardPrinting``.
 
-Two claim paths run in order:
+Single claim path: each face's oracle text walks through the unified
+per-line grammar (``_parse_clause`` + ``_parse_triggered_ability_line``).
+Door triggers (``"When you unlock this door, …"``) flow through
+the predicate-trigger-phrasebook entry ``"you unlock this door"``
+which maps to ``(Event.ENTERS, IsSelf())`` — the same shape the
+per-half static-side wiring uses, gated through the Room's
+per-half ``unlocked_halves`` set by ``make_room`` tagging the
+flattened ability with ``room_half=<half-name>``.
 
-1. **Oracle-text-driven** (``_build_room_printing_from_faces``):
-   each face's oracle text walks through the unified per-line
-   grammar (``_parse_clause`` + ``_parse_triggered_ability_line``).
-   Door triggers (``"When you unlock this door, …"``) flow through
-   the predicate-trigger-phrasebook entry ``"you unlock this door"``
-   which maps to ``(Event.ENTERS, IsSelf())`` — the same shape the
-   per-half static-side wiring uses, gated through the Room's
-   per-half ``unlocked_halves`` set by ``make_room`` tagging the
-   flattened ability with ``room_half=<half-name>``.
+Per-half oracle-text lines that map to engine-unmodeled mechanics
+(trigger doubling, optional alt-cost permission, etc.) live on the
+``_ROOM_HONEST_NOOP_LINES`` allowlist below; the half emits as
+cost-and-name only for those lines. Same precedent as
+``_NONAURA_HONEST_NOOP_LINES`` in ``enchantment_builder``.
 
-2. **Name-keyed bespoke fallback** (``_ROOM_BUILDERS``): a small
-   shrinking dispatch table for Rooms whose two halves still carry
-   shapes outside the unified grammar (e.g. trigger-doubling
-   statics, alt-cost permissions, leaves-graveyard observers,
-   custom continuous effects). As more shapes land in the unified
-   grammar each entry migrates out of this table.
+Combined-card names that the unified-grammar path is allowed to
+claim live on ``_UNIFIED_ROOM_NAMES``. Rooms outside the allowlist
+are simply not claimed (they pass through the type-gate and return
+``None``) — same silent-skip discipline the rest of the parser
+applies to unclaimed cards. The allowlist serves as documentation
+of "these Rooms have been audited end-to-end and the unified-path
+output matches the printed surface".
 """
 
 from __future__ import annotations
@@ -48,41 +52,15 @@ from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.text import _strip_reminder_text
 
 
-# ---------------------------------------------------------------------------
-# Room factories
-# ---------------------------------------------------------------------------
-
-def _half(
-    name: str, mana_cost: str,
-    triggered_abilities: tuple[TriggeredAbility, ...] = (),
-) -> RoomHalf:
-    """Tiny convenience wrapper that parses the half's mana cost and
-    bundles its abilities. Static / activated abilities aren't used by
-    any currently-claimed Room half, so they're not surfaced here yet."""
-    return RoomHalf(
-        name=name,
-        mana_cost_str=mana_cost,
-        mana_cost=parse_mana_cost(mana_cost),
-        triggered_abilities=tuple(triggered_abilities),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Dispatch table: combined card name → factory
-# ---------------------------------------------------------------------------
-
-_ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {}
-
-
 # Combined-card names that the unified-grammar path is allowed to
 # claim. Restricting the oracle-text path to an explicit allowlist
-# keeps the migration incremental — a Room whose oracle text happens
-# to match the per-line grammar today but whose engine semantics
-# weren't yet validated against the parser path stays on the bespoke
-# dispatch until it's been audited and added here. As entries leave
-# ``_ROOM_BUILDERS`` they land in this set; once every Room is in
-# the unified path the set and the bespoke table both drop to zero
-# and the gate goes away with them.
+# preserves the audit-trail discipline: a Room whose oracle text
+# happens to match the per-line grammar today but whose engine
+# semantics weren't yet validated end-to-end stays unclaimed until
+# it's been audited and added here. The bespoke dispatch that this
+# allowlist used to gate is gone — all four prior bespoke entries
+# (Charred Foyer / Mirror Room / Unholy Annex / Derelict Attic)
+# migrated to the unified path.
 _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Bottomless Pool // Locker Room",
     "Charred Foyer // Warped Space",
@@ -226,10 +204,12 @@ def _build_room_printing_from_faces(card: dict) -> CardPrinting | None:
 def _build_room_printing(card: dict) -> CardPrinting | None:
     """Claim a DSK Room card.
 
-    Tries the unified per-line grammar path first for Rooms in
-    ``_UNIFIED_ROOM_NAMES``; falls back to the name-keyed bespoke
-    dispatch (``_ROOM_BUILDERS``) for the remaining shapes. Returns
-    ``None`` if the card isn't a Room or no path claims it.
+    Routes Rooms in ``_UNIFIED_ROOM_NAMES`` through the unified
+    per-line grammar path (``_build_room_printing_from_faces``).
+    Returns ``None`` for non-Room cards, for Rooms outside the
+    allowlist, or for Rooms in the allowlist whose unified-path
+    parse fails (a parse failure is a regression — the allowlist
+    promises the unified path claims the card).
 
     Type-line gate: Scryfall's combined Room type_line is
     ``"Enchantment — Room // Enchantment — Room"``. We accept any
@@ -240,17 +220,6 @@ def _build_room_printing(card: dict) -> CardPrinting | None:
     if "Room" not in type_line:
         return None
     name = card.get("name", "")
-    if name in _UNIFIED_ROOM_NAMES:
-        built = _build_room_printing_from_faces(card)
-        if built is not None:
-            return built
-        # The allowlist promises the unified path claims the card. A
-        # miss here is a parser bug, not a license to fall through to
-        # the bespoke dispatch (which we just removed the entry from)
-        # — surface as a parser miss so the surrounding test suite
-        # catches the regression.
+    if name not in _UNIFIED_ROOM_NAMES:
         return None
-    factory = _ROOM_BUILDERS.get(name)
-    if factory is None:
-        return None
-    return factory()
+    return _build_room_printing_from_faces(card)

@@ -2291,3 +2291,179 @@ def test_create_token_copy_no_targets_noop():
     eff.resolve(state, controller_id=0, targets=())
     assert len(state.battlefield) == pre
 
+
+# ---------------------------------------------------------------------------
+# End-to-end: all four migrated Rooms produce the right shape via the
+# unified path. The bespoke ``_ROOM_BUILDERS`` dispatch table is now
+# empty and removed; every Room with a printed body in the EoE / DSK
+# pool is claimed by ``_build_room_printing_from_faces``.
+# ---------------------------------------------------------------------------
+
+
+def test_all_migrated_rooms_claim_via_unified_path():
+    """Every previously-bespoke Room (Charred Foyer, Mirror Room,
+    Unholy Annex, Derelict Attic) now produces a printing through
+    the unified per-line grammar with the same key behaviors the
+    bespoke factories wired.
+
+    The four migrations:
+
+    1. Mirror Room // Fractured Realm — Mirror Room's door trigger
+       is ``CreateTokenCopyOfTargetCreatureYouControl(
+       additional_subtype="Reflection")``; Fractured Realm is an
+       honest no-op (trigger doubler — engine-unmodeled).
+
+    2. Charred Foyer // Warped Space — Charred Foyer's upkeep
+       trigger is ``ExileTopOfLibraryMayPlayThisTurn(amount=1)``;
+       Warped Space is an honest no-op (alt-cost permission —
+       engine-unmodeled).
+
+    3. Unholy Annex // Ritual Chamber — Unholy Annex's end-step
+       trigger is ``Sequence(DrawCards(1),
+       ConditionalIfYouControlSubtype(subtype="Demon", ...))``;
+       Ritual Chamber's door trigger creates a Demon token.
+
+    4. Derelict Attic // Widow's Walk — Derelict Attic's door
+       trigger is ``Sequence(DrawCards(2), LoseLife(2))``; Widow's
+       Walk's lone-attacker trigger pumps the lone attacker via
+       ``PumpTargetCreatureUntilEOT(attacking_only=True,
+       you_control_only=True)``.
+    """
+    from mtg_bot.effects import (
+        ConditionalIfYouControlSubtype,
+        CreateToken,
+        CreateTokenCopyOfTargetCreatureYouControl,
+        DrawCards,
+        ExileTopOfLibraryMayPlayThisTurn,
+        LoseLife,
+        PumpTargetCreatureUntilEOT,
+        Sequence,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    # Each entry: (combined-card name, expected (half-name → leading-
+    # effect-class) checks). Each leading-effect class is the OUTER
+    # class on the half's first triggered ability; deeper structural
+    # checks happen inline below.
+    targets = {
+        "Mirror Room // Fractured Realm": {
+            "Mirror Room": CreateTokenCopyOfTargetCreatureYouControl,
+        },
+        "Charred Foyer // Warped Space": {
+            "Charred Foyer": ExileTopOfLibraryMayPlayThisTurn,
+        },
+        "Unholy Annex // Ritual Chamber": {
+            "Unholy Annex": Sequence,
+            "Ritual Chamber": CreateToken,
+        },
+        "Derelict Attic // Widow's Walk": {
+            "Derelict Attic": Sequence,
+            "Widow's Walk": PumpTargetCreatureUntilEOT,
+        },
+    }
+    for combined_name, half_to_effect_class in targets.items():
+        assert combined_name in _PARSER_PRINTINGS, (
+            f"{combined_name} not claimed by the unified parser path"
+        )
+        printing = _PARSER_PRINTINGS[combined_name]
+        assert printing.is_room
+        halves = {h.name: h for h in printing.room_halves}
+        for half_name, expected_class in half_to_effect_class.items():
+            assert half_name in halves, (
+                f"{combined_name}: half {half_name!r} missing"
+            )
+            half = halves[half_name]
+            assert len(half.triggered_abilities) >= 1, (
+                f"{combined_name} / {half_name}: no triggered abilities"
+            )
+            outer_effect = half.triggered_abilities[0].effect
+            assert isinstance(outer_effect, expected_class), (
+                f"{combined_name} / {half_name}: outer effect was "
+                f"{type(outer_effect).__name__}, expected "
+                f"{expected_class.__name__}"
+            )
+
+    # Mirror Room: the additional_subtype is "Reflection".
+    mirror_room = next(
+        h for h in _PARSER_PRINTINGS["Mirror Room // Fractured Realm"].room_halves
+        if h.name == "Mirror Room"
+    )
+    assert mirror_room.triggered_abilities[0].effect.additional_subtype == "Reflection"
+
+    # Charred Foyer: amount=1, event=BEGINNING_OF_UPKEEP.
+    charred_foyer = next(
+        h for h in _PARSER_PRINTINGS["Charred Foyer // Warped Space"].room_halves
+        if h.name == "Charred Foyer"
+    )
+    assert charred_foyer.triggered_abilities[0].effect.amount == 1
+    assert charred_foyer.triggered_abilities[0].event == Event.BEGINNING_OF_UPKEEP
+
+    # Unholy Annex: outer Sequence is (DrawCards(1),
+    # ConditionalIfYouControlSubtype("Demon", then=Sequence(...),
+    # else_=LoseLife(2))). Event is BEGINNING_OF_END_STEP.
+    unholy = next(
+        h for h in _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"].room_halves
+        if h.name == "Unholy Annex"
+    )
+    assert unholy.triggered_abilities[0].event == Event.BEGINNING_OF_END_STEP
+    seq = unholy.triggered_abilities[0].effect
+    assert isinstance(seq, Sequence)
+    assert len(seq.effects) == 2
+    assert isinstance(seq.effects[0], DrawCards)
+    assert seq.effects[0].amount == 1
+    assert isinstance(seq.effects[1], ConditionalIfYouControlSubtype)
+    cond = seq.effects[1]
+    assert cond.subtype == "Demon"
+    assert isinstance(cond.else_effect, LoseLife)
+    assert cond.else_effect.amount == 2
+
+    # Ritual Chamber: CreateToken of the registered Demon token.
+    ritual = next(
+        h for h in _PARSER_PRINTINGS["Unholy Annex // Ritual Chamber"].room_halves
+        if h.name == "Ritual Chamber"
+    )
+    create = ritual.triggered_abilities[0].effect
+    assert isinstance(create, CreateToken)
+    assert create.token_printing.name == "Demon"
+    assert create.count == 1
+
+    # Derelict Attic: Sequence(DrawCards(2), LoseLife(2)) on door
+    # trigger.
+    derelict = next(
+        h for h in _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"].room_halves
+        if h.name == "Derelict Attic"
+    )
+    seq = derelict.triggered_abilities[0].effect
+    assert isinstance(seq, Sequence)
+    assert len(seq.effects) == 2
+    assert isinstance(seq.effects[0], DrawCards)
+    assert seq.effects[0].amount == 2
+    assert isinstance(seq.effects[1], LoseLife)
+    assert seq.effects[1].amount == 2
+
+    # Widow's Walk: PumpTargetCreatureUntilEOT with attacking_only
+    # and you_control_only set, deathtouch granted, +1/+0 bonus.
+    widow = next(
+        h for h in _PARSER_PRINTINGS["Derelict Attic // Widow's Walk"].room_halves
+        if h.name == "Widow's Walk"
+    )
+    pump = widow.triggered_abilities[0].effect
+    assert isinstance(pump, PumpTargetCreatureUntilEOT)
+    assert pump.power_bonus == 1
+    assert pump.toughness_bonus == 0
+    assert pump.attacking_only
+    assert pump.you_control_only
+    assert "deathtouch" in pump.granted_keywords
+
+
+def test_room_builders_dispatch_table_is_empty():
+    """The bespoke ``_ROOM_BUILDERS`` dispatch table no longer
+    exists — every Room is claimed by the unified-grammar path.
+    Removing the table is the goal of the migration; this test
+    locks the absence in so a regression that re-introduces the
+    dispatch trips here.
+    """
+    import mtg_bot.cards.parser.room_builder as rb
+
+    assert not hasattr(rb, "_ROOM_BUILDERS")
+
