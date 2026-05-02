@@ -1,7 +1,7 @@
-"""Tests for the audit-litdispatch-auras decomposition of
-``_AURA_LITERAL_TRIGGER_LINES``.
+"""Tests for the audit-litdispatch-auras decomposition that retired
+the literal-trigger-line dispatch on Aura builders.
 
-The parent audit flagged the 8-entry literal-trigger-line table on
+The parent audit flagged an 8-entry literal-trigger-line table on
 ``mtg_bot.cards.parser.enchantment_builder`` as "hidden bespoke
 dispatch": each entry mapped a verbatim oracle trigger line to a
 ``TriggeredAbility`` rather than letting the unified
@@ -13,7 +13,8 @@ audit-monoist-chorale: the body now claims through a literal multi-
 sentence recognizer in ``effects._parse_effect`` mapping to the
 generic ``ReanimateTargetCreatureCardFromDefendersGraveyard``
 primitive, and the trigger header parses through the unified
-grammar.
+grammar. The empty-shell dict was retired in
+retire-empty-bespoke-shells.
 
 This file asserts:
 
@@ -21,7 +22,6 @@ This file asserts:
   ``_parse_triggered_ability_line`` path to the same
   ``TriggeredAbility`` shape the literal table previously
   produced;
-* the literal table is now empty;
 * Chorale of the Void's "Void —" end-step rider, which uses the
   "sacrifice unless" surface (not the standard intervening-if
   Void-gate surface), parses with ``requires_void=False`` because
@@ -35,9 +35,6 @@ from __future__ import annotations
 import pytest
 
 from mtg_bot.cards.base import TriggeredAbility
-from mtg_bot.cards.parser.enchantment_builder import (
-    _AURA_LITERAL_TRIGGER_LINES,
-)
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects import (
     DestroyEnchantedPermanent,
@@ -148,10 +145,8 @@ def test_migrated_aura_trigger_lines_parse_via_unified_path(
     line: str, expected: TriggeredAbility,
 ) -> None:
     """Each migrated line claims through ``_parse_triggered_ability_line``
-    and produces the same ``TriggeredAbility`` shape the literal table
-    previously held. The literal table no longer carries any of these
-    lines."""
-    assert line not in _AURA_LITERAL_TRIGGER_LINES
+    and produces the same ``TriggeredAbility`` shape the (now-retired)
+    literal table previously held."""
     parsed = _parse_triggered_ability_line(line)
     assert parsed == expected
 
@@ -159,27 +154,8 @@ def test_migrated_aura_trigger_lines_parse_via_unified_path(
 # ---------- final literal entry migrated: Chorale attacks trigger ----------
 
 
-def test_chorale_attacks_trigger_no_longer_in_literal_table() -> None:
-    """Chorale of the Void's attacks-trigger reanimate body
-    (``put target creature card from defending player's graveyard
-    onto the battlefield under your control tapped and attacking``)
-    was migrated in audit-monoist-chorale to a generic engine
-    primitive (``ReanimateTargetCreatureCardFromDefendersGraveyard``)
-    plus a literal multi-sentence recognizer in
-    ``effects._parse_effect``. The literal-trigger table no longer
-    carries the line; the unified ``_parse_triggered_ability_line``
-    path claims it.
-    """
-    line = (
-        "Whenever enchanted creature attacks, put target creature card "
-        "from defending player's graveyard onto the battlefield under "
-        "your control tapped and attacking."
-    )
-    assert line not in _AURA_LITERAL_TRIGGER_LINES
-
-
 def test_chorale_attacks_trigger_parses_via_unified_path() -> None:
-    """Chorale's attacks-trigger body now claims through the unified
+    """Chorale's attacks-trigger body claims through the unified
     grammar: trigger header (``Whenever enchanted creature attacks``)
     parses via the predicate-trigger phrasebook; effect body parses
     via ``_parse_effect``'s literal multi-sentence recognizer mapping
@@ -198,14 +174,3 @@ def test_chorale_attacks_trigger_parses_via_unified_path() -> None:
         effect=ReanimateTargetCreatureCardFromDefendersGraveyard(),
     )
     assert parsed == expected
-
-
-def test_aura_literal_table_is_empty() -> None:
-    """After the audit-monoist-chorale decomposition, the literal-
-    trigger table is empty: every entry has been migrated to the
-    unified grammar. Future entries should NOT be added — they
-    indicate either a missing engine primitive (in which case add
-    the primitive and route through the grammar) or a missing
-    parameterized recognizer (in which case extend the grammar).
-    """
-    assert _AURA_LITERAL_TRIGGER_LINES == {}

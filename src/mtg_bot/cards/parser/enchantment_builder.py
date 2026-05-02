@@ -316,28 +316,14 @@ _CRYOSHATTER_COMPOUND_LINE = (
     "destroy it."
 )
 
-# Literal trigger-line recognizers for Aura trigger surfaces that
-# can't yet flow through the unified ``_parse_triggered_ability_line``
-# grammar because a needed engine primitive doesn't exist yet — an
-# *architectural blocker*, not a "complex" body. Each entry's
-# docstring NAMES the missing primitive (specific generic-form,
-# what blocks adding it today). When a new card eventually exercises
-# the same primitive, or when the engine grows the missing piece,
-# the literal-line entry should be removed and the body migrated to
-# a parser-grammar surface alongside the new engine class.
-#
-# The table is consulted BEFORE the standard
-# ``_parse_triggered_ability_line`` path so the literal wins over a
-# potential partial parse failure. ``_strip_reminder_text`` has
-# already been applied to the line before the lookup — keys must be
-# reminder-text-stripped.
-#
-# Audit history (audit-litdispatch-auras): seven routing-only entries
-# previously lived here. Each was migrated to an Aura-context
-# effect-phrase recognizer in
+# Historical note: a literal-trigger-line dispatch table
+# (``_AURA_LITERAL_TRIGGER_LINES``) used to live here for Aura trigger
+# surfaces that didn't yet flow through the unified
+# ``_parse_triggered_ability_line`` grammar. Every entry was migrated
+# to an Aura-context effect-phrase recognizer in
 # ``mtg_bot.cards.parser.effects._parse_effect`` paired with the
 # matching condition phrase already in ``_PREDICATE_TRIGGER_PHRASES``.
-# The seven migrated bodies → engine class:
+# The migrated bodies → engine class:
 #
 # - ``destroy it`` → ``DestroyEnchantedPermanent`` (Cryoshatter +
 #   Cracked Skull + Sporogenic Infection)
@@ -362,7 +348,7 @@ _CRYOSHATTER_COMPOUND_LINE = (
 #   is informative-only, and the audit reworked the void-prefix
 #   handling in ``triggers.py`` to set ``requires_void=True`` only
 #   when the body carries the canonical middle-clause Void gate).
-_AURA_LITERAL_TRIGGER_LINES: dict[str, TriggeredAbility] = {}
+#
 # Chorale of the Void — fully decomposed in audit-monoist-chorale.
 # The attacks-trigger body is claimed by a literal multi-sentence
 # recognizer in ``effects._parse_effect`` mapping to the generic
@@ -517,17 +503,6 @@ def _build_aura_via_oracle_text(card: dict) -> CardPrinting | None:
                 predicate=IsHost(),
                 effect=DestroyEnchantedPermanent(),
             ))
-            continue
-
-        # ----------------------------------------------------------------
-        # Literal bespoke trigger lines: effects that aren't yet in the
-        # general grammar. The table maps the verbatim stripped oracle
-        # line to its TriggeredAbility. Checked BEFORE the standard
-        # trigger parser so the known literal wins.
-        # ----------------------------------------------------------------
-        literal_trigger = _AURA_LITERAL_TRIGGER_LINES.get(line)
-        if literal_trigger is not None:
-            triggers.append(literal_trigger)
             continue
 
         # ----------------------------------------------------------------
@@ -754,7 +729,7 @@ _UNIFIED_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     # The printing sits inert, same shape as the bespoke factory.
     "Leyline of Mutation",
     # Weftwalking — grants_first_spell_each_turn_free static (literal)
-    # + ETB trigger via _NONAURA_LITERAL_TRIGGER_LINES.
+    # + ETB trigger via the unified grammar.
     "Weftwalking",
     # Terrasymbiosis — COUNTERS_ADDED trigger now claims through the
     # unified clause grammar via the ``"you put one or more +1/+1
