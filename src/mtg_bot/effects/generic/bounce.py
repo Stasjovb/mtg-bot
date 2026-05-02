@@ -11,6 +11,7 @@ from mtg_bot.effects.base import (
     _apply_damage, _multicolored_permanents_count,
     _find_moonlit_replacement_source,
 )
+from mtg_bot.effects.generic.graveyard import ReturnFromGraveyard
 from mtg_bot.effects.generic.targets_helpers import (
     _eff_subtypes,
     _slot_target_still_legal,
@@ -370,51 +371,17 @@ class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
 
 
 @dataclass(frozen=True)
-class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
-    """Target artifact card from your graveyard goes to your hand.
-
-    Matches Scour for Scrap's second mode. Uses a dedicated target kind
-    ``graveyard_artifact`` so the multi-zone target pool is distinct
-    from battlefield targets.
+class ReturnTargetArtifactCardFromYourGraveyardToHand(ReturnFromGraveyard):
+    """``ReturnFromGraveyard`` constructor sugar for "return target
+    artifact card from your graveyard to your hand". Matches Scour for
+    Scrap's second mode. Uses target-kind ``graveyard_artifact`` so the
+    pool is distinct from creature-grave / land-grave variants.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        p = state.player_by_id(controller_id)
-        return [
-            ("graveyard_artifact", c.id)
-            for c in p.graveyard
-            if c.printing.is_artifact
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "graveyard_artifact":
-            return
-        p = state.player_by_id(controller_id)
-        card = next((c for c in p.graveyard if c.id == target_id), None)
-        if card is None:
-            return
-        from mtg_bot.game import reveal_to_all
-        p.graveyard.remove(card)
-        card.zone = Zone.HAND
-        p.hand.append(card)
-        reveal_to_all(state, card)
-        state.log.append(
-            f"{card.printing.name} returns from P{controller_id}'s "
-            f"graveyard to hand"
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact", True)
+        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "target_kind", "graveyard_artifact")
 
     def describe(self) -> str:
         return "return target artifact card from your graveyard to your hand"
