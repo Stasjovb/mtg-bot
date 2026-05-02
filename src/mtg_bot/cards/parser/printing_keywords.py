@@ -401,16 +401,18 @@ def _parse_replaces_draw_when_hand_at_most_one_line(line: str) -> bool:
 # ``As long as an artifact entered the battlefield under your control
 # this turn, this creature can attack as though it didn't have
 # defender.`` — Mechan Shieldmate's printed defender-bypass static.
-# The engine wires the bypass off the printing-level
-# ``attack_bypass_if_artifact_entered_this_turn`` boolean flag (rather
-# than a generic ``StaticAbility`` shape, since the attack-eligibility
-# check sits in ``combat._can_attack_through_defender`` and reads the
-# controller's per-turn artifact-entered counter). Matched as a literal
-# string — Mechan Shieldmate is the only card in the pool with this
-# exact surface today; "broader grammar deferred until a second
-# example exists" (a future printing whose triggering condition
-# differs — ``a creature entered``, ``a Spacecraft entered``, etc. —
-# would parameterize this recognizer's permanent-type capture).
+# The caller (creature_builder) builds a SELF-scope StaticAbility
+# carrying ``ContinuousModifier(layer=6, payload=
+# RemoveKeyword("defender"))`` gated on
+# ``ControlledArtifactEnteredThisTurn``; ``effective_keywords`` then
+# returns a set without "defender" while the gate holds and
+# ``eligible_attackers``'s defender check passes naturally. Matched
+# as a literal string — Mechan Shieldmate is the only card in the
+# pool with this exact surface today; "broader grammar deferred
+# until a second example exists" (a future printing whose triggering
+# condition differs — ``a creature entered``, ``a Spacecraft
+# entered``, etc. — would parameterize this recognizer's
+# permanent-type capture).
 _ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE = (
     "As long as an artifact entered the battlefield under your control "
     "this turn, this creature can attack as though it didn't have "
@@ -422,28 +424,32 @@ def _parse_attack_bypass_if_artifact_entered_line(line: str) -> bool:
     """Return ``True`` if ``line`` is the printing-level
     ``As long as an artifact entered the battlefield under your control
     this turn, this creature can attack as though it didn't have
-    defender.`` clause, else ``False``. Flips the
-    ``attack_bypass_if_artifact_entered_this_turn`` kwarg on
-    ``make_creature``; the engine reads the flag in
-    ``combat._can_attack_through_defender`` and lets the source attack
-    despite Defender once the controller's per-turn artifact-entered
-    counter is positive.
+    defender.`` clause, else ``False``. The caller builds a SELF-scope
+    ``StaticAbility(condition=ControlledArtifactEnteredThisTurn(),
+    continuous_effect=ContinuousModifier(layer=6,
+    payload=RemoveKeyword("defender")))``; ``effective_keywords``
+    drops "defender" while the gate holds and the source attacks
+    naturally through ``eligible_attackers``.
     """
     return line.strip() == _ATTACK_BYPASS_IF_ARTIFACT_ENTERED_LINE
 
 
 # ``This creature can't be blocked if you've cast two or more spells
 # this turn.`` — Illvoi Infiltrator's printed conditional-unblockable
-# static. The engine wires the unblockable check off the printing-level
-# ``unblockable_if_two_spells_cast_this_turn`` boolean flag (rather
-# than a generic ``StaticAbility`` shape, since the unblockability
-# decision sits in ``combat`` and reads the controller's per-turn
-# spells-cast counter). Matched as a literal string — Illvoi
-# Infiltrator is the only card in the pool with this exact surface
-# today; "broader grammar deferred until a second example exists" (a
-# future printing whose threshold differs — ``three or more spells``,
-# ``a noncreature spell``, etc. — would parameterize this recognizer's
-# threshold/spell-type capture).
+# static. The caller (creature_builder) builds a SELF-scope
+# StaticAbility carrying ``ContinuousModifier(layer=6,
+# payload=CantBeBlocked())`` gated on
+# ``AtLeastNSpellsCastThisTurn(2)``. CantBeBlocked is a layer-6
+# continuous gameplay-action restriction (structurally distinct from
+# real keyword grants); ``combat.can_block`` /
+# ``combat.declare_blockers`` reach it via ``game.is_cant_be_blocked``,
+# which walks ``walk_continuous_modifiers`` for the payload. Matched
+# as a literal string — Illvoi Infiltrator is the only card in the
+# pool with this exact surface today; "broader grammar deferred
+# until a second example exists" (a future printing whose threshold
+# differs — ``three or more spells``, ``a noncreature spell``, etc.
+# — would parameterize this recognizer's threshold/spell-type
+# capture).
 _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE = (
     "This creature can't be blocked if you've cast two or more spells "
     "this turn."
@@ -453,12 +459,12 @@ _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE = (
 def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
     """Return ``True`` if ``line`` is the printing-level
     ``This creature can't be blocked if you've cast two or more spells
-    this turn.`` clause, else ``False``. Flips the
-    ``unblockable_if_two_spells_cast_this_turn`` kwarg on
-    ``make_creature``; the engine reads the flag in ``combat`` (both
-    legality at declare-blockers and the cast-time validation hook)
-    and treats the creature as unblockable once the controller has
-    cast two or more spells this turn.
+    this turn.`` clause, else ``False``. The caller builds a SELF-scope
+    ``StaticAbility(condition=AtLeastNSpellsCastThisTurn(2),
+    continuous_effect=ContinuousModifier(layer=6,
+    payload=CantBeBlocked()))``; ``game.is_cant_be_blocked`` walks
+    the modifier registry and short-circuits block legality while
+    the gate holds.
     """
     return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
 
