@@ -80,10 +80,10 @@ This builder grew in several slices:
   doesn't apply because anthem scopes target *other* permanents and
   fire as soon as the Spacecraft has enough charge counters
   irrespective of whether the Spacecraft itself is animated.
-- **Slice 6** (this batch) migrates the three remaining ``_BESPOKE_SPACECRAFT``
-  entries whose effects were previously outside the unified grammar:
-  Entropic Battlecruiser, Synthesizer Labship, and Dawnsire, Sunstar
-  Dreadnought. Three effect-grammar additions unlock them:
+- **Slice 6** migrated the three remaining bespoke entries whose effects
+  were previously outside the unified grammar: Entropic Battlecruiser,
+  Synthesizer Labship, and Dawnsire, Sunstar Dreadnought. Three
+  effect-grammar additions unlocked them:
 
   1. ``"they lose N life"`` → ``TargetPlayerLosesLife(amount=N)`` (for
      DISCARDS_CARD observer effects where "they" is the pre-wired target).
@@ -107,8 +107,8 @@ This builder grew in several slices:
   ``this creature deals 100 damage to up to one target creature or
   planeswalker`` effect phrase claims correctly.
 
-- **Slice 7** (this batch) migrates The Eternity Elevator from
-  ``_BESPOKE_SPACECRAFT`` into the unified grammar. Three grammar gaps are
+- **Slice 7** migrated The Eternity Elevator (the last remaining
+  bespoke entry) into the unified grammar. Three grammar gaps were
   closed:
 
   1. **Missing P/T**: non-animating Spacecraft have no printed P/T in
@@ -137,7 +137,9 @@ This builder grew in several slices:
      return True for ``AddChargeCounterManaOfChosenColor`` so the engine
      bypasses the stack on activation per CR 605.
 
-  After this slice ``_BESPOKE_SPACECRAFT`` is empty.
+  After this slice every Spacecraft printing was claimed by the
+  unified grammar; the bespoke dispatch table was retired in
+  retire-empty-bespoke-shells.
 
 Anything outside the supported shape - lower-tier static/activated
 abilities, multiple tier-keyword lines (single-keyword-tier only is
@@ -172,24 +174,6 @@ from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, IsSelf, YOU, Predicate
-
-
-# ---------------------------------------------------------------------------
-# Bespoke dispatch table — cards whose ETB effects are outside the general
-# Station grammar's effect-phrase coverage. Built eagerly at module load
-# (same pattern as ``special_guests_builder``). ``_build_spacecraft_printing``
-# checks this table FIRST: if the card name is here and the type line says
-# Spacecraft, the pre-built ``CardPrinting`` is returned immediately.
-#
-# Every entry mirrors the corresponding ``make_spacecraft(...)`` call in
-# ``eoe_creatures.py`` exactly — same cost, power, toughness, thresholds,
-# frozenset keywords, and trigger tuple.
-#
-# Currently empty: all EoE Spacecraft printings are claimed by the unified
-# grammar. The table and the lookup code remain in place for future
-# printings that may require bespoke handling.
-# ---------------------------------------------------------------------------
-_BESPOKE_SPACECRAFT: dict[str, CardPrinting] = {}
 
 
 # The Station reminder line. Scryfall prints it as a single line:
@@ -340,14 +324,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
     if "Spacecraft" not in subtypes:
         return None
 
-    # Bespoke table: cards whose ETB effects aren't covered by the
-    # general Station grammar. Check name FIRST — if the card is
-    # present here the pre-built ``CardPrinting`` is returned
-    # immediately, skipping the grammar entirely.
     name = card.get("name", "")
-    if name in _BESPOKE_SPACECRAFT:
-        return _BESPOKE_SPACECRAFT[name]
-
     legendary = "Legendary" in supertypes
     pt_missing = False
     try:
