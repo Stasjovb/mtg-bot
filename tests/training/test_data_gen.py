@@ -8,15 +8,20 @@ test runs in single-digit seconds).
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import numpy as np
 
+from mtg_bot.agents import RandomAgent
 from mtg_bot.features import FEATURE_DIM
+from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.simulate import setup_game
 from mtg_bot.training import (
     PimcConfig, generate_training_data, load_all_datasets,
     load_dataset, random_choice_factory, save_dataset,
 )
+from mtg_bot.training.data_gen import _play_one_game_recording
 
 
 # ---------- generate_training_data: shape + content invariants ---------------
@@ -426,3 +431,126 @@ def test_deck_pool_with_short_decks_works():
     )
     assert f.shape[1] == FEATURE_DIM
     assert f.shape[0] > 0
+
+
+# ---------- A2.1: visits captured at sample points ---------------------------
+
+
+class _FakeStrategyWithVisits:
+    """Records that ``choose_with_visits`` was called and returns a
+    fixed (synthetic) visit dict so the test can verify the dict is
+    forwarded into the per-sample tuple unchanged. Picks a legal
+    decision via the adapter so the game still progresses."""
+
+    def __init__(self):
+        self.visits_calls = 0
+
+    def choose(self, adapter, player_id):
+        legal = list(adapter.legal_decisions())
+        return legal[0]
+
+    def choose_with_visits(self, adapter, player_id):
+        self.visits_calls += 1
+        legal = list(adapter.legal_decisions())
+        if not legal:
+            return {}
+        # Synthetic distribution: first legal decision gets 100
+        # visits, the rest get 1 each. Realistic shape, easy to
+        # distinguish from a uniform fallback.
+        visits = {legal[0]: 100}
+        for d in legal[1:]:
+            visits[d] = 1
+        return visits
+
+
+def test_play_one_game_recording_captures_visits_at_sample_points():
+    """The active player's sample at each sample point should
+    carry the strategy's visit dict; the non-active player's
+    same-state sample (data-doubling row) should carry ``None``.
+    Random / no-visits strategies fall through with ``None``."""
+    engine = setup_game(
+        [
+            RandomAgent(rng=random.Random(11)),
+            RandomAgent(rng=random.Random(22)),
+        ],
+        ["G", "R"], seed=42,
+    )
+    adapter = MtgGameStateAdapter(
+        engine, expose_combat_decisions=True,
+    )
+    p0 = _FakeStrategyWithVisits()
+    p1 = _FakeStrategyWithVisits()
+    rng = random.Random(7)
+
+    _, samples = _play_one_game_recording(
+        adapter, {0: p0, 1: p1}, rng,
+        decision_cap=200, sample_every=1,
+    )
+
+    assert len(samples) > 0
+    # Either p0 or p1 must have been hit for visits at least once.
+    assert p0.visits_calls + p1.visits_calls > 0
+
+    # Per-sample-point grouping: each sample point appends two
+    # rows (one per viewer). Find a pair where the active viewer's
+    # row carries visits.
+    found_with_visits = False
+    found_none_partner = False
+    for feats, viewer, visits in samples:
+        if visits is not None:
+            found_with_visits = True
+            # Synthetic distribution puts 100 on the favorite.
+            # MTG often has only 1 legal action at a priority
+            # moment (forced PassPriority etc.); single-entry
+            # dicts are normal. The constant we care about is
+            # that the fake strategy's 100-on-favorite signal
+            # made it through — assert max==100 and skip the
+            # min check (which is only meaningful when len>1).
+            assert max(visits.values()) == 100
+        else:
+            found_none_partner = True
+
+    assert found_with_visits, (
+        "no sample carried visits — _play_one_game_recording "
+        "didn't forward choose_with_visits output"
+    )
+    assert found_none_partner, (
+        "no sample had visits=None — non-active viewer's row "
+        "should be value-only"
+    )
+
+
+def test_play_one_game_recording_falls_back_when_visits_empty():
+    """If the strategy's ``choose_with_visits`` returns ``{}``
+    (e.g. RandomChoice's default), the recording loop must still
+    pick a legal decision and record value-only samples (visits=
+    None on both rows). Catches a regression where the empty-dict
+    path tries to argmax over nothing or skips the sample entirely.
+    """
+    engine = setup_game(
+        [
+            RandomAgent(rng=random.Random(11)),
+            RandomAgent(rng=random.Random(22)),
+        ],
+        ["G", "R"], seed=42,
+    )
+    adapter = MtgGameStateAdapter(
+        engine, expose_combat_decisions=True,
+    )
+    # random_choice_factory returns RandomChoice — its default
+    # ``choose_with_visits`` returns ``{}``.
+    rng = random.Random(7)
+    rs0 = random_choice_factory(0)
+    rs1 = random_choice_factory(0)
+
+    _, samples = _play_one_game_recording(
+        adapter, {0: rs0, 1: rs1}, rng,
+        decision_cap=200, sample_every=1,
+    )
+
+    assert len(samples) > 0
+    for _feats, _viewer, visits in samples:
+        assert visits is None, (
+            "RandomChoice has no visit data; samples should be "
+            "value-only"
+        )

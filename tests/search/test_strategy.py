@@ -36,3 +36,40 @@ def test_random_choice_raises_on_terminal_state():
 def test_base_strategy_is_abstract():
     with pytest.raises(TypeError):
         SearchStrategy()
+
+
+def test_random_choice_choose_with_visits_returns_empty_dict():
+    """The default ``choose_with_visits`` lives on ``SearchStrategy``
+    and returns ``{}`` for strategies (like ``RandomChoice``) that
+    don't expose visit counts. The data-gen pipeline relies on this
+    contract — an empty dict signals "no policy supervision for
+    this sample" so the row is recorded value-only."""
+    s = TicTacToe()
+    visits = RandomChoice(rng=random.Random(42)).choose_with_visits(
+        s, player_id=0,
+    )
+    assert visits == {}
+
+
+def test_choose_with_visits_default_does_not_run_search():
+    """The base default returns ``{}`` without calling ``choose()``
+    or any other search method — important because data-gen's
+    sample path calls ``choose_with_visits`` first and only falls
+    back to ``choose()`` when the visits dict is empty. If the
+    default re-entered ``choose``, baseline strategies would
+    double-pay (and MCTS subclasses that override the method
+    would be unaffected)."""
+
+    class _Recorder(SearchStrategy):
+        def __init__(self):
+            self.choose_calls = 0
+
+        def choose(self, state, player_id):
+            self.choose_calls += 1
+            return next(iter(state.legal_decisions()))
+
+    rec = _Recorder()
+    s = TicTacToe()
+    visits = rec.choose_with_visits(s, player_id=0)
+    assert visits == {}
+    assert rec.choose_calls == 0

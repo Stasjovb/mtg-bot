@@ -347,11 +347,17 @@ def _generate_one_game_data(
     if not samples:
         return _empty_arrays()
     outcome_label = _outcome_label(winner)
+    # Drop the per-sample visit dict here — A2.1 captures it for
+    # downstream A2.3 schema work but ``save_dataset`` still writes
+    # the value-only ``(features, outcomes)`` shape. Once A2.3
+    # extends the NPZ schema, this unpacking grows to forward the
+    # visits as a third array.
     features = np.stack(
-        [f for f, _ in samples], axis=0,
+        [f for f, _, _ in samples], axis=0,
     ).astype(_DTYPE_FEATURES)
     outcomes = np.asarray(
-        [outcome_label[v] for _, v in samples], dtype=_DTYPE_OUTCOMES,
+        [outcome_label[v] for _, v, _ in samples],
+        dtype=_DTYPE_OUTCOMES,
     )
     return features, outcomes
 
@@ -390,7 +396,10 @@ def _play_one_game_recording(
     decision_cap: int,
     sample_every: int,
     replay_recorder: Optional[ReplayRecorder] = None,
-) -> tuple[PlayerID | None, list[tuple[np.ndarray, PlayerID]]]:
+) -> tuple[
+    PlayerID | None,
+    list[tuple[np.ndarray, PlayerID, Optional[dict]]],
+]:
     """Play one game with the decision cap, recording features at
     every Nth non-chance decision from both player perspectives.
 
@@ -400,10 +409,17 @@ def _play_one_game_recording(
     values, etc.) run inline.
 
     Returns ``(winner_or_None, samples)`` where ``samples`` is a list
-    of ``(features_array, viewer_id)`` pairs to be paired with the
-    eventual outcome label later.
+    of ``(features, viewer_id, visits_or_None)`` triples. Visit
+    counts are captured ONLY for the active player's sample at
+    sample-points where the strategy's ``choose_with_visits``
+    returns a non-empty dict — that's the policy supervision
+    signal for A4. The non-active viewer's sample (the data-
+    doubling row) and any sample from a strategy without visit
+    counts (e.g., ``RandomChoice``) get ``None``; downstream
+    consumers (A2.3 NPZ schema) treat ``None`` as "value-only,
+    no policy target".
     """
-    samples: list[tuple[np.ndarray, PlayerID]] = []
+    samples: list[tuple[np.ndarray, PlayerID, Optional[dict]]] = []
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
         active = adapter.active_player()
@@ -413,15 +429,43 @@ def _play_one_game_recording(
             weights = [w for _, w in outcomes]
             decision = rng.choices(choices, weights=weights, k=1)[0]
         else:
-            if decision_idx % sample_every == 0:
+            sampling = decision_idx % sample_every == 0
+            if sampling:
+                # Capture visits and decision in a SINGLE search:
+                # ``choose_with_visits`` runs the strategy's search
+                # and returns visit counts; ``decision`` is the
+                # argmax (matches what ``.choose()`` would return).
+                # Don't fall through to ``.choose()`` afterward —
+                # that would re-run the search.
+                visits = strategies[active].choose_with_visits(
+                    adapter, active,
+                )
+                if visits:
+                    decision = max(
+                        visits.items(), key=lambda kv: kv[1],
+                    )[0]
+                else:
+                    # No visit data (random/baseline strategy or
+                    # search bottomed out). Pick a legal default
+                    # without re-running the search.
+                    decision = list(adapter.legal_decisions())[0]
                 # Capture features from both viewers' perspectives.
                 # Same state, opposite outcomes — twice the data
-                # with no extra game-play cost.
+                # with no extra game-play cost. Only the active
+                # player's sample carries a policy target — the
+                # non-active viewer's "visits" would be the
+                # active player's decisions seen from the other
+                # side, not their own policy.
                 engine = adapter.engine_state
                 for viewer in (0, 1):
                     feats = extract_features(engine, viewer)
-                    samples.append((feats, viewer))
-            decision = strategies[active].choose(adapter, active)
+                    sample_visits = (
+                        visits if (viewer == active and visits)
+                        else None
+                    )
+                    samples.append((feats, viewer, sample_visits))
+            else:
+                decision = strategies[active].choose(adapter, active)
         adapter.apply(decision)
         if replay_recorder is not None:
             replay_recorder.record(adapter.engine_state)
