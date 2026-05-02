@@ -1,0 +1,697 @@
+"""Generic effects cluster module. Behavior and API unchanged from
+the pre-split mtg_bot.effects.generic monolith; this is a pure file move."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from mtg_bot.effects.base import (
+    Effect, Target, TriggeredAbility,
+    _apply_damage, _multicolored_permanents_count,
+    _find_moonlit_replacement_source,
+)
+from mtg_bot.effects.generic.targets_helpers import (
+    _eff_subtypes,
+    _slot_target_still_legal,
+    _fizzle_message,
+    _describe_targets,
+    _describe_filter,
+    _bounce_to_hand,
+)
+
+if TYPE_CHECKING:
+    from mtg_bot.cards import ManaCost
+    from mtg_bot.effects.formulas import Formula
+    from mtg_bot.game import GameState
+
+
+@dataclass(frozen=True)
+class Bounce(Effect):
+    """Unified return-to-owner's-hand primitive driven by ``targets``.
+
+    Sibling of :class:`Destroy` / :class:`Exile` / :class:`Tap` /
+    :class:`Pump` for the bounce family. The unified resolve walks
+    each slot, re-verifies legality at resolution per CR 608.2b, and
+    bounces each surviving target via :func:`_bounce_to_hand` (which
+    handles token cease-to-exist, hand placement, reveal, and the
+    permanent-left-battlefield-this-turn bookkeeping for Void).
+
+    Variants with riders that need to snapshot battlefield state
+    BEFORE the bounce (e.g., the "if it was attacking, create a
+    Drone token" rider on Desculpting Blast) override ``resolve`` so
+    they can capture ``obj.attacking`` before ``_bounce_to_hand``
+    clears it.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="bounce")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                _bounce_to_hand(state, obj)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"return {_describe_targets(self.targets)} to its owner's hand"
+
+
+@dataclass(frozen=True)
+class ReturnTargetCreatureToOwnersHand(Bounce):
+    """``Bounce`` constructor sugar for "return target creature to its
+    owner's hand" with optional widening / rider flags.
+
+    Filter composition:
+      - default: ``IsCreature()``
+      - ``allow_nonland_permanent=True``: ``~IsLand() & ~IsPlayer()``
+        (Desculpting Blast — broadens to any nonland permanent)
+      - ``optional=True``: slot ``count_min=0`` ("up to one target")
+
+    Rider: ``create_drone_if_was_attacking=True`` snapshots
+    ``obj.attacking`` BEFORE the unified ``_bounce_to_hand`` clears
+    it, then creates a Drone token after the bounce — needs a custom
+    resolve since the snapshot can't happen inside the bare base.
+    """
+
+    allow_nonland_permanent: bool = False
+    create_drone_if_was_attacking: bool = False
+    optional: bool = False
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            IsCreature, IsLand, IsPlayer,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        if self.allow_nonland_permanent:
+            f = ~IsLand() & ~IsPlayer()
+        else:
+            f = IsCreature()
+        spec = TargetSpec(
+            f,
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not self.create_drone_if_was_attacking:
+            super().resolve(state, controller_id, targets)
+            return
+        # Drone-rider variant: snapshot ``obj.attacking`` before the
+        # unified bounce clears it, then create the token after the
+        # bounce settles.
+        if not targets:
+            return
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        from mtg_bot.game import Zone
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="bounce")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                was_attacking = obj.attacking
+                _bounce_to_hand(state, obj)
+                if was_attacking:
+                    drone_printing = TOKEN_PRINTINGS["Drone"]
+                    drone = state.new_object(
+                        drone_printing,
+                        owner_id=controller_id,
+                        zone=Zone.STACK,
+                    )
+                    put_into_battlefield(state, drone, controller_id)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        scope = "nonland permanent" if self.allow_nonland_permanent else "creature"
+        base = f"return target {scope} to its owner's hand"
+        if self.create_drone_if_was_attacking:
+            base += "; if it was attacking, create a Drone token"
+        return base
+
+
+
+@dataclass(frozen=True)
+class ReturnTargetPermanentYouControlToOwnersHand(Bounce):
+    """``Bounce`` constructor sugar for "return target permanent you
+    control to its owner's hand" (Exosuit Savior's bounce arm).
+
+    Filter is ``ControlledByYou() & ~IsPlayer()`` — covers any
+    battlefield permanent (lands too) the controller controls.
+    ``exclude_self=True`` adds ``& ~IsSource()`` for the "other
+    target" qualifier. ``optional=True`` flips the slot's
+    ``count_min`` to 0 for "up to one target" semantics.
+    """
+
+    optional: bool = False
+    exclude_self: bool = False
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            ControlledByYou, IsPlayer, IsSource,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+        f = ControlledByYou() & ~IsPlayer()
+        if self.exclude_self:
+            f = f & ~IsSource()
+        spec = TargetSpec(
+            f,
+            count_min=0 if self.optional else 1,
+            count_max=1,
+        )
+        object.__setattr__(self, "targets", (spec,))
+
+    def describe(self) -> str:
+        return "return target permanent you control to its owner's hand"
+
+
+
+@dataclass(frozen=True)
+class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
+    """Return up to ``max_n`` target creatures to their owners' hands.
+
+    Matches Specimen Freighter's "return up to two target non-Spacecraft
+    creatures to their owners' hands". Set ``exclude_spacecraft=True`` to
+    enforce the non-Spacecraft filter at target-selection time.
+    """
+
+    max_n: int = 2
+    exclude_spacecraft: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("creature", o.id)
+            for o in state.battlefield
+            if o.printing.is_creature
+            and (not self.exclude_spacecraft or not o.printing.is_spacecraft)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        for kind, target_id in targets:
+            if kind != "creature":
+                continue
+            obj = next(
+                (o for o in state.battlefield if o.id == target_id), None
+            )
+            if obj is None:
+                continue
+            state.battlefield.remove(obj)
+            obj.damage = 0
+            obj.marked_lethal = False
+            obj.damaged_this_turn = False
+            obj.tapped = False
+            obj.attacking = False
+            obj.blocking = None
+            obj.blocked_by = []
+            obj.plus_one_counters = 0
+            obj.charge_counters = 0
+            obj.temp_power_bonus = 0
+            obj.temp_toughness_bonus = 0
+            obj.attached_to = None
+            if not obj.printing.is_land:
+                state.permanent_left_battlefield_this_turn = True
+            if obj.printing.is_token:
+                state.log.append(
+                    f"{obj.printing.name} token ceases to exist (bounced)"
+                )
+                continue
+            from mtg_bot.game import reveal_to_all
+            obj.zone = Zone.HAND
+            state.player_by_id(obj.owner_id).hand.append(obj)
+            reveal_to_all(state, obj)
+            state.log.append(
+                f"{obj.printing.name} returns to P{obj.owner_id}'s hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creatures to their "
+            f"owners' hands"
+        )
+
+
+
+@dataclass(frozen=True)
+class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(Effect):
+    """Return up to ``max_n`` creature cards with **total mana value**
+    ≤ ``max_total_mv`` from your graveyard to the battlefield. Put a
+    +1/+1 counter on each.
+
+    Matches Scout for Survivors. The constraint is on the sum of
+    chosen targets' mana values, not on each individually — the
+    cleanest place to enforce that is at resolution time, since the
+    cast pipeline picks targets sequentially without a running budget.
+    Single-target legality still filters to MV ≤ max_total_mv (a card
+    bigger than the budget can never appear in any legal multi-pick).
+    """
+
+    max_n: int = 3
+    max_total_mv: int = 3
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+            and c.printing.mana_cost.total <= self.max_total_mv
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        p = state.player_by_id(controller_id)
+        # Enforce the SUM-of-MV budget at resolve time. Walk picks in
+        # pick order; admit each only if it fits the remaining budget,
+        # else drop it. Targets that already left the graveyard are
+        # silently skipped (standard targeting rule).
+        remaining = self.max_total_mv
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            mv = card.printing.mana_cost.total
+            if mv > remaining:
+                state.log.append(
+                    f"{card.printing.name} skipped — exceeds total-MV "
+                    f"budget (remaining {remaining}, needs {mv})"
+                )
+                continue
+            remaining -= mv
+            p.graveyard.remove(card)
+            state.log.append(
+                f"{card.printing.name} returns to the battlefield under "
+                f"P{controller_id} with a +1/+1 counter"
+            )
+            put_into_battlefield(state, card, controller_id)
+            from mtg_bot.game import add_plus_one_counters
+            add_plus_one_counters(state, card, 1)
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creature cards with total "
+            f"mana value {self.max_total_mv} or less from your graveyard "
+            f"to the battlefield with a +1/+1 counter on each"
+        )
+
+
+
+@dataclass(frozen=True)
+class ReturnTargetArtifactCardFromYourGraveyardToHand(Effect):
+    """Target artifact card from your graveyard goes to your hand.
+
+    Matches Scour for Scrap's second mode. Uses a dedicated target kind
+    ``graveyard_artifact`` so the multi-zone target pool is distinct
+    from battlefield targets.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_artifact", c.id)
+            for c in p.graveyard
+            if c.printing.is_artifact
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_artifact":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        from mtg_bot.game import reveal_to_all
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand"
+        )
+
+    def describe(self) -> str:
+        return "return target artifact card from your graveyard to your hand"
+
+
+
+@dataclass(frozen=True)
+class ReturnCreatureFromYourGraveyardToHand(Effect):
+    """Target creature (or artifact/Spacecraft) card from your graveyard
+    goes to your hand.
+
+    ``max_mv`` (default 0 = "no cap") narrows the legal-target pool to
+    cards whose printed mana value is ≤ the threshold.
+
+    ``or_spacecraft`` widens the legal-target pool to also include
+    Spacecraft cards in the graveyard. Matches "return target creature
+    or Spacecraft card" — Fell Gravship.
+
+    ``or_artifact`` widens the pool to also include artifact cards.
+    Matches Interceptor Mechan's "return target artifact or creature
+    card from your graveyard to your hand."
+    """
+
+    max_mv: int = 0
+    or_spacecraft: bool = False
+    or_artifact: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if (
+                c.printing.is_creature
+                or (self.or_spacecraft and c.printing.is_spacecraft)
+                or (self.or_artifact and c.printing.is_artifact)
+            )
+            and (self.max_mv == 0 or c.printing.mana_cost.total <= self.max_mv)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_creature":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        from mtg_bot.game import reveal_to_all
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand"
+        )
+
+    def describe(self) -> str:
+        extras = []
+        if self.or_artifact:
+            extras.append("artifact")
+        if self.or_spacecraft:
+            extras.append("Spacecraft")
+        if extras:
+            type_phrase = "artifact or creature" if "artifact" in extras else "creature or Spacecraft"
+        else:
+            type_phrase = "creature"
+        if self.max_mv > 0:
+            return (
+                f"return target {type_phrase} card with mana value "
+                f"{self.max_mv} or less from your graveyard to your hand"
+            )
+        return (
+            f"return target {type_phrase} card from your graveyard "
+            f"to your hand"
+        )
+
+
+
+@dataclass(frozen=True)
+class ReturnUpToNCreaturesFromYourGraveyardToHand(Effect):
+    """Return up to ``max_n`` creature cards from your graveyard to your hand.
+
+    Models the "return one or two target creature [or planeswalker] cards
+    from your graveyard to your hand" mode of Archenemy's Charm. Since
+    planeswalkers aren't yet modeled in our card pool, the legal-target
+    pool is creature-only; if/when planeswalker cards land in graveyards,
+    they'd surface here through the same code path automatically.
+    """
+
+    max_n: int = 2
+    min_n: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (self.min_n, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if c.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        if not targets:
+            return
+        p = state.player_by_id(controller_id)
+        seen_ids: set[int] = set()
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            if target_id in seen_ids:
+                continue
+            seen_ids.add(target_id)
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            reveal_to_all(state, card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target creature cards from your "
+            f"graveyard to your hand"
+        )
+
+
+
+@dataclass(frozen=True)
+class ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(Effect):
+    """Return up to ``max_n`` nonland permanent cards from your graveyard
+    to your hand.
+
+    Models the first clause of "Return up to two target nonland permanent
+    cards from your graveyard to your hand, then return up to two target
+    land cards from your graveyard to the battlefield tapped." (Pull
+    Through the Weft). The second clause (lands to battlefield tapped)
+    is not modeled today — the engine has no "return land card from GY to
+    BF tapped" primitive; the parser drops the second clause as an
+    unimplemented rider.
+
+    Legal targets: all cards in the controller's graveyard that are NOT
+    lands (``not is_land``). Lands are excluded because the oracle text
+    explicitly separates "nonland permanent cards" (first clause) from
+    "land cards" (second clause). In practice the current EoE/DSK card
+    pool keeps the two categories disjoint in GY targets.
+    """
+
+    max_n: int = 2
+    min_n: int = 0
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (self.min_n, self.max_n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_creature", c.id)
+            for c in p.graveyard
+            if not c.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        if not targets:
+            return
+        p = state.player_by_id(controller_id)
+        seen_ids: set[int] = set()
+        for kind, target_id in targets:
+            if kind != "graveyard_creature":
+                continue
+            if target_id in seen_ids:
+                continue
+            seen_ids.add(target_id)
+            card = next((c for c in p.graveyard if c.id == target_id), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            reveal_to_all(state, card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to hand"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"return up to {self.max_n} target nonland permanent cards "
+            f"from your graveyard to your hand"
+        )
+
+
+@dataclass(frozen=True)
+class ReturnTargetLandFromGraveyardToHand(Effect):
+    """Petrified Field's {T}, Sacrifice: Return target land card from
+    your graveyard to your hand.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_land", c.id)
+            for c in p.graveyard
+            if c.printing.is_land
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "graveyard_land":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == target_id), None)
+        if card is None:
+            return
+        from mtg_bot.game import reveal_to_all
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s "
+            f"graveyard to hand (Petrified Field)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "return target land card from your graveyard to your hand"
+        )
