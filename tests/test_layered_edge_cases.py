@@ -689,6 +689,56 @@ def test_lignified_magus_still_collapses_nonbasic_lands_per_cr():
     assert effective_land_produces(state, land) == frozenset({"R"})
 
 
+def test_multi_keyword_anthem_end_to_end_via_continuous_modifier():
+    """Full PR-D anthem migration end-to-end pin. Thrumming Hivepool's
+    multi-keyword anthem ("Slivers you control have double strike and
+    haste.") fans out into TWO StaticAbility instances — one per
+    keyword, each carrying a layer-6 ContinuousModifier(GrantKeyword);
+    neither carries any legacy granted_keywords. The
+    ``effective_keywords`` walk picks both grants up via
+    ``walk_continuous_modifiers`` (synthesized into the layer-6
+    timestamp pass in ``_layer6_entries_for``), so a Sliver under the
+    controller's control sees both keywords."""
+    from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+
+    state = _new_state()
+    bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=0)
+    state.add_continuous_effect(
+        source_id=bear.id, layer=4, kind="add_subtype",
+        target_id=bear.id, params=("Sliver",),
+        description="(test) Bear is a Sliver",
+    )
+    hivepool_pr = _PRINTINGS["Thrumming Hivepool"]
+
+    # Migration shape: two StaticAbility instances, each carrying a
+    # layer-6 ContinuousModifier(GrantKeyword) and an empty
+    # granted_keywords field. No part of the printing's static surface
+    # leans on legacy granted_keywords for the keyword grant.
+    keyword_statics = [
+        s for s in hivepool_pr.static_abilities
+        if s.continuous_effect is not None
+        and isinstance(s.continuous_effect.payload, GrantKeyword)
+    ]
+    assert len(keyword_statics) == 2
+    granted = {
+        s.continuous_effect.payload.keyword for s in keyword_statics
+    }
+    assert granted == {"double strike", "haste"}
+    for s in keyword_statics:
+        assert s.granted_keywords == frozenset()
+        assert s.continuous_effect == ContinuousModifier(
+            layer=6,
+            payload=GrantKeyword(s.continuous_effect.payload.keyword),
+        )
+
+    # End-to-end: the migrated statics produce the expected effective
+    # keywords on a Sliver controlled by Hivepool's controller.
+    _put(state, hivepool_pr, owner_id=0)
+    kws = effective_keywords(state, bear)
+    assert "haste" in kws
+    assert "double strike" in kws
+
+
 def test_lignified_sliver_lord_still_grants_anthem_keywords_per_dependency():
     """Thrumming Hivepool's anthem ("Slivers you control have
     double strike and haste") is a layer-6 keyword grant. Per CR
