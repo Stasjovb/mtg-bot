@@ -33,14 +33,24 @@
 ## Running things
 
 - Virtual env is at `.venv/` in the **main checkout** (`mtg-bot/.venv/`). Worktrees share it. Use `mtg-bot/.venv/Scripts/python.exe` on Windows / `mtg-bot/.venv/bin/python` on macOS-Linux.
+- **Recommended interpreter for tests is Python 3.13** (or any 3.12+).
+  The shared 3.11 venv hits an intermittent Windows access-violation
+  segfault inside coverage.py's C-trace backend during the simulation
+  sweep tests. Python 3.12+ has PEP 669 `sys.monitoring`; coverage.py
+  auto-uses the `sysmon` backend (already pinned in `pyproject.toml`),
+  and the crash does not reproduce. See `docs/segfault-fix.md` for the
+  full diagnosis.
+  Easiest path: create a parallel 3.13 venv per worktree:
+  `py -3.13 -m venv .venv-py313 && .venv-py313/Scripts/python.exe -m pip install -e ".[dev]"`
+  then run `PYTHONPATH=src .venv-py313/Scripts/python.exe -m pytest`.
+  `.venv-*/` is gitignored.
 - **From a worktree, always set `PYTHONPATH=src` when invoking python**, otherwise the editable install in the shared venv resolves `mtg_bot` to the main checkout's source and your worktree changes won't be exercised. Example:
   `PYTHONPATH=src ../../mtg-bot/.venv/Scripts/python.exe -m pytest`
   (Or, on Windows cmd: `set PYTHONPATH=src && ...`.)
 - Run tests: `PYTHONPATH=src ../../mtg-bot/.venv/Scripts/python.exe -m pytest` from inside a worktree, or `.venv/Scripts/python.exe -m pytest` from the main checkout.
-  (Python 3.13 + coverage.py can intermittently segfault deep in the simulation
-  sweep tests. The crash is not reproducible in isolation and no local code
-  change fixes it. If pytest exits with an access violation, run
-  `scripts/run_tests.py` instead — it retries on segfault.)
+  (If you're on the 3.11 venv and pytest exits with an access violation,
+  run `scripts/run_tests.py` instead — it retries on segfault. The retry
+  workaround can be skipped entirely under a 3.13 venv.)
 - Tests marked `@pytest.mark.isolated` (currently `tests/test_perf_clone.py`)
   are skipped by the default `pytest` invocation — they're sensitive to
   accumulated interpreter state from preceding tests and only run reliably
