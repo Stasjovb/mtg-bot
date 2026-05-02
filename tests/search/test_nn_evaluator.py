@@ -19,8 +19,13 @@ from mtg_bot.features import FEATURE_DIM
 from mtg_bot.search import (
     Budget, MCTS, MtgGameStateAdapter, NNEvaluator,
 )
-from mtg_bot.search.nn_evaluator import HIDDEN_SIZES, _ValueMLP
+from mtg_bot.search.nn_evaluator import (
+    HIDDEN_SIZES, _ValueMLP, _ValuePolicyMLP,
+)
 from mtg_bot.simulate import setup_game
+from mtg_bot.training.action_encoding import (
+    ACTION_VOCAB_SIZE, legal_action_mask,
+)
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
@@ -193,3 +198,210 @@ def test_nn_evaluator_drives_mcts_without_crashing():
     legal = adapter.legal_decisions()
     decision = mcts.choose(adapter, adapter.active_player())
     assert decision in legal
+
+
+# ---------- dual-head architecture (A4) -------------------------------------
+
+
+def test_value_policy_mlp_forward_shape():
+    """Synthetic batch through ``_ValuePolicyMLP`` returns the right
+    shapes from each head. Pinning the dual-tuple contract: shape
+    ``(B, 1)`` value + ``(B, ACTION_VOCAB_SIZE)`` policy."""
+    net = _ValuePolicyMLP()
+    x = torch.zeros(8, FEATURE_DIM)
+    value, policy = net(x)
+    assert value.shape == (8, 1)
+    assert policy.shape == (8, ACTION_VOCAB_SIZE)
+    # Value-head tanh keeps outputs in [-1, 1] — sanity-pin the same
+    # contract that ``_ValueMLP`` provides.
+    assert torch.all(value >= -1.0) and torch.all(value <= 1.0)
+
+
+def test_value_policy_mlp_param_count_is_reasonable():
+    """Param count for the dual-head architecture should be modestly
+    larger than the value-only baseline — most of the delta comes
+    from the policy head (h_last × ACTION_VOCAB_SIZE + ACTION_VOCAB_SIZE
+    ≈ 33k extra at the current shapes). 60k total is the headline
+    number to sanity-check; cap at 150k as the upper sanity bound
+    (anything past that means HIDDEN_SIZES drifted)."""
+    net = _ValuePolicyMLP()
+    total = sum(p.numel() for p in net.parameters())
+    # Lower bound: ~30k; upper bound: 150k.
+    assert 30_000 <= total <= 150_000, (
+        f"_ValuePolicyMLP has {total} params; expected ~30k-150k for "
+        f"HIDDEN_SIZES={HIDDEN_SIZES} + policy_dim={ACTION_VOCAB_SIZE}"
+    )
+
+
+def test_evaluate_with_policy_returns_legal_distribution():
+    """Run a forward pass over a real engine state, confirm the
+    returned policy is a valid distribution over the legal slots:
+    sums to 1.0, illegal slots are exactly 0.0, legal slots are
+    strictly positive (softmax of a finite logit > 0)."""
+    evaluator = NNEvaluator(with_policy=True)
+    adapter = _adapter()
+    value, policy = evaluator.evaluate_with_policy(adapter, player_id=0)
+    assert isinstance(value, float)
+    assert -1.0 <= value <= 1.0
+    assert policy.shape == (ACTION_VOCAB_SIZE,)
+    assert policy.dtype == np.float32
+
+    mask = legal_action_mask(adapter, viewer=0)
+    # Sanity: at least one legal action — the engine wouldn't be
+    # asking for a decision otherwise.
+    assert mask.any(), "no legal actions on the chosen seed; pick another"
+
+    # Illegal slots are exactly 0.
+    np.testing.assert_array_equal(policy[~mask], 0.0)
+    # Legal slots are positive (softmax of finite logits).
+    assert np.all(policy[mask] > 0.0)
+    # Distribution sums to 1.
+    assert policy.sum() == pytest.approx(1.0, rel=0, abs=1e-5)
+
+
+def test_evaluate_with_policy_handles_terminal_state():
+    """Terminal short-circuit: returns the right value sign without
+    touching the network, plus an all-zeros policy because no
+    decision is taken at a terminal."""
+    adapter = _adapter()
+    # Force a terminal where P0 won.
+    adapter.engine_state.players[1].has_lost = True
+    adapter.engine_state.winner_id = 0
+    assert adapter.is_terminal()
+    evaluator = NNEvaluator(with_policy=True)
+
+    val_p0, pol_p0 = evaluator.evaluate_with_policy(adapter, player_id=0)
+    val_p1, pol_p1 = evaluator.evaluate_with_policy(adapter, player_id=1)
+
+    assert val_p0 == 1.0
+    assert val_p1 == -1.0
+    np.testing.assert_array_equal(
+        pol_p0, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        pol_p1, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+
+
+def test_batch_evaluate_with_policy_matches_per_state():
+    """Stacking 8 adapters into one batched call should return the
+    same per-state result as 8 individual ``evaluate_with_policy``
+    calls (within float-rounding tolerance — same forward pass, same
+    masking, just different batch axis on the matmul)."""
+    evaluator = NNEvaluator(with_policy=True)
+    adapters = [_adapter(seed=s) for s in range(8)]
+
+    per_state = [
+        evaluator.evaluate_with_policy(a, player_id=0) for a in adapters
+    ]
+    batched = evaluator.batch_evaluate_with_policy(adapters, player_id=0)
+
+    assert len(per_state) == len(batched)
+    for (v_a, p_a), (v_b, p_b) in zip(per_state, batched):
+        assert v_a == pytest.approx(v_b, abs=1e-5)
+        np.testing.assert_allclose(p_a, p_b, atol=1e-5, rtol=0)
+
+
+def test_save_load_round_trip_dual_head(tmp_path: Path):
+    """One synthetic training step (a manual SGD update on a random
+    target), save weights, reload via ``with_policy=True``, predictions
+    match. The training step proves the save format reflects post-
+    update weights, not just the random init that would round-trip
+    trivially through any save format."""
+    a = NNEvaluator(with_policy=True)
+    # Synthetic gradient step: random input, random value+policy
+    # targets, MSE on value + cross-entropy on policy. Torch's
+    # cross_entropy expects raw logits + target indices, so we use
+    # a dummy target index for the policy head.
+    a.model.train()
+    optimizer = torch.optim.SGD(a.model.parameters(), lr=0.01)
+    x = torch.randn(4, FEATURE_DIM)
+    target_value = torch.zeros(4, 1)
+    target_policy_idx = torch.zeros(4, dtype=torch.long)
+    value, logits = a.model(x)
+    loss = (
+        ((value - target_value) ** 2).mean()
+        + torch.nn.functional.cross_entropy(logits, target_policy_idx)
+    )
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    a.model.eval()
+
+    weights_path = tmp_path / "weights.pt"
+    a.save(weights_path)
+    assert weights_path.exists()
+
+    b = NNEvaluator(weights_path=weights_path, with_policy=True)
+
+    adapter = _adapter()
+    val_a, pol_a = a.evaluate_with_policy(adapter, player_id=0)
+    val_b, pol_b = b.evaluate_with_policy(adapter, player_id=0)
+    assert val_a == val_b
+    np.testing.assert_array_equal(pol_a, pol_b)
+
+
+def test_evaluate_with_policy_requires_with_policy_flag():
+    """Calling ``evaluate_with_policy`` on a value-only evaluator
+    is a programming error — surface it loudly rather than silently
+    returning bogus output. Same contract for the batched call."""
+    evaluator = NNEvaluator()  # default: with_policy=False
+    adapter = _adapter()
+    with pytest.raises(RuntimeError, match="with_policy=True"):
+        evaluator.evaluate_with_policy(adapter, player_id=0)
+    with pytest.raises(RuntimeError, match="with_policy=True"):
+        evaluator.batch_evaluate_with_policy([adapter], player_id=0)
+
+
+def test_value_only_path_still_uses_value_mlp():
+    """Backward-compat invariant: ``with_policy=False`` (default)
+    must instantiate ``_ValueMLP`` so v1/v2 weight loading + bit-
+    exact inference is preserved."""
+    evaluator = NNEvaluator()
+    assert isinstance(evaluator.model, _ValueMLP)
+    assert evaluator.with_policy is False
+
+
+def test_with_policy_path_uses_value_policy_mlp():
+    """Mirror of the above for the dual-head path."""
+    evaluator = NNEvaluator(with_policy=True)
+    assert isinstance(evaluator.model, _ValuePolicyMLP)
+    assert evaluator.with_policy is True
+
+
+def test_batch_evaluate_with_policy_handles_empty_input():
+    """Empty input → empty output. Mirrors ``batch_evaluate``."""
+    evaluator = NNEvaluator(with_policy=True)
+    assert evaluator.batch_evaluate_with_policy([], player_id=0) == []
+
+
+def test_batch_evaluate_with_policy_mixes_terminal_and_nonterminal():
+    """Mixed batch: terminal states short-circuit per element while
+    non-terminal states go through the network in a single forward
+    pass. Result list preserves input order."""
+    evaluator = NNEvaluator(with_policy=True)
+    nonterm = _adapter(seed=42)
+    term = _adapter(seed=99)
+    term.engine_state.players[1].has_lost = True
+    term.engine_state.winner_id = 0
+    assert term.is_terminal()
+    assert not nonterm.is_terminal()
+
+    out = evaluator.batch_evaluate_with_policy(
+        [nonterm, term, nonterm], player_id=0,
+    )
+    assert len(out) == 3
+    # Terminal P0-win value is 1.0, all-zero policy.
+    val_t, pol_t = out[1]
+    assert val_t == 1.0
+    np.testing.assert_array_equal(
+        pol_t, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+    # Non-terminal slots match per-state path.
+    val_n0, pol_n0 = out[0]
+    val_n2, pol_n2 = out[2]
+    val_ref, pol_ref = evaluator.evaluate_with_policy(nonterm, player_id=0)
+    assert val_n0 == pytest.approx(val_ref, abs=1e-5)
+    assert val_n2 == pytest.approx(val_ref, abs=1e-5)
+    np.testing.assert_allclose(pol_n0, pol_ref, atol=1e-5, rtol=0)
+    np.testing.assert_allclose(pol_n2, pol_ref, atol=1e-5, rtol=0)

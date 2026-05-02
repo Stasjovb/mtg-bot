@@ -58,6 +58,14 @@ class ModelMetadata:
     created_at: str  # ISO 8601, UTC
     feature_dim: int
     hidden_sizes: list[int]
+    # Whether this version was trained with the two-headed
+    # value+policy architecture (``_ValuePolicyMLP``) or the older
+    # value-only ``_ValueMLP``. Defaults to False so existing v1/v2
+    # metadata files round-trip unchanged: when an old metadata.json
+    # is read, the missing key falls through to the default and the
+    # tournament harness keeps loading those weights into a value-
+    # only NNEvaluator. v4+ writes True for AlphaZero-style runs.
+    with_policy: bool = False
     # Training inputs and hyperparameters.
     training: dict[str, Any] = field(default_factory=dict)
     # Per-epoch loss series + summary, from TrainingHistory.
@@ -80,8 +88,8 @@ class ModelMetadata:
     def from_dict(cls, d: dict[str, Any]) -> "ModelMetadata":
         known = {
             "version", "created_at", "feature_dim", "hidden_sizes",
-            "training", "training_history", "evaluation",
-            "git_commit", "notes", "extra",
+            "with_policy", "training", "training_history",
+            "evaluation", "git_commit", "notes", "extra",
         }
         # Stuff future-written keys we don't recognize into ``extra``.
         extra = dict(d.get("extra", {}))
@@ -93,6 +101,9 @@ class ModelMetadata:
             created_at=d["created_at"],
             feature_dim=d["feature_dim"],
             hidden_sizes=list(d["hidden_sizes"]),
+            # Default False so old metadata.json (no with_policy key)
+            # loads as a value-only network — backward compat.
+            with_policy=bool(d.get("with_policy", False)),
             training=dict(d.get("training", {})),
             training_history=dict(d.get("training_history", {})),
             evaluation=dict(d.get("evaluation", {})),

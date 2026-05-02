@@ -68,6 +68,37 @@ def test_metadata_preserves_unknown_keys_in_extra():
     assert round_tripped.extra["future_field"] == "from-tomorrow"
 
 
+def test_metadata_with_policy_defaults_false_for_old_metadata():
+    """v1/v2 metadata.json files written before A4 don't have the
+    ``with_policy`` key. Loading them must default to False so the
+    tournament harness keeps treating them as value-only networks."""
+    raw = {
+        "version": "v2",
+        "created_at": "2026-04-25T17:00:00Z",
+        "feature_dim": 51,
+        "hidden_sizes": [128, 128, 64],
+    }
+    m = ModelMetadata.from_dict(raw)
+    assert m.with_policy is False
+    # Forward-compat: round-trip writes the field, future readers
+    # see it explicitly.
+    assert m.to_dict()["with_policy"] is False
+
+
+def test_metadata_with_policy_round_trip_true():
+    """v4+ writes ``with_policy=True``; verify round-trip preserves it."""
+    m = ModelMetadata(
+        version="v4",
+        created_at="2026-05-02T17:00:00Z",
+        feature_dim=51,
+        hidden_sizes=[128, 128, 64],
+        with_policy=True,
+    )
+    restored = ModelMetadata.from_dict(m.to_dict())
+    assert restored.with_policy is True
+    assert restored == m
+
+
 # ---------- Registry: registration ------------------------------------------
 
 
