@@ -72,12 +72,18 @@ def test_training_reduces_loss_on_synthetic_data(tmp_path: Path):
     """Train for a few epochs on a tractable synthetic problem;
     final train loss should be lower than first-epoch loss. Catches
     bugs where backward pass is wrong, optimizer isn't stepping,
-    etc."""
+    etc.
+
+    Uses 30 epochs at lr=1e-3 — enough updates for the production
+    HIDDEN_SIZES network (420k params at the 2026-05-02 sizing) to
+    show meaningful loss decrease without overshooting. The
+    assertion is "loss went down at all", not "converged" — keeps
+    the test fast in CI."""
     features, outcomes = _synthetic_dataset(256)
     history = train_value_network(
         features=features, outcomes=outcomes,
         weights_out_path=tmp_path / "w.pt",
-        epochs=10, batch_size=32, learning_rate=1e-2,
+        epochs=30, batch_size=32, learning_rate=1e-3,
         device="cpu", rng_seed=0,
     )
     assert history.train_losses[-1] < history.train_losses[0], (

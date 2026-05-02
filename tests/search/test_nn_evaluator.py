@@ -51,14 +51,17 @@ def test_value_mlp_output_is_in_unit_interval():
 
 
 def test_value_mlp_parameter_count_is_reasonable():
-    """Sanity check on architecture size — bumping past 1M params
-    unintentionally would mean we lost track of HIDDEN_SIZES."""
+    """Sanity check on architecture size — bumping past the upper
+    bound unintentionally would mean we lost track of
+    ``HIDDEN_SIZES``."""
     net = _ValueMLP()
     total = sum(p.numel() for p in net.parameters())
-    # Default 51→128→128→64→1 is ~25k params. Cap at 100k as a
-    # generous sanity ceiling.
-    assert 1_000 <= total <= 100_000, (
-        f"network has {total} params; expected 1k–100k for the "
+    # Current 51→512→512→256→1 is ~420k params. The pre-2026-05-02
+    # default 51→128→128→64→1 was ~25k. Cap at 2M as a sanity
+    # ceiling — a value-only net beyond that starts overfitting at
+    # our data scale.
+    assert 1_000 <= total <= 2_000_000, (
+        f"network has {total} params; expected 1k–2M for the "
         f"default HIDDEN_SIZES={HIDDEN_SIZES}"
     )
 

@@ -50,11 +50,16 @@ from mtg_bot.game import GameState as EngineGameState
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.protocol import GameState, PlayerID
 
-# Hidden-layer widths. 3 hidden layers, ReLU between. ~25k params at
-# the default sizes. Make wider/deeper later if we hit a capacity
-# ceiling — but a wider network needs more training data, so don't
-# scale up speculatively.
-HIDDEN_SIZES: tuple[int, ...] = (128, 128, 64)
+# Hidden-layer widths. 3 hidden layers, ReLU between. ~420k params
+# at these sizes (51 → 512 → 512 → 256 → 1). Original arch was
+# (128, 128, 64) ≈ 25k params; the 2026-05-02 v2 evaluation showed
+# the 25k net was statistically indistinguishable from the heuristic
+# (45-55 over 100 games at PIMC defaults). 17× more capacity gives
+# the network room to fit deeper patterns; with 398k samples in the
+# pool, the data-to-param ratio stays around 1× which is workable
+# for a value-only fit. If we add a policy head later (A4 in the
+# AlphaZero-style upgrade plan), expect to scale up further.
+HIDDEN_SIZES: tuple[int, ...] = (512, 512, 256)
 
 
 class _ValueMLP(nn.Module):
