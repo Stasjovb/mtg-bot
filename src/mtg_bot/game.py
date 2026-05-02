@@ -503,7 +503,24 @@ def _static_bonuses(
     The famous case: Lord of Atlantis + Humility. Coralhelm
     Commander becomes 1/1, not 2/2 — the Lord's +1/+1 doesn't
     apply because the Lord's static is wiped before layer 7c.
+
+    Modifier-grammar layer-7c contributions (PR D continuous-effects):
+    in addition to the legacy per-StaticAbility ``power_bonus`` /
+    ``toughness_bonus`` reads above, also walk every active
+    ``ContinuousModifier`` declared on a printing's static abilities
+    via :func:`mtg_bot.effects.modifiers.walk_continuous_modifiers`
+    and fold in any ``PowerToughnessBonus`` payloads at layer 7. The
+    Lignify-skip discipline applies to this path too — a wiped source
+    contributes zero. Today no migrated card declares a
+    ``ContinuousModifier(layer=7, payload=PowerToughnessBonus(...))``,
+    so this walk is a no-op contributor; the wiring is here so PR-D
+    anthem migrations can drop ``power_bonus``/``toughness_bonus``
+    fields and produce ``ContinuousModifier`` declarations instead.
     """
+    from mtg_bot.effects.modifiers import (
+        PowerToughnessBonus, walk_continuous_modifiers,
+    )
+
     power_bonus = 0
     toughness_bonus = 0
     granted: set[str] = set()
@@ -530,6 +547,19 @@ def _static_bonuses(
         if not _source_layer6_wiped(state, source):
             power_bonus += ep
             toughness_bonus += et
+    # Modifier-grammar layer-7c contributions (PR D continuous-effects
+    # path). Currently a no-op contributor — no migrated card
+    # declares a layer-7 PowerToughnessBonus continuous modifier yet.
+    for src_id, mod in walk_continuous_modifiers(state, obj):
+        if mod.layer != 7 or not isinstance(mod.payload, PowerToughnessBonus):
+            continue
+        source = next(
+            (o for o in state.battlefield if o.id == src_id), None,
+        )
+        if source is None or _source_layer6_wiped(state, source):
+            continue
+        power_bonus += mod.payload.power_bonus
+        toughness_bonus += mod.payload.toughness_bonus
     return power_bonus, toughness_bonus, frozenset(granted)
 
 
