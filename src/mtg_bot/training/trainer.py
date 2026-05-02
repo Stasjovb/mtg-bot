@@ -16,9 +16,14 @@ retrain, repeat) and policy heads (visit-count distribution targets).
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -49,6 +54,52 @@ def auto_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _git_short_sha() -> Optional[str]:
+    """Best-effort current git commit short SHA; ``None`` if not in
+    a git repo or git isn't on PATH. Stamped onto the progress JSON
+    so a viewer can correlate runs to code state."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        pass
+    return None
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` to ``path`` atomically: serialize to a
+    sibling ``.tmp`` file then ``os.replace`` it into place. Replace
+    is atomic on both POSIX and Windows, so a polling reader either
+    sees the previous version or the new one — never a half-file.
+
+    Windows wrinkle: if a reader currently has the destination file
+    open (even just for the duration of a ``read_text`` call),
+    ``os.replace`` raises ``PermissionError`` because Windows MOVEFILE
+    requires deletable access. The contention window for a 2-second
+    polling reader doing one fast read is small (~ms), so a tight
+    retry loop reliably wins. If we can't get through after ~1s,
+    raise — that's a real bug, not a transient race.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    delay = 0.005
+    for _ in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+            delay = min(delay * 2, 0.1)
+    # One last try; let the exception propagate if it still fails.
+    os.replace(tmp, path)
+
+
 def train_value_network(
     features: np.ndarray,
     outcomes: np.ndarray,
@@ -60,6 +111,9 @@ def train_value_network(
     val_split: float = 0.1,
     device: Optional[str] = None,
     rng_seed: int = 0,
+    progress_path: Optional[Path] = None,
+    run_id: Optional[str] = None,
+    notes: str = "",
 ) -> TrainingHistory:
     """Fit a ``_ValueMLP`` to ``(features, outcomes)`` and write the
     final state_dict to ``weights_out_path``.
@@ -71,6 +125,12 @@ def train_value_network(
     the same seed and dataset reproduces the same train/val
     partition (important for tuning loops that compare training
     runs at different hyperparameters).
+
+    If ``progress_path`` is given, a JSON status file is written
+    after each epoch (and once at startup) so an external viewer
+    can poll it. Writes are atomic via ``os.replace`` — a polling
+    reader never sees a half-written file. ``run_id`` is the stable
+    identifier baked into that file; it defaults to the file stem.
 
     Returns a ``TrainingHistory`` with per-epoch losses. The weights
     file written at ``weights_out_path`` always reflects the FINAL
@@ -130,39 +190,103 @@ def train_value_network(
 
     history = TrainingHistory()
 
-    for epoch in range(epochs):
-        # Train.
-        model.train()
-        train_losses_epoch: list[float] = []
-        for batch_x, batch_y in train_loader:
-            batch_x = batch_x.to(device_obj)
-            batch_y = batch_y.to(device_obj)
-            optimizer.zero_grad()
-            pred = model(batch_x)
-            loss = loss_fn(pred, batch_y)
-            loss.backward()
-            optimizer.step()
-            train_losses_epoch.append(loss.item())
-        train_loss = float(np.mean(train_losses_epoch))
-        history.train_losses.append(train_loss)
+    # Progress emission. Snapshot a few values up front so the writer
+    # never has to recompute or worry about dataclass mutation
+    # mid-write.
+    progress_enabled = progress_path is not None
+    started_at_iso = ""
+    started_perf = 0.0
+    git_commit: Optional[str] = None
+    if progress_enabled:
+        progress_path = Path(progress_path)
+        if run_id is None:
+            run_id = progress_path.stem
+        started_at_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
+        started_perf = time.perf_counter()
+        git_commit = _git_short_sha()
 
-        # Val (skip if no val data).
-        if n_val > 0:
-            model.eval()
-            with torch.no_grad():
-                val_pred = model(x_val.to(device_obj))
-                val_loss = loss_fn(val_pred, y_val.to(device_obj)).item()
-        else:
-            val_loss = float("nan")
-        history.val_losses.append(val_loss)
+    def _emit(status: str, current_epoch: int) -> None:
+        if not progress_enabled:
+            return
+        elapsed = time.perf_counter() - started_perf
+        done = max(current_epoch, 0)
+        avg = (elapsed / done) if done > 0 else 0.0
+        remaining_epochs = max(epochs - done, 0)
+        eta = avg * remaining_epochs if avg > 0 else 0.0
+        payload = {
+            "run_id": run_id,
+            "started_at": started_at_iso,
+            "total_epochs": int(epochs),
+            "current_epoch": int(done),
+            "elapsed_seconds": float(elapsed),
+            "per_epoch_seconds_avg": float(avg),
+            "estimated_remaining_seconds": float(eta),
+            "train_losses": list(history.train_losses),
+            "val_losses": list(history.val_losses),
+            "status": status,
+            "git_commit": git_commit,
+            "notes": notes,
+        }
+        _atomic_write_json(progress_path, payload)
 
-        if val_loss < history.best_val_loss:
-            history.best_val_loss = val_loss
-            history.best_val_epoch = epoch
+    # Initial "running" snapshot so the UI shows the run immediately,
+    # before the first epoch finishes (epochs can be ~30s each at
+    # 420k params on CPU).
+    _emit("running", current_epoch=0)
+
+    try:
+        for epoch in range(epochs):
+            # Train.
+            model.train()
+            train_losses_epoch: list[float] = []
+            for batch_x, batch_y in train_loader:
+                batch_x = batch_x.to(device_obj)
+                batch_y = batch_y.to(device_obj)
+                optimizer.zero_grad()
+                pred = model(batch_x)
+                loss = loss_fn(pred, batch_y)
+                loss.backward()
+                optimizer.step()
+                train_losses_epoch.append(loss.item())
+            train_loss = float(np.mean(train_losses_epoch))
+            history.train_losses.append(train_loss)
+
+            # Val (skip if no val data).
+            if n_val > 0:
+                model.eval()
+                with torch.no_grad():
+                    val_pred = model(x_val.to(device_obj))
+                    val_loss = loss_fn(
+                        val_pred, y_val.to(device_obj),
+                    ).item()
+            else:
+                val_loss = float("nan")
+            history.val_losses.append(val_loss)
+
+            if val_loss < history.best_val_loss:
+                history.best_val_loss = val_loss
+                history.best_val_epoch = epoch
+
+            _emit("running", current_epoch=epoch + 1)
+    except BaseException:
+        # Mark the run failed before re-raising so a watcher knows
+        # not to keep polling. BaseException so even KeyboardInterrupt
+        # leaves a useful tombstone.
+        try:
+            _emit("failed", current_epoch=len(history.train_losses))
+        except Exception:
+            # Don't mask the original error with a logging error.
+            pass
+        raise
 
     # Save final weights. (Move back to CPU so the state_dict is
     # device-agnostic when loaded.)
     model.to("cpu")
     torch.save(model.state_dict(), weights_out_path)
     history.weights_path = weights_out_path
+
+    _emit("completed", current_epoch=epochs)
+
     return history

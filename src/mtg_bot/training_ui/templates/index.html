@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NN Training Progress</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+    --text: #e2e8f0; --muted: #8892a4;
+    --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --blue: #3b82f6;
+    --radius: 12px;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; padding: 32px 24px;
+  }
+  .page { max-width: 900px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px; }
+  h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+  #refresh-indicator { margin-left: auto; font-size: 0.75rem; color: var(--muted); }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 22px; margin-bottom: 18px; }
+
+  .run-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .run-id { font-family: monospace; font-size: 0.95rem; color: var(--text); }
+  .badge { font-size: 0.72rem; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; }
+  .badge.running { background: #1e3a5f; color: #93c5fd; animation: pulse 1.6s infinite; }
+  .badge.completed { background: #14532d; color: #4ade80; }
+  .badge.failed { background: #4c1d1d; color: #fca5a5; }
+  .badge.unknown { background: #2a2d3a; color: var(--muted); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .run-meta { font-size: 0.78rem; color: var(--muted); font-family: monospace; }
+
+  .progress-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .progress-bar {
+    flex: 1; height: 12px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 999px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: var(--blue); transition: width 0.4s ease;
+    border-radius: 999px;
+  }
+  .progress-fill.completed { background: var(--green); }
+  .progress-fill.failed { background: var(--red); }
+  .progress-pct { font-family: monospace; font-size: 0.9rem; min-width: 64px; text-align: right; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; margin-top: 14px; }
+  .stat { padding: 10px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; }
+  .stat-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 4px; }
+  .stat-value { font-size: 0.95rem; font-family: monospace; }
+
+  #chart-wrap { margin-top: 20px; height: 240px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 600; }
+  td.num { font-family: monospace; }
+  .empty { font-size: 0.85rem; color: var(--muted); text-align: center;
+    padding: 28px; border: 1px dashed var(--border); border-radius: var(--radius); }
+
+  .section-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); margin: 24px 0 10px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>NN Training Progress</h1>
+    <span id="refresh-indicator">loading…</span>
+  </header>
+
+  <div id="latest"></div>
+
+  <div class="section-title">Older runs</div>
+  <div id="older"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const REFRESH_MS = 2000;
+const refreshEl = document.getElementById('refresh-indicator');
+const latestEl = document.getElementById('latest');
+const olderEl = document.getElementById('older');
+let chart = null;
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fmtSeconds(s) {
+  if (s == null || !isFinite(s) || s < 0) return '—';
+  s = Math.round(s);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return m + 'm ' + r + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+function fmtLoss(v) {
+  if (v == null || !isFinite(v)) return '—';
+  return Number(v).toFixed(4);
+}
+
+function statusClass(s) {
+  if (s === 'running' || s === 'completed' || s === 'failed') return s;
+  return 'unknown';
+}
+
+function pctOf(run) {
+  const total = run.total_epochs || 0;
+  if (!total) return 0;
+  return Math.min(100, 100 * (run.current_epoch || 0) / total);
+}
+
+function renderLatest(run) {
+  if (!run) {
+    latestEl.innerHTML = '<div class="empty">No training runs yet. Start one with <code>scripts/train_nn.py</code>.</div>';
+    if (chart) { chart.destroy(); chart = null; }
+    return;
+  }
+  const status = statusClass(run.status);
+  const pct = pctOf(run);
+  const trainLoss = (run.train_losses || []).slice(-1)[0];
+  const valLoss = (run.val_losses || []).slice(-1)[0];
+
+  // build/refresh the structural bits exactly once per run_id so we
+  // don't blow away the chart canvas on every refresh.
+  if (latestEl.dataset.runId !== run.run_id) {
+    latestEl.dataset.runId = run.run_id;
+    latestEl.innerHTML = `
+      <div class="card" id="latest-card">
+        <div class="run-header">
+          <span class="run-id" id="lt-run-id"></span>
+          <span class="badge" id="lt-status"></span>
+          <span class="run-meta" id="lt-meta"></span>
+        </div>
+        <div class="progress-row">
+          <div class="progress-bar"><div class="progress-fill" id="lt-fill" style="width:0%"></div></div>
+          <div class="progress-pct" id="lt-pct">0%</div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="stat-label">Epoch</div><div class="stat-value" id="lt-epoch">—</div></div>
+          <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" id="lt-elapsed">—</div></div>
+          <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" id="lt-eta">—</div></div>
+          <div class="stat"><div class="stat-label">Avg / epoch</div><div class="stat-value" id="lt-avg">—</div></div>
+          <div class="stat"><div class="stat-label">Train loss</div><div class="stat-value" id="lt-train">—</div></div>
+          <div class="stat"><div class="stat-label">Val loss</div><div class="stat-value" id="lt-val">—</div></div>
+        </div>
+        <div id="chart-wrap"><canvas id="loss-chart"></canvas></div>
+      </div>`;
+    if (chart) { chart.destroy(); chart = null; }
+  }
+
+  document.getElementById('lt-run-id').textContent = run.run_id;
+  const statusEl = document.getElementById('lt-status');
+  statusEl.textContent = run.status || 'unknown';
+  statusEl.className = 'badge ' + status;
+  const metaParts = [];
+  if (run.git_commit) metaParts.push(run.git_commit);
+  if (run.started_at) metaParts.push(run.started_at);
+  if (run.notes) metaParts.push(run.notes);
+  document.getElementById('lt-meta').textContent = metaParts.join(' · ');
+
+  const fill = document.getElementById('lt-fill');
+  fill.style.width = pct.toFixed(1) + '%';
+  fill.className = 'progress-fill ' + status;
+  document.getElementById('lt-pct').textContent = pct.toFixed(1) + '%';
+
+  document.getElementById('lt-epoch').textContent =
+    (run.current_epoch || 0) + ' / ' + (run.total_epochs || 0);
+  document.getElementById('lt-elapsed').textContent = fmtSeconds(run.elapsed_seconds);
+  document.getElementById('lt-eta').textContent =
+    status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
+  document.getElementById('lt-avg').textContent = fmtSeconds(run.per_epoch_seconds_avg);
+  document.getElementById('lt-train').textContent = fmtLoss(trainLoss);
+  document.getElementById('lt-val').textContent = fmtLoss(valLoss);
+
+  drawChart(run);
+}
+
+function drawChart(run) {
+  const canvas = document.getElementById('loss-chart');
+  if (!canvas) return;
+  const labels = (run.train_losses || []).map((_, i) => i + 1);
+  const train = run.train_losses || [];
+  const val = (run.val_losses || []).map(v => isFinite(v) ? v : null);
+  if (!chart) {
+    chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'train', data: train, borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.15)', tension: 0.2, pointRadius: 0 },
+          { label: 'val', data: val, borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.15)', tension: 0.2, pointRadius: 0,
+            spanGaps: true },
+        ],
+      },
+      options: {
+        animation: false,
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { title: { display: true, text: 'epoch', color: '#8892a4' },
+               ticks: { color: '#8892a4' }, grid: { color: '#2a2d3a' } },
+          y: { title: { display: true, text: 'MSE', color: '#8892a4' },
+               ticks: { color: '#8892a4' }, grid: { color: '#2a2d3a' } },
+        },
+        plugins: { legend: { labels: { color: '#e2e8f0' } } },
+      },
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = train;
+    chart.data.datasets[1].data = val;
+    chart.update('none');
+  }
+}
+
+function renderOlder(runs) {
+  if (!runs.length) {
+    olderEl.innerHTML = '<div class="empty">No older runs.</div>';
+    return;
+  }
+  const rows = runs.map(r => {
+    const trainFinal = (r.train_losses || []).slice(-1)[0];
+    const valFinal = (r.val_losses || []).slice(-1)[0];
+    return `<tr>
+      <td><span class="run-id">${esc(r.run_id)}</span></td>
+      <td><span class="badge ${statusClass(r.status)}">${esc(r.status || 'unknown')}</span></td>
+      <td class="num">${(r.current_epoch || 0)} / ${(r.total_epochs || 0)}</td>
+      <td class="num">${esc(fmtLoss(trainFinal))}</td>
+      <td class="num">${esc(fmtLoss(valFinal))}</td>
+      <td class="num">${esc(fmtSeconds(r.elapsed_seconds))}</td>
+      <td class="num">${esc(r.started_at || '')}</td>
+    </tr>`;
+  }).join('');
+  olderEl.innerHTML = `
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th>run</th><th>status</th><th>epochs</th>
+          <th>train</th><th>val</th><th>duration</th><th>started</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/runs');
+    const data = await res.json();
+    const runs = data.runs || [];
+    renderLatest(runs[0] || null);
+    renderOlder(runs.slice(1));
+    refreshEl.textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    refreshEl.textContent = 'error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

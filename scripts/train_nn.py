@@ -101,6 +101,17 @@ def main() -> None:
         "--notes", default="",
         help="Optional free-form note saved into metadata.json.",
     )
+    parser.add_argument(
+        "--progress-path", type=Path, default=None,
+        help=(
+            "Where to write live per-epoch progress JSON for the "
+            "training UI. Defaults to "
+            "<cwd>/training_progress/<version>.json where <version> "
+            "is the next registry version (peeked, not reserved). "
+            "Pass an explicit path to override; pass an empty string "
+            "to disable progress emission entirely."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.data_dir.is_dir():
@@ -122,6 +133,28 @@ def main() -> None:
     device = args.device or auto_device()
     print(f"# Training on {device} for {args.epochs} epochs")
 
+    # Resolve the progress-file path BEFORE training so the UI can
+    # see the run from epoch 0. We peek at the next version ID
+    # rather than reserve it — the registry assigns sequentially at
+    # register time, so as long as nobody else trains concurrently
+    # the peek value matches the eventual assignment. If a race
+    # happens, the progress filename simply won't match the
+    # registered version; nothing breaks (the UI just sees an extra
+    # file with the original name).
+    registry = Registry(args.registry_root)
+    peeked_version = registry.next_version_id()
+    if args.progress_path is None:
+        progress_dir = Path("training_progress")
+        progress_dir.mkdir(parents=True, exist_ok=True)
+        progress_path: Path | None = progress_dir / f"{peeked_version}.json"
+    elif str(args.progress_path) == "":
+        progress_path = None
+    else:
+        progress_path = args.progress_path
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+    if progress_path is not None:
+        print(f"# Progress JSON: {progress_path}")
+
     # Train into a temp file, then hand off to the registry which
     # copies the bytes into the versioned directory.
     with tempfile.TemporaryDirectory() as tmp:
@@ -136,10 +169,12 @@ def main() -> None:
             val_split=args.val_split,
             device=device,
             rng_seed=args.seed,
+            progress_path=progress_path,
+            run_id=peeked_version,
+            notes=args.notes,
         )
         elapsed = time.perf_counter() - started
 
-        registry = Registry(args.registry_root)
         metadata = ModelMetadata(
             version="",  # filled in by Registry.register
             created_at="",  # filled in by Registry.register

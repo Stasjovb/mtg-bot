@@ -60,6 +60,11 @@ package-lock.json
 training_data/
 trained_weights/
 
+# Live per-epoch progress JSON written by train_nn.py for the
+# training-progress UI to poll. Each file is ephemeral / recreated
+# on the next run, so don't commit them.
+training_progress/
+
 # Captured per-game replays (gzipped JSON), written by data gen with
 # --save-replays-to. Regenerable; can be huge for long training runs.
 replays/
