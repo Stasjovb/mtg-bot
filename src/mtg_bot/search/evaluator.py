@@ -11,12 +11,20 @@ For terminal states, evaluators SHOULD short-circuit to the true
 result (+1 if the asked-for player won, -1 if they lost, 0 for a
 draw). The base ABC handles this automatically so subclasses only
 need to implement ``_evaluate_nonterminal``.
+
+Batched evaluation: evaluators expose ``batch_evaluate(states,
+player_id)`` so MCTS can collect a batch of leaves and submit them
+in a single call. The base implementation iterates ``evaluate`` —
+correct but with no batch advantage. Subclasses with real batched
+compute (NN evaluator → tensor stacking + one forward pass)
+override to capture the win.
 """
 
 from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
+from typing import Sequence
 
 from mtg_bot.search.protocol import CHANCE_PLAYER, GameState, PlayerID
 
@@ -38,6 +46,25 @@ class Evaluator(ABC):
                 return 0.0
             return 1.0 if winner == player_id else -1.0
         return self._evaluate_nonterminal(state, player_id)
+
+    def batch_evaluate(
+        self, states: Sequence[GameState], player_id: PlayerID,
+    ) -> list[float]:
+        """Evaluate a batch of states from ``player_id``'s perspective.
+
+        Default implementation iterates ``evaluate`` — correct but
+        with no batch advantage. Subclasses with real batched
+        compute (NN evaluators that stack into one tensor and run a
+        single forward pass) override this method.
+
+        Terminal states are handled identically to ``evaluate`` —
+        the per-state short-circuit still runs, so the returned
+        list mixes terminal and non-terminal values transparently.
+
+        Returns a list the same length as ``states``, each entry the
+        value of the corresponding state for ``player_id``.
+        """
+        return [self.evaluate(s, player_id) for s in states]
 
     @abstractmethod
     def _evaluate_nonterminal(

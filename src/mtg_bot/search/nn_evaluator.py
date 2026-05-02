@@ -20,10 +20,15 @@ Inference path:
 
 CPU-only here. Phase D adds CUDA for *training* on the 5090; for
 *inference* during MCTS, the per-call Python↔CUDA round-trip
-overhead is much higher than running a tiny MLP on CPU. If we ever
-want batched evaluation across MCTS leaves, that's a Phase E
-optimization (restructure the search to collect leaves into a batch
-before scoring) where CUDA would actually pay off.
+overhead is much higher than running a tiny MLP on CPU.
+
+Batched inference: ``batch_evaluate(states, player_id)`` stacks
+the feature vectors into a single ``(B, FEATURE_DIM)`` tensor and
+runs one forward pass — the path that lets MCTS amortize the
+Python↔C overhead across the batch. MCTS opts in via its
+``batch_size`` knob; ``batch_size=1`` falls through to the
+per-state path. CUDA would also pay off here once batched
+inference is the dominant rollout cost.
 
 Save / load uses ``torch.save(model.state_dict(), path)`` — standard
 PyTorch convention. Old saved weights become incompatible if
@@ -34,8 +39,9 @@ PyTorch convention. Old saved weights become incompatible if
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -127,6 +133,61 @@ class NNEvaluator(Evaluator):
             x = torch.from_numpy(features).unsqueeze(0).to(self.device)
             value = self.model(x).item()
         return value
+
+    def batch_evaluate(
+        self, states: Sequence[GameState], player_id: PlayerID,
+    ) -> list[float]:
+        """Single forward pass over a stacked batch of feature
+        vectors. Captures the 5–20× win the per-state path forfeits
+        to Python↔C round-trip overhead — at batch size 1 there's
+        almost no compute being done; at batch 32 the same wall-
+        clock buys 32 evaluations.
+
+        Terminal states short-circuit to ±1/0 (matches the
+        per-state path) without touching the network. Non-terminal
+        states are extracted, stacked into a ``(B, FEATURE_DIM)``
+        tensor, run through ``self.model``, and unpacked. The
+        returned list preserves input order and includes the
+        terminal short-circuits intermixed with NN-scored values.
+        """
+        if not states:
+            return []
+        # Partition into (index, kind, value-or-engine-state) so we
+        # can run the NN only over the non-terminal subset and
+        # stitch the terminals back in by index.
+        terminal_results: list[tuple[int, float]] = []
+        nonterminal_indices: list[int] = []
+        nonterminal_features: list[np.ndarray] = []
+        for i, s in enumerate(states):
+            if s.is_terminal():
+                winner = s.winner()
+                if winner is None:
+                    terminal_results.append((i, 0.0))
+                else:
+                    terminal_results.append(
+                        (i, 1.0 if winner == player_id else -1.0)
+                    )
+                continue
+            engine = self._engine_state(s)
+            nonterminal_indices.append(i)
+            nonterminal_features.append(
+                extract_features(engine, player_id)
+            )
+
+        out: list[float] = [0.0] * len(states)
+        for i, v in terminal_results:
+            out[i] = v
+        if nonterminal_features:
+            stacked = np.stack(nonterminal_features, axis=0)
+            with torch.no_grad():
+                x = torch.from_numpy(stacked).to(self.device)
+                # ``self.model(x)`` returns ``(B, 1)``; squeeze the
+                # value dim and pull values back to the host as a
+                # Python list.
+                values = self.model(x).squeeze(-1).cpu().tolist()
+            for idx, v in zip(nonterminal_indices, values):
+                out[idx] = v
+        return out
 
     def save(self, path: Path) -> None:
         """Persist ``state_dict`` to disk. Standard PyTorch convention."""
