@@ -358,7 +358,7 @@ def is_void_active(state: GameState) -> bool:
     )
 
 
-def _active_static_abilities(source: GameObject) -> list:
+def _active_static_abilities(source: GameObject):
     """Return ``source.printing.static_abilities`` filtered for DSK
     Room half-locking: a static tagged with a ``room_half`` is inert
     while that half is locked (not in ``source.unlocked_halves``).
@@ -368,14 +368,22 @@ def _active_static_abilities(source: GameObject) -> list:
     pump, layer-6 keyword grants) route through this helper so a
     locked-half anthem (Lecture Hall's "Other permanents you control
     have hexproof") doesn't apply while its half is locked.
+
+    Returns the underlying ``static_abilities`` tuple directly for
+    non-Room sources (the common case) — no per-call list allocation.
+    Callers iterate; none mutate. Reads ``printing.room_halves``
+    directly rather than going through the ``is_room`` property to
+    skip the property-dispatch overhead on this hot path (called
+    ~1.1M times per self-play game per the 2026-05-02 perf profile).
     """
-    if not source.printing.is_room:
-        return list(source.printing.static_abilities)
-    return [
-        a for a in source.printing.static_abilities
-        if getattr(a, "room_half", None) is None
-        or a.room_half in source.unlocked_halves
-    ]
+    statics = source.printing.static_abilities
+    if not source.printing.room_halves:
+        return statics
+    unlocked = source.unlocked_halves
+    return tuple(
+        a for a in statics
+        if a.room_half is None or a.room_half in unlocked
+    )
 
 
 def reveal_to(obj: GameObject, *player_ids: int) -> None:
