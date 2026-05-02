@@ -818,6 +818,12 @@ def clear_combat_state(state: GameState) -> None:
                     f"end of combat: sacrifice {obj.printing.name}"
                 )
                 _sacrifice(state, obj)
+    # Drop continuous-effect registry entries scoped to "until end of
+    # combat" — the dispatch key for ``EndOfCombat`` Duration via
+    # ``ApplyEffect``. End-of-combat is not controller-relative
+    # (combat is a single set of steps within the active player's
+    # turn), so no ``player_id`` is passed.
+    state.expire_continuous_effects("end_of_combat")
     for obj in state.battlefield:
         obj.attacking = False
         obj.blocking = None

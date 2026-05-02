@@ -6,16 +6,25 @@ pair stored on a ``ContinuousEffect`` registry entry. Use them with the
 to wrap an inner ``Effect`` and rewrite the lifetime of every registry
 entry the inner adds.
 
-Today ``EndOfTurn`` (``"cleanup"``), ``Permanent`` (``None``), and
-``EndOfYourNextTurn`` (``"controller_untap"`` keyed on the controller)
-are exercised by migrated callers — ``EndOfYourNextTurn`` lands on
-``run_untap_step``'s ``expire_continuous_effects("controller_untap",
-player_id=ap.id)`` hook through
-``PumpCreaturesOpponentsControlUntilEOT``'s ``until_caster_next_turn=
-True`` keyword path. ``EndOfCombat`` and ``UntilSourceLeaves`` are
-stubs: their string keys aren't yet recognised by ``run_cleanup_step``
-/ ``move_off_battlefield``, and no migrated caller uses them. Wire
-them through cleanup when a card needs them.
+All four finite durations are wired end-to-end:
+
+- ``EndOfTurn`` (``"cleanup"``) — dropped at the active player's
+  cleanup step in ``run_cleanup_step``.
+- ``EndOfYourNextTurn`` (``"controller_untap"`` keyed on the
+  controller) — dropped at the controller's next untap step in
+  ``run_untap_step``. Exercised end-to-end by
+  ``PumpCreaturesOpponentsControlUntilEOT``'s
+  ``until_caster_next_turn=True`` keyword path.
+- ``EndOfCombat`` (``"end_of_combat"``) — dropped at the
+  end-of-combat step in ``clear_combat_state`` (combat.py). No
+  production card uses this duration today; the wiring is in place
+  so a future card can route through ``ApplyEffect(<inner>,
+  EndOfCombat())`` without further plumbing.
+- ``Permanent`` (``None``) — stays in the registry until the source
+  leaves play (per ``move_off_battlefield``).
+
+``UntilSourceLeaves`` is currently an alias for ``Permanent`` — see
+its class docstring for when to differentiate.
 """
 
 from __future__ import annotations
@@ -94,10 +103,18 @@ class EndOfYourNextTurn(Duration):
 
 @dataclass(frozen=True)
 class EndOfCombat(Duration):
-    """``until end of combat``: stub — the dispatch key
-    ``"end_of_combat"`` isn't consumed by any cleanup site today.
-    Wire it through the end-of-combat turn-based action when a card
-    needs it."""
+    """``until end of combat``: dropped at the end-of-combat step.
+    Maps to ``expires_at="end_of_combat"`` — consumed by
+    ``clear_combat_state`` in ``combat.py`` via
+    ``state.expire_continuous_effects("end_of_combat")``. End-of-
+    combat is not controller-relative (combat is a single set of
+    steps within the active player's turn), so
+    ``expires_at_player_id`` is unused.
+
+    No production card routes through this duration today; the
+    wiring exists so a future card with ``until end of combat``
+    oracle text can use ``ApplyEffect(<inner>, EndOfCombat())``
+    without further plumbing."""
 
     def to_expires(
         self, controller_id: int,
@@ -110,13 +127,25 @@ class EndOfCombat(Duration):
 
 @dataclass(frozen=True)
 class UntilSourceLeaves(Duration):
-    """``for as long as <source> is on the battlefield``: equivalent to
-    ``Permanent`` today — ``expires_at=None`` already means "drop when
-    the source leaves play" (see ``move_off_battlefield``). Defined as
-    a distinct type for grammar fidelity; if a future card needs a
-    different "source leaves" semantic (e.g. a registry entry whose
-    source is a different object than the one whose departure ends the
-    effect), this is the place to differentiate."""
+    """``for as long as <source> is on the battlefield``: currently
+    equivalent to ``Permanent`` — both translate to
+    ``(expires_at=None, expires_at_player_id=None)``. The registry's
+    ``move_off_battlefield`` path drops every entry whose
+    ``source_id`` left the battlefield, which already implements the
+    "source leaves" semantics for the typical case where the
+    effect's source IS the registry entry's source.
+
+    Defined as a distinct ``Duration`` value type for grammar
+    fidelity (so ``ApplyEffect(<inner>, UntilSourceLeaves())`` reads
+    correctly at the call site) and as the differentiation point for
+    future cards that need source-leave semantics distinct from
+    registry-source-leave — e.g. an effect whose source object is
+    different from the registry entry's ``source_id``. When such a
+    card lands, change ``to_expires`` to return a new dispatch key
+    (e.g. ``"effect_source_leaves"``) and add a hook in
+    ``move_off_battlefield`` (or a parallel teardown site) to drop
+    matching entries when the effect's source — not the registry's
+    source — leaves play."""
 
     def to_expires(
         self, controller_id: int,
