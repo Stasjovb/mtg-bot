@@ -65,6 +65,11 @@
   First time only: `npm install` (requires Node 18+).
   Tests live under `tests-js/`. They load `src/mtg_bot/static/app.js`
   into a jsdom fixture and call its globals; see `tests-js/setup.js`.
+- **GPU available** — `.venv-py313/` has `torch 2.11.0+cu128` (CUDA 12.8 build) installed against an RTX 5090. `torch.cuda.is_available()` returns True; `auto_device()` in `src/mtg_bot/training/trainer.py` picks `cuda` automatically when training. Reinstall the CUDA build with:
+  `.venv-py313/Scripts/python.exe -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128`
+  Smoke check:
+  `.venv-py313/Scripts/python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"`
+  At the current 25k-65k-param networks, CPU and CUDA training are within ~0-15% of each other (Python↔CUDA round-trip overhead beats tiny matmuls). The GPU win arrives once the model scales up; until then, `device='cpu'` is fine and tests force it explicitly. Multiprocessing data-gen workers stay CPU-only — `data_gen.py` does not call `auto_device`, and self-play games never instantiate a CUDA tensor.
 - Run a game: `.venv/Scripts/python.exe -m mtg_bot`
 - Run the UI (localhost): `.venv/Scripts/python.exe -m mtg_bot.ui`
 - Run the UI over Tailscale (reachable from phone/laptop on the tailnet):
