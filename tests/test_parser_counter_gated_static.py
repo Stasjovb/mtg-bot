@@ -25,22 +25,36 @@ from mtg_bot.cards.parser.statics import (
     _parse_static_ability_line,
 )
 from mtg_bot.cards.parser_source import OracleParserCardSource
+from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+
+
+def _expected_counter_gated_static(keyword: str) -> tuple[StaticAbility, ...]:
+    """Common expected-shape helper. Counter-gated anthems migrate to a
+    layer-6 ContinuousModifier(GrantKeyword) carried on a single
+    StaticAbility — same shape the parser returns for keyword-only
+    anthem lines, just with a different scope."""
+    return (
+        StaticAbility(
+            scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword(keyword),
+            ),
+        ),
+    )
 
 
 # ---------- Happy paths ----------
 
 
 def test_drix_fatemaker_line_parses_to_counter_gated_static():
-    # Drix's exact oracle line; the parsed ability must match the
-    # static-registry entry for the structural parity gate to admit
+    # Drix's exact oracle line; the parsed tuple must match the new
+    # ContinuousModifier shape for the structural parity gate to admit
     # the card.
     parsed = _parse_static_ability_line(
         "Each creature you control with a +1/+1 counter on it has trample."
     )
-    assert parsed == StaticAbility(
-        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
-        granted_keywords=frozenset({"trample"}),
-    )
+    assert parsed == _expected_counter_gated_static("trample")
 
 
 def test_counter_gated_grammar_accepts_other_evergreens():
@@ -50,10 +64,7 @@ def test_counter_gated_grammar_accepts_other_evergreens():
     parsed = _parse_static_ability_line(
         "Each creature you control with a +1/+1 counter on it has flying."
     )
-    assert parsed == StaticAbility(
-        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
-        granted_keywords=frozenset({"flying"}),
-    )
+    assert parsed == _expected_counter_gated_static("flying")
 
 
 def test_counter_gated_grammar_accepts_multiword_keyword():
@@ -64,10 +75,7 @@ def test_counter_gated_grammar_accepts_multiword_keyword():
         "Each creature you control with a +1/+1 counter on it has "
         "first strike."
     )
-    assert parsed == StaticAbility(
-        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
-        granted_keywords=frozenset({"first strike"}),
-    )
+    assert parsed == _expected_counter_gated_static("first strike")
 
 
 def test_counter_gated_helper_callable_directly():
@@ -77,10 +85,7 @@ def test_counter_gated_helper_callable_directly():
     parsed = _parse_counter_gated_anthem_line(
         "Each creature you control with a +1/+1 counter on it has trample."
     )
-    assert parsed == StaticAbility(
-        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
-        granted_keywords=frozenset({"trample"}),
-    )
+    assert parsed == _expected_counter_gated_static("trample")
 
 
 # ---------- Regex sanity ----------
@@ -100,7 +105,7 @@ def test_regex_extracts_keyword_named_group():
 # ---------- Negatives ----------
 
 
-def test_unknown_keyword_returns_none():
+def test_unknown_keyword_returns_empty_tuple():
     # A non-evergreen keyword fails the parse rather than silently
     # producing a static with no engine effect — same conservative
     # policy as the plural-anthem grammar.
@@ -109,11 +114,11 @@ def test_unknown_keyword_returns_none():
             "Each creature you control with a +1/+1 counter on it has "
             "scry."
         )
-        is None
+        == ()
     )
 
 
-def test_missing_period_returns_none():
+def test_missing_period_returns_empty_tuple():
     # The line anchor requires a terminating period; an oracle line
     # without one is malformed and must not match.
     assert (
@@ -121,11 +126,11 @@ def test_missing_period_returns_none():
             "Each creature you control with a +1/+1 counter on it has "
             "trample"
         )
-        is None
+        == ()
     )
 
 
-def test_plural_subject_returns_none():
+def test_plural_subject_returns_empty_tuple():
     # The grammar is pinned to the singular ``Each creature`` subject.
     # The plural ``Creatures you control with a +1/+1 counter on them``
     # form does not appear on any EoE card today and is not handled.
@@ -137,11 +142,11 @@ def test_plural_subject_returns_none():
             "Creatures you control with a +1/+1 counter on them have "
             "trample."
         )
-        is None
+        == ()
     )
 
 
-def test_different_counter_kind_returns_none():
+def test_different_counter_kind_returns_empty_tuple():
     # The regex hard-codes ``+1/+1`` counters. Other counter kinds
     # (charge, loyalty, stun, etc.) need their own scope and grammar;
     # a line about a different counter must not be silently mapped to
@@ -151,11 +156,11 @@ def test_different_counter_kind_returns_none():
             "Each creature you control with a charge counter on it has "
             "trample."
         )
-        is None
+        == ()
     )
 
 
-def test_pt_grant_in_counter_gated_form_returns_none():
+def test_pt_grant_in_counter_gated_form_returns_empty_tuple():
     # P/T grants in the counter-gated shape would need their own
     # grammar branch; today only keyword grants are accepted. A line
     # that smuggles a ``get +N/+N`` body into the counter-gated subject
@@ -165,7 +170,7 @@ def test_pt_grant_in_counter_gated_form_returns_none():
             "Each creature you control with a +1/+1 counter on it gets "
             "+1/+1."
         )
-        is None
+        == ()
     )
 
 
