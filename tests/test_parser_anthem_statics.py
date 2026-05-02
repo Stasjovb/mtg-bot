@@ -77,14 +77,20 @@ def test_anthem_pt_with_keyword_tail():
     # ``... get +N/+M and have <keyword>.`` — combined P/T + keyword
     # grant. The plural ``have`` (vs. self-scope's ``has``) is what
     # distinguishes the anthem grammar from the self-scope grammar.
+    # PR-D-pilot shape: P/T moves to a layer-7c ContinuousModifier;
+    # the keyword grant stays in ``granted_keywords`` for now (a
+    # follow-up migrates it to ContinuousModifier(layer=6,
+    # GrantKeyword), which needs a tuple-of-StaticAbility return).
     parsed = _parse_static_ability_line(
         "Creatures you control get +1/+1 and have trample."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.CREATURES_YOU_CONTROL,
-        power_bonus=1,
-        toughness_bonus=1,
         granted_keywords=frozenset({"trample"}),
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=1, toughness_bonus=1),
+        ),
     )
 
 
@@ -92,15 +98,17 @@ def test_anthem_pt_with_multiword_keyword_tail():
     # Multi-word evergreens (``first strike``, ``double strike``) must
     # round-trip through ``str.capitalize()`` to find their
     # ``_KEYWORD_LINES`` entry — same convention as the self-scope
-    # grammar.
+    # grammar. Same compound-anthem PR-D-pilot shape.
     parsed = _parse_static_ability_line(
         "Other creatures you control get +0/+1 and have first strike."
     )
     assert parsed == StaticAbility(
         scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
-        power_bonus=0,
-        toughness_bonus=1,
         granted_keywords=frozenset({"first strike"}),
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(power_bonus=0, toughness_bonus=1),
+        ),
     )
 
 

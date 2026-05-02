@@ -383,20 +383,26 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
             engine_keywords.add(ek)
         granted = frozenset(engine_keywords)
     active_turn_only = m.group("turn_rider") is not None
-    if (power_bonus or toughness_bonus) and not granted:
-        # PR D continuous-effects pilot: pure P/T-only anthems
-        # (no keyword-tail) are now expressed as a layer-7c
-        # ContinuousModifier(PowerToughnessBonus) declaration. The
-        # walker in ``mtg_bot.game._static_bonuses`` (added 2026-05-01,
-        # commit 24d5038) folds the contribution into effective P/T
-        # exactly the same way the legacy ``StaticAbility.power_bonus``
-        # / ``.toughness_bonus`` field reads did. Compound anthems
-        # (P/T + keyword in one line) and pure-keyword anthems still
-        # use the legacy field path — those need either a multi-payload
-        # ContinuousModifier or a tuple-of-StaticAbility return shape;
-        # follow-up todo 1d4f2a5c covers that broader migration.
+    if power_bonus or toughness_bonus:
+        # PR D continuous-effects: pure-P/T and compound (P/T +
+        # keyword tail) anthems route the P/T contribution through
+        # a layer-7c ``ContinuousModifier(PowerToughnessBonus)``
+        # declaration. ``_static_bonuses`` (commit 24d5038) folds
+        # the contribution into effective P/T exactly the way the
+        # legacy ``power_bonus`` / ``toughness_bonus`` field reads
+        # did. The keyword-tail grant (single or multi-keyword)
+        # stays in ``granted_keywords`` for now — moving it to a
+        # ContinuousModifier(layer=6, GrantKeyword) would need a
+        # tuple-of-StaticAbility return shape since
+        # ContinuousModifier holds a single LayerPayload, and
+        # multi-keyword statics would split into multiple
+        # StaticAbility instances. Pure-keyword anthems
+        # (``_ANTHEM_KEYWORD_LINE`` match — no P/T component) keep
+        # the legacy ``granted_keywords`` shape entirely. Follow-up
+        # todo 1d4f2a5c covers the keyword-side migration.
         return StaticAbility(
             scope=scope,
+            granted_keywords=granted,
             active_turn_only=active_turn_only,
             continuous_effect=ContinuousModifier(
                 layer=7,
