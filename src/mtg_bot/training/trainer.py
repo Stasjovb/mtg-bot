@@ -89,7 +89,20 @@ def train_value_network(
             f"val_split must be in [0, 1); got {val_split}"
         )
 
-    device_obj = torch.device(device or auto_device())
+    # Pin to a single torch thread on CPU. With our small batches
+    # (256 rows × FEATURE_DIM=51 floats) and small model (~25k
+    # params), per-batch OMP/MKL barrier sync across the host's
+    # cores costs more than it saves — empirically observed an
+    # ~85× slowdown going from 1 thread to 32 threads on a 32-core
+    # box (248s/epoch → 2.93s/epoch). Once the model scales up to
+    # ~100k+ parameters the matmul work per batch grows enough
+    # that multi-threading wins; revisit this pin then.
+    # GPU training is unaffected (set_num_threads governs CPU only).
+    if device is None:
+        device = auto_device()
+    if device == "cpu":
+        torch.set_num_threads(1)
+    device_obj = torch.device(device)
     torch.manual_seed(rng_seed)
 
     # Train/val split. Shuffle indices once, slice deterministically.
