@@ -73,13 +73,7 @@ from mtg_bot.cards.parser.effects import (
     _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import (
-    _is_self_shuffle_clause,
-    _SELF_SHUFFLE_GSZ_RE,
-    _SELF_SHUFFLE_NEXUS_RE,
-    _try_whole_spell_exact_text,
-    _parse_spell_oracle_text,
-)
+from mtg_bot.cards.parser.spell_builder import _is_self_shuffle_clause, _SELF_SHUFFLE_GSZ_RE, _SELF_SHUFFLE_NEXUS_RE, _parse_spell_oracle_text
 
 
 def _claimed_names() -> frozenset[str]:
@@ -290,16 +284,6 @@ def test_nexus_of_fate_shuffles_static():
     )
 
 
-def test_nexus_of_fate_no_bespoke_entry():
-    # The whole-spell tier no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Take an extra turn after this one.\n"
-        "If Nexus of Fate would be put into a graveyard from anywhere, "
-        "reveal Nexus of Fate and shuffle it into its owner's library "
-        "instead."
-    ) is None
-
-
 def test_nexus_of_fate_parses_via_per_clause_grammar():
     eff = _parse_spell_oracle_text(
         "Take an extra turn after this one.\n"
@@ -342,15 +326,6 @@ def test_green_suns_zenith_shuffles_static():
     )
 
 
-def test_green_suns_zenith_no_bespoke_entry():
-    # The whole-spell tier no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Search your library for a green creature card with mana "
-        "value X or less, put it onto the battlefield, then shuffle. "
-        "Shuffle Green Sun's Zenith into its owner's library."
-    ) is None
-
-
 def test_green_suns_zenith_parses_via_per_clause_grammar():
     eff = _parse_spell_oracle_text(
         "Search your library for a green creature card with mana "
@@ -376,14 +351,6 @@ def test_cerebral_download_engine_class():
         Surveil(amount=1, use_artifact_count=True),
         DrawCards(amount=3),
     ))
-
-
-def test_cerebral_download_no_bespoke_entry():
-    # The whole-spell tier no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Surveil X, where X is the number of artifacts you control. "
-        "Then draw three cards."
-    ) is None
 
 
 def test_cerebral_download_parses_via_per_clause_grammar():
@@ -471,15 +438,6 @@ def test_jump_scare_engine_class():
     )
 
 
-def test_jump_scare_no_bespoke_entry():
-    # The whole-spell tier no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Until end of turn, target creature gets +2/+2, gains "
-        "flying, and becomes a Horror enchantment creature in "
-        "addition to its other types."
-    ) is None
-
-
 def test_jump_scare_parses_via_per_clause_grammar():
     eff = _parse_spell_oracle_text(
         "Until end of turn, target creature gets +2/+2, gains "
@@ -551,14 +509,6 @@ def test_depressurize_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Depressurize"]
     assert p.spell_effect == DepressurizeEffect(power_penalty=3)
-
-
-def test_depressurize_no_bespoke_entry():
-    # The whole-spell tier no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Target creature gets -3/-0 until end of turn. "
-        "Then if that creature's power is 0 or less, destroy it."
-    ) is None
 
 
 def test_depressurize_parses_via_per_clause_grammar():

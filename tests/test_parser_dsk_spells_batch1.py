@@ -72,7 +72,6 @@ from mtg_bot.cards.parser.effects import (
     _parse_spell_effect_phrase,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 
 
 def _claimed_names() -> frozenset[str]:
@@ -140,17 +139,6 @@ def test_dont_make_a_sound_claimed_by_parser():
     # of a counterspell survives the rider drop per the parser-is-right
     # rule).
     assert "Don't Make a Sound" in _claimed_names()
-
-
-def test_dispatch_dont_make_a_sound_no_bespoke_entry():
-    # After migration, the whole-spell dispatcher no longer has an
-    # entry for Don't Make a Sound; the per-clause grammar claims it
-    # via CounterTargetSpell() (_COUNTER_TARGET_SPELL_UNLESS_PAYS) +
-    # _is_unimplemented_secondary_rider dropper for "If they do,…".
-    assert _try_whole_spell_exact_text(
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, surveil 2."
-    ) is None
 
 
 def test_dont_make_a_sound_parses_via_per_clause_grammar():

@@ -41,13 +41,15 @@ Newly claimed spells:
 Each spell is exercised by:
   - A claim test confirming the parser's ``claimed_names`` includes
     it.
-  - A dispatch test confirming
-    ``_try_whole_spell_exact_text`` returns the same engine-class
-    instance the static side ships.
   - The shared parametrized parity test in
     ``tests/test_parser_parity.py`` enforces that the produced
     ``CardPrinting`` matches the static one (no separate per-card
     parity assert needed here).
+
+(The whole-spell exact-text dispatch table that originally backed
+these spells was retired in retire-empty-bespoke-shells once every
+entry had been migrated to per-clause / multi-sentence-literal
+recognizers in ``effects.py``.)
 """
 
 from __future__ import annotations
@@ -75,10 +77,7 @@ from mtg_bot.cards.base import (
     SystemsOverrideEffect,
     ZeroPointBalladEffect,
 )
-from mtg_bot.cards.parser.spell_builder import (
-    _parse_spell_oracle_text,
-    _try_whole_spell_exact_text,
-)
+from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
 
@@ -154,15 +153,6 @@ def test_invasive_maneuvers_claimed_by_parser():
 
 # ---------- dispatch tests (direct lookup) ----------
 
-def test_dispatch_depressurize_no_bespoke_entry():
-    # Depressurize migrated to per-clause grammar in bespoke-spells2;
-    # the whole-spell exact-text dispatcher no longer has a key for
-    # this text.
-    assert _try_whole_spell_exact_text(
-        "Target creature gets -3/-0 until end of turn. "
-        "Then if that creature's power is 0 or less, destroy it."
-    ) is None
-
 
 def test_dispatch_focus_fire_returns_engine_class():
     # Focus Fire migrated from the whole-spell exact-text tier to the
@@ -171,25 +161,10 @@ def test_dispatch_focus_fire_returns_engine_class():
     # whole-spell dispatch now falls through. End-to-end claim
     # verified via the active source's printing — the recognizer's
     # captured ``base=2`` integer parameterizes the engine class.
-    assert _try_whole_spell_exact_text(
-        "Focus Fire deals X damage to target attacking or blocking "
-        "creature, where X is 2 plus the number of creatures and/or "
-        "Spacecraft you control."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     p = get_active_source().get_printings().get("Focus Fire")
     assert p is not None
     assert p.spell_effect == FocusFireEffect(base=2)
-
-
-def test_dispatch_diplomatic_relations_no_bespoke_entry():
-    # Diplomatic Relations migrated from the whole-spell exact-text tier
-    # to the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Target creature you control gets +1/+0 and gains vigilance "
-        "until end of turn. It deals damage equal to its power to "
-        "target creature an opponent controls."
-    ) is None
 
 
 def test_diplomatic_relations_parses_via_per_clause_grammar():
@@ -207,16 +182,6 @@ def test_diplomatic_relations_parses_via_per_clause_grammar():
     assert eff == DiplomaticRelationsEffect()
 
 
-def test_dispatch_biosynthic_burst_no_bespoke_entry():
-    # Biosynthic Burst migrated from the whole-spell exact-text tier to
-    # the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Put a +1/+1 counter on target creature you control. "
-        "It gains reach, trample, and indestructible until end of "
-        "turn. Untap it."
-    ) is None
-
-
 def test_biosynthic_burst_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the full three-sentence body
@@ -229,15 +194,6 @@ def test_biosynthic_burst_parses_via_per_clause_grammar():
     )
     eff = _parse_spell_effect_phrase(body, "Biosynthic Burst")
     assert eff == BiosynthicBurstEffect()
-
-
-def test_dispatch_zealous_display_no_bespoke_entry():
-    # Zealous Display migrated to the per-clause grammar; whole-spell
-    # dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Creatures you control get +2/+0 until end of turn. "
-        "If it's not your turn, untap those creatures."
-    ) is None
 
 
 def test_zealous_display_parses_via_per_clause_grammar():
@@ -254,17 +210,6 @@ def test_zealous_display_parses_via_per_clause_grammar():
         toughness_bonus=0,
         also_untap_if_not_your_turn=True,
     )
-
-
-def test_dispatch_dual_sun_technique_no_bespoke_entry():
-    # Dual-Sun Technique migrated from the whole-spell exact-text tier
-    # to the per-clause grammar (effects.py's
-    # ``_GRANT_KEYWORDS_TO_TARGET_CREATURE_YOU_CONTROL_DRAW_IF_COUNTER_
-    # UEOT``); whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Target creature you control gains double strike until end "
-        "of turn. If it has a +1/+1 counter on it, draw a card."
-    ) is None
 
 
 def test_dual_sun_technique_parses_via_per_clause_grammar():
@@ -295,10 +240,6 @@ def test_dispatch_invasive_maneuvers_returns_engine_class():
     # boosted=5)`` — the captured integers (``3``, ``5``)
     # parameterize the engine class off the printed base/boosted
     # damage values.
-    assert _try_whole_spell_exact_text(
-        "Invasive Maneuvers deals 3 damage to target creature. "
-        "It deals 5 damage instead if you control a Spacecraft."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     im = get_active_source().get_printings().get("Invasive Maneuvers")
     assert im is not None
@@ -349,10 +290,6 @@ def test_parse_depressurize_typo_no_match():
     # ``_DEPRESSURIZE`` regex — verifying the recognizer is exact-match,
     # not fuzzy.  Both the whole-spell tier and the per-clause grammar
     # should return None for the malformed text.
-    assert _try_whole_spell_exact_text(
-        "Target creature gets -3/-0 until end of turn. "
-        "Then if that creature's power is 0 or fewer, destroy it."
-    ) is None
     assert _parse_spell_oracle_text(
         "Target creature gets -3/-0 until end of turn. "
         "Then if that creature's power is 0 or fewer, destroy it.",
@@ -398,15 +335,6 @@ def test_hymn_of_the_faller_claimed_by_parser():
     assert "Hymn of the Faller" in _claimed_names()
 
 
-def test_dispatch_cerebral_download_no_bespoke_entry():
-    # Cerebral Download migrated to per-clause grammar; the whole-spell
-    # exact-text dispatcher no longer has a key for this text.
-    assert _try_whole_spell_exact_text(
-        "Surveil X, where X is the number of artifacts you control. "
-        "Then draw three cards."
-    ) is None
-
-
 def test_cerebral_download_parses_via_per_clause_grammar():
     # The per-clause grammar produces Sequence(Surveil(...), DrawCards(3))
     # for Cerebral Download's printed oracle text — the same structure the
@@ -424,17 +352,6 @@ def test_cerebral_download_parses_via_per_clause_grammar():
         Surveil(amount=1, use_artifact_count=True),
         DrawCards(amount=3),
     ))
-
-
-def test_dispatch_decode_transmissions_no_bespoke_entry():
-    # Decode Transmissions migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "You draw two cards and lose 2 life.\n"
-        "Void — If a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn, instead you draw two cards "
-        "and each opponent loses 2 life."
-    ) is None
 
 
 def test_decode_transmissions_parses_via_per_clause_grammar():
@@ -462,16 +379,6 @@ def test_decode_transmissions_parses_via_per_clause_grammar():
             LoseLife(amount=2),
         )),
     )
-
-
-def test_dispatch_hymn_of_the_faller_no_bespoke_entry():
-    # Hymn of the Faller migrated from the whole-spell exact-text tier
-    # to the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Surveil 1, then you draw a card and lose 1 life.\n"
-        "Void — If a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn, draw another card."
-    ) is None
 
 
 def test_hymn_of_the_faller_parses_via_per_clause_grammar():
@@ -563,17 +470,6 @@ def test_full_bore_claimed_by_parser():
     assert "Full Bore" in _claimed_names()
 
 
-def test_dispatch_desculpting_blast_no_bespoke_entry():
-    # Desculpting Blast migrated from the whole-spell exact-text tier to
-    # the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Return target nonland permanent to its owner's hand. "
-        "If it was attacking, create a 1/1 colorless Drone artifact "
-        "creature token with flying and \"This token can block only "
-        "creatures with flying.\""
-    ) is None
-
-
 def test_desculpting_blast_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the two-sentence body (bounce
@@ -592,15 +488,6 @@ def test_desculpting_blast_parses_via_per_clause_grammar():
         allow_nonland_permanent=True,
         create_drone_if_was_attacking=True,
     )
-
-
-def test_dispatch_emergency_eject_no_bespoke_entry():
-    # Emergency Eject migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Destroy target nonland permanent. "
-        "Its controller creates a Lander token."
-    ) is None
 
 
 def test_emergency_eject_parses_via_per_clause_grammar():
@@ -624,10 +511,6 @@ def test_dispatch_orbital_plunge_returns_engine_class():
     # ``DealDamageToTargetCreatureWithExcessLanderRider(amount=6)``
     # — the captured integer (``6``) parameterizes the engine class
     # off the printed damage.
-    assert _try_whole_spell_exact_text(
-        "Orbital Plunge deals 6 damage to target creature. "
-        "If excess damage was dealt this way, create a Lander token."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     op = get_active_source().get_printings().get("Orbital Plunge")
     assert op is not None
@@ -644,24 +527,10 @@ def test_dispatch_seedship_impact_returns_engine_class():
     # ``SeedshipImpactEffect()`` (parameterless, only card with this
     # shape today — see the recognizer's docstring for the deferred-
     # generalization plan).
-    assert _try_whole_spell_exact_text(
-        "Destroy target artifact or enchantment. "
-        "If its mana value was 2 or less, create a Lander token."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     si = get_active_source().get_printings().get("Seedship Impact")
     assert si is not None
     assert si.spell_effect == SeedshipImpactEffect()
-
-
-def test_dispatch_scout_for_survivors_no_bespoke_entry():
-    # Scout for Survivors migrated from the whole-spell exact-text tier
-    # to the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Return up to three target creature cards with total mana "
-        "value 3 or less from your graveyard to the battlefield. "
-        "Put a +1/+1 counter on each of them."
-    ) is None
 
 
 def test_scout_for_survivors_parses_via_per_clause_grammar():
@@ -683,16 +552,6 @@ def test_scout_for_survivors_parses_via_per_clause_grammar():
     )
 
 
-def test_dispatch_zero_point_ballad_no_bespoke_entry():
-    # Zero Point Ballad migrated from the whole-spell exact-text tier to
-    # the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Destroy all creatures with toughness X or less. You lose "
-        "X life. If X is 6 or more, return a creature card put into "
-        "a graveyard this way to the battlefield under your control."
-    ) is None
-
-
 def test_zero_point_ballad_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the three-sentence body
@@ -706,18 +565,6 @@ def test_zero_point_ballad_parses_via_per_clause_grammar():
     )
     eff = _parse_spell_effect_phrase(body, "Zero Point Ballad")
     assert eff == ZeroPointBalladEffect()
-
-
-def test_dispatch_systems_override_no_bespoke_entry():
-    # Systems Override migrated from the whole-spell exact-text tier to
-    # the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Gain control of target artifact or creature until end of "
-        "turn. Untap that permanent. It gains haste until end of "
-        "turn. If it's a Spacecraft, put ten charge counters on it. "
-        "If you do, remove ten charge counters from it at the "
-        "beginning of the next end step."
-    ) is None
 
 
 def test_systems_override_parses_via_per_clause_grammar():
@@ -737,17 +584,6 @@ def test_systems_override_parses_via_per_clause_grammar():
     assert eff == SystemsOverrideEffect()
 
 
-def test_dispatch_devastating_onslaught_no_bespoke_entry():
-    # Devastating Onslaught migrated from the whole-spell exact-text tier
-    # to the per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Create X tokens that are copies of target artifact or "
-        "creature you control. Those tokens gain haste until end "
-        "of turn. Sacrifice them at the beginning of the next end "
-        "step."
-    ) is None
-
-
 def test_devastating_onslaught_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the three-sentence body
@@ -762,16 +598,6 @@ def test_devastating_onslaught_parses_via_per_clause_grammar():
     )
     eff = _parse_spell_effect_phrase(body, "Devastating Onslaught")
     assert eff == CreateXTokensOfTargetPermanentWithHasteEndStepSac()
-
-
-def test_dispatch_full_bore_no_bespoke_entry():
-    # Full Bore migrated from the whole-spell exact-text tier to the
-    # per-clause grammar; whole-spell dispatch now falls through.
-    assert _try_whole_spell_exact_text(
-        "Target creature you control gets +3/+2 until end of turn. "
-        "If that creature was cast for its warp cost, it also gains "
-        "trample and haste until end of turn."
-    ) is None
 
 
 def test_full_bore_parses_via_per_clause_grammar():

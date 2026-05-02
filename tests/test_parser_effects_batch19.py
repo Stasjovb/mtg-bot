@@ -67,7 +67,6 @@ from mtg_bot.cards.base import (
     PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
     ReturnUpToNCreaturesFromYourGraveyardToHand,
 )
-from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
 
@@ -97,16 +96,6 @@ def test_divert_disaster_claimed_by_parser():
 
 # ---------- dispatch tests (direct lookup) ----------
 
-def test_dispatch_unravel_no_bespoke_entry():
-    # After migration, the whole-spell dispatcher no longer has an
-    # entry for Unravel; the per-clause grammar claims it via
-    # CounterTargetSpell() + _is_unimplemented_secondary_rider dropper.
-    assert _try_whole_spell_exact_text(
-        "Counter target spell. "
-        "If the amount of mana spent to cast that spell was less "
-        "than its mana value, you draw a card."
-    ) is None
-
 
 def test_unravel_parses_via_per_clause_grammar():
     from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
@@ -117,17 +106,6 @@ def test_unravel_parses_via_per_clause_grammar():
         "Unravel",
     )
     assert eff == CounterTargetSpell()
-
-
-def test_dispatch_divert_disaster_no_bespoke_entry():
-    # After migration, the whole-spell dispatcher no longer has an
-    # entry for Divert Disaster; the per-clause grammar claims it via
-    # CounterTargetSpell() (_COUNTER_TARGET_SPELL_UNLESS_PAYS) +
-    # _is_unimplemented_secondary_rider dropper for "If they do,…".
-    assert _try_whole_spell_exact_text(
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, you create a Lander token."
-    ) is None
 
 
 def test_divert_disaster_parses_via_per_clause_grammar():
@@ -146,19 +124,6 @@ def test_archenemys_charm_claimed_by_parser():
     # planeswalker), mode 2 (1-or-2 graveyard returns), and mode 3
     # (multi-counter + grant-keyword 2-sentence body).
     assert "Archenemy's Charm" in _claimed_names()
-
-
-def test_dispatch_archenemys_charm_no_bespoke_entry():
-    # After migration, the whole-spell dispatcher no longer has an
-    # entry for Archenemy's Charm.
-    assert _try_whole_spell_exact_text(
-        "Choose one —\n"
-        "• Exile target creature or planeswalker.\n"
-        "• Return one or two target creature and/or planeswalker "
-        "cards from your graveyard to your hand.\n"
-        "• Put two +1/+1 counters on target creature you control. "
-        "It gains lifelink until end of turn."
-    ) is None
 
 
 def test_archenemys_charm_parses_via_per_clause_grammar():
@@ -183,8 +148,3 @@ def test_archenemys_charm_parses_via_per_clause_grammar():
     ))
 
 
-def test_dispatch_unrelated_text_returns_none():
-    # A spell text that isn't in the dispatch table returns ``None`` —
-    # belt-and-suspenders that the new entries don't accidentally
-    # widen the dispatcher's match surface.
-    assert _try_whole_spell_exact_text("Counter target creature spell.") is None

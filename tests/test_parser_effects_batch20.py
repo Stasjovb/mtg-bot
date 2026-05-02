@@ -58,7 +58,6 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.effects import _parse_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects.object_predicates import (
     IsLand,
@@ -132,19 +131,6 @@ def test_scrounge_for_eternity_claimed_by_parser():
     # Scrounge for Eternity ``{2}{B}`` Sorcery — now claimed via the
     # per-clause grammar.
     assert "Scrounge for Eternity" in _claimed_names()
-
-
-def test_scrounge_for_eternity_no_bespoke_entry():
-    # After migration, the whole-spell exact-text table no longer has
-    # a key for Scrounge for Eternity's text.
-    eff = _try_whole_spell_exact_text(
-        "As an additional cost to cast this spell, sacrifice an "
-        "artifact or creature.\n"
-        "Return target creature or Spacecraft card with mana value 5 "
-        "or less from your graveyard to the battlefield. "
-        "Then create a Lander token."
-    )
-    assert eff is None
 
 
 def test_scrounge_for_eternity_parses_via_per_clause_grammar():

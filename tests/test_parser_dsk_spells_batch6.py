@@ -112,18 +112,6 @@ def test_trial_of_agony_engine_class():
     assert p.spell_effect == DealDamageToTargetCreature(amount=5)
 
 
-def test_dispatch_trial_of_agony_no_bespoke_entry():
-    # Trial of Agony migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Choose two target creatures controlled by the same opponent. "
-        "That player chooses one of those creatures. Trial of Agony "
-        "deals 5 damage to that creature, and the other can't block "
-        "this turn."
-    ) is None
-
-
 def test_trial_of_agony_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the three-sentence body as

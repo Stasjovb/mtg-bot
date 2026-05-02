@@ -631,16 +631,13 @@ def test_source_claims_gravpack_monoist():
 
 def test_source_skips_cards_with_unsupported_clauses():
     """A card whose oracle text uses any clause beyond what the parser
-    supports must not be claimed by the per-clause grammar. Cards that
-    are claimed via the whole-spell exact-text bespoke dispatch are
-    deliberately included — they mirror the static-registry simplification
-    (parser-is-right). Pull Through the Weft is now claimed via the
-    whole-spell exact-text dispatch in ``_WHOLE_SPELL_EXACT_TEXT``, so
-    it IS in claimed_names; the old assertion is retired."""
+    supports must not be claimed by the per-clause grammar. Pull
+    Through the Weft was historically routed through a whole-spell
+    exact-text bespoke dispatch (retired in
+    retire-empty-bespoke-shells); after the dispatch was retired the
+    per-clause grammar now claims it directly, so it remains in
+    ``claimed_names``."""
     source = OracleParserCardSource()
-    # Pull Through the Weft is now claimed via whole-spell exact-text
-    # bespoke dispatch (misc-batch23). Verify it lands in the source
-    # rather than asserting it is absent.
     assert "Pull Through the Weft" in source.claimed_names
 
 

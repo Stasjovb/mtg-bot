@@ -50,23 +50,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.effects import _parse_effect, _parse_spell_effect_phrase
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import (
-    _DELIRIUM_COST_REDUCTION_RIDER_RE,
-    _DELIRIUM_EFFECT_RIDER_RE,
-    _DELIRIUM_MODAL_HEADER_RE,
-    _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE,
-    _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE,
-    _IF_THEY_DO_RIDER_RE,
-    _is_delirium_drop_clause,
-    _ITS_CONTROLLER_MANIFESTS_DREAD_RE,
-    _is_unimplemented_secondary_rider,
-    _MANA_SPENT_CONDITIONAL_DRAW_RE,
-    _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE,
-    _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE,
-    _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE,
-    _WHOLE_SPELL_EXACT_TEXT,
-    _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE,
-)
+from mtg_bot.cards.parser.spell_builder import _DELIRIUM_COST_REDUCTION_RIDER_RE, _DELIRIUM_EFFECT_RIDER_RE, _DELIRIUM_MODAL_HEADER_RE, _EXILE_ON_DEATH_THIS_TURN_INSTEAD_RE, _IF_CREATURE_CARD_PUT_INTO_GY_THIS_WAY_RETURN_IT_RE, _IF_THEY_DO_RIDER_RE, _is_delirium_drop_clause, _ITS_CONTROLLER_MANIFESTS_DREAD_RE, _is_unimplemented_secondary_rider, _MANA_SPENT_CONDITIONAL_DRAW_RE, _SACRIFICE_IT_AT_BEGINNING_OF_NEXT_END_STEP_RE, _SUBTYPE_CREATURES_YOU_CONTROL_GAIN_KEYWORDS_UEOT_RE, _WHEN_IT_DIES_THIS_TURN_MANIFEST_DREAD_RE, _YOU_MAY_RETURN_PERMANENT_CARD_FROM_GY_TO_HAND_RE
 
 
 def _claimed_names() -> frozenset[str]:
@@ -76,77 +60,6 @@ def _claimed_names() -> frozenset[str]:
 # ------------------------------------------------------------------ #
 # Table-size regression                                               #
 # ------------------------------------------------------------------ #
-
-def test_bespoke_table_count():
-    # Removals in bespoke-spells1 branch (23 total, 27 remaining):
-    #   5 Delirium-bearing (Impossible Inferno, Violent Urge,
-    #     Drag to the Roots, Let's Play a Game, Demonic Counsel)
-    #   + Temporal Intervention (directed-discard recognizer)
-    #   + Dual-Sun Technique (keyword-grant-with-draw recognizer)
-    #   + Full Bore (warp-conditional keyword-rider recognizer)
-    #   + Zealous Display (anthem-untap-if-not-your-turn recognizer)
-    #   + Emergency Eject (destroy + Lander-for-controller recognizer)
-    #   + Hymn of the Faller (Void adds-draw rider recognizer)
-    #   + Warping Wail (exile-p/t-threshold + sorcery-counter +
-    #     "It has" token suffix recognizers)
-    #   + Decode Transmissions (Void "instead" rider recognizer)
-    #   + Archenemy's Charm (exile-or-planeswalker + graveyard-return +
-    #     counter-grant recognizers)
-    #   + Unwanted Remake (controller-manifest rider dropper)
-    #   + Under the Skin (optional-graveyard-return rider dropper)
-    #   + Turn Inside Out (death-trigger-manifest rider dropper)
-    #   + Unravel (mana-spent-conditional-draw rider dropper)
-    #   + Midnight Mayhem (subtype-filtered UEOT keyword-grant dropper)
-    #   + Scorching Dragonfire (exile-on-death rider dropper +
-    #     optional-planeswalker scope in damage recognizer)
-    #   + Divert Disaster (Mana-Leak counterspell recognizer +
-    #     "If they do" consequent dropper)
-    #   + Don't Make a Sound (same Mana-Leak + consequent dropper)
-    #   + Come Back Wrong (conditional-reanimate + delayed-sac droppers,
-    #     N-clause general rider-drop path)
-    # Additional removals in bespoke-spells2 branch (5 more, 22 remaining):
-    #   + Nexus of Fate (take-extra-turn primitive + self-shuffle dropper)
-    #   + Green Sun's Zenith (GSZ battlefield-tutor primitive +
-    #     self-shuffle dropper)
-    #   + Cerebral Download (surveil-X-artifact-count primitive)
-    #   + Jump Scare (leading-UEOT + keywords + becomes-type-change dropper)
-    #   + Depressurize (debuff-then-conditional-destroy multi-sentence literal)
-    # Additional removals in bespoke-spells3 branch (7 more, 15 remaining):
-    #   + Lithobraking (optional-sac-artifact-when-you-do compound)
-    #   + Scrounge for Eternity (creature-or-Spacecraft+MV GY reanimate +
-    #     Then-create-Lander rider)
-    #   + Pull Through the Weft (nonland-permanent GY-to-hand multi-target,
-    #     then-lands-BF-tapped rider dropped)
-    #   + Commune with Evil (look-top-N-put-one-in-hand-rest-to-graveyard
-    #     three-sentence recognizer)
-    #   + Unnerving Grasp (return-up-to-one-nonland-permanent optional bounce
-    #     + Sequence.target_count_range() fix)
-    #   + Get Out (modal exactly-one-parseable fallback, mode 1)
-    #   + Untimely Malfunction (modal exactly-one-parseable fallback, mode 1)
-    # Additional removals in bespoke-spells4 branch (3 more, 12 remaining):
-    #   + Biosynthic Burst (per-clause multi-sentence literal in effects.py)
-    #   + Systems Override (per-clause multi-sentence literal in effects.py)
-    #   + Vengeful Possession (per-clause multi-sentence literal in effects.py)
-    # Additional removals in bespoke-spells6 branch (10 more, 2 remaining):
-    #   + Cut Propulsion (per-clause multi-sentence literal in effects.py)
-    #   + Mutinous Massacre (per-clause multi-sentence literal in effects.py)
-    #   + Diplomatic Relations (per-clause multi-sentence literal in effects.py)
-    #   + Desculpting Blast (per-clause multi-sentence literal in effects.py)
-    #   + Scout for Survivors (per-clause multi-sentence literal in effects.py)
-    #   + Coordinated Clobbering (per-clause multi-sentence literal in effects.py)
-    #   + Trial of Agony (per-clause multi-sentence literal in effects.py)
-    #   + Zero Point Ballad (per-clause multi-sentence literal in effects.py)
-    #   + Devastating Onslaught (per-clause multi-sentence literal in effects.py)
-    #   + Consult the Star Charts (per-clause multi-sentence literal in effects.py)
-    # Additional removals in bespoke-final-spells branch (2 more, 0 remaining):
-    #   + Terminal Velocity (per-clause multi-sentence literal in effects.py;
-    #     two-sentence body with embedded quoted triggered abilities)
-    #   + Close Encounter (per-clause literal in effects.py for the
-    #     "deals damage equal to the power of the chosen creature or card"
-    #     surface; additional-cost preamble already stripped by the
-    #     _is_additional_cost_preamble dropper)
-    # 50 - 50 = 0 entries remaining.
-    assert len(_WHOLE_SPELL_EXACT_TEXT) == 0
 
 
 # ------------------------------------------------------------------ #
@@ -245,9 +158,7 @@ def test_impossible_inferno_no_bespoke_entry():
         "cards in your graveyard, exile the top card of your "
         "library. You may play it until the end of your next turn."
     )
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
     from mtg_bot.cards.parser.text import _strip_reminder_text
-    assert _try_whole_spell_exact_text(_strip_reminder_text(text)) is None
 
 
 # ------------------------------------------------------------------ #
@@ -276,9 +187,7 @@ def test_violent_urge_no_bespoke_entry():
         "cards in your graveyard, that creature gains double strike "
         "until end of turn."
     )
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
     from mtg_bot.cards.parser.text import _strip_reminder_text
-    assert _try_whole_spell_exact_text(_strip_reminder_text(text)) is None
 
 
 # ------------------------------------------------------------------ #
@@ -310,9 +219,7 @@ def test_drag_to_the_roots_no_bespoke_entry():
         "graveyard.\n"
         "Destroy target nonland permanent."
     )
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
     from mtg_bot.cards.parser.text import _strip_reminder_text
-    assert _try_whole_spell_exact_text(_strip_reminder_text(text)) is None
 
 
 # ------------------------------------------------------------------ #
@@ -360,9 +267,7 @@ def test_lets_play_a_game_no_bespoke_entry():
         "• Each opponent discards two cards.\n"
         "• Each opponent loses 3 life and you gain 3 life."
     )
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
     from mtg_bot.cards.parser.text import _strip_reminder_text
-    assert _try_whole_spell_exact_text(_strip_reminder_text(text)) is None
 
 
 # ------------------------------------------------------------------ #
@@ -389,9 +294,7 @@ def test_demonic_counsel_no_bespoke_entry():
         "cards in your graveyard, instead search your library for "
         "any card, put it into your hand, then shuffle."
     )
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
     from mtg_bot.cards.parser.text import _strip_reminder_text
-    assert _try_whole_spell_exact_text(_strip_reminder_text(text)) is None
 
 
 # ------------------------------------------------------------------ #
@@ -522,34 +425,6 @@ def test_you_may_return_permanent_card_from_gy_to_hand_re_matches():
 # (per-clause grammar claims via unimplemented-rider dropper)         #
 # ------------------------------------------------------------------ #
 
-def test_unwanted_remake_no_bespoke_entry():
-    # Migrated to per-clause grammar; the whole-spell dispatcher no
-    # longer has a key for this text.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Destroy target creature. Its controller manifests dread."
-    ) is None
-
-
-def test_under_the_skin_no_bespoke_entry():
-    # Migrated to per-clause grammar; the whole-spell dispatcher no
-    # longer has a key for this text.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Manifest dread.\n"
-        "You may return a permanent card from your graveyard to your hand."
-    ) is None
-
-
-def test_turn_inside_out_no_bespoke_entry():
-    # Migrated to per-clause grammar; the whole-spell dispatcher no
-    # longer has a key for this text.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Target creature gets +3/+0 until end of turn. "
-        "When it dies this turn, manifest dread."
-    ) is None
-
 
 def test_unwanted_remake_parses_via_per_clause_grammar():
     from mtg_bot.cards.base import DestroyTargetCreature
@@ -623,24 +498,6 @@ def test_subtype_pump_rider_is_dropped():
     )
 
 
-def test_unravel_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Counter target spell. "
-        "If the amount of mana spent to cast that spell was less "
-        "than its mana value, you draw a card."
-    ) is None
-
-
-def test_midnight_mayhem_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Create three 1/1 red Gremlin creature tokens. "
-        "Gremlins you control gain menace, lifelink, and haste until "
-        "end of turn."
-    ) is None
-
-
 def test_unravel_parses_via_per_clause_grammar():
     from mtg_bot.cards.base import CounterTargetSpell
     from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
@@ -684,15 +541,6 @@ def test_exile_on_death_rider_is_dropped():
         "If that creature or planeswalker would die this turn, "
         "exile it instead."
     )
-
-
-def test_scorching_dragonfire_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Scorching Dragonfire deals 3 damage to target creature or "
-        "planeswalker. If that creature or planeswalker would die "
-        "this turn, exile it instead."
-    ) is None
 
 
 def test_scorching_dragonfire_parses_via_per_clause_grammar():
@@ -752,22 +600,6 @@ def test_counter_target_spell_unless_pays_parses():
     assert eff == CounterTargetSpell()
 
 
-def test_divert_disaster_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, you create a Lander token."
-    ) is None
-
-
-def test_dont_make_a_sound_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Counter target spell unless its controller pays {2}. "
-        "If they do, surveil 2."
-    ) is None
-
-
 def test_divert_disaster_parses_via_per_clause_grammar():
     from mtg_bot.cards.base import CounterTargetSpell
     from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
@@ -820,16 +652,6 @@ def test_delayed_sac_trigger_rider_is_dropped():
     assert _is_unimplemented_secondary_rider(
         "Sacrifice it at the beginning of your next end step."
     )
-
-
-def test_come_back_wrong_no_bespoke_entry():
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Destroy target creature. If a creature card is put into a "
-        "graveyard this way, return it to the battlefield under "
-        "your control. Sacrifice it at the beginning of your next "
-        "end step."
-    ) is None
 
 
 def test_come_back_wrong_parses_via_per_clause_grammar():

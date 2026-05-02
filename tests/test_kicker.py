@@ -52,22 +52,6 @@ def test_consult_printing_has_kicker_cost():
     assert p.kicker_cost_str == "{1}{U}"
 
 
-def test_dispatch_consult_no_whole_spell_bespoke_entry():
-    # Consult the Star Charts migrated from the whole-spell exact-text
-    # tier to the per-clause grammar; whole-spell dispatch now falls
-    # through (the key with the Kicker preamble no longer exists in the
-    # table).
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Kicker {1}{U}\n"
-        "Look at the top X cards of your library, where X is the "
-        "number of lands you control. Put one of those cards into "
-        "your hand. If this spell was kicked, put two of those cards "
-        "into your hand instead. Put the rest on the bottom of your "
-        "library in a random order."
-    ) is None
-
-
 def test_consult_body_parses_via_per_clause_grammar():
     # Belt-and-suspenders: after the Kicker preamble is stripped by
     # the per-clause path, the body text is claimed by the new

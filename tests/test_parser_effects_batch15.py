@@ -590,17 +590,6 @@ def test_cut_propulsion_claimed_by_parser():
     assert "Cut Propulsion" in _claimed_names()
 
 
-def test_dispatch_cut_propulsion_no_bespoke_entry():
-    # Cut Propulsion migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Target creature deals damage to itself equal to its power. "
-        "If that creature has flying, "
-        "it deals twice that much damage to itself instead."
-    ) is None
-
-
 def test_cut_propulsion_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the two-sentence body (self-damage
@@ -626,18 +615,6 @@ def test_mutinous_massacre_claimed_by_parser():
     assert "Mutinous Massacre" in _claimed_names()
 
 
-def test_dispatch_mutinous_massacre_no_bespoke_entry():
-    # Mutinous Massacre migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Choose odd or even. "
-        "Destroy each creature with mana value of the chosen quality. "
-        "Then gain control of all creatures until end of turn. "
-        "Untap them. They gain haste until end of turn."
-    ) is None
-
-
 def test_mutinous_massacre_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the five-sentence body
@@ -661,38 +638,12 @@ def test_singularity_rupture_claimed_by_parser():
     assert "Singularity Rupture" in _claimed_names()
 
 
-def test_whole_spell_exact_match_returns_none_for_unrelated_text():
-    # The dispatcher is exact-match, so unrelated oracle text never
-    # accidentally claims a spell. Sanity-check via a paraphrased
-    # version of one of the table keys — even one-character differences
-    # reject.
-    from mtg_bot.cards.parser.spell_builder import (
-        _try_whole_spell_exact_text,
-    )
-
-    # Same shape as Mutinous Massacre but with a typo in ``creature``
-    # — the exact-match dispatcher rejects.
-    assert _try_whole_spell_exact_text(
-        "Choose odd or even. "
-        "Destroy each creature with mana value of the chosen quality. "
-        "Then gain control of all creature until end of turn. "
-        "Untap them. They gain haste until end of turn."
-    ) is None
-
-
 def test_dispatch_singularity_rupture_returns_engine_class():
     # Singularity Rupture migrated from the whole-spell exact-text tier
     # to the per-clause grammar (effects.py's ``_SINGULARITY_RUPTURE``);
     # whole-spell dispatch now falls through. End-to-end claim verified
     # via the active source's printing.
-    from mtg_bot.cards.parser.spell_builder import (
-        _try_whole_spell_exact_text,
-    )
 
-    assert _try_whole_spell_exact_text(
-        "Destroy all creatures, then any number of target players "
-        "each mill half their library, rounded down."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     sr = get_active_source().get_printings().get("Singularity Rupture")
     assert sr is not None

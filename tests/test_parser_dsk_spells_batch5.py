@@ -336,17 +336,6 @@ def test_vengeful_possession_is_sorcery():
     assert "Sorcery" in p.card_types
 
 
-def test_dispatch_vengeful_possession_no_bespoke_entry():
-    # Vengeful Possession migrated from the whole-spell exact-text tier
-    # to the per-clause grammar; whole-spell dispatch now falls through.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Gain control of target creature until end of turn. "
-        "Untap it. It gains haste until end of turn. "
-        "You may discard a card. If you do, draw a card."
-    ) is None
-
-
 def test_vengeful_possession_parses_via_per_clause_grammar():
     # Belt-and-suspenders: the per-clause grammar's multi-sentence
     # literal in ``effects.py`` claims the full four-sentence body
@@ -568,14 +557,7 @@ def test_dispatch_exorcise_returns_engine_class():
     # Exorcise migrated from the whole-spell exact-text tier to the
     # per-clause grammar; whole-spell dispatch now falls through.
     # End-to-end claim verified via the active source's printing.
-    from mtg_bot.cards.parser.spell_builder import (
-        _try_whole_spell_exact_text,
-    )
 
-    assert _try_whole_spell_exact_text(
-        "Exile target artifact, enchantment, or creature with "
-        "power 4 or greater."
-    ) is None
     from mtg_bot.effects import ExorciseEffect
     parser = OracleParserCardSource()
     p = parser.get_printings()["Exorcise"]
@@ -850,17 +832,6 @@ def test_coordinated_clobbering_claimed_by_parser():
     # multi-sentence literal in ``effects.py`` claims the two-sentence
     # body as ``CoordinatedClobberingEffect()``.
     assert "Coordinated Clobbering" in _claimed_names()
-
-
-def test_dispatch_coordinated_clobbering_no_bespoke_entry():
-    # Coordinated Clobbering migrated to per-clause grammar; whole-spell
-    # dispatch now falls through.
-    from mtg_bot.cards.parser.spell_builder import _try_whole_spell_exact_text
-    assert _try_whole_spell_exact_text(
-        "Tap one or two target untapped creatures you control. "
-        "They each deal damage equal to their power to target "
-        "creature an opponent controls."
-    ) is None
 
 
 def test_coordinated_clobbering_parses_via_per_clause_grammar():

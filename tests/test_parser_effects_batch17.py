@@ -48,13 +48,7 @@ from mtg_bot.cards.base import (
     TakeExtraTurnAfterThisOne,
     TargetOpponentDiscardsCasterChoice,
 )
-from mtg_bot.cards.parser.spell_builder import (
-    _detect_kicker_cost,
-    _detect_shuffle_self_statics,
-    _is_kicker_preamble,
-    _kicker_cost,
-    _try_whole_spell_exact_text,
-)
+from mtg_bot.cards.parser.spell_builder import _detect_kicker_cost, _detect_shuffle_self_statics, _is_kicker_preamble, _kicker_cost
 from mtg_bot.effects.base import StaticAbility, StaticScope
 from mtg_bot.effects.modifiers import (
     EventPattern, Replace, ReplacementEffect,
@@ -116,25 +110,10 @@ def test_dispatch_darkness_returns_engine_class():
     # `_PREVENT_ALL_COMBAT_DAMAGE_THIS_TURN`); whole-spell dispatch
     # now falls through. End-to-end claim verified via the active
     # source's printing.
-    assert _try_whole_spell_exact_text(
-        "Prevent all combat damage that would be dealt this turn."
-    ) is None
     from mtg_bot.cards.source import get_active_source
     darkness = get_active_source().get_printings().get("Darkness")
     assert darkness is not None
     assert darkness.spell_effect == PreventAllCombatDamageThisTurn()
-
-
-def test_dispatch_nexus_of_fate_no_bespoke_entry():
-    # Nexus of Fate migrated to per-clause grammar in bespoke-spells2;
-    # the whole-spell exact-text dispatcher no longer has a key for
-    # this text.
-    assert _try_whole_spell_exact_text(
-        "Take an extra turn after this one.\n"
-        "If Nexus of Fate would be put into a graveyard from anywhere, "
-        "reveal Nexus of Fate and shuffle it into its owner's library "
-        "instead."
-    ) is None
 
 
 def test_nexus_of_fate_parses_via_per_clause_grammar():
@@ -152,17 +131,6 @@ def test_nexus_of_fate_parses_via_per_clause_grammar():
         "Nexus of Fate",
     )
     assert eff == TakeExtraTurnAfterThisOne()
-
-
-def test_dispatch_green_suns_zenith_no_bespoke_entry():
-    # Green Sun's Zenith migrated to per-clause grammar in bespoke-
-    # spells2; the whole-spell exact-text dispatcher no longer has a
-    # key for this text.
-    assert _try_whole_spell_exact_text(
-        "Search your library for a green creature card with mana "
-        "value X or less, put it onto the battlefield, then shuffle. "
-        "Shuffle Green Sun's Zenith into its owner's library."
-    ) is None
 
 
 def test_green_suns_zenith_parses_via_per_clause_grammar():
@@ -256,16 +224,6 @@ def test_lithobraking_claimed_by_parser():
     assert "Lithobraking" in _claimed_names()
 
 
-def test_lithobraking_no_bespoke_entry():
-    # After migration, the whole-spell exact-text table no longer has
-    # a key for Lithobraking's text.
-    eff = _try_whole_spell_exact_text(
-        "Create a Lander token. Then you may sacrifice an artifact. "
-        "When you do, Lithobraking deals 2 damage to each creature."
-    )
-    assert eff is None
-
-
 def test_lithobraking_parses_via_per_clause_grammar():
     from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
     eff = _parse_spell_oracle_text(
@@ -292,20 +250,6 @@ def test_temporal_intervention_claimed_by_parser():
     # (``TargetOpponentDiscardsCasterChoice``) after the Void
     # cost-reduction line is dropped by ``_parse_spell_oracle_text``.
     assert "Temporal Intervention" in _claimed_names()
-
-
-def test_temporal_intervention_no_bespoke_entry():
-    # After migration, the whole-spell exact-text dispatcher no longer
-    # has an entry for Temporal Intervention's full oracle text.
-    eff = _try_whole_spell_exact_text(
-        "Void — This spell costs {2} less to cast "
-        "if a nonland permanent left the battlefield this turn "
-        "or a spell was warped this turn.\n"
-        "Target opponent reveals their hand. "
-        "You choose a nonland card from it. "
-        "That player discards that card."
-    )
-    assert eff is None
 
 
 def test_directed_discard_body_parses_via_per_clause_grammar():
@@ -339,19 +283,6 @@ def test_close_encounter_claimed_by_parser():
     assert "Close Encounter" in _claimed_names()
 
 
-def test_dispatch_close_encounter_no_whole_spell_bespoke_entry():
-    # Close Encounter migrated from the whole-spell exact-text tier to
-    # the per-clause grammar; the whole-spell dispatcher now falls
-    # through (the key no longer exists in _WHOLE_SPELL_EXACT_TEXT).
-    eff = _try_whole_spell_exact_text(
-        "As an additional cost to cast this spell, choose a creature "
-        "you control or a warped creature card you own in exile.\n"
-        "Close Encounter deals damage equal to the power of the "
-        "chosen creature or card to target creature."
-    )
-    assert eff is None
-
-
 def test_dispatch_close_encounter_body_parses_via_per_clause_grammar():
     # After the additional-cost preamble is stripped, the body clause
     # normalizes to "deals damage equal to the power of the chosen
@@ -374,20 +305,6 @@ def test_consult_the_star_charts_claimed_by_parser():
     # new multi-sentence literal in ``effects.py`` (migrated from the
     # whole-spell exact-text tier in bespoke-spells6).
     assert "Consult the Star Charts" in _claimed_names()
-
-
-def test_dispatch_consult_no_whole_spell_bespoke_entry():
-    # Consult the Star Charts migrated from the whole-spell exact-text
-    # tier to the per-clause grammar; whole-spell dispatch now falls
-    # through (the key with the Kicker preamble no longer exists).
-    assert _try_whole_spell_exact_text(
-        "Kicker {1}{U}\n"
-        "Look at the top X cards of your library, where X is the "
-        "number of lands you control. Put one of those cards into "
-        "your hand. If this spell was kicked, put two of those cards "
-        "into your hand instead. Put the rest on the bottom of your "
-        "library in a random order."
-    ) is None
 
 
 # ---------- Kicker preamble detector ----------
@@ -460,18 +377,6 @@ def test_warping_wail_claimed_by_parser():
     # extended ``_CREATE_CREATURE_TOKEN`` regex that accepts the
     # ``. It has ...`` trailing clause.
     assert "Warping Wail" in _claimed_names()
-
-
-def test_dispatch_warping_wail_no_bespoke_entry():
-    # After migration, the whole-spell exact-text dispatcher no longer
-    # has an entry for Warping Wail.
-    assert _try_whole_spell_exact_text(
-        "Choose one —\n"
-        "• Exile target creature with power or toughness 1 or less.\n"
-        "• Counter target sorcery spell.\n"
-        "• Create a 1/1 colorless Eldrazi Scion creature token. "
-        "It has \"Sacrifice this token: Add {C}.\""
-    ) is None
 
 
 def test_warping_wail_per_clause_grammar_produces_correct_modal():

@@ -111,12 +111,7 @@ from mtg_bot.cards.parser.effects import (
     _parse_spell_effect_phrase,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import (
-    _SENTENCE_BOUNDARY_RE,
-    _split_sentences,
-    _try_whole_spell_exact_text,
-    _parse_spell_oracle_text,
-)
+from mtg_bot.cards.parser.spell_builder import _SENTENCE_BOUNDARY_RE, _split_sentences, _parse_spell_oracle_text
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 
 
@@ -332,15 +327,6 @@ def test_lithobraking_claimed_by_parser():
     assert "Lithobraking" in _claimed_names()
 
 
-def test_lithobraking_no_bespoke_entry():
-    # After migration, the whole-spell table no longer has a key for
-    # Lithobraking's oracle text.
-    assert _try_whole_spell_exact_text(
-        "Create a Lander token. Then you may sacrifice an artifact. "
-        "When you do, Lithobraking deals 2 damage to each creature."
-    ) is None
-
-
 def test_lithobraking_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Lithobraking"]
@@ -372,18 +358,6 @@ def test_lithobraking_parses_via_per_clause_grammar():
 
 def test_scrounge_for_eternity_claimed_by_parser():
     assert "Scrounge for Eternity" in _claimed_names()
-
-
-def test_scrounge_for_eternity_no_bespoke_entry():
-    # After migration, the whole-spell table no longer has a key for
-    # Scrounge for Eternity's text.
-    assert _try_whole_spell_exact_text(
-        "As an additional cost to cast this spell, sacrifice an "
-        "artifact or creature.\n"
-        "Return target creature or Spacecraft card with mana value 5 "
-        "or less from your graveyard to the battlefield. "
-        "Then create a Lander token."
-    ) is None
 
 
 def test_scrounge_for_eternity_engine_class_more_faithful():
@@ -526,16 +500,6 @@ def test_pull_through_the_weft_claimed_by_parser():
     assert "Pull Through the Weft" in _claimed_names()
 
 
-def test_pull_through_the_weft_no_bespoke_entry():
-    # After migration, the whole-spell table no longer has a key for
-    # Pull Through the Weft's text.
-    assert _try_whole_spell_exact_text(
-        "Return up to two target nonland permanent cards from your "
-        "graveyard to your hand, then return up to two target land "
-        "cards from your graveyard to the battlefield tapped."
-    ) is None
-
-
 def test_pull_through_the_weft_engine_class_more_faithful():
     # The per-clause parse preserves the "up to two" count and the
     # "nonland permanent" scope — more faithful than the old
@@ -614,16 +578,6 @@ def test_look_top_two_split_hand_graveyard_not_claimed_by_new_regex():
 
 def test_commune_with_evil_claimed_by_parser():
     assert "Commune with Evil" in _claimed_names()
-
-
-def test_commune_with_evil_no_bespoke_entry():
-    # After migration, the whole-spell table no longer has a key for
-    # Commune with Evil's text.
-    assert _try_whole_spell_exact_text(
-        "Look at the top four cards of your library. Put one of them "
-        "into your hand and the rest into your graveyard. You gain 3 "
-        "life."
-    ) is None
 
 
 def test_commune_with_evil_engine_class_more_faithful():
@@ -706,15 +660,6 @@ def test_return_up_to_one_nonland_permanent_does_not_match_creature():
 
 def test_unnerving_grasp_claimed_by_parser():
     assert "Unnerving Grasp" in _claimed_names()
-
-
-def test_unnerving_grasp_no_bespoke_entry():
-    # After migration, the whole-spell table no longer has a key for
-    # Unnerving Grasp's text.
-    assert _try_whole_spell_exact_text(
-        "Return up to one target nonland permanent to its owner's "
-        "hand. Manifest dread."
-    ) is None
 
 
 def test_unnerving_grasp_engine_class_more_faithful():
@@ -804,14 +749,6 @@ def test_get_out_claimed_by_parser():
     assert "Get Out" in _claimed_names()
 
 
-def test_get_out_no_bespoke_entry():
-    assert _try_whole_spell_exact_text(
-        "Choose one —\n"
-        "• Counter target creature or enchantment spell.\n"
-        "• Return one or two target creatures and/or enchantments you own to your hand."
-    ) is None
-
-
 def test_get_out_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Get Out"]
@@ -826,15 +763,6 @@ def test_get_out_engine_class():
 
 def test_untimely_malfunction_claimed_by_parser():
     assert "Untimely Malfunction" in _claimed_names()
-
-
-def test_untimely_malfunction_no_bespoke_entry():
-    assert _try_whole_spell_exact_text(
-        "Choose one —\n"
-        "• Destroy target artifact.\n"
-        "• Change the target of target spell or ability with a single target.\n"
-        "• One or two target creatures can't block this turn."
-    ) is None
 
 
 def test_untimely_malfunction_engine_class():
