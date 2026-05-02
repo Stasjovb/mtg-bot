@@ -62,7 +62,7 @@ class _Node:
 
     __slots__ = (
         "state", "parent", "decision", "children",
-        "pending_decisions", "visits", "total_value",
+        "pending_decisions", "visits", "total_value", "virtual_loss",
     )
 
     def __init__(
@@ -82,18 +82,34 @@ class _Node:
         )
         self.visits: int = 0
         self.total_value: float = 0.0
+        # Virtual loss for batched leaf evaluation (B1). Zero when no
+        # batched evaluation is in flight through this node.
+        # ``_apply_virtual_loss`` increments along the leaf→root path
+        # before queuing a leaf for the NN batch; ``_revert_virtual_loss``
+        # decrements when the real value comes back. ``ucb1`` and
+        # ``mean_value`` consult the *augmented* stats (visits +
+        # virtual_loss, total_value - virtual_loss), treating each
+        # in-flight evaluation as a worst-case -1 contribution. This
+        # discourages other selections in the same batch from
+        # converging on the same path. With ``batch_size=1`` (the
+        # default), no virtual loss is ever applied — augmented stats
+        # equal real stats, and behavior is bit-exact with the
+        # pre-batched MCTS.
+        self.virtual_loss: int = 0
 
     def is_leaf(self) -> bool:
         return self.state.is_terminal()
 
     def mean_value(self) -> float:
-        return self.total_value / self.visits if self.visits else 0.0
+        n = self.visits + self.virtual_loss
+        return (self.total_value - self.virtual_loss) / n if n else 0.0
 
     def ucb1(self, parent_visits: int, c: float) -> float:
-        if self.visits == 0:
+        n = self.visits + self.virtual_loss
+        if n == 0:
             return math.inf
-        exploit = self.mean_value()
-        explore = c * math.sqrt(math.log(parent_visits) / self.visits)
+        exploit = (self.total_value - self.virtual_loss) / n
+        explore = c * math.sqrt(math.log(parent_visits) / n)
         return exploit + explore
 
 
@@ -112,6 +128,7 @@ class MCTS(SearchStrategy):
         rng: random.Random | None = None,
         exploration_c: float = math.sqrt(2),
         expansion_policy: Optional[ExpansionPolicy] = None,
+        batch_size: int = 1,
     ) -> None:
         """
         ``evaluator`` scores leaves from ``player_id``'s perspective
@@ -127,7 +144,26 @@ class MCTS(SearchStrategy):
         ``FullEnumeration`` — preserves classic MCTS behavior.
         Swap in ``ProgressiveWidening`` (optionally with a prior)
         for large action spaces.
+
+        ``batch_size`` controls the batched-leaf-evaluation path
+        (B1). With ``batch_size=1`` (default), the search iterates
+        leaves serially — bit-exact with the pre-batched MCTS, no
+        virtual loss applied. With ``batch_size > 1``, the search
+        collects up to ``batch_size`` leaves at a time, applies
+        virtual loss along each leaf→root path so subsequent
+        selections fan out, calls ``evaluator.batch_evaluate`` once
+        per batch, then reverts virtual loss and backprops each
+        real value. The win shows up when the evaluator has real
+        batched compute (NN inference): one ``(B, D)`` forward pass
+        is ~5–25× faster than ``B`` single-state forward passes
+        because Python↔C overhead amortizes across the batch.
+        Heuristic and rollout evaluators see no win from batching
+        and should leave ``batch_size=1``.
         """
+        if batch_size < 1:
+            raise ValueError(
+                f"batch_size must be >= 1, got {batch_size!r}"
+            )
         self.evaluator = evaluator
         self.budget_factory = budget_factory
         self.rng = rng or random.Random()
@@ -136,6 +172,7 @@ class MCTS(SearchStrategy):
             expansion_policy if expansion_policy is not None
             else FullEnumeration()
         )
+        self.batch_size = batch_size
 
     def choose(
         self, state: GameState, player_id: PlayerID
@@ -183,13 +220,75 @@ class MCTS(SearchStrategy):
 
         budget = self.budget_factory()
         budget.start()
+        if self.batch_size == 1:
+            self._search_serial(root, player_id, budget)
+        else:
+            self._search_batched(
+                root, player_id, budget, self.batch_size,
+            )
+
+        return {c.decision: c.visits for c in root.children}
+
+    def _search_serial(
+        self, root: _Node, player_id: PlayerID, budget,
+    ) -> None:
+        """Today's iteration loop, factored out for symmetry with
+        ``_search_batched``. Bit-exact with the pre-batching MCTS
+        — no virtual loss is applied along the way."""
         while not budget.exhausted():
             leaf = self._select_and_expand(root)
             value = self._evaluate_leaf(leaf, player_id)
             self._backprop(leaf, value, player_id)
             budget.consume_node()
 
-        return {c.decision: c.visits for c in root.children}
+    def _search_batched(
+        self, root: _Node, player_id: PlayerID, budget,
+        batch_size: int,
+    ) -> None:
+        """Collect up to ``batch_size`` leaves with virtual loss,
+        evaluate them in one ``batch_evaluate`` call, revert virtual
+        loss, and backprop each real value. See ``__init__`` for
+        the design rationale. Terminal leaves short-circuit to the
+        evaluator's terminal handling and are backpropped
+        immediately without entering the batch (no NN value to
+        wait on)."""
+        while not budget.exhausted():
+            pending: list[_Node] = []
+            terminal_results: list[tuple[_Node, float]] = []
+            # Collect a batch worth of leaves. Each non-terminal
+            # leaf gets virtual loss applied so the next selection
+            # in this batch sees a degraded UCB1 score on the path
+            # we're already evaluating.
+            for _ in range(batch_size):
+                if budget.exhausted():
+                    break
+                leaf = self._select_and_expand(root)
+                budget.consume_node()
+                if leaf.is_leaf():
+                    # Terminal — evaluator short-circuits to ±1/0
+                    # without touching the network. Backprop
+                    # immediately; no virtual loss needed because
+                    # nothing's pending on this leaf.
+                    value = self._evaluate_leaf(leaf, player_id)
+                    terminal_results.append((leaf, value))
+                else:
+                    self._apply_virtual_loss(leaf)
+                    pending.append(leaf)
+
+            # Backprop terminal leaves first — they have real
+            # values immediately. Order doesn't affect correctness.
+            for leaf, value in terminal_results:
+                self._backprop(leaf, value, player_id)
+
+            # Batch-evaluate the non-terminal leaves and backprop.
+            if pending:
+                states = [leaf.state for leaf in pending]
+                values = self.evaluator.batch_evaluate(
+                    states, player_id,
+                )
+                for leaf, value in zip(pending, values):
+                    self._revert_virtual_loss(leaf)
+                    self._backprop(leaf, value, player_id)
 
     # ------------------------------------------------------------------
     # Internals
@@ -224,10 +323,15 @@ class MCTS(SearchStrategy):
                 # ProgressiveWidening could get here if it caps
                 # children at 0.)
                 return node
-            # Fully widened (per policy) — UCB1 descent.
+            # Fully widened (per policy) — UCB1 descent. Parent
+            # visits is the augmented count (real + virtual_loss) so
+            # the exploration term reflects pending in-flight
+            # evaluations during batched search; identical to today
+            # when virtual_loss is zero everywhere.
+            parent_n = node.visits + node.virtual_loss
             node = max(
                 node.children,
-                key=lambda c: c.ucb1(node.visits, self.exploration_c),
+                key=lambda c: c.ucb1(parent_n, self.exploration_c),
             )
         return node
 
@@ -306,4 +410,24 @@ class MCTS(SearchStrategy):
                     pass
                 else:
                     node.total_value += -value_for_root
+            node = node.parent
+
+    def _apply_virtual_loss(self, leaf: _Node) -> None:
+        """Add a worst-case -1 contribution along the leaf→root path
+        so subsequent selections in the same batch see a degraded
+        UCB1 score on this path and fan out to other branches.
+        Reverted by ``_revert_virtual_loss`` when the real value
+        comes back from ``batch_evaluate``."""
+        node: _Node | None = leaf
+        while node is not None:
+            node.virtual_loss += 1
+            node = node.parent
+
+    def _revert_virtual_loss(self, leaf: _Node) -> None:
+        """Undo a single ``_apply_virtual_loss`` along the leaf→root
+        path. Called once per batched leaf right before its real
+        value gets backpropped."""
+        node: _Node | None = leaf
+        while node is not None:
+            node.virtual_loss -= 1
             node = node.parent
