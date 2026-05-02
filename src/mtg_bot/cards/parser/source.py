@@ -28,9 +28,6 @@ from mtg_bot.cards.parser.room_builder import _build_room_printing
 from mtg_bot.cards.parser.planeswalker_builder import (
     _build_planeswalker_printing,
 )
-from mtg_bot.cards.parser.special_guests_builder import (
-    _build_special_guest_printing,
-)
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
 
 
@@ -55,15 +52,7 @@ class OracleParserCardSource:
     def __init__(self) -> None:
         printings: dict[str, CardPrinting] = {}
         for card in _load_scryfall_data():
-            # The Special Guests bonus-sheet builder runs first so its
-            # name-keyed exact-text dispatch wins over any
-            # general-purpose builder that might otherwise produce a
-            # near-miss printing for these one-off reprints. The
-            # builder gates on ``card.set == "spg"`` so it can't claim
-            # main-set cards.
-            built = _build_special_guest_printing(card)
-            if built is None:
-                built = _build_room_printing(card)
+            built = _build_room_printing(card)
             if built is None:
                 built = _build_enchantment_printing(card)
             if built is None:

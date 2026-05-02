@@ -1,172 +1,78 @@
-"""Tests for the Special Guests bonus-sheet whole-card dispatch.
+"""End-to-end claim tests for EoE Special Guests bonus-sheet cards.
 
-The ``special_guests_builder`` module claims a small set of EoE
-Special Guests reprints whose entire oracle text maps to a single
-printing-level boolean flag. This test file pins the per-card
-dispatch shape and the defensive surface-form / set-code gates.
+The legacy ``special_guests_builder`` module hosted a name-keyed
+exact-oracle-text dispatch that returned canonical printings for a
+small set of Special Guests reprints. Every entry has been migrated
+to the unified per-builder grammar, the dispatch table is gone, and
+the module itself was retired. These tests keep the end-to-end claim
+assertions so future refactors can't silently regress one of the
+migrated reprints.
 """
 
 from __future__ import annotations
 
-from mtg_bot.cards.parser.special_guests_builder import (
-    _build_special_guest_printing,
-)
-
 from mtg_bot.cards.source import get_active_source
+from mtg_bot.effects.predicates import Event
 
 _PRINTINGS = get_active_source().get_printings()
 
 
-def test_magus_of_the_moon_falls_through_to_creature_builder():
-    """Magus is no longer claimed by the special-guests dispatch — the
-    ``Nonbasic lands are Mountains.`` static is recognized in the
+def test_magus_of_the_moon_claimed_via_creature_builder():
+    """``Nonbasic lands are Mountains.`` static is recognized in the
     creature builder via ``_parse_nonbasic_lands_are_mountains_line``,
-    which sets the printing-level flag. The special-guests builder
-    returns ``None`` so the chain falls through to the creature
-    builder."""
-    card = {
-        "name": "Magus of the Moon",
-        "type_line": "Creature — Human Wizard",
-        "oracle_text": "Nonbasic lands are Mountains.",
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
-    # End-to-end: the active source still claims it (via creature builder).
+    which sets the printing-level flag.
+    """
     assert _PRINTINGS["Magus of the Moon"].nonbasic_lands_are_mountains is True
 
 
-def test_deafening_silence_falls_through_to_enchantment_builder():
-    """Deafening Silence is no longer claimed by the special-guests
-    dispatch — the noncreature-spell static is recognized by the
-    enchantment builder's printing-flag-only fallback path, which sets
-    the ``restricts_noncreature_spells_to_one_per_turn`` flag. The
-    special-guests builder returns ``None`` so the chain falls
-    through."""
-    card = {
-        "name": "Deafening Silence",
-        "type_line": "Enchantment",
-        "oracle_text": (
-            "Each player can't cast more than one noncreature "
-            "spell each turn."
-        ),
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
-    # End-to-end: the active source still claims it (via enchantment).
+def test_deafening_silence_claimed_via_enchantment_builder():
+    """The noncreature-spell static is recognized by the enchantment
+    builder's printing-flag-only fallback path which sets the
+    ``restricts_noncreature_spells_to_one_per_turn`` flag."""
     ds = _PRINTINGS["Deafening Silence"]
     assert ds.restricts_noncreature_spells_to_one_per_turn is True
 
 
-def test_burgeoning_falls_through_to_enchantment_builder():
-    """Burgeoning is no longer claimed by the special-guests dispatch —
-    the opponent-plays-land trigger is recognized by the enchantment
-    builder's unified oracle-text fallback, which produces the same
-    ``OptionalPutLandFromHandOntoBattlefield`` effect via the
+def test_burgeoning_claimed_via_enchantment_builder():
+    """The opponent-plays-land trigger is recognized by the
+    enchantment builder's unified oracle-text fallback, which produces
+    the same ``OptionalPutLandFromHandOntoBattlefield`` effect via the
     generalized ``you may put a (creature|land) card from your hand
     onto the battlefield`` regex (shared with Sledge-Class Seedship's
     creature variant)."""
-    from mtg_bot.effects.predicates import (
-        Event,
-    )
-    card = {
-        "name": "Burgeoning",
-        "type_line": "Enchantment",
-        "oracle_text": (
-            "Whenever an opponent plays a land, you may put a land "
-            "card from your hand onto the battlefield."
-        ),
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
-    # End-to-end: the active source still claims it (via enchantment).
     burgeoning = _PRINTINGS["Burgeoning"]
     assert len(burgeoning.triggered_abilities) == 1
     assert burgeoning.triggered_abilities[0].event == Event.PLAYS_LAND
 
 
-def test_sliver_overlord_falls_through_to_creature_builder():
-    """Sliver Overlord is no longer claimed by the special-guests
-    dispatch — both activated abilities now parse via the unified
-    grammar:
+def test_sliver_overlord_claimed_via_creature_builder():
+    """Both activated abilities parse via the unified grammar:
       * "{3}: Search your library for a Sliver card, reveal that
         card, put it into your hand, then shuffle." claims through
         _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE with the new "Sliver"
         filter entry (and "reveal that card" wording variant).
       * "{3}: Gain control of target Sliver." claims through the new
         _GAIN_CONTROL_TARGET_SUBTYPE regex dispatching to
-        GainControlOfTargetSliverPermanently().
-    The special-guests builder returns None so the chain falls
-    through to the creature builder."""
-    card = {
-        "name": "Sliver Overlord",
-        "type_line": "Legendary Creature — Sliver Mutant",
-        "oracle_text": (
-            "{3}: Search your library for a Sliver card, reveal "
-            "that card, put it into your hand, then shuffle.\n"
-            "{3}: Gain control of target Sliver. (This effect "
-            "lasts indefinitely.)"
-        ),
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
-    # End-to-end: the active source still claims it (via creature builder).
-    assert _PRINTINGS["Sliver Overlord"].activated_abilities[0].effect.__class__.__name__ == "SearchLibraryForCard"
-    assert _PRINTINGS["Sliver Overlord"].activated_abilities[1].effect.__class__.__name__ == "GainControlOfTargetSliverPermanently"
-
-
-def test_skips_non_spg_set():
-    """Defensive: a same-named card from a non-spg set must not
-    claim — the Special Guest dispatch is gated on set code."""
-    card = {
-        "name": "Magus of the Moon",
-        "type_line": "Creature — Human Wizard",
-        "oracle_text": "Nonbasic lands are Mountains.",
-        "set": "eoe",
-    }
-    assert _build_special_guest_printing(card) is None
-
-
-def test_skips_unknown_name():
-    """A spg-set card whose name isn't on the whitelist falls
-    through to the silent-skip path — defending against Scryfall
-    adding new bonus-sheet cards."""
-    card = {
-        "name": "Hypothetical New Special Guest",
-        "type_line": "Creature — Human Wizard",
-        "oracle_text": "Nonbasic lands are Mountains.",
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
-
-
-def test_skips_when_oracle_text_drifts():
-    """Defensive: if Scryfall changes a printed wording, the
-    surface-form sanity belt rejects the card rather than claiming
-    a stale-modeled flag."""
-    card = {
-        "name": "Magus of the Moon",
-        "type_line": "Creature — Human Wizard",
-        # Hypothetical reword — the modeled flag still says
-        # nonbasic-lands-are-mountains, so claiming would lock parity
-        # to an out-of-date interpretation.
-        "oracle_text": "All nonbasic lands are Mountains.",
-        "set": "spg",
-    }
-    assert _build_special_guest_printing(card) is None
+        GainControlOfTargetSliverPermanently()."""
+    sliver = _PRINTINGS["Sliver Overlord"]
+    assert sliver.activated_abilities[0].effect.__class__.__name__ == (
+        "SearchLibraryForCard"
+    )
+    assert sliver.activated_abilities[1].effect.__class__.__name__ == (
+        "GainControlOfTargetSliverPermanently"
+    )
 
 
 def test_source_claims_special_guests_via_data_walk():
-    """End-to-end: the parser source's data walk picks up Special
-    Guests. Deafening Silence and Magus of the Moon still claim via
-    their respective builders. Sliver Overlord now claims via the
-    creature builder (migrated from special-guests dispatch)."""
+    """End-to-end: the parser source's data walk picks up the
+    Special Guests reprints. All three flagship migrated cards are
+    in the claimed set after the dispatch table retirement."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
+
     parser = OracleParserCardSource()
     parsed = parser.get_printings()
     assert "Magus of the Moon" in parsed
     assert "Deafening Silence" in parsed
-    # Sliver Overlord still appears in the parser output, now via the
-    # creature builder rather than the special-guests dispatch.
     assert "Sliver Overlord" in parsed
     assert parsed["Magus of the Moon"] == _PRINTINGS["Magus of the Moon"]
     assert parsed["Deafening Silence"] == _PRINTINGS["Deafening Silence"]
