@@ -138,14 +138,7 @@ def test_unsupported_symbol_raises():
 def test_pinnacle_emissary_claimed_by_grammar():
     """The oracle-text grammar claims Pinnacle Emissary (not bespoke table)."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_ARTIFACT_CREATURES
-
     # Verify it was removed from the bespoke table.
-    assert "Pinnacle Emissary" not in _BESPOKE_ARTIFACT_CREATURES, (
-        "Pinnacle Emissary should have been migrated out of "
-        "_BESPOKE_ARTIFACT_CREATURES"
-    )
-
     # Verify the oracle parser still claims it.
     parser = OracleParserCardSource()
     printings = parser.get_printings()

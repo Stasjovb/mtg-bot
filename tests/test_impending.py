@@ -31,7 +31,6 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS
 from mtg_bot.cards.parser.creature_builder import (
-    _BESPOKE_CREATURES,
     _build_creature_printing,
 )
 from mtg_bot.cards.parser.printing_keywords import _parse_impending_line
@@ -490,20 +489,6 @@ def test_compound_trigger_phrase_this_permanent_enters_or_attacks():
 # -----------------------
 # Grammar-path migration: Overlords NOT in _BESPOKE_CREATURES
 # -----------------------
-
-
-def test_overlord_mistmoors_not_in_bespoke_table():
-    """Overlord of the Mistmoors was removed from ``_BESPOKE_CREATURES``
-    after engine-impending migration; the grammar claims it directly."""
-    assert "Overlord of the Mistmoors" not in _BESPOKE_CREATURES
-
-
-def test_overlord_floodpits_not_in_bespoke_table():
-    assert "Overlord of the Floodpits" not in _BESPOKE_CREATURES
-
-
-def test_overlord_boilerbilges_not_in_bespoke_table():
-    assert "Overlord of the Boilerbilges" not in _BESPOKE_CREATURES
 
 
 @pytest.mark.parametrize("name", [

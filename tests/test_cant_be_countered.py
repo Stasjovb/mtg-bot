@@ -308,12 +308,6 @@ def test_frenzied_baloth_parser_parity():
     construct the printing if no bespoke entry intercepted first.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-
-    assert "Frenzied Baloth" not in _BESPOKE_CREATURES, (
-        "Frenzied Baloth should be claimed by the grammar, not bespoke"
-    )
-
     p = OracleParserCardSource().get_printings()
     assert "Frenzied Baloth" in p, "parser must claim Frenzied Baloth"
 

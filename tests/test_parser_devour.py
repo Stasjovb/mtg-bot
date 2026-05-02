@@ -215,10 +215,3 @@ def test_build_creature_printing_famished_worldsire_grammar_attributes():
     assert isinstance(p.triggered_abilities[0].effect, _Effect)
 
 
-def test_famished_worldsire_not_in_bespoke():
-    """After migration, Famished Worldsire must NOT be in
-    ``_BESPOKE_CREATURES`` — the grammar now claims it through the
-    ``_parse_effect`` literal registered for its ETB body.
-    """
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Famished Worldsire" not in _BESPOKE_CREATURES

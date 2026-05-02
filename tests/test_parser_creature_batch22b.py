@@ -33,17 +33,8 @@ def _parser(name: str):
     return _PARSER_PRINTINGS[name]
 
 
-
-
 def test_lightstall_inquisitor_claimed_by_parser():
     assert "Lightstall Inquisitor" in _PARSER_PRINTINGS
-
-
-def test_lightstall_inquisitor_not_in_bespoke_creatures():
-    """Lightstall Inquisitor migrated from _BESPOKE_CREATURES to the
-    literal trigger-line dispatch in _BESPOKE_TRIGGER_LINES."""
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Lightstall Inquisitor" not in _BESPOKE_CREATURES
 
 
 def test_lightstall_inquisitor_has_etb_exile_trigger():
@@ -58,35 +49,22 @@ def test_lightstall_inquisitor_has_etb_exile_trigger():
     assert len(etb_effects) == 1
 
 
-
-
 def test_biomechan_engineer_claimed_by_parser():
     assert "Biomechan Engineer" in _PARSER_PRINTINGS
-
-
 
 
 def test_blade_of_the_swarm_claimed_by_parser():
     assert "Blade of the Swarm" in _PARSER_PRINTINGS
 
 
-
-
 def test_seedship_broodtender_claimed_by_parser():
     assert "Seedship Broodtender" in _PARSER_PRINTINGS
-
-
 
 
 def test_genemorph_imago_claimed_by_parser():
     # Genemorph Imago is now claimed end-to-end by the grammar
     # (migrated from _BESPOKE_CREATURES in the engine-base-pt branch).
     assert "Genemorph Imago" in _PARSER_PRINTINGS
-
-
-def test_genemorph_imago_not_in_bespoke():
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Genemorph Imago" not in _BESPOKE_CREATURES
 
 
 def test_genemorph_imago_has_flying():
@@ -111,42 +89,28 @@ def test_genemorph_imago_has_landfall_trigger():
     assert eff.upgrade_toughness == 6
 
 
-
-
 def test_broodguard_elite_claimed_by_parser():
     assert "Broodguard Elite" in _PARSER_PRINTINGS
-
-
 
 
 def test_icetill_explorer_claimed_by_parser():
     assert "Icetill Explorer" in _PARSER_PRINTINGS
 
 
-
-
 def test_possibility_technician_claimed_by_parser():
     assert "Possibility Technician" in _PARSER_PRINTINGS
-
-
 
 
 def test_terrapact_intimidator_claimed_by_parser():
     assert "Terrapact Intimidator" in _PARSER_PRINTINGS
 
 
-
-
 def test_famished_worldsire_claimed_by_parser():
     assert "Famished Worldsire" in _PARSER_PRINTINGS
 
 
-
-
 def test_ouroboroid_claimed_by_parser():
     assert "Ouroboroid" in _PARSER_PRINTINGS
-
-
 
 
 def test_quantum_riddler_claimed_by_parser():

@@ -62,11 +62,6 @@ def _hand(state, printing, owner_id=0):
 # 1. Parser: Lightstall Inquisitor claimed end-to-end
 # ---------------------------------------------------------------------------
 
-def test_lightstall_inquisitor_not_in_bespoke_creatures():
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Lightstall Inquisitor" not in _BESPOKE_CREATURES
-
-
 def test_lightstall_inquisitor_has_etb_trigger():
     from mtg_bot.effects.generic import EachOpponentExilesCardFromHandWithCastPermission
     from mtg_bot.effects.predicates import Event

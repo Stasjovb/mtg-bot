@@ -262,11 +262,6 @@ def test_set_base_pt_conditional_describe():
 # ─────────────────────────────────────────────
 
 
-def test_genemorph_imago_not_in_bespoke():
-    from mtg_bot.cards.parser.creature_builder import _BESPOKE_CREATURES
-    assert "Genemorph Imago" not in _BESPOKE_CREATURES
-
-
 def test_genemorph_imago_parser_claims_card():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     parser = OracleParserCardSource()
