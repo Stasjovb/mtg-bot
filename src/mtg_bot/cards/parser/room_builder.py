@@ -50,8 +50,6 @@ from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects import (
     ConditionalIfYouControlSubtype,
     CreateToken,
-    CreateTokenCopyOfTargetCreatureYouControl,
-    DiscardSelf,
     DrawCards,
     EachOpponentLosesLife,
     ExileTopOfLibraryMayPlayThisTurn,
@@ -228,58 +226,6 @@ def _build_unholy_annex_ritual_chamber() -> CardPrinting:
     )
 
 
-def _build_mirror_room_fractured_realm() -> CardPrinting:
-    """Mirror Room // Fractured Realm ``{2}{U}`` // ``{5}{U}{U}``.
-
-    Mirror Room oracle:
-        When you unlock this door, create a token that's a copy of
-        target creature you control, except it's a Reflection in
-        addition to its other creature types.
-
-    Fractured Realm oracle:
-        If a triggered ability of a permanent you control triggers,
-        that ability triggers an additional time.
-
-    Mirror Room is a pure door trigger using
-    ``CreateTokenCopyOfTargetCreatureYouControl(additional_subtype=
-    "Reflection")`` — same Mirrorpool-mode-2 primitive used for the
-    base copy, with the new ``additional_subtype`` rider that injects
-    "Reflection" into the copy's printed subtype tuple. Existing
-    layer-3/4 walks (``effective_subtypes``) read the merged
-    subtypes off the token's printing directly.
-
-    Fractured Realm is the static trigger-doubler (CR 603.10b — "if
-    [trigger condition], that ability triggers an additional time").
-    The engine doesn't model trigger doubling, so the printed effect
-    is an honest no-op permission-style miss in the same family as
-    Lecture Hall's hexproof-on-permanents and Warped Space's
-    pay-{0}-for-spells-from-exile: not modelling the optional
-    extra-fire doesn't break rules, the player just doesn't get the
-    doubled trigger. Default engine behaviour (single fire) is the
-    rules-correct base; the doubler would only ever ADD benefits.
-    The half is wired with cost-and-name only; once a trigger-
-    doubling layer lands, the static gains a real effect via the
-    ``room_half`` lock gate already in
-    ``_active_static_abilities``.
-    """
-    return make_room(
-        _half(
-            "Mirror Room", "{2}{U}",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.ENTERS, predicate=IsSelf(),
-                    effect=CreateTokenCopyOfTargetCreatureYouControl(
-                        additional_subtype="Reflection",
-                    ),
-                ),
-            ),
-        ),
-        _half(
-            "Fractured Realm", "{5}{U}{U}",
-        ),
-    )
-
-
 def _build_charred_foyer_warped_space() -> CardPrinting:
     """Charred Foyer // Warped Space ``{3}{R}`` // ``{4}{R}{R}``.
 
@@ -337,7 +283,6 @@ _ROOM_BUILDERS: dict[str, "callable[[], CardPrinting]"] = {
     "Derelict Attic // Widow's Walk": _build_derelict_attic_widows_walk,
     "Unholy Annex // Ritual Chamber": _build_unholy_annex_ritual_chamber,
     "Charred Foyer // Warped Space": _build_charred_foyer_warped_space,
-    "Mirror Room // Fractured Realm": _build_mirror_room_fractured_realm,
 }
 
 
@@ -356,12 +301,43 @@ _UNIFIED_ROOM_NAMES: frozenset[str] = frozenset({
     "Glassworks // Shattered Yard",
     "Grand Entryway // Elegant Rotunda",
     "Meat Locker // Drowned Diner",
+    "Mirror Room // Fractured Realm",
     "Moldering Gym // Weight Room",
     "Restricted Office // Lecture Hall",
     "Roaring Furnace // Steaming Sauna",
     "Surgical Suite // Hospital Room",
     "Ticket Booth // Tunnel of Hate",
     "Underwater Tunnel // Slimy Aquarium",
+})
+
+
+# Per-half oracle-text lines that map to engine-unmodeled mechanics
+# and emit as honest no-ops on the produced ``RoomHalf``: the half
+# still exists with cost-and-name only, but the line contributes no
+# trigger / static / activated to the emitted abilities tuple. Same
+# permission-not-offered / engine-doesn't-model-this discipline as
+# ``_NONAURA_HONEST_NOOP_LINES`` in ``enchantment_builder``.
+#
+# Each entry is the full printed line (after reminder-text stripping)
+# of a half whose entire body is a single un-modeled clause. When a
+# new mechanic lands in the engine that promotes one of these lines
+# to an actual recognizer, drop the entry — the recognizer will
+# claim it on the standard ``_parse_clause`` path. Keeping the
+# allowlist explicit (rather than silently dropping every
+# unrecognized clause) preserves the "honest miss" discipline:
+# adding a new Room half whose body the parser doesn't recognize
+# rejects loudly rather than silently dropping clauses.
+_ROOM_HONEST_NOOP_LINES: frozenset[str] = frozenset({
+    # Fractured Realm: trigger doubler — CR 603.10b ``if [trigger
+    # condition], that ability triggers an additional time``. The
+    # engine doesn't model trigger doubling, so the printed effect is
+    # an honest no-op permission-style miss — single fire is the
+    # rules-correct base; the doubler would only ever ADD benefits.
+    # Same family as Lecture Hall's hexproof-on-permanents (which
+    # parses through the anthem grammar) and Warped Space's optional
+    # alt-cost permission.
+    "If a triggered ability of a permanent you control triggers, "
+    "that ability triggers an additional time.",
 })
 
 
@@ -381,6 +357,12 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
     unrecognized line surfaces as a parser miss for the whole face
     rather than a silently-dropped clause.
 
+    Lines on ``_ROOM_HONEST_NOOP_LINES`` are silently dropped — they
+    map to engine-unmodeled mechanics (trigger doubling, optional
+    alt-cost permission, etc.) and the half emits as cost-and-name
+    only, mirroring the bespoke factory's pattern of producing a
+    cost-and-name-only ``RoomHalf`` for un-modeled partner halves.
+
     Triggered abilities AND static abilities are threaded onto the
     produced ``RoomHalf``. Keywords and activated abilities on a
     half aren't exercised by any unified-path Room today — those
@@ -394,6 +376,8 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
     for raw_line in face.get("oracle_text", "").split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
+            continue
+        if line in _ROOM_HONEST_NOOP_LINES:
             continue
         clause = _parse_clause(line, name=name)
         if clause is None:

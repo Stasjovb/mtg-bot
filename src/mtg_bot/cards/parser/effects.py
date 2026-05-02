@@ -206,6 +206,7 @@ from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     BecomeType,
+    CreateTokenCopyOfTargetCreatureYouControl,
     DestroyEnchantedPermanent,
     DrawCardsAndLoseLifeEqualToResolvingDamage,
     DrawCardsByConditionMultiplier,
@@ -3053,6 +3054,29 @@ _CREATE_LANDER_AND_SCHEDULE_SAC = re.compile(
     r"At the beginning of the end step on your next turn, "
     r"sacrifice that token$"
 )
+# ``create a token that's a copy of target creature you control``
+# (Mirrorpool's mode-2 activation) — bare copy with no extra
+# subtype rider. Maps to
+# ``CreateTokenCopyOfTargetCreatureYouControl()``.
+#
+# ``create a token that's a copy of target creature you control,
+# except it's a <Subtype> in addition to its other creature types``
+# (Mirror Room's door trigger) — same primitive with the
+# ``additional_subtype`` rider injecting the captured subtype into the
+# copy's printed subtype tuple. The capture group accepts a single
+# capitalized subtype word (Reflection is the surface today; broader
+# multi-word subtype phrases — e.g. ``"Eldrazi Spawn"`` — would
+# extend the alternation if a future printing surfaces them).
+#
+# A single regex with an optional rider claims both surfaces; the
+# bare and ridered forms differ only by the comma-prefixed
+# ``except it's a <Subtype> in addition to its other creature types``
+# tail, captured optionally so the regex matches with or without it.
+_CREATE_TOKEN_COPY_TARGET_CREATURE_RE = re.compile(
+    r"^create a token that's a copy of target creature you control"
+    r"(?:, except it's a (?P<subtype>[A-Z][A-Za-z]*) "
+    r"in addition to its other creature types)?$"
+)
 
 
 def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
@@ -3094,12 +3118,27 @@ def _parse_token_count(token: str) -> int:
 
 def _parse_create_token_effect(phrase: str) -> Effect | None:
     """Try to parse ``phrase`` as a token-creation effect (either the
-    stat-bearing creature shape, the bare-name shape, or the
-    each-player bare-name shape). Returns ``None`` if no shape
+    stat-bearing creature shape, the bare-name shape, the
+    each-player bare-name shape, or the
+    copy-of-target-creature shape). Returns ``None`` if no shape
     matches OR if the resolved token name has no ``TOKEN_PRINTINGS``
     entry — the parser doesn't fabricate new token printings on
     the fly.
     """
+    # Copy-of-target-creature shape (Mirrorpool / Mirror Room) — tried
+    # before the stat-bearing shape because the printed surface
+    # ``create a token that's a copy of target creature you control``
+    # has no <P>/<T> stats and would never match the stat-bearing
+    # regex anyway, but ordering more-specific before more-general is
+    # the convention here. The single regex covers both the bare form
+    # (Mirrorpool's mode-2: no extra subtype rider) and the
+    # additional-subtype rider form (Mirror Room: ``..., except it's
+    # a Reflection in addition to its other creature types``).
+    m = _CREATE_TOKEN_COPY_TARGET_CREATURE_RE.match(phrase)
+    if m is not None:
+        return CreateTokenCopyOfTargetCreatureYouControl(
+            additional_subtype=m.group("subtype"),
+        )
     m = _CREATE_CREATURE_TOKEN.match(phrase)
     if m is not None:
         count = _parse_token_count(m.group(1))
