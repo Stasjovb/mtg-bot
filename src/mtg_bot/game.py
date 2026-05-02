@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from mtg_bot.cards import CardPrinting
 
@@ -22,6 +22,169 @@ class Zone(Enum):
     GRAVEYARD = "graveyard"
     EXILE = "exile"
     STACK = "stack"
+
+
+class _CowList(list):
+    """Copy-on-write list used for the library, graveyard, and exile zones.
+
+    Why this exists
+    ---------------
+    ``GameState.clone()`` is the search hot path. Profiling showed that
+    the per-card ``clone_obj`` call inside ``[clone_obj(o) for o in
+    p.library]`` dominates clone time — most cards in those three zones
+    are never touched during a given rollout, so deep-cloning them is
+    pure waste.
+
+    A naive "share the GameObjects, copy the list" approach (the original
+    cow-library commit ``73df2ab`` plus its graveyard/exile follow-up
+    ``52f4389``) was reverted in ``2864cc2``: the engine's draw / mill /
+    exile-from-library / etc. paths do ``card = p.library.pop(0);
+    p.hand.append(card); card.zone = HAND``. The in-place mutation
+    ``card.zone = HAND`` happened on a GameObject that was *also* in the
+    parent state's library list — so the parent state silently
+    corrupted, and a downstream ``apply_action`` blew up with
+    ``ValueError: card N not castable by PX``.
+
+    The fix
+    -------
+    A list subclass that tracks two states per instance:
+
+    - ``_owned``: ``True`` for an independent backing storage; mutations
+      are unconstrained. ``False`` for a "shared view" — its current
+      contents are also referenced by some sibling list (the source
+      state's library, or the clone's at-clone-time view of it).
+
+    - ``_clone_each``: when shared, this is the per-element clone
+      function to call on first mutation. The function is the same
+      ``clone_obj`` closure used by ``GameState.clone`` so memoization
+      via the parent ``id_map`` Just Works for the whole sibling pair.
+
+    Every list mutator (``append``, ``pop``, ``remove``, ``__setitem__``,
+    etc.) starts by calling ``_fork_if_shared``: if shared, build a fresh
+    list of cloned elements, install it as our backing storage via
+    ``list.__init__``, set ``_owned = True``, and clear ``_clone_each``.
+    Reads (``__getitem__``, ``__iter__``, ``__len__``, ``__contains__``,
+    slicing) pass through to ``list``'s C implementations unchanged —
+    sharing is transparent for read-only access, which is exactly the
+    common case during MCTS expansion / evaluation.
+
+    Invariant for a clone-time pair
+    -------------------------------
+    Right after ``GameState.clone()``:
+        parent.library:  _CowList shared view, _owned=False
+        clone.library:   _CowList shared view, _owned=False
+    Both reference the SAME GameObject instances. The first one to
+    mutate forks: it constructs a fresh list of cloned objects via
+    ``_clone_each``, installs it, and becomes ``_owned=True``. The
+    other still owns the originals — its own ``_owned`` flag is still
+    ``False`` until *it* tries to mutate, at which point it'd fork too.
+    Because both forks lazily call ``_clone_each`` on the elements they
+    see, and ``_clone_each`` is the parent ``id_map``-memoizing closure,
+    no GameObject ever gets cloned twice.
+
+    Why not hand / mana_pool
+    ------------------------
+    Hand cards routinely get mutated in place during the cast pipeline
+    (cost prep, additional-cost flags, alt-cost selections). Forking
+    the hand on every cast attempt would defeat the optimization.
+    Mana pool is small (typically empty or a handful of coins) so
+    indirection overhead would outweigh the win. Both stay deep-cloned
+    in ``GameState.clone``.
+    """
+
+    # ``__slots__`` on a ``list`` subclass: CPython allows it only if
+    # we also include ``__dict__`` (list has variable-size internal
+    # storage and the subclass inherits that layout). Skip slots and
+    # rely on the regular instance dict — the two attrs are tiny and
+    # the perf cost is negligible vs. the work each mutator already
+    # does.
+    _owned: bool
+    _clone_each: Optional[Callable[[Any], Any]]
+
+    def __init__(self, iterable=()):
+        super().__init__(iterable)
+        self._owned = True
+        self._clone_each = None
+
+    def _fork_if_shared(self) -> None:
+        """If we're sharing GameObjects with a sibling list, deep-fork
+        them now so the upcoming in-place mutation is isolated."""
+        if self._owned:
+            return
+        clone_each = self._clone_each
+        if clone_each is None:
+            # Defensive: a shared list with no cloner is a programming
+            # error. Treat as already-owned to avoid silent corruption.
+            self._owned = True
+            return
+        # Build a fresh list of cloned elements using the existing
+        # backing storage, then swap it in. ``list.__init__`` on an
+        # already-initialized list replaces the backing storage in place.
+        cloned = [clone_each(o) for o in self]
+        list.__init__(self, cloned)
+        self._owned = True
+        self._clone_each = None
+
+    # --- mutators: fork-then-delegate -----------------------------------
+
+    def append(self, item):
+        self._fork_if_shared()
+        list.append(self, item)
+
+    def extend(self, iterable):
+        self._fork_if_shared()
+        list.extend(self, iterable)
+
+    def insert(self, index, item):
+        self._fork_if_shared()
+        list.insert(self, index, item)
+
+    def remove(self, item):
+        self._fork_if_shared()
+        list.remove(self, item)
+
+    def pop(self, index=-1):
+        self._fork_if_shared()
+        return list.pop(self, index)
+
+    def clear(self):
+        self._fork_if_shared()
+        list.clear(self)
+
+    def reverse(self):
+        self._fork_if_shared()
+        list.reverse(self)
+
+    def sort(self, *args, **kwargs):
+        self._fork_if_shared()
+        list.sort(self, *args, **kwargs)
+
+    def __setitem__(self, index, value):
+        self._fork_if_shared()
+        list.__setitem__(self, index, value)
+
+    def __delitem__(self, index):
+        self._fork_if_shared()
+        list.__delitem__(self, index)
+
+    def __iadd__(self, other):
+        self._fork_if_shared()
+        return list.__iadd__(self, other)
+
+    def __imul__(self, n):
+        self._fork_if_shared()
+        return list.__imul__(self, n)
+
+    # --- pickling support ----------------------------------------------
+
+    def __reduce_ex__(self, protocol):
+        # Pickle as a plain ``_CowList`` with ``_owned=True`` (a fork has
+        # already been forced by serialization, conceptually). The list
+        # contents go through ``list``'s native pickling.
+        return (
+            self.__class__,
+            (list(self),),
+        )
 
 
 def _make_shallow_cloner(cls, list_fields: tuple[str, ...] = ()):
@@ -2763,10 +2926,54 @@ class GameState:
         new_players: list[Player] = []
         for p in self.players:
             np = _clone_player(p)
-            np.library = [clone_obj(o) for o in p.library]
+            # Library / graveyard / exile use a copy-on-write list
+            # (see ``_CowList``). Both the source's list and the
+            # clone's start out pointing at the same GameObject
+            # instances; the first one to mutate any of those zones
+            # forks (deep-cloning each element via ``_clone_game_object``)
+            # and the other keeps the originals. Reads pass through
+            # unchanged. Hand and mana_pool stay deep-cloned — hand
+            # cards are routinely mutated in-place during the cast
+            # pipeline, and the mana pool is small enough that
+            # indirection wouldn't pay.
+            #
+            # We have to wrap the SOURCE list too, not just the
+            # clone's: an in-place mutation on either side would leak
+            # to the other if it isn't intercepted. The first wrap
+            # promotes ``p.library`` from a plain ``list`` to a
+            # ``_CowList`` — the rest of the engine sees a list
+            # subclass and behaves identically.
+            #
+            # ``_clone_game_object`` (not the ``clone_obj`` closure)
+            # is used as the fork callback: cross-references between
+            # GameObjects are integer ids (``attached_to``,
+            # ``blocked_by``, ``exiled_by_source``), so no cross-zone
+            # ``id_map`` memoization is required at fork time. Using
+            # the bare slot cloner avoids keeping the per-clone
+            # ``id_map`` alive past the end of this clone() call.
+            src_lib = p.library
+            if not isinstance(src_lib, _CowList):
+                src_lib = _CowList(src_lib)
+                p.library = src_lib
+            src_gy = p.graveyard
+            if not isinstance(src_gy, _CowList):
+                src_gy = _CowList(src_gy)
+                p.graveyard = src_gy
+            src_ex = p.exile
+            if not isinstance(src_ex, _CowList):
+                src_ex = _CowList(src_ex)
+                p.exile = src_ex
+
+            new_lib = _CowList(src_lib)
+            new_gy = _CowList(src_gy)
+            new_ex = _CowList(src_ex)
+            for cow in (new_lib, new_gy, new_ex, src_lib, src_gy, src_ex):
+                cow._owned = False
+                cow._clone_each = _clone_game_object
+            np.library = new_lib
+            np.graveyard = new_gy
+            np.exile = new_ex
             np.hand = [clone_obj(o) for o in p.hand]
-            np.graveyard = [clone_obj(o) for o in p.graveyard]
-            np.exile = [clone_obj(o) for o in p.exile]
             np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
