@@ -518,6 +518,39 @@ def client():
     return app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _drain_sessions_after_each_test():
+    """Tear down every InteractiveSession spawned during a test.
+
+    POST /api/interactive/new spawns a daemon thread (the
+    ``game_thread``) that runs ``simulate_game`` and parks inside
+    ``InteractiveAgent._ask`` waiting for a 10-minute decision
+    timeout. Without explicit teardown, those daemon threads
+    accumulate across tests; later tests run with dozens of parked
+    threads alive in the interpreter, which interacts badly with
+    coverage tracing and causes intermittent STATUS_ACCESS_VIOLATION
+    segfaults during the simulation-sweep tests (see todo
+    5e7b3c8d2f1a496a87b91d4c2e6f8a30).
+
+    After each test, snapshot the session registry, signal each
+    parked agent's response event so ``_ask`` returns a sentinel
+    (which causes the surrounding ``run()`` to catch the resulting
+    error and ``mark_over``-and-exit the thread cleanly), then join
+    each thread on a short timeout and clear the registry.
+    """
+    yield
+    with _SESSIONS_LOCK:
+        sessions = list(_SESSIONS.values())
+        _SESSIONS.clear()
+    for session in sessions:
+        # Wake the agent up so _ask returns; resp will be None which
+        # causes the decision method to crash inside run(); run()'s
+        # except block calls session.mark_over and exits the thread.
+        session.human_agent.timed_out = True
+        session.human_agent._response_event.set()
+        session.game_thread.join(timeout=2)
+
+
 class TestInteractiveRoutes:
     def test_new_game_returns_session_id(self, client):
         resp = client.post(
