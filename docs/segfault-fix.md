@@ -81,10 +81,11 @@ nothing in the project requires 3.12+, and the pyproject pin stays
 at `>=3.11`. 3.13 is the recommended interpreter for running the
 test suite locally.)
 
-## Implication for `scripts/run_tests.py`
+## Retired: `scripts/run_tests.py`
 
-The retry-on-segfault wrapper in `scripts/run_tests.py` is no
-longer needed when tests run under 3.13. It remains useful if a
-contributor is still on 3.11. Once everyone moves to 3.13+, the
-wrapper and the `_TRANSIENT_MARKERS` heuristics it carries can be
-deleted — and the sweep tests can stop being treated as flaky.
+A `scripts/run_tests.py` retry-on-segfault wrapper used to exist as
+a workaround for the 3.11 crash. With 3.13 + sysmon as the
+recommended interpreter, the wrapper was deleted; run pytest
+directly. If you're still on 3.11 and hit the crash, switch
+interpreters per the steps above rather than reviving the retry
+loop.
