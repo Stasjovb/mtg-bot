@@ -33,11 +33,11 @@ _SRC = _HERE.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from mtg_bot.search import (  # noqa: E402
-    Budget, MCTS, NNEvaluator, PIMC,
-)
-from mtg_bot.search.heuristic_evaluator import MtgHeuristicEvaluator  # noqa: E402
 from mtg_bot.training import run_match  # noqa: E402
+from mtg_bot.training.config import (  # noqa: E402
+    HeuristicConfig, NNPimcConfig, PimcConfig,
+)
+from mtg_bot.training.self_play import run_match_parallel  # noqa: E402
 from mtg_bot.training.registry import Registry  # noqa: E402
 
 
@@ -79,6 +79,25 @@ def main() -> None:
         "--seed", type=int, default=0,
         help="Base seed.",
     )
+    parser.add_argument(
+        "--nn-batch-size", type=int, default=32,
+        help=(
+            "MCTS batched-leaf-evaluation size for the NN seat "
+            "(default 32). 1 disables batching (legacy serial "
+            "search). Higher = more leaves per NN forward pass = "
+            "fewer Python↔C round-trips. Heuristic seat always "
+            "uses 1 (no batched compute to amortize)."
+        ),
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help=(
+            "Worker count for parallel game execution. Default: "
+            "cpu_count() - 2. Pass 1 to force sequential (useful "
+            "for debugging — easier traces, no spawn overhead). "
+            "Pass 0 to also force sequential."
+        ),
+    )
     args = parser.parse_args()
 
     registry: Registry | None = None
@@ -98,35 +117,58 @@ def main() -> None:
         weights_path = args.weights
         label = str(args.weights)
 
-    nn_evaluator = NNEvaluator(weights_path=weights_path)
-    heuristic_evaluator = MtgHeuristicEvaluator()
+    # Configs (picklable frozen dataclasses) so we can ship the
+    # factories across multiprocessing.Pool worker boundaries.
+    # Closures over local variables wouldn't pickle; bound methods
+    # of frozen dataclasses do. NNPimcConfig carries weights_path
+    # rather than an NNEvaluator instance — workers reload weights
+    # from disk inside ``build``, which always pickles cleanly.
+    # Batched leaf evaluation (B1) helps the NN side substantially:
+    # one (B, FEATURE_DIM) forward pass beats B single-state
+    # forwards by ~5-25× in steady-state CPU benches. The heuristic
+    # side has no batched compute and pays virtual-loss bookkeeping
+    # for nothing — keep it at batch_size=1.
+    nn_cfg = NNPimcConfig(
+        weights_path=str(weights_path),
+        samples=args.samples,
+        inner_nodes=args.nodes,
+        batch_size=args.nn_batch_size,
+    )
+    heuristic_cfg = PimcConfig(
+        samples=args.samples,
+        inner_nodes=args.nodes,
+        heuristic=HeuristicConfig(),
+        batch_size=1,
+    )
 
-    def make_pimc(evaluator):
-        def factory(seed: int) -> PIMC:
-            def inner_factory() -> MCTS:
-                return MCTS(
-                    evaluator=evaluator,
-                    budget_factory=lambda: Budget(max_nodes=args.nodes),
-                    rng=random.Random(seed + 100),
-                )
-            return PIMC(
-                inner_factory=inner_factory,
-                samples=args.samples,
-                rng=random.Random(seed + 200),
-            )
-        return factory
-
+    if args.workers is None or args.workers > 1:
+        worker_label = (
+            f"workers={args.workers}" if args.workers
+            else "workers=auto"
+        )
+    else:
+        worker_label = "sequential"
     print(
         f"# evaluate_nn: {args.n_games} games, NN({label}, seat 0) "
-        f"vs heuristic(seat 1), samples={args.samples} nodes={args.nodes}"
+        f"vs heuristic(seat 1), samples={args.samples} nodes={args.nodes}, "
+        f"NN batch_size={args.nn_batch_size}, {worker_label}"
     )
     started = time.perf_counter()
-    stats = run_match(
-        p0_factory=make_pimc(nn_evaluator),
-        p1_factory=make_pimc(heuristic_evaluator),
-        n_games=args.n_games,
-        base_seed=args.seed,
-    )
+    if args.workers is not None and args.workers <= 1:
+        stats = run_match(
+            p0_factory=nn_cfg.build,
+            p1_factory=heuristic_cfg.build,
+            n_games=args.n_games,
+            base_seed=args.seed,
+        )
+    else:
+        stats = run_match_parallel(
+            p0_factory=nn_cfg.build,
+            p1_factory=heuristic_cfg.build,
+            n_games=args.n_games,
+            base_seed=args.seed,
+            n_workers=args.workers,
+        )
     elapsed = time.perf_counter() - started
 
     print(
@@ -149,6 +191,7 @@ def main() -> None:
             "avg_decisions": stats.avg_decisions,
             "samples": args.samples,
             "nodes": args.nodes,
+            "nn_batch_size": args.nn_batch_size,
             "duration_seconds": elapsed,
             "seed": args.seed,
         }
