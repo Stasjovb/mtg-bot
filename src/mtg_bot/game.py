@@ -2771,8 +2771,8 @@ class GameState:
             # the unique zone where sharing is safe.
             np.library = list(p.library)
             np.hand = [clone_obj(o) for o in p.hand]
-            np.graveyard = [clone_obj(o) for o in p.graveyard]
-            np.exile = [clone_obj(o) for o in p.exile]
+            np.graveyard = list(p.graveyard)
+            np.exile = list(p.exile)
             np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
             new_players.append(np)
 
