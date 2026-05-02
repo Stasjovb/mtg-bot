@@ -83,7 +83,11 @@ import re
 
 from mtg_bot.cards.base import StaticAbility, StaticScope
 from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
-from mtg_bot.effects.modifiers import ContinuousModifier, PowerToughnessBonus
+from mtg_bot.effects.modifiers import (
+    ContinuousModifier,
+    GrantKeyword,
+    PowerToughnessBonus,
+)
 
 
 # Ability-word prefix stripper for static lines. Mirrors the trigger-
@@ -325,11 +329,11 @@ _DURING_YOUR_TURN_SELF_HAS_KEYWORD_LINE = re.compile(
 _NO_MAX_HAND_SIZE_LINE = re.compile(r"^You have no maximum hand size\.$")
 
 
-def _parse_anthem_static_line(line: str) -> StaticAbility | None:
-    """Return a ``StaticAbility`` for an anthem-shape static line, or
-    ``None`` if the surface form doesn't match, the subject isn't a
-    recognized scope, or the granted keyword (if any) isn't a known
-    evergreen.
+def _parse_anthem_static_line(line: str) -> tuple[StaticAbility, ...]:
+    """Return a tuple of ``StaticAbility`` for an anthem-shape static
+    line, or an empty tuple if the surface form doesn't match, the
+    subject isn't a recognized scope, or the granted keyword (if any)
+    isn't a known evergreen.
 
     Tries ``_ANTHEM_PT_LINE`` first (P/T-bearing, with optional
     ``and have <keyword>`` tail) and falls back to
@@ -337,6 +341,19 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     expose the same ``subject`` and ``turn_rider`` groups so the
     scope-and-rider mapping is identical between the two; only the
     P/T extraction differs.
+
+    PR D continuous-effects shape (full anthem migration): the P/T
+    contribution rides on a layer-7c
+    ``ContinuousModifier(PowerToughnessBonus)`` and each granted
+    keyword rides on its own layer-6
+    ``ContinuousModifier(GrantKeyword)``. A multi-keyword anthem
+    splits into one ``StaticAbility`` per keyword (since
+    ``ContinuousModifier`` carries a single ``LayerPayload``); a
+    compound P/T + keyword(s) anthem fans out into one P/T
+    StaticAbility plus one StaticAbility per keyword. All emitted
+    StaticAbility instances share the same scope and
+    ``active_turn_only`` rider — ``applies_to`` is the shared gate.
+    Migrated statics carry an empty ``granted_keywords`` field.
 
     Capitalization sensitivity: the lowercase ``creatures you control``
     spelling never starts an oracle line in EoE, so the regex requires
@@ -354,15 +371,15 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
     else:
         m = _ANTHEM_KEYWORD_LINE.match(stripped)
         if m is None:
-            return None
+            return ()
     scope = _ANTHEM_SUBJECT_SCOPES.get(m.group("subject").lower())
     if scope is None:
         # Defensive: the regex alternation only matches subjects that
         # appear in the mapping, so this branch is unreachable today.
         # Kept as belt-and-braces against future edits to the regex
         # that add a subject without updating the mapping.
-        return None
-    granted: frozenset[str] = frozenset()
+        return ()
+    engine_keywords: tuple[str, ...] = ()
     keyword = m.group("keyword")
     if keyword is not None:
         # The keyword tail may list multiple evergreens joined by " and "
@@ -375,56 +392,53 @@ def _parse_anthem_static_line(line: str) -> StaticAbility | None:
         # normalization ``_parse_keyword_line`` applies to comma-separated
         # keyword lines.
         pieces = [kw.strip() for kw in keyword.strip().split(" and ")]
-        engine_keywords: set[str] = set()
+        ekws: list[str] = []
         for piece in pieces:
             ek = _KEYWORD_LINES.get(piece.capitalize())
             if ek is None:
-                return None
-            engine_keywords.add(ek)
-        granted = frozenset(engine_keywords)
+                return ()
+            ekws.append(ek)
+        engine_keywords = tuple(ekws)
     active_turn_only = m.group("turn_rider") is not None
+    statics: list[StaticAbility] = []
     if power_bonus or toughness_bonus:
-        # PR D continuous-effects: pure-P/T and compound (P/T +
-        # keyword tail) anthems route the P/T contribution through
-        # a layer-7c ``ContinuousModifier(PowerToughnessBonus)``
-        # declaration. ``_static_bonuses`` (commit 24d5038) folds
-        # the contribution into effective P/T exactly the way the
-        # legacy ``power_bonus`` / ``toughness_bonus`` field reads
-        # did. The keyword-tail grant (single or multi-keyword)
-        # stays in ``granted_keywords`` for now — moving it to a
-        # ContinuousModifier(layer=6, GrantKeyword) would need a
-        # tuple-of-StaticAbility return shape since
-        # ContinuousModifier holds a single LayerPayload, and
-        # multi-keyword statics would split into multiple
-        # StaticAbility instances. Pure-keyword anthems
-        # (``_ANTHEM_KEYWORD_LINE`` match — no P/T component) keep
-        # the legacy ``granted_keywords`` shape entirely. Follow-up
-        # todo 1d4f2a5c covers the keyword-side migration.
-        return StaticAbility(
-            scope=scope,
-            granted_keywords=granted,
-            active_turn_only=active_turn_only,
-            continuous_effect=ContinuousModifier(
-                layer=7,
-                payload=PowerToughnessBonus(
-                    power_bonus=power_bonus,
-                    toughness_bonus=toughness_bonus,
+        # P/T contribution rides on a layer-7c PowerToughnessBonus
+        # ContinuousModifier; ``_static_bonuses`` folds the contribution
+        # in via the layer-7c walker.
+        statics.append(
+            StaticAbility(
+                scope=scope,
+                active_turn_only=active_turn_only,
+                continuous_effect=ContinuousModifier(
+                    layer=7,
+                    payload=PowerToughnessBonus(
+                        power_bonus=power_bonus,
+                        toughness_bonus=toughness_bonus,
+                    ),
                 ),
-            ),
+            )
         )
-    return StaticAbility(
-        scope=scope,
-        power_bonus=power_bonus,
-        toughness_bonus=toughness_bonus,
-        granted_keywords=granted,
-        active_turn_only=active_turn_only,
-    )
+    for ek in engine_keywords:
+        # Each granted keyword rides on its own layer-6 GrantKeyword
+        # ContinuousModifier. ``effective_keywords`` picks these up via
+        # ``walk_continuous_modifiers`` (game.py post-layer-6 walk).
+        statics.append(
+            StaticAbility(
+                scope=scope,
+                active_turn_only=active_turn_only,
+                continuous_effect=ContinuousModifier(
+                    layer=6,
+                    payload=GrantKeyword(ek),
+                ),
+            )
+        )
+    return tuple(statics)
 
 
-def _parse_counter_gated_anthem_line(line: str) -> StaticAbility | None:
-    """Return a ``StaticAbility`` for a counter-gated anthem line, or
-    ``None`` if the line doesn't match or the granted keyword isn't a
-    known evergreen.
+def _parse_counter_gated_anthem_line(line: str) -> tuple[StaticAbility, ...]:
+    """Return a tuple of ``StaticAbility`` for a counter-gated anthem
+    line, or an empty tuple if the line doesn't match or the granted
+    keyword isn't a known evergreen.
 
     Recognizes the singular-subject shape ``Each creature you control
     with a +1/+1 counter on it has <keyword>.`` (Drix Fatemaker). The
@@ -433,6 +447,13 @@ def _parse_counter_gated_anthem_line(line: str) -> StaticAbility | None:
     controller owns and admits only those with at least one +1/+1
     counter, which is exactly the surface filter.
 
+    Returns a single-element tuple in the happy path: every counter-
+    gated EoE printing today grants exactly one keyword. The
+    tuple-of-StaticAbility return shape mirrors
+    ``_parse_anthem_static_line`` so a multi-keyword counter-gated
+    line (no EoE printing today) would fan out the same way without
+    a second API.
+
     P/T grants and the ``and has`` combined tail are not supported
     today: every counter-gated print in EoE is keyword-only, and
     pulling the P/T branch in here speculatively would require deciding
@@ -440,13 +461,18 @@ def _parse_counter_gated_anthem_line(line: str) -> StaticAbility | None:
     """
     m = _COUNTER_GATED_ANTHEM_LINE.match(line.strip())
     if m is None:
-        return None
+        return ()
     engine_keyword = _KEYWORD_LINES.get(m.group("keyword").strip().capitalize())
     if engine_keyword is None:
-        return None
-    return StaticAbility(
-        scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
-        granted_keywords=frozenset({engine_keyword}),
+        return ()
+    return (
+        StaticAbility(
+            scope=StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER,
+            continuous_effect=ContinuousModifier(
+                layer=6,
+                payload=GrantKeyword(engine_keyword),
+            ),
+        ),
     )
 
 
@@ -454,9 +480,18 @@ def _parse_static_ability_line(
     line: str,
     *,
     name: str | None = None,
-) -> StaticAbility | None:
-    """Return a ``StaticAbility`` for a single static-ability line, or
-    ``None`` if no surface form matches.
+) -> tuple[StaticAbility, ...]:
+    """Return a tuple of ``StaticAbility`` for a single static-ability
+    line, or an empty tuple if no surface form matches.
+
+    Most surface forms produce a one-element tuple (a single
+    ``StaticAbility``); the exceptions are anthem-shape lines whose
+    keyword tail names multiple evergreens — those fan out into one
+    ``StaticAbility`` per keyword (a layer-6
+    ``ContinuousModifier(GrantKeyword)`` declaration each). The shared
+    scope, ``active_turn_only``, and other gating fields are
+    duplicated across the emitted instances; ``applies_to`` therefore
+    fires/refuses on each one consistently.
 
     ``name`` is the card's own printed name; when supplied, oracle lines
     that use the card's name as the subject (e.g. ``"During your turn,
@@ -515,17 +550,19 @@ def _parse_static_ability_line(
             kw_raw = dtk.group("keyword").strip().capitalize()
             engine_keyword = _KEYWORD_LINES.get(kw_raw)
             if engine_keyword is not None:
-                return StaticAbility(
-                    scope=StaticScope.SELF,
-                    granted_keywords=frozenset({engine_keyword}),
-                    active_turn_only=True,
+                return (
+                    StaticAbility(
+                        scope=StaticScope.SELF,
+                        granted_keywords=frozenset({engine_keyword}),
+                        active_turn_only=True,
+                    ),
                 )
-            return None
+            return ()
         anthem = _parse_anthem_static_line(stripped)
-        if anthem is not None:
+        if anthem:
             return anthem
         counter_gated = _parse_counter_gated_anthem_line(stripped)
-        if counter_gated is not None:
+        if counter_gated:
             return counter_gated
         # Player-scope statics — no creature target, just a flag on
         # the source's controller. ``You have no maximum hand size.``
@@ -538,26 +575,30 @@ def _parse_static_ability_line(
         # ``applies_to`` walk is a clean no-op for non-creature
         # source permanents (Steaming Sauna is an Enchantment).
         if _NO_MAX_HAND_SIZE_LINE.match(stripped) is not None:
-            return StaticAbility(
-                scope=StaticScope.SELF,
-                grants_no_max_hand_size=True,
+            return (
+                StaticAbility(
+                    scope=StaticScope.SELF,
+                    grants_no_max_hand_size=True,
+                ),
             )
-        return None
+        return ()
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:
-        return None
+        return ()
     granted: frozenset[str] = frozenset()
     keyword = m.group("keyword")
     if keyword is not None:
         engine_keyword = _KEYWORD_LINES.get(keyword.strip().capitalize())
         if engine_keyword is None:
-            return None
+            return ()
         granted = frozenset({engine_keyword})
-    return StaticAbility(
-        scope=StaticScope.SELF,
-        power_bonus=int(m.group("power")),
-        toughness_bonus=int(m.group("toughness")),
-        granted_keywords=granted,
-        **cond_kwargs,
+    return (
+        StaticAbility(
+            scope=StaticScope.SELF,
+            power_bonus=int(m.group("power")),
+            toughness_bonus=int(m.group("toughness")),
+            granted_keywords=granted,
+            **cond_kwargs,
+        ),
     )

@@ -435,7 +435,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             if clause is None:
                 # Activated / unknown shape — out of scope.
                 return None
-            if clause.static is not None:
+            if clause.statics:
                 # Tier-gated anthem static. Lumen-Class Frigate's
                 # ``2+ | Other creatures you control get +1/+1.`` is
                 # the EoE printing in this shape: an anthem-scope
@@ -455,16 +455,19 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
                 # remain rejected because their faithfulness story is
                 # the unresolved one (would need engine work for
                 # tier-gated stationed-keyword grants, deferred to a
-                # future slice).
-                static_ab = clause.static
-                if static_ab.scope not in (
-                    StaticScope.OTHER_CREATURES_YOU_CONTROL,
-                    StaticScope.CREATURES_YOU_CONTROL,
-                ):
-                    return None
-                statics.append(
-                    dataclasses.replace(static_ab, tier_threshold=tier_n)
-                )
+                # future slice). A multi-keyword anthem fans out into
+                # multiple StaticAbility instances; the tier_threshold
+                # is stamped on each so the engine gate fires uniformly
+                # across the keyword grants.
+                for static_ab in clause.statics:
+                    if static_ab.scope not in (
+                        StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                        StaticScope.CREATURES_YOU_CONTROL,
+                    ):
+                        return None
+                    statics.append(
+                        dataclasses.replace(static_ab, tier_threshold=tier_n)
+                    )
                 continue
             if clause.activated is not None:
                 # Tier-gated activated ability. The Eternity Elevator's
@@ -536,7 +539,7 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             # construction.
             activateds.append(clause.activated)
             continue
-        if clause.static is not None:
+        if clause.statics:
             # Standalone (non-tier-gated) anthem static. The Seriema's
             # ``Other tapped legendary creatures you control have
             # indestructible.`` is the EoE printing in this shape: the
@@ -557,11 +560,13 @@ def _build_spacecraft_printing(card: dict) -> CardPrinting | None:
             # be a creature, which a Spacecraft only is at-or-above
             # its station threshold — modeling that correctly needs
             # an engine-side change for tier-gated stationed-keyword
-            # grants and is out of scope.
-            static_ab = clause.static
-            if static_ab.scope == StaticScope.SELF:
-                return None
-            statics.append(static_ab)
+            # grants and is out of scope. A multi-keyword anthem fans
+            # out into multiple StaticAbility instances — extend
+            # rather than append.
+            for static_ab in clause.statics:
+                if static_ab.scope == StaticScope.SELF:
+                    return None
+                statics.append(static_ab)
             continue
         if clause.trigger is None:
             # The clause parsed but as a non-trigger / non-activated /

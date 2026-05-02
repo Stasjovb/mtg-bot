@@ -342,8 +342,8 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         if clause.activated is not None:
             activated.append(clause.activated)
             continue
-        if clause.static is not None:
-            statics.append(clause.static)
+        if clause.statics:
+            statics.extend(clause.statics)
             continue
         # Defensive: an empty ``_ParsedClause`` (no fields populated)
         # should be impossible per the per-clause parser contract, but

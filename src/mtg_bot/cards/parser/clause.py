@@ -43,13 +43,34 @@ class _ParsedClause:
     dies, …``) parses to a single ``_ParsedClause`` whose ``triggers``
     tuple holds one ``TriggeredAbility`` per condition arm — the
     builder treats them as if each arm appeared on its own oracle
-    line.
+    line. Static-ability lines populate ``statics`` with one or more
+    ``StaticAbility`` instances; multi-keyword anthem lines fan out
+    into one StaticAbility per keyword (each carrying a layer-6
+    ``ContinuousModifier(GrantKeyword)``), which is why the field is
+    a tuple rather than a single optional.
     """
 
     keywords: tuple[str, ...] = ()
     triggers: tuple[TriggeredAbility, ...] = ()
     activated: ActivatedAbility | None = None
-    static: StaticAbility | None = None
+    statics: tuple[StaticAbility, ...] = ()
+
+    @property
+    def static(self) -> StaticAbility | None:
+        """Back-compat shim for callers that still want a single
+        static ability. Returns ``None`` if no statics or more than
+        one — multi-static clauses (multi-keyword anthems) must be
+        consumed via ``statics``.
+
+        Builders that only model single-static clauses can keep using
+        ``.static``: a multi-static anthem will surface as ``None``
+        here, matching the "out of scope" semantics those builders
+        already apply when a clause's static field doesn't carry
+        exactly what they expect.
+        """
+        if len(self.statics) == 1:
+            return self.statics[0]
+        return None
 
     @property
     def keyword(self) -> str | None:
@@ -126,7 +147,7 @@ def _parse_clause(
     activated = _parse_activated_ability_line(line)
     if activated is not None:
         return _ParsedClause(activated=activated)
-    static = _parse_static_ability_line(line, name=name)
-    if static is not None:
-        return _ParsedClause(static=static)
+    statics = _parse_static_ability_line(line, name=name)
+    if statics:
+        return _ParsedClause(statics=statics)
     return None

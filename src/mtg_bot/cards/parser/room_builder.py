@@ -401,8 +401,8 @@ def _build_half_from_face(face: dict) -> RoomHalf | None:
         if clause.triggers:
             triggers.extend(clause.triggers)
             continue
-        if clause.static is not None:
-            statics.append(clause.static)
+        if clause.statics:
+            statics.extend(clause.statics)
             continue
         # Keywords / activated on a Room half aren't claimed by the
         # unified path yet — surface as a miss so the bespoke

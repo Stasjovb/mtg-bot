@@ -860,8 +860,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         triggers.extend(parsed.triggers)
         if parsed.activated is not None:
             activated.append(parsed.activated)
-        if parsed.static is not None:
-            statics.append(parsed.static)
+        if parsed.statics:
+            statics.extend(parsed.statics)
 
     return make_creature(
         name=card["name"],
