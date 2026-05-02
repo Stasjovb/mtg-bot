@@ -615,50 +615,19 @@ class ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(Effect):
 
 
 @dataclass(frozen=True)
-class ReturnTargetLandFromGraveyardToHand(Effect):
-    """Petrified Field's {T}, Sacrifice: Return target land card from
-    your graveyard to your hand.
+class ReturnTargetLandFromGraveyardToHand(ReturnFromGraveyard):
+    """``ReturnFromGraveyard`` constructor sugar for "return target
+    land card from your graveyard to your hand". Used by Petrified
+    Field's tap-sacrifice activated ability. Uses target-kind
+    ``graveyard_land`` and tags the resolve log line with the
+    "(Petrified Field)" suffix matching the legacy printout.
     """
 
-    def requires_target(self) -> bool:
-        return True
-
-    def legal_targets(
-        self, state: "GameState", controller_id: int
-    ) -> list[Target]:
-        p = state.player_by_id(controller_id)
-        return [
-            ("graveyard_land", c.id)
-            for c in p.graveyard
-            if c.printing.is_land
-        ]
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        if not targets:
-            return
-        kind, target_id = targets[0]
-        if kind != "graveyard_land":
-            return
-        p = state.player_by_id(controller_id)
-        card = next((c for c in p.graveyard if c.id == target_id), None)
-        if card is None:
-            return
-        from mtg_bot.game import reveal_to_all
-        p.graveyard.remove(card)
-        card.zone = Zone.HAND
-        p.hand.append(card)
-        reveal_to_all(state, card)
-        state.log.append(
-            f"{card.printing.name} returns from P{controller_id}'s "
-            f"graveyard to hand (Petrified Field)"
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "land", True)
+        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "target_kind", "graveyard_land")
+        object.__setattr__(self, "log_suffix", "(Petrified Field)")
 
     def describe(self) -> str:
-        return (
-            "return target land card from your graveyard to your hand"
-        )
+        return "return target land card from your graveyard to your hand"
